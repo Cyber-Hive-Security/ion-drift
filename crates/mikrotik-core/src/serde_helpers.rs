@@ -47,6 +47,7 @@ where
 }
 
 /// Deserialize a string-encoded `i64`.
+#[allow(dead_code)]
 pub fn ros_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
 where
     D: serde::Deserializer<'de>,
