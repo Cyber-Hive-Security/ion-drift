@@ -1,0 +1,22 @@
+[package]
+name = "ion-drift-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI tool for Mikrotik RouterOS management"
+
+[[bin]]
+name = "ion-drift"
+path = "src/main.rs"
+
+[dependencies]
+mikrotik-core = { path = "../mikrotik-core" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tabled = "0.17"
+colored = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"

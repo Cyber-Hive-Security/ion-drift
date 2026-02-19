@@ -1,0 +1,26 @@
+[server]
+listen_addr = "0.0.0.0"
+listen_port = 3000
+
+[router]
+host = "10.20.25.1"
+port = 443
+tls = true
+ca_cert_path = "/certs/root_ca.crt"
+username = "admin"
+# password from HIVE_ROUTER_PASSWORD env var
+
+[oidc]
+issuer_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet"
+client_id = "ion-drift"
+# client_secret from HIVE_ROUTER_OIDC_SECRET env var
+redirect_uri = "https://hiverouter.kaziik.xyz/auth/callback"
+# Smallstep root CA for verifying Keycloak's TLS cert
+ca_cert_path = "/certs/root_ca.crt"
+
+[session]
+# secret from HIVE_ROUTER_SESSION_SECRET env var (generate: openssl rand -base64 64)
+cookie_name = "ion_drift_session"
+max_age_seconds = 86400
+secure = true
+same_site = "lax"

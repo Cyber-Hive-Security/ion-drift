@@ -1,0 +1,123 @@
+use serde::{Deserialize, Serialize};
+
+use crate::MikrotikClient;
+use crate::MikrotikError;
+use crate::serde_helpers::*;
+
+/// IP address — `/ip/address`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct IpAddress {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub address: String,
+    pub network: String,
+    pub interface: String,
+    #[serde(default)]
+    pub actual_interface: Option<String>,
+    #[serde(deserialize_with = "ros_bool")]
+    pub disabled: bool,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub dynamic: Option<bool>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub invalid: Option<bool>,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+/// IP route — `/ip/route`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Route {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub dst_address: String,
+    #[serde(default)]
+    pub gateway: Option<String>,
+    #[serde(default, deserialize_with = "ros_u32_opt")]
+    pub distance: Option<u32>,
+    #[serde(default)]
+    pub routing_table: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub active: Option<bool>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub dynamic: Option<bool>,
+    #[serde(deserialize_with = "ros_bool")]
+    pub disabled: bool,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+/// DHCP lease — `/ip/dhcp-server/lease`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DhcpLease {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub address: String,
+    #[serde(default)]
+    pub mac_address: Option<String>,
+    #[serde(default)]
+    pub host_name: Option<String>,
+    #[serde(default)]
+    pub server: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub active_address: Option<String>,
+    #[serde(default)]
+    pub active_mac_address: Option<String>,
+    #[serde(default)]
+    pub expires_after: Option<String>,
+    #[serde(default)]
+    pub last_seen: Option<String>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub dynamic: Option<bool>,
+    #[serde(deserialize_with = "ros_bool")]
+    pub disabled: bool,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+/// DNS static entry — `/ip/dns/static`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DnsStaticEntry {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default, deserialize_with = "ros_u32_opt")]
+    pub ttl: Option<u32>,
+    #[serde(deserialize_with = "ros_bool")]
+    pub disabled: bool,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+// ── Client methods ─────────────────────────────────────────────
+
+impl MikrotikClient {
+    /// List all IP addresses.
+    pub async fn ip_addresses(&self) -> Result<Vec<IpAddress>, MikrotikError> {
+        self.get("ip/address").await
+    }
+
+    /// List all routes.
+    pub async fn ip_routes(&self) -> Result<Vec<Route>, MikrotikError> {
+        self.get("ip/route").await
+    }
+
+    /// List DHCP server leases.
+    pub async fn dhcp_leases(&self) -> Result<Vec<DhcpLease>, MikrotikError> {
+        self.get("ip/dhcp-server/lease").await
+    }
+
+    /// List DNS static entries.
+    pub async fn dns_static_entries(&self) -> Result<Vec<DnsStaticEntry>, MikrotikError> {
+        self.get("ip/dns/static").await
+    }
+}

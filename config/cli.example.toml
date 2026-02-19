@@ -1,0 +1,7 @@
+[router]
+host = "10.20.25.1"
+port = 443
+tls = true
+ca_cert_path = "/home/yodaadmin/.step/certs/root_ca.crt"
+username = "admin"
+# password is read from HIVE_ROUTER_PASSWORD env var or prompted interactively

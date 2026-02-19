@@ -1,0 +1,32 @@
+# Build artifacts
+/target/
+
+# Environment and secrets
+.env
+*.env
+.env.*
+
+# Certificates (user-provided)
+certs/
+*.crt
+*.pem
+*.key
+
+# Node modules (frontend)
+web/node_modules/
+web/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+CLAUDE.md
+.claude/
