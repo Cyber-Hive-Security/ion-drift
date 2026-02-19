@@ -9,13 +9,23 @@ pub mod traffic;
 use axum::Router;
 use axum::routing::{get, post};
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use crate::auth;
 use crate::state::AppState;
 
 /// Build the full Axum router with all routes and middleware.
-pub fn router(state: AppState) -> Router {
+///
+/// `web_dist` is the path to the SPA's built assets (e.g. `web/dist`).
+/// If the directory doesn't exist, the fallback serves a plain 404.
+pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
+    // SPA fallback: serve static files from web/dist/,
+    // fall back to index.html for client-side routing.
+    let index_html = web_dist.join("index.html");
+    let spa = ServeDir::new(&web_dist)
+        .not_found_service(ServeFile::new(index_html));
+
     Router::new()
         // Auth routes (no RequireAuth)
         .route("/auth/login", get(auth::login))
@@ -43,6 +53,8 @@ pub fn router(state: AppState) -> Router {
         // Speedtest
         .route("/api/speedtest/latest", get(speedtest::latest))
         .route("/api/speedtest/history", get(speedtest::history))
+        // SPA static files (fallback for all non-API routes)
+        .fallback_service(spa)
         // Middleware
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())

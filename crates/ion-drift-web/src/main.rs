@@ -78,8 +78,21 @@ async fn main() -> anyhow::Result<()> {
     spawn_speedtest_runner(speedtest_store.clone());
     spawn_session_cleanup(sessions);
 
+    // Resolve web/dist path relative to the config file's parent (project root)
+    let web_dist = config_file
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("web/dist");
+    if web_dist.is_dir() {
+        tracing::info!("serving SPA from {}", web_dist.display());
+    } else {
+        tracing::warn!("SPA directory not found at {}, only API routes available", web_dist.display());
+    }
+
     // Build router and start server
-    let app = routes::router(app_state);
+    let app = routes::router(app_state, web_dist);
     let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("ion-drift web server listening on {bind_addr}");
@@ -128,7 +141,7 @@ fn spawn_traffic_poller(
     });
 }
 
-/// Run speed tests every 7 hours.
+/// Run speed tests once per week.
 fn spawn_speedtest_runner(store: Arc<mikrotik_core::SpeedTestStore>) {
     tokio::spawn(async move {
         // Build a separate HTTP client for speedtests (public CAs only)
@@ -149,7 +162,7 @@ fn spawn_speedtest_runner(store: Arc<mikrotik_core::SpeedTestStore>) {
                 tracing::error!("failed to save speedtest result: {e}");
             }
 
-            tokio::time::sleep(Duration::from_secs(7 * 3600)).await;
+            tokio::time::sleep(Duration::from_secs(7 * 24 * 3600)).await;
         }
     });
 }
