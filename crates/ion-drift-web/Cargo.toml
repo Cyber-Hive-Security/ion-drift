@@ -11,19 +11,22 @@ path = "src/main.rs"
 
 [dependencies]
 mikrotik-core = { path = "../mikrotik-core" }
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.10", features = ["cookie"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-manual-roots", "rustls-tls-webpki-roots"] }
+openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
+jsonwebtoken = "10"
+rand = "0.9"
+uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
-
-# Full deps added when Phase 3 implementation begins:
-# axum = { version = "0.8", features = ["macros"] }
-# axum-extra = { version = "0.10", features = ["cookie"] }
-# tower = "0.5"
-# tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
-# serde = { version = "1", features = ["derive"] }
-# serde_json = "1"
-# toml = "0.8"
-# openidconnect = "4"
-# reqwest = { version = "0.12", features = ["json", "rustls-tls-manual-roots"] }
-# rand = "0.9"
-# uuid = { version = "1", features = ["v4"] }
-# tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+cookie = "0.18"
+dashmap = "6"
+dirs = "6"
+anyhow = "1"
