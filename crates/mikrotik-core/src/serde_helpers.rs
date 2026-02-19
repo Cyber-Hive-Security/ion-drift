@@ -34,13 +34,14 @@ where
 }
 
 /// Deserialize an optional string-encoded `u64`.
+/// Non-numeric values (e.g. `"auto"`) return `None`.
 pub fn ros_u64_opt<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let s: Option<String> = Option::deserialize(deserializer)?;
     match s {
-        Some(s) if !s.is_empty() => s.parse::<u64>().map(Some).map_err(serde::de::Error::custom),
+        Some(s) if !s.is_empty() => Ok(s.parse::<u64>().ok()),
         _ => Ok(None),
     }
 }
@@ -64,13 +65,14 @@ where
 }
 
 /// Deserialize an optional string-encoded `u32`.
+/// Non-numeric values (e.g. `"auto"`) return `None`.
 pub fn ros_u32_opt<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let s: Option<String> = Option::deserialize(deserializer)?;
     match s {
-        Some(s) if !s.is_empty() => s.parse::<u32>().map(Some).map_err(serde::de::Error::custom),
+        Some(s) if !s.is_empty() => Ok(s.parse::<u32>().ok()),
         _ => Ok(None),
     }
 }

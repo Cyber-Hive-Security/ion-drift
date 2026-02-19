@@ -38,8 +38,8 @@ pub struct FilterRule {
     pub connection_state: Option<String>,
     #[serde(default)]
     pub connection_nat_state: Option<String>,
-    #[serde(deserialize_with = "ros_bool")]
-    pub disabled: bool,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub disabled: Option<bool>,
     #[serde(default, deserialize_with = "ros_bool_opt")]
     pub dynamic: Option<bool>,
     #[serde(default, deserialize_with = "ros_u64_opt")]
@@ -84,8 +84,8 @@ pub struct NatRule {
     pub to_addresses: Option<String>,
     #[serde(default)]
     pub to_ports: Option<String>,
-    #[serde(deserialize_with = "ros_bool")]
-    pub disabled: bool,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub disabled: Option<bool>,
     #[serde(default, deserialize_with = "ros_bool_opt")]
     pub dynamic: Option<bool>,
     #[serde(default, deserialize_with = "ros_u64_opt")]
@@ -126,8 +126,8 @@ pub struct MangleRule {
     pub new_connection_mark: Option<String>,
     #[serde(default)]
     pub new_routing_mark: Option<String>,
-    #[serde(deserialize_with = "ros_bool")]
-    pub disabled: bool,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub disabled: Option<bool>,
     #[serde(default, deserialize_with = "ros_bool_opt")]
     pub dynamic: Option<bool>,
     #[serde(default, deserialize_with = "ros_u64_opt")]

@@ -44,8 +44,8 @@ pub struct Route {
     pub active: Option<bool>,
     #[serde(default, deserialize_with = "ros_bool_opt")]
     pub dynamic: Option<bool>,
-    #[serde(deserialize_with = "ros_bool")]
-    pub disabled: bool,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub disabled: Option<bool>,
     #[serde(default)]
     pub comment: Option<String>,
 }
@@ -75,8 +75,8 @@ pub struct DhcpLease {
     pub last_seen: Option<String>,
     #[serde(default, deserialize_with = "ros_bool_opt")]
     pub dynamic: Option<bool>,
-    #[serde(deserialize_with = "ros_bool")]
-    pub disabled: bool,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub disabled: Option<bool>,
     #[serde(default)]
     pub comment: Option<String>,
 }
@@ -92,8 +92,8 @@ pub struct DnsStaticEntry {
     pub address: Option<String>,
     #[serde(default, deserialize_with = "ros_u32_opt")]
     pub ttl: Option<u32>,
-    #[serde(deserialize_with = "ros_bool")]
-    pub disabled: bool,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub disabled: Option<bool>,
     #[serde(default)]
     pub comment: Option<String>,
 }
