@@ -1,7 +1,7 @@
 use clap::Args;
 use mikrotik_core::speedtest;
 
-use super::{OutputFormat, print_rows, print_single};
+use super::{OutputFormat, print_rows};
 
 #[derive(Args)]
 pub struct SpeedTestCommand {
@@ -16,53 +16,75 @@ pub async fn run(cmd: SpeedTestCommand, format: OutputFormat, data_dir: &std::pa
 
     if let Some(limit) = cmd.history {
         let results = store.recent(limit).await?;
-        print_rows(&results, format,
-            &["Time", "Download", "Upload", "Latency", "Server"],
-            |r| vec![
-                format_timestamp(r.timestamp),
-                format!("{:.1} Mbps", r.download_mbps),
-                format!("{:.1} Mbps", r.upload_mbps),
-                format!("{:.1} ms", r.latency_ms),
-                r.server_location.clone().unwrap_or_default(),
-            ],
-        );
+        for result in &results {
+            let ts = format_timestamp(result.timestamp);
+            println!("Test: {ts}");
+            print_provider_table(&result.providers, format);
+            println!(
+                "  Median: {:.1} Mbps down / {:.1} Mbps up / {:.1} ms\n",
+                result.median_download_mbps, result.median_upload_mbps, result.median_latency_ms,
+            );
+        }
+        if results.is_empty() {
+            println!("(no results)");
+        }
         return Ok(());
     }
 
-    eprintln!("Running Cloudflare speed test...");
+    eprintln!("Running speed test against 3 providers (Cloudflare, Netflix, Akamai)...");
+    eprintln!("(each runs separately — this will take ~2-3 minutes)\n");
 
     let client = reqwest::Client::new();
-    let result = speedtest::run_speedtest(&client).await?;
+    let result = speedtest::run_speedtest(&client).await;
+
+    if result.providers.is_empty() {
+        anyhow::bail!("all providers failed — check internet connectivity");
+    }
 
     // Save to DB
     store.save(&result).await?;
 
-    print_single(&result, format, &[
-        ("Server", result.server_location.clone().unwrap_or_else(|| "unknown".into())),
-        ("Latency", format!("{:.1} ms", result.latency_ms)),
-        ("Download", format!("{:.1} Mbps", result.download_mbps)),
-        ("Upload", format!("{:.1} Mbps", result.upload_mbps)),
-    ]);
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        }
+        _ => {
+            print_provider_table(&result.providers, format);
+            println!(
+                "\n  Median: {:.1} Mbps down / {:.1} Mbps up / {:.1} ms",
+                result.median_download_mbps, result.median_upload_mbps, result.median_latency_ms,
+            );
+        }
+    }
 
     Ok(())
 }
 
+fn print_provider_table(providers: &[mikrotik_core::ProviderResult], format: OutputFormat) {
+    print_rows(providers, format,
+        &["Provider", "Server", "Download", "Upload", "Latency"],
+        |p| vec![
+            p.provider.clone(),
+            p.server_location.clone().unwrap_or_default(),
+            if p.download_mbps > 0.0 { format!("{:.1} Mbps", p.download_mbps) } else { "—".into() },
+            if p.upload_mbps > 0.0 { format!("{:.1} Mbps", p.upload_mbps) } else { "—".into() },
+            format!("{:.1} ms", p.latency_ms),
+        ],
+    );
+}
+
 fn format_timestamp(ts: i64) -> String {
-    // Simple UTC formatting without pulling in chrono
     let secs_per_day = 86400u64;
     let ts = ts as u64;
     let days = ts / secs_per_day;
     let rem = ts % secs_per_day;
     let hours = rem / 3600;
     let minutes = (rem % 3600) / 60;
-
-    // Days since epoch to Y-M-D (simplified)
     let (year, month, day) = days_to_ymd(days);
-    format!("{year:04}-{month:02}-{day:02} {hours:02}:{minutes:02}")
+    format!("{year:04}-{month:02}-{day:02} {hours:02}:{minutes:02} UTC")
 }
 
 fn days_to_ymd(days: u64) -> (u64, u64, u64) {
-    // Algorithm from https://howardhinnant.github.io/date_algorithms.html
     let z = days + 719468;
     let era = z / 146097;
     let doe = z - era * 146097;

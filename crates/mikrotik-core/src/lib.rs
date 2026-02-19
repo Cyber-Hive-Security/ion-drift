@@ -7,5 +7,5 @@ mod serde_helpers;
 
 pub use client::{MikrotikClient, MikrotikConfig};
 pub use error::MikrotikError;
-pub use speedtest::{SpeedTestResult, SpeedTestStore};
+pub use speedtest::{ProviderResult, SpeedTestResult, SpeedTestStore};
 pub use tracker::{LifetimeTraffic, TrafficTracker};
