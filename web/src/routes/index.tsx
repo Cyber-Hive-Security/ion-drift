@@ -13,6 +13,18 @@ import { DhcpCard } from "@/components/dashboard/dhcp-card";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { PageShell } from "@/components/layout/page-shell";
+import { StatCard } from "@/components/stat-card";
+import { Loader2 } from "lucide-react";
+
+function CardSkeleton({ title }: { title: string }) {
+  return (
+    <StatCard title={title} icon={<Loader2 className="h-4 w-4 animate-spin" />}>
+      <div className="flex h-12 items-center justify-center text-sm text-muted-foreground">
+        Loading...
+      </div>
+    </StatCard>
+  );
+}
 
 export function DashboardPage() {
   const system = useSystemResources();
@@ -37,9 +49,9 @@ export function DashboardPage() {
         {system.data && <CpuCard data={system.data} />}
         {system.data && <MemoryCard data={system.data} />}
         {system.data && <UptimeCard data={system.data} />}
-        {traffic.data && <TrafficCard data={traffic.data} />}
+        {traffic.data ? <TrafficCard data={traffic.data} /> : <CardSkeleton title="WAN Traffic" />}
         <SpeedtestCard data={speedtest.data ?? null} />
-        {dhcp.data && <DhcpCard data={dhcp.data} />}
+        {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
       </div>
     </PageShell>
   );

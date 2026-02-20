@@ -5,6 +5,7 @@ mod routes;
 mod state;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
 use tracing_subscriber::EnvFilter;
@@ -62,6 +63,10 @@ async fn main() -> anyhow::Result<()> {
     // Session store
     let sessions = auth::SessionStore::new(config.session.max_age_seconds);
 
+    // Shared speedtest coordination
+    let speedtest_running = Arc::new(AtomicBool::new(false));
+    let speedtest_last_completed = Arc::new(AtomicI64::new(0));
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),
@@ -71,12 +76,17 @@ async fn main() -> anyhow::Result<()> {
         traffic_tracker: traffic_tracker.clone(),
         speedtest_store: speedtest_store.clone(),
         config: config.clone(),
-        speedtest_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        speedtest_running: speedtest_running.clone(),
+        speedtest_last_completed: speedtest_last_completed.clone(),
     };
 
     // Spawn background tasks
     spawn_traffic_poller(traffic_tracker.clone(), mikrotik.clone());
-    spawn_speedtest_runner(speedtest_store.clone());
+    spawn_speedtest_runner(
+        speedtest_store.clone(),
+        speedtest_running.clone(),
+        speedtest_last_completed.clone(),
+    );
     spawn_session_cleanup(sessions);
 
     // Resolve web/dist path relative to the config file's parent (project root)
@@ -142,8 +152,12 @@ fn spawn_traffic_poller(
     });
 }
 
-/// Run speed tests once per week.
-fn spawn_speedtest_runner(store: Arc<mikrotik_core::SpeedTestStore>) {
+/// Run speed tests once per week, coordinating with on-demand tests.
+fn spawn_speedtest_runner(
+    store: Arc<mikrotik_core::SpeedTestStore>,
+    running: Arc<AtomicBool>,
+    last_completed: Arc<AtomicI64>,
+) {
     tokio::spawn(async move {
         // Build a separate HTTP client for speedtests (public CAs only)
         let http_client = reqwest::Client::new();
@@ -152,15 +166,29 @@ fn spawn_speedtest_runner(store: Arc<mikrotik_core::SpeedTestStore>) {
         tokio::time::sleep(Duration::from_secs(300)).await;
 
         loop {
-            tracing::info!("starting scheduled speed test");
-            let result = mikrotik_core::speedtest::run_speedtest(&http_client).await;
-            tracing::info!(
-                "speedtest complete: {:.1}/{:.1} Mbps (down/up)",
-                result.median_download_mbps,
-                result.median_upload_mbps,
-            );
-            if let Err(e) = store.save(&result).await {
-                tracing::error!("failed to save speedtest result: {e}");
+            // Try to claim the running flag; skip if an on-demand test is in progress
+            if running
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                tracing::info!("starting scheduled speed test");
+                let result = mikrotik_core::speedtest::run_speedtest(&http_client).await;
+                tracing::info!(
+                    "speedtest complete: {:.1}/{:.1} Mbps (down/up)",
+                    result.median_download_mbps,
+                    result.median_upload_mbps,
+                );
+                if let Err(e) = store.save(&result).await {
+                    tracing::error!("failed to save speedtest result: {e}");
+                }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64;
+                last_completed.store(now, Ordering::Release);
+                running.store(false, Ordering::Release);
+            } else {
+                tracing::info!("scheduled speedtest skipped: on-demand test in progress");
             }
 
             tokio::time::sleep(Duration::from_secs(7 * 24 * 3600)).await;

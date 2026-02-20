@@ -10,9 +10,11 @@ import { IpPage } from "./ip";
 import { FirewallPage } from "./firewall";
 import { LogsPage } from "./logs";
 import { SpeedtestPage } from "./speedtest";
+import { NotFoundPage } from "./__root";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
+  notFoundComponent: NotFoundPage,
 });
 
 const indexRoute = createRoute({

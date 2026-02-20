@@ -4,27 +4,9 @@ import { DataTable, type Column } from "@/components/data-table";
 import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
+import { Badge } from "@/components/badge";
 import { cn } from "@/lib/utils";
 import type { IpAddress, Route, DhcpLease } from "@/api/types";
-
-function Badge({
-  active,
-  label,
-}: {
-  active: boolean;
-  label: string;
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
-        active ? "bg-success/15 text-success" : "bg-muted text-muted-foreground",
-      )}
-    >
-      {label}
-    </span>
-  );
-}
 
 const addressColumns: Column<IpAddress>[] = [
   {
@@ -105,9 +87,9 @@ type Tab = "addresses" | "routes" | "dhcp";
 
 export function IpPage() {
   const [tab, setTab] = useState<Tab>("addresses");
-  const addresses = useIpAddresses();
-  const routes = useIpRoutes();
-  const dhcp = useDhcpLeases();
+  const addresses = useIpAddresses({ enabled: tab === "addresses" });
+  const routes = useIpRoutes({ enabled: tab === "routes" });
+  const dhcp = useDhcpLeases({ enabled: tab === "dhcp" });
 
   const queries = { addresses, routes, dhcp };
   const query = queries[tab];
@@ -145,13 +127,13 @@ export function IpPage() {
       )}
 
       {tab === "addresses" && addresses.data && (
-        <DataTable columns={addressColumns} data={addresses.data} rowKey={(r) => r[".id"]} />
+        <DataTable columns={addressColumns} data={addresses.data} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search addresses..." />
       )}
       {tab === "routes" && routes.data && (
-        <DataTable columns={routeColumns} data={routes.data} rowKey={(r) => r[".id"]} />
+        <DataTable columns={routeColumns} data={routes.data} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search routes..." />
       )}
       {tab === "dhcp" && dhcp.data && (
-        <DataTable columns={dhcpColumns} data={dhcp.data} rowKey={(r) => r[".id"]} defaultSort={{ key: "address" }} />
+        <DataTable columns={dhcpColumns} data={dhcp.data} rowKey={(r) => r[".id"]} defaultSort={{ key: "address" }} searchable searchPlaceholder="Search leases..." />
       )}
     </PageShell>
   );

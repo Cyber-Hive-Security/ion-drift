@@ -12,7 +12,9 @@ export function LogsPage() {
   const [limit, setLimit] = useState<number>(100);
   const [autoRefresh, setAutoRefresh] = useState(false);
 
-  const logs = useLogs(topics || undefined, limit);
+  const logs = useLogs(topics || undefined, limit, {
+    refetchInterval: autoRefresh ? 5_000 : false,
+  });
 
   return (
     <PageShell

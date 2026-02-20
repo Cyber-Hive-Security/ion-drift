@@ -97,9 +97,9 @@ export function FirewallPage() {
   const [tab, setTab] = useState<Tab>("filter");
   const [chainFilter, setChainFilter] = useState("");
 
-  const filter = useFirewallFilter();
-  const nat = useFirewallNat();
-  const mangle = useFirewallMangle();
+  const filter = useFirewallFilter(undefined, { enabled: tab === "filter" });
+  const nat = useFirewallNat(undefined, { enabled: tab === "nat" });
+  const mangle = useFirewallMangle(undefined, { enabled: tab === "mangle" });
 
   const queries = { filter, nat, mangle };
   const query = queries[tab];
@@ -170,13 +170,13 @@ export function FirewallPage() {
       )}
 
       {tab === "filter" && filter.data && (
-        <DataTable columns={filterColumns} data={filteredData as Numbered<FilterRule>[]} rowKey={(r) => r[".id"]} />
+        <DataTable columns={filterColumns} data={filteredData as Numbered<FilterRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search filter rules..." />
       )}
       {tab === "nat" && nat.data && (
-        <DataTable columns={natColumns} data={filteredData as Numbered<NatRule>[]} rowKey={(r) => r[".id"]} />
+        <DataTable columns={natColumns} data={filteredData as Numbered<NatRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search NAT rules..." />
       )}
       {tab === "mangle" && mangle.data && (
-        <DataTable columns={mangleColumns} data={filteredData as Numbered<MangleRule>[]} rowKey={(r) => r[".id"]} />
+        <DataTable columns={mangleColumns} data={filteredData as Numbered<MangleRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search mangle rules..." />
       )}
     </PageShell>
   );

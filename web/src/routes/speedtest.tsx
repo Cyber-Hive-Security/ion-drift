@@ -237,9 +237,9 @@ export function SpeedtestPage() {
                 </tr>
               </thead>
               <tbody>
-                {history.data.map((r, i) => (
+                {history.data.map((r) => (
                   <tr
-                    key={i}
+                    key={r.timestamp}
                     className="border-b border-border/50 hover:bg-muted/30"
                   >
                     <td className="px-3 py-2 text-xs text-muted-foreground">

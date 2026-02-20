@@ -5,27 +5,9 @@ import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { formatBytes } from "@/lib/format";
+import { Badge } from "@/components/badge";
 import { cn } from "@/lib/utils";
 import type { RouterInterface, VlanInterface } from "@/api/types";
-
-function Badge({
-  active,
-  label,
-}: {
-  active: boolean;
-  label: string;
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
-        active ? "bg-success/15 text-success" : "bg-muted text-muted-foreground",
-      )}
-    >
-      {label}
-    </span>
-  );
-}
 
 const ifaceColumns: Column<RouterInterface>[] = [
   {
@@ -84,8 +66,8 @@ const vlanColumns: Column<VlanInterface>[] = [
 
 export function InterfacesPage() {
   const [tab, setTab] = useState<"all" | "vlans">("all");
-  const ifaces = useInterfaces();
-  const vlans = useVlans();
+  const ifaces = useInterfaces({ enabled: tab === "all" });
+  const vlans = useVlans({ enabled: tab === "vlans" });
 
   const query = tab === "all" ? ifaces : vlans;
 
@@ -122,6 +104,8 @@ export function InterfacesPage() {
           columns={ifaceColumns}
           data={ifaces.data}
           rowKey={(r) => r[".id"]}
+          searchable
+          searchPlaceholder="Search interfaces..."
         />
       )}
       {tab === "vlans" && vlans.data && (
@@ -129,6 +113,8 @@ export function InterfacesPage() {
           columns={vlanColumns}
           data={vlans.data}
           rowKey={(r) => r[".id"]}
+          searchable
+          searchPlaceholder="Search VLANs..."
         />
       )}
     </PageShell>

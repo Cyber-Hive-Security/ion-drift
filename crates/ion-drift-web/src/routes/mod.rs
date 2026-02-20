@@ -7,6 +7,8 @@ pub mod system;
 pub mod traffic;
 
 use axum::Router;
+use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -14,6 +16,27 @@ use tower_http::trace::TraceLayer;
 
 use crate::auth;
 use crate::state::AppState;
+
+/// Shared error handler for RouterOS API errors.
+pub(crate) fn api_error(e: mikrotik_core::MikrotikError) -> Response {
+    tracing::error!("router API error: {e}");
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(serde_json::json!({ "error": e.to_string() })),
+    )
+        .into_response()
+}
+
+/// Extract the origin (scheme + host) from a full URL.
+fn extract_origin(url: &str) -> String {
+    if let Some(scheme_end) = url.find("://") {
+        let rest = &url[scheme_end + 3..];
+        if let Some(path_start) = rest.find('/') {
+            return url[..scheme_end + 3 + path_start].to_string();
+        }
+    }
+    url.to_string()
+}
 
 /// Build the full Axum router with all routes and middleware.
 ///
@@ -25,6 +48,18 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
     let index_html = web_dist.join("index.html");
     let spa = ServeDir::new(&web_dist)
         .not_found_service(ServeFile::new(index_html));
+
+    // Derive CORS allowed origin from the OIDC redirect URI
+    let origin = extract_origin(&state.config.oidc.redirect_uri);
+    let cors = CorsLayer::new()
+        .allow_origin(
+            origin
+                .parse::<HeaderValue>()
+                .expect("valid origin from redirect_uri"),
+        )
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        .allow_credentials(true);
 
     Router::new()
         // Auth routes (no RequireAuth)
@@ -59,6 +94,6 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .fallback_service(spa)
         // Middleware
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state)
 }

@@ -7,7 +7,11 @@ export function useAuth() {
   const queryClient = useQueryClient();
 
   const logout = async () => {
-    await apiFetch("/auth/logout", { method: "POST" });
+    try {
+      await apiFetch("/auth/logout", { method: "POST" });
+    } catch {
+      // Clear local auth state even if server is unreachable
+    }
     queryClient.setQueryData(["auth", "status"], {
       authenticated: false,
     });

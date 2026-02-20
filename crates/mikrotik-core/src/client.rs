@@ -74,6 +74,8 @@ impl MikrotikClient {
         }
 
         let http = builder
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| MikrotikError::TlsConfig(format!("failed to build HTTP client: {e}")))?;
 

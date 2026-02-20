@@ -79,11 +79,7 @@ impl TrafficTracker {
 
         let db = self.db.lock().await;
         self.update_counters(&db, current_rx, current_tx)
-            .map_err(|e| crate::MikrotikError::RouterOs {
-                status: 0,
-                message: format!("tracker db error: {e}"),
-                detail: None,
-            })
+            .map_err(|e| crate::MikrotikError::Database(format!("tracker: {e}")))
     }
 
     /// Get current lifetime totals without polling the router.
@@ -95,11 +91,7 @@ impl TrafficTracker {
                 [&self.interface_name],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
-            .map_err(|e| crate::MikrotikError::RouterOs {
-                status: 0,
-                message: format!("tracker db error: {e}"),
-                detail: None,
-            })?;
+            .map_err(|e| crate::MikrotikError::Database(format!("tracker: {e}")))?;
 
         Ok(LifetimeTraffic {
             rx_bytes: baseline_rx + last_rx,

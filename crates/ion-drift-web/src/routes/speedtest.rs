@@ -8,6 +8,9 @@ use serde::Deserialize;
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 
+/// Minimum seconds between speed test runs.
+const SPEEDTEST_COOLDOWN_SECS: i64 = 300;
+
 pub async fn latest(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
@@ -50,13 +53,36 @@ pub async fn history(
     Ok(Json(serde_json::to_value(results).unwrap()))
 }
 
-/// Trigger an on-demand speed test. Returns 409 if one is already running.
+/// Trigger an on-demand speed test. Returns 409 if one is already running,
+/// 429 if the cooldown period hasn't elapsed.
 pub async fn run(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    // Check if a test is already in progress
-    if state.speedtest_running.load(Ordering::Relaxed) {
+    // Enforce cooldown between tests
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let last = state.speedtest_last_completed.load(Ordering::Acquire);
+    if last > 0 && (now - last) < SPEEDTEST_COOLDOWN_SECS {
+        let remaining = SPEEDTEST_COOLDOWN_SECS - (now - last);
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": format!("speed test cooldown: {remaining}s remaining"),
+                "retry_after": remaining,
+            })),
+        )
+            .into_response());
+    }
+
+    // Atomically try to claim the running flag
+    if state
+        .speedtest_running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
         return Err((
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": "speed test already in progress" })),
@@ -64,10 +90,9 @@ pub async fn run(
             .into_response());
     }
 
-    // Mark as running and spawn
-    state.speedtest_running.store(true, Ordering::Relaxed);
     let store = state.speedtest_store.clone();
     let running = state.speedtest_running.clone();
+    let last_completed = state.speedtest_last_completed.clone();
 
     tokio::spawn(async move {
         let http_client = reqwest::Client::new();
@@ -81,7 +106,12 @@ pub async fn run(
         if let Err(e) = store.save(&result).await {
             tracing::error!("failed to save speedtest result: {e}");
         }
-        running.store(false, Ordering::Relaxed);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        last_completed.store(now, Ordering::Release);
+        running.store(false, Ordering::Release);
     });
 
     Ok(Json(serde_json::json!({ "status": "started" })))
@@ -93,6 +123,6 @@ pub async fn status(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
     Json(serde_json::json!({
-        "running": state.speedtest_running.load(Ordering::Relaxed)
+        "running": state.speedtest_running.load(Ordering::Acquire)
     }))
 }

@@ -20,6 +20,9 @@ pub enum MikrotikError {
 
     #[error("Deserialization error: {0}")]
     Deserialize(String),
+
+    #[error("Database error: {0}")]
+    Database(String),
 }
 
 /// Raw error response from RouterOS REST API.

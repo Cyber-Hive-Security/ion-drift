@@ -48,73 +48,81 @@ export function useSystemIdentity() {
 
 // Interfaces
 
-export function useInterfaces() {
+export function useInterfaces(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["interfaces"],
     queryFn: () => apiFetch<RouterInterface[]>("/api/interfaces"),
+    enabled: options?.enabled ?? true,
   });
 }
 
-export function useVlans() {
+export function useVlans(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["interfaces", "vlans"],
     queryFn: () => apiFetch<VlanInterface[]>("/api/interfaces/vlans"),
+    enabled: options?.enabled ?? true,
   });
 }
 
 // IP
 
-export function useIpAddresses() {
+export function useIpAddresses(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["ip", "addresses"],
     queryFn: () => apiFetch<IpAddress[]>("/api/ip/addresses"),
+    enabled: options?.enabled ?? true,
   });
 }
 
-export function useIpRoutes() {
+export function useIpRoutes(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["ip", "routes"],
     queryFn: () => apiFetch<Route[]>("/api/ip/routes"),
+    enabled: options?.enabled ?? true,
   });
 }
 
-export function useDhcpLeases(options?: { polling?: boolean }) {
+export function useDhcpLeases(options?: { polling?: boolean; enabled?: boolean }) {
   return useQuery({
     queryKey: ["ip", "dhcp-leases"],
     queryFn: () => apiFetch<DhcpLease[]>("/api/ip/dhcp-leases"),
     refetchInterval: options?.polling ? 60_000 : false,
+    enabled: options?.enabled ?? true,
   });
 }
 
 // Firewall
 
-export function useFirewallFilter(chain?: string) {
+export function useFirewallFilter(chain?: string, options?: { enabled?: boolean }) {
   const params = chain ? `?chain=${encodeURIComponent(chain)}` : "";
   return useQuery({
     queryKey: ["firewall", "filter", chain],
     queryFn: () => apiFetch<FilterRule[]>(`/api/firewall/filter${params}`),
+    enabled: options?.enabled ?? true,
   });
 }
 
-export function useFirewallNat(chain?: string) {
+export function useFirewallNat(chain?: string, options?: { enabled?: boolean }) {
   const params = chain ? `?chain=${encodeURIComponent(chain)}` : "";
   return useQuery({
     queryKey: ["firewall", "nat", chain],
     queryFn: () => apiFetch<NatRule[]>(`/api/firewall/nat${params}`),
+    enabled: options?.enabled ?? true,
   });
 }
 
-export function useFirewallMangle(chain?: string) {
+export function useFirewallMangle(chain?: string, options?: { enabled?: boolean }) {
   const params = chain ? `?chain=${encodeURIComponent(chain)}` : "";
   return useQuery({
     queryKey: ["firewall", "mangle", chain],
     queryFn: () => apiFetch<MangleRule[]>(`/api/firewall/mangle${params}`),
+    enabled: options?.enabled ?? true,
   });
 }
 
 // Logs
 
-export function useLogs(topics?: string, limit?: number) {
+export function useLogs(topics?: string, limit?: number, options?: { refetchInterval?: number | false }) {
   const params = new URLSearchParams();
   if (topics) params.set("topics", topics);
   if (limit) params.set("limit", String(limit));
@@ -122,6 +130,7 @@ export function useLogs(topics?: string, limit?: number) {
   return useQuery({
     queryKey: ["logs", topics, limit],
     queryFn: () => apiFetch<LogEntry[]>(`/api/logs${qs ? `?${qs}` : ""}`),
+    refetchInterval: options?.refetchInterval ?? false,
   });
 }
 

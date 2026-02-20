@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicI64};
 
 use mikrotik_core::{MikrotikClient, SpeedTestStore, TrafficTracker};
 use crate::auth::{OidcClient, SessionStore};
@@ -24,4 +24,6 @@ pub struct AppState {
     pub config: Arc<ServerConfig>,
     /// Whether a speed test is currently running.
     pub speedtest_running: Arc<AtomicBool>,
+    /// Unix timestamp of the last completed speed test (for cooldown).
+    pub speedtest_last_completed: Arc<AtomicI64>,
 }
