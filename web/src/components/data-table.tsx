@@ -14,6 +14,7 @@ interface DataTableProps<T> {
   data: T[];
   rowKey: (row: T) => string;
   emptyMessage?: string;
+  defaultSort?: { key: string; asc?: boolean };
 }
 
 export function DataTable<T>({
@@ -21,9 +22,10 @@ export function DataTable<T>({
   data,
   rowKey,
   emptyMessage = "No data",
+  defaultSort,
 }: DataTableProps<T>) {
-  const [sortCol, setSortCol] = useState<string | null>(null);
-  const [sortAsc, setSortAsc] = useState(true);
+  const [sortCol, setSortCol] = useState<string | null>(defaultSort?.key ?? null);
+  const [sortAsc, setSortAsc] = useState(defaultSort?.asc ?? true);
 
   const sorted = useMemo(() => {
     if (!sortCol) return data;

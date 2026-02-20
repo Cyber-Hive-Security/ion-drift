@@ -65,12 +65,17 @@ const routeColumns: Column<Route>[] = [
   { key: "comment", header: "Comment", render: (r) => r.comment ?? "" },
 ];
 
+function ipToNum(ip: string): number {
+  const parts = ip.split(".");
+  return parts.reduce((acc, p) => acc * 256 + Number(p), 0);
+}
+
 const dhcpColumns: Column<DhcpLease>[] = [
   {
     key: "address",
     header: "IP Address",
     render: (r) => <span className="font-mono text-sm">{r.address}</span>,
-    sortValue: (r) => r.address,
+    sortValue: (r) => ipToNum(r.address),
   },
   {
     key: "mac",
@@ -146,7 +151,7 @@ export function IpPage() {
         <DataTable columns={routeColumns} data={routes.data} rowKey={(r) => r[".id"]} />
       )}
       {tab === "dhcp" && dhcp.data && (
-        <DataTable columns={dhcpColumns} data={dhcp.data} rowKey={(r) => r[".id"]} />
+        <DataTable columns={dhcpColumns} data={dhcp.data} rowKey={(r) => r[".id"]} defaultSort={{ key: "address" }} />
       )}
     </PageShell>
   );
