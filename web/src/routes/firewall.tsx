@@ -21,7 +21,10 @@ function RuleCell({ value, disabled }: { value?: string | null; disabled?: boole
   );
 }
 
-const filterColumns: Column<FilterRule>[] = [
+type Numbered<T> = T & { _ruleNum: number };
+
+const filterColumns: Column<Numbered<FilterRule>>[] = [
+  { key: "num", header: "#", render: (r) => <span className="text-muted-foreground text-xs">{r._ruleNum}</span>, sortValue: (r) => r._ruleNum },
   { key: "chain", header: "Chain", render: (r) => r.chain, sortValue: (r) => r.chain },
   {
     key: "action",
@@ -59,7 +62,8 @@ const filterColumns: Column<FilterRule>[] = [
   { key: "comment", header: "Comment", render: (r) => <span className={cn(r.disabled && "opacity-50")}>{r.comment ?? ""}</span> },
 ];
 
-const natColumns: Column<NatRule>[] = [
+const natColumns: Column<Numbered<NatRule>>[] = [
+  { key: "num", header: "#", render: (r) => <span className="text-muted-foreground text-xs">{r._ruleNum}</span>, sortValue: (r) => r._ruleNum },
   { key: "chain", header: "Chain", render: (r) => r.chain, sortValue: (r) => r.chain },
   {
     key: "action",
@@ -75,7 +79,8 @@ const natColumns: Column<NatRule>[] = [
   { key: "comment", header: "Comment", render: (r) => r.comment ?? "" },
 ];
 
-const mangleColumns: Column<MangleRule>[] = [
+const mangleColumns: Column<Numbered<MangleRule>>[] = [
+  { key: "num", header: "#", render: (r) => <span className="text-muted-foreground text-xs">{r._ruleNum}</span>, sortValue: (r) => r._ruleNum },
   { key: "chain", header: "Chain", render: (r) => r.chain, sortValue: (r) => r.chain },
   { key: "action", header: "Action", render: (r) => <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">{r.action}</span> },
   { key: "src", header: "Src", render: (r) => <RuleCell value={r["src-address"]} /> },
@@ -99,21 +104,26 @@ export function FirewallPage() {
   const queries = { filter, nat, mangle };
   const query = queries[tab];
 
-  // Get unique chains for the current tab
-  const chains = useMemo(() => {
-    const data = query.data as Array<{ chain: string }> | undefined;
-    if (!data) return [];
-    return [...new Set(data.map((r) => r.chain))].sort();
+  // Number rules by their position in the API response (rule order)
+  const numberedData = useMemo(() => {
+    if (!query.data) return [];
+    return (query.data as Array<{ chain: string }>).map((r, i) => ({
+      ...r,
+      _ruleNum: i,
+    }));
   }, [query.data]);
 
-  // Filter data by chain
+  // Get unique chains for the current tab
+  const chains = useMemo(() => {
+    if (!numberedData.length) return [];
+    return [...new Set(numberedData.map((r) => r.chain))].sort();
+  }, [numberedData]);
+
+  // Filter data by chain (rule numbers preserved from original order)
   const filteredData = useMemo(() => {
-    if (!query.data) return [];
-    if (!chainFilter) return query.data;
-    return (query.data as Array<{ chain: string }>).filter(
-      (r) => r.chain === chainFilter,
-    );
-  }, [query.data, chainFilter]);
+    if (!chainFilter) return numberedData;
+    return numberedData.filter((r) => r.chain === chainFilter);
+  }, [numberedData, chainFilter]);
 
   return (
     <PageShell
@@ -160,13 +170,13 @@ export function FirewallPage() {
       )}
 
       {tab === "filter" && filter.data && (
-        <DataTable columns={filterColumns} data={filteredData as FilterRule[]} rowKey={(r) => r[".id"]} />
+        <DataTable columns={filterColumns} data={filteredData as Numbered<FilterRule>[]} rowKey={(r) => r[".id"]} />
       )}
       {tab === "nat" && nat.data && (
-        <DataTable columns={natColumns} data={filteredData as NatRule[]} rowKey={(r) => r[".id"]} />
+        <DataTable columns={natColumns} data={filteredData as Numbered<NatRule>[]} rowKey={(r) => r[".id"]} />
       )}
       {tab === "mangle" && mangle.data && (
-        <DataTable columns={mangleColumns} data={filteredData as MangleRule[]} rowKey={(r) => r[".id"]} />
+        <DataTable columns={mangleColumns} data={filteredData as Numbered<MangleRule>[]} rowKey={(r) => r[".id"]} />
       )}
     </PageShell>
   );
