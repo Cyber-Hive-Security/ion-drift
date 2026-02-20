@@ -53,6 +53,8 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         // Speedtest
         .route("/api/speedtest/latest", get(speedtest::latest))
         .route("/api/speedtest/history", get(speedtest::history))
+        .route("/api/speedtest/run", post(speedtest::run))
+        .route("/api/speedtest/status", get(speedtest::status))
         // SPA static files (fallback for all non-API routes)
         .fallback_service(spa)
         // Middleware

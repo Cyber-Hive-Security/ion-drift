@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use mikrotik_core::{MikrotikClient, SpeedTestStore, TrafficTracker};
 use crate::auth::{OidcClient, SessionStore};
@@ -21,4 +22,6 @@ pub struct AppState {
     pub speedtest_store: Arc<SpeedTestStore>,
     /// Immutable server configuration.
     pub config: Arc<ServerConfig>,
+    /// Whether a speed test is currently running.
+    pub speedtest_running: Arc<AtomicBool>,
 }

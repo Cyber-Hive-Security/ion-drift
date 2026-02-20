@@ -1,4 +1,11 @@
-import { useSpeedtestLatest, useSpeedtestHistory } from "@/api/queries";
+import { useEffect, useRef } from "react";
+import {
+  useSpeedtestLatest,
+  useSpeedtestHistory,
+  useSpeedtestStatus,
+  useRunSpeedtest,
+} from "@/api/queries";
+import { useQueryClient } from "@tanstack/react-query";
 import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
@@ -14,11 +21,26 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts";
-import { Gauge, Wifi } from "lucide-react";
+import { Gauge, Wifi, Play, Loader2 } from "lucide-react";
 
 export function SpeedtestPage() {
   const latest = useSpeedtestLatest();
   const history = useSpeedtestHistory(20);
+  const status = useSpeedtestStatus();
+  const runTest = useRunSpeedtest();
+  const queryClient = useQueryClient();
+  const wasRunning = useRef(false);
+
+  const isRunning = status.data?.running ?? false;
+
+  // When a test finishes, refresh the results
+  useEffect(() => {
+    if (wasRunning.current && !isRunning) {
+      queryClient.invalidateQueries({ queryKey: ["speedtest", "latest"] });
+      queryClient.invalidateQueries({ queryKey: ["speedtest", "history"] });
+    }
+    wasRunning.current = isRunning;
+  }, [isRunning, queryClient]);
 
   const chartData = (history.data ?? [])
     .slice()
@@ -38,6 +60,31 @@ export function SpeedtestPage() {
       }}
       isRefreshing={latest.isFetching || history.isFetching}
     >
+      <div className="mb-4">
+        <button
+          onClick={() => runTest.mutate()}
+          disabled={isRunning || runTest.isPending}
+          className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isRunning ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Running...
+            </>
+          ) : (
+            <>
+              <Play className="h-4 w-4" />
+              Start Speed Test
+            </>
+          )}
+        </button>
+        {runTest.isError && (
+          <span className="ml-3 text-sm text-destructive">
+            {runTest.error.message}
+          </span>
+        )}
+      </div>
+
       {latest.isLoading && <LoadingSpinner />}
       {latest.error && (
         <ErrorDisplay

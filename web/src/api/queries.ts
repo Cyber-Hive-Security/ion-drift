@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
   AuthStatus,
@@ -151,5 +151,24 @@ export function useSpeedtestHistory(limit = 10) {
     queryKey: ["speedtest", "history", limit],
     queryFn: () =>
       apiFetch<SpeedTestResult[]>(`/api/speedtest/history?limit=${limit}`),
+  });
+}
+
+export function useSpeedtestStatus() {
+  return useQuery({
+    queryKey: ["speedtest", "status"],
+    queryFn: () => apiFetch<{ running: boolean }>("/api/speedtest/status"),
+    refetchInterval: 3_000,
+  });
+}
+
+export function useRunSpeedtest() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ status: string }>("/api/speedtest/run", { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["speedtest", "status"] });
+    },
   });
 }

@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
         traffic_tracker: traffic_tracker.clone(),
         speedtest_store: speedtest_store.clone(),
         config: config.clone(),
+        speedtest_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Spawn background tasks
