@@ -200,6 +200,41 @@ export interface LifetimeTraffic {
   interface: string;
 }
 
+// Metrics types (snake_case — custom Rust structs)
+
+export interface MetricsPoint {
+  timestamp: number;
+  cpu_load: number;
+  memory_used: number;
+  memory_total: number;
+}
+
+// Live traffic types (snake_case — custom Rust structs)
+
+export interface TrafficSample {
+  timestamp: number;
+  rx_bps: number;
+  tx_bps: number;
+}
+
+// IP pool / DHCP server types (kebab-case)
+
+export interface IpPool {
+  ".id": string;
+  name: string;
+  ranges: string;
+  comment?: string;
+}
+
+export interface DhcpServer {
+  ".id": string;
+  name: string;
+  interface: string;
+  "address-pool"?: string;
+  disabled?: boolean;
+  comment?: string;
+}
+
 // Speedtest types (snake_case — custom Rust structs)
 
 export interface ProviderResult {

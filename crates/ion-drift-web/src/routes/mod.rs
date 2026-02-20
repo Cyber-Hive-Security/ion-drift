@@ -2,6 +2,7 @@ pub mod firewall;
 pub mod interfaces;
 pub mod ip;
 pub mod logs;
+pub mod metrics;
 pub mod speedtest;
 pub mod system;
 pub mod traffic;
@@ -77,6 +78,8 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/api/ip/addresses", get(ip::addresses))
         .route("/api/ip/routes", get(ip::routes))
         .route("/api/ip/dhcp-leases", get(ip::dhcp_leases))
+        .route("/api/ip/pools", get(ip::pools))
+        .route("/api/ip/dhcp-servers", get(ip::dhcp_servers))
         // Firewall
         .route("/api/firewall/filter", get(firewall::filter))
         .route("/api/firewall/nat", get(firewall::nat))
@@ -85,6 +88,9 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/api/logs", get(logs::list))
         // Traffic
         .route("/api/traffic", get(traffic::current))
+        .route("/api/traffic/live", get(traffic::live))
+        // Metrics
+        .route("/api/metrics/history", get(metrics::history))
         // Speedtest
         .route("/api/speedtest/latest", get(speedtest::latest))
         .route("/api/speedtest/history", get(speedtest::history))

@@ -9,11 +9,15 @@ import type {
   IpAddress,
   Route,
   DhcpLease,
+  IpPool,
+  DhcpServer,
   FilterRule,
   NatRule,
   MangleRule,
   LogEntry,
   LifetimeTraffic,
+  TrafficSample,
+  MetricsPoint,
   SpeedTestResult,
 } from "./types";
 
@@ -91,6 +95,22 @@ export function useDhcpLeases(options?: { polling?: boolean; enabled?: boolean }
   });
 }
 
+export function useIpPools(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["ip", "pools"],
+    queryFn: () => apiFetch<IpPool[]>("/api/ip/pools"),
+    enabled: options?.enabled ?? true,
+  });
+}
+
+export function useDhcpServers(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["ip", "dhcp-servers"],
+    queryFn: () => apiFetch<DhcpServer[]>("/api/ip/dhcp-servers"),
+    enabled: options?.enabled ?? true,
+  });
+}
+
 // Firewall
 
 export function useFirewallFilter(chain?: string, options?: { enabled?: boolean }) {
@@ -140,6 +160,24 @@ export function useTraffic() {
   return useQuery({
     queryKey: ["traffic"],
     queryFn: () => apiFetch<LifetimeTraffic>("/api/traffic"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useLiveTraffic() {
+  return useQuery({
+    queryKey: ["traffic", "live"],
+    queryFn: () => apiFetch<TrafficSample[]>("/api/traffic/live"),
+    refetchInterval: 5_000,
+  });
+}
+
+// Metrics
+
+export function useMetricsHistory(range: "24h" | "7d") {
+  return useQuery({
+    queryKey: ["metrics", "history", range],
+    queryFn: () => apiFetch<MetricsPoint[]>(`/api/metrics/history?range=${range}`),
     refetchInterval: 60_000,
   });
 }

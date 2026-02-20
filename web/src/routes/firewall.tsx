@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, type CSSProperties } from "react";
 import {
   useFirewallFilter,
   useFirewallNat,
@@ -91,6 +91,30 @@ const mangleColumns: Column<Numbered<MangleRule>>[] = [
   { key: "comment", header: "Comment", render: (r) => r.comment ?? "" },
 ];
 
+/** Compute heatmap background style based on rule bytes relative to max. */
+function makeHeatmapStyle(
+  maxBytes: number,
+  getAction: (row: { bytes?: number }) => string,
+) {
+  return (row: { bytes?: number }): CSSProperties | undefined => {
+    const bytes = row.bytes ?? 0;
+    if (bytes === 0 || maxBytes === 0) return undefined;
+
+    // Log scale for better distribution
+    const intensity = Math.log(1 + bytes) / Math.log(1 + maxBytes);
+    const opacity = 0.03 + intensity * 0.12; // range 0.03 to 0.15
+
+    const action = getAction(row);
+    if (action === "drop" || action === "reject") {
+      return { backgroundColor: `rgba(239, 68, 68, ${opacity})` }; // red
+    }
+    if (action === "accept") {
+      return { backgroundColor: `rgba(34, 197, 94, ${opacity})` }; // green
+    }
+    return { backgroundColor: `rgba(148, 163, 184, ${opacity})` }; // gray
+  };
+}
+
 type Tab = "filter" | "nat" | "mangle";
 
 export function FirewallPage() {
@@ -124,6 +148,27 @@ export function FirewallPage() {
     if (!chainFilter) return numberedData;
     return numberedData.filter((r) => r.chain === chainFilter);
   }, [numberedData, chainFilter]);
+
+  // Compute max bytes for heatmap scaling
+  const maxBytes = useMemo(() => {
+    if (!filteredData.length) return 0;
+    return Math.max(
+      ...filteredData.map((r) => (r as { bytes?: number }).bytes ?? 0),
+    );
+  }, [filteredData]);
+
+  const filterHeatmap = useMemo(
+    () => makeHeatmapStyle(maxBytes, (r) => (r as Numbered<FilterRule>).action ?? ""),
+    [maxBytes],
+  );
+  const natHeatmap = useMemo(
+    () => makeHeatmapStyle(maxBytes, (r) => (r as Numbered<NatRule>).action ?? ""),
+    [maxBytes],
+  );
+  const mangleHeatmap = useMemo(
+    () => makeHeatmapStyle(maxBytes, (r) => (r as Numbered<MangleRule>).action ?? ""),
+    [maxBytes],
+  );
 
   return (
     <PageShell
@@ -170,13 +215,13 @@ export function FirewallPage() {
       )}
 
       {tab === "filter" && filter.data && (
-        <DataTable columns={filterColumns} data={filteredData as Numbered<FilterRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search filter rules..." />
+        <DataTable columns={filterColumns} data={filteredData as Numbered<FilterRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search filter rules..." rowStyle={filterHeatmap as (row: Numbered<FilterRule>) => CSSProperties | undefined} />
       )}
       {tab === "nat" && nat.data && (
-        <DataTable columns={natColumns} data={filteredData as Numbered<NatRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search NAT rules..." />
+        <DataTable columns={natColumns} data={filteredData as Numbered<NatRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search NAT rules..." rowStyle={natHeatmap as (row: Numbered<NatRule>) => CSSProperties | undefined} />
       )}
       {tab === "mangle" && mangle.data && (
-        <DataTable columns={mangleColumns} data={filteredData as Numbered<MangleRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search mangle rules..." />
+        <DataTable columns={mangleColumns} data={filteredData as Numbered<MangleRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search mangle rules..." rowStyle={mangleHeatmap as (row: Numbered<MangleRule>) => CSSProperties | undefined} />
       )}
     </PageShell>
   );

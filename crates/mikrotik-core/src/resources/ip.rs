@@ -98,6 +98,34 @@ pub struct DnsStaticEntry {
     pub comment: Option<String>,
 }
 
+/// IP pool — `/ip/pool`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct IpPool {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub name: String,
+    pub ranges: String,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+/// DHCP server — `/ip/dhcp-server`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DhcpServer {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub name: String,
+    pub interface: String,
+    #[serde(default)]
+    pub address_pool: Option<String>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub disabled: Option<bool>,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
 // ── Client methods ─────────────────────────────────────────────
 
 impl MikrotikClient {
@@ -119,5 +147,15 @@ impl MikrotikClient {
     /// List DNS static entries.
     pub async fn dns_static_entries(&self) -> Result<Vec<DnsStaticEntry>, MikrotikError> {
         self.get("ip/dns/static").await
+    }
+
+    /// List IP address pools.
+    pub async fn ip_pools(&self) -> Result<Vec<IpPool>, MikrotikError> {
+        self.get("ip/pool").await
+    }
+
+    /// List DHCP servers.
+    pub async fn dhcp_servers(&self) -> Result<Vec<DhcpServer>, MikrotikError> {
+        self.get("ip/dhcp-server").await
     }
 }

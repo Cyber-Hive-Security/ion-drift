@@ -1,5 +1,6 @@
 mod auth;
 mod config;
+mod live_traffic;
 mod middleware;
 mod routes;
 mod state;
@@ -11,6 +12,7 @@ use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::ServerConfig;
+use crate::live_traffic::{LiveTrafficBuffer, TrafficSample};
 use crate::state::AppState;
 
 #[tokio::main]
@@ -59,6 +61,13 @@ async fn main() -> anyhow::Result<()> {
         mikrotik_core::SpeedTestStore::new(&data_dir.join("speedtest.db"))
             .map_err(|e| anyhow::anyhow!("failed to init speedtest store: {e}"))?,
     );
+    let metrics_store = Arc::new(
+        mikrotik_core::MetricsStore::new(&data_dir.join("metrics.db"))
+            .map_err(|e| anyhow::anyhow!("failed to init metrics store: {e}"))?,
+    );
+
+    // Live traffic buffer (300 entries = 5 min at 1 sample per second, but we poll every 10s so ~50 min)
+    let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
 
     // Session store
     let sessions = auth::SessionStore::new(config.session.max_age_seconds);
@@ -75,13 +84,16 @@ async fn main() -> anyhow::Result<()> {
         sessions: sessions.clone(),
         traffic_tracker: traffic_tracker.clone(),
         speedtest_store: speedtest_store.clone(),
+        metrics_store: metrics_store.clone(),
+        live_traffic: live_traffic.clone(),
         config: config.clone(),
         speedtest_running: speedtest_running.clone(),
         speedtest_last_completed: speedtest_last_completed.clone(),
     };
 
     // Spawn background tasks
-    spawn_traffic_poller(traffic_tracker.clone(), mikrotik.clone());
+    spawn_traffic_poller(traffic_tracker.clone(), live_traffic.clone(), mikrotik.clone());
+    spawn_metrics_poller(metrics_store.clone(), mikrotik.clone());
     spawn_speedtest_runner(
         speedtest_store.clone(),
         speedtest_running.clone(),
@@ -124,13 +136,15 @@ fn parse_config_arg() -> Option<String> {
     None
 }
 
-/// Poll WAN traffic counters every 15 minutes.
+/// Poll WAN traffic counters every 10 seconds for live rates,
+/// and every 15 minutes for lifetime totals (SQLite).
 fn spawn_traffic_poller(
     tracker: Arc<mikrotik_core::TrafficTracker>,
+    live_buf: Arc<LiveTrafficBuffer>,
     client: mikrotik_core::MikrotikClient,
 ) {
     tokio::spawn(async move {
-        // Initial poll on startup
+        // Initial poll for lifetime totals
         match tracker.poll(&client).await {
             Ok(t) => tracing::info!(
                 "traffic initial poll: rx={}, tx={}", t.rx_bytes, t.tx_bytes
@@ -138,15 +152,101 @@ fn spawn_traffic_poller(
             Err(e) => tracing::warn!("traffic initial poll failed: {e}"),
         }
 
-        let mut interval = tokio::time::interval(Duration::from_secs(900));
+        let mut prev_rx: Option<u64> = None;
+        let mut prev_tx: Option<u64> = None;
+        let mut prev_time: Option<std::time::Instant> = None;
+        let mut tick_count: u64 = 0;
+
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
         interval.tick().await; // skip immediate tick
         loop {
             interval.tick().await;
-            match tracker.poll(&client).await {
-                Ok(t) => tracing::debug!(
-                    "traffic poll: rx={}, tx={}", t.rx_bytes, t.tx_bytes
-                ),
-                Err(e) => tracing::warn!("traffic poll failed: {e}"),
+            tick_count += 1;
+
+            // Fetch current interface counters
+            let interfaces = match client.interfaces().await {
+                Ok(i) => i,
+                Err(e) => {
+                    tracing::warn!("live traffic poll failed: {e}");
+                    continue;
+                }
+            };
+
+            let wan = interfaces.iter().find(|i| i.name == "1-WAN");
+            if let Some(wan) = wan {
+                let current_rx = wan.rx_byte.unwrap_or(0);
+                let current_tx = wan.tx_byte.unwrap_or(0);
+                let now = std::time::Instant::now();
+
+                // Compute per-second rates if we have a previous sample
+                if let (Some(prx), Some(ptx), Some(pt)) = (prev_rx, prev_tx, prev_time) {
+                    let elapsed = now.duration_since(pt).as_secs_f64();
+                    if elapsed > 0.0 && current_rx >= prx && current_tx >= ptx {
+                        let rx_bps = ((current_rx - prx) as f64 / elapsed) * 8.0;
+                        let tx_bps = ((current_tx - ptx) as f64 / elapsed) * 8.0;
+                        let timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs() as i64;
+                        live_buf
+                            .push(TrafficSample {
+                                timestamp,
+                                rx_bps,
+                                tx_bps,
+                            })
+                            .await;
+                    }
+                }
+
+                prev_rx = Some(current_rx);
+                prev_tx = Some(current_tx);
+                prev_time = Some(now);
+            }
+
+            // Poll lifetime totals every 90 ticks (~15 minutes at 10s interval)
+            if tick_count % 90 == 0 {
+                match tracker.poll(&client).await {
+                    Ok(t) => tracing::debug!(
+                        "traffic poll: rx={}, tx={}", t.rx_bytes, t.tx_bytes
+                    ),
+                    Err(e) => tracing::warn!("traffic poll failed: {e}"),
+                }
+            }
+        }
+    });
+}
+
+/// Poll system resources every 60 seconds, store CPU/memory metrics.
+/// Prune data older than 7 days every hour.
+fn spawn_metrics_poller(
+    store: Arc<mikrotik_core::MetricsStore>,
+    client: mikrotik_core::MikrotikClient,
+) {
+    tokio::spawn(async move {
+        let mut tick_count: u64 = 0;
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            tick_count += 1;
+
+            match client.system_resources().await {
+                Ok(res) => {
+                    let memory_used = res.total_memory - res.free_memory;
+                    if let Err(e) = store
+                        .record(res.cpu_load, memory_used, res.total_memory)
+                        .await
+                    {
+                        tracing::warn!("metrics record failed: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("metrics poll failed: {e}"),
+            }
+
+            // Cleanup every 60 ticks (every hour)
+            if tick_count % 60 == 0 {
+                if let Err(e) = store.cleanup(7 * 86400).await {
+                    tracing::warn!("metrics cleanup failed: {e}");
+                }
             }
         }
     });

@@ -20,3 +20,11 @@ pub async fn current(
 
     Ok(Json(serde_json::to_value(totals).unwrap()))
 }
+
+pub async fn live(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let samples = state.live_traffic.snapshot().await;
+    Json(serde_json::to_value(samples).unwrap())
+}

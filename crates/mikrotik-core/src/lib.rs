@@ -1,5 +1,6 @@
 pub mod client;
 pub mod error;
+pub mod metrics;
 pub mod resources;
 pub mod speedtest;
 pub mod tracker;
@@ -7,5 +8,6 @@ mod serde_helpers;
 
 pub use client::{MikrotikClient, MikrotikConfig};
 pub use error::MikrotikError;
+pub use metrics::{MetricsPoint, MetricsStore};
 pub use speedtest::{ProviderResult, SpeedTestResult, SpeedTestStore};
 pub use tracker::{LifetimeTraffic, TrafficTracker};

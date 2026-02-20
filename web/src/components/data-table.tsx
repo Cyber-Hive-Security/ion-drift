@@ -1,4 +1,4 @@
-import { useState, useMemo, type ReactNode } from "react";
+import { useState, useMemo, type CSSProperties, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ArrowUpDown, Search } from "lucide-react";
 
@@ -17,6 +17,7 @@ interface DataTableProps<T> {
   defaultSort?: { key: string; asc?: boolean };
   searchable?: boolean;
   searchPlaceholder?: string;
+  rowStyle?: (row: T) => CSSProperties | undefined;
 }
 
 export function DataTable<T>({
@@ -27,6 +28,7 @@ export function DataTable<T>({
   defaultSort,
   searchable,
   searchPlaceholder = "Search...",
+  rowStyle,
 }: DataTableProps<T>) {
   const [sortCol, setSortCol] = useState<string | null>(defaultSort?.key ?? null);
   const [sortAsc, setSortAsc] = useState(defaultSort?.asc ?? true);
@@ -131,6 +133,7 @@ export function DataTable<T>({
                 <tr
                   key={rowKey(row)}
                   className="border-b border-border/50 hover:bg-muted/30"
+                  style={rowStyle?.(row)}
                 >
                   {columns.map((col) => (
                     <td key={col.key} className="px-3 py-2">

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64};
 
-use mikrotik_core::{MikrotikClient, SpeedTestStore, TrafficTracker};
+use mikrotik_core::{MikrotikClient, MetricsStore, SpeedTestStore, TrafficTracker};
 use crate::auth::{OidcClient, SessionStore};
 use crate::config::ServerConfig;
+use crate::live_traffic::LiveTrafficBuffer;
 
 /// Shared application state, passed to all Axum handlers via `State<AppState>`.
 #[derive(Clone)]
@@ -20,6 +21,10 @@ pub struct AppState {
     pub traffic_tracker: Arc<TrafficTracker>,
     /// Persistent speed test result store (SQLite).
     pub speedtest_store: Arc<SpeedTestStore>,
+    /// CPU/memory metrics history store (SQLite).
+    pub metrics_store: Arc<MetricsStore>,
+    /// In-memory ring buffer for real-time traffic rates.
+    pub live_traffic: Arc<LiveTrafficBuffer>,
     /// Immutable server configuration.
     pub config: Arc<ServerConfig>,
     /// Whether a speed test is currently running.

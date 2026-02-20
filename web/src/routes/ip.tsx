@@ -1,6 +1,13 @@
 import { useState } from "react";
-import { useIpAddresses, useIpRoutes, useDhcpLeases } from "@/api/queries";
+import {
+  useIpAddresses,
+  useIpRoutes,
+  useDhcpLeases,
+  useIpPools,
+  useDhcpServers,
+} from "@/api/queries";
 import { DataTable, type Column } from "@/components/data-table";
+import { SubnetUtilization } from "@/components/subnet-utilization";
 import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
@@ -83,28 +90,43 @@ const dhcpColumns: Column<DhcpLease>[] = [
   { key: "comment", header: "Comment", render: (r) => r.comment ?? "" },
 ];
 
-type Tab = "addresses" | "routes" | "dhcp";
+type Tab = "addresses" | "routes" | "dhcp" | "utilization";
 
 export function IpPage() {
   const [tab, setTab] = useState<Tab>("addresses");
   const addresses = useIpAddresses({ enabled: tab === "addresses" });
   const routes = useIpRoutes({ enabled: tab === "routes" });
-  const dhcp = useDhcpLeases({ enabled: tab === "dhcp" });
+  const dhcp = useDhcpLeases({ enabled: tab === "dhcp" || tab === "utilization" });
+  const pools = useIpPools({ enabled: tab === "utilization" });
+  const servers = useDhcpServers({ enabled: tab === "utilization" });
 
-  const queries = { addresses, routes, dhcp };
-  const query = queries[tab];
+  const queries: Record<string, { isFetching: boolean; refetch: () => void; isLoading: boolean; error: Error | null }> = { addresses, routes, dhcp };
+  const query = tab === "utilization" ? pools : queries[tab];
 
   return (
     <PageShell
       title="IP"
-      onRefresh={() => query.refetch()}
-      isRefreshing={query.isFetching}
+      onRefresh={() => {
+        if (tab === "utilization") {
+          pools.refetch();
+          servers.refetch();
+          dhcp.refetch();
+        } else {
+          query.refetch();
+        }
+      }}
+      isRefreshing={
+        tab === "utilization"
+          ? pools.isFetching || servers.isFetching || dhcp.isFetching
+          : query.isFetching
+      }
     >
       <div className="mb-4 flex gap-2">
         {([
           ["addresses", "Addresses"],
           ["routes", "Routes"],
           ["dhcp", "DHCP Leases"],
+          ["utilization", "Utilization"],
         ] as const).map(([key, label]) => (
           <button
             key={key}
@@ -121,8 +143,8 @@ export function IpPage() {
         ))}
       </div>
 
-      {query.isLoading && <LoadingSpinner />}
-      {query.error && (
+      {tab !== "utilization" && query.isLoading && <LoadingSpinner />}
+      {tab !== "utilization" && query.error && (
         <ErrorDisplay message={query.error.message} onRetry={() => query.refetch()} />
       )}
 
@@ -134,6 +156,21 @@ export function IpPage() {
       )}
       {tab === "dhcp" && dhcp.data && (
         <DataTable columns={dhcpColumns} data={dhcp.data} rowKey={(r) => r[".id"]} defaultSort={{ key: "address" }} searchable searchPlaceholder="Search leases..." />
+      )}
+      {tab === "utilization" && (
+        <>
+          {(pools.isLoading || servers.isLoading || dhcp.isLoading) && <LoadingSpinner />}
+          {pools.error && (
+            <ErrorDisplay message={pools.error.message} onRetry={() => pools.refetch()} />
+          )}
+          {pools.data && servers.data && dhcp.data && (
+            <SubnetUtilization
+              pools={pools.data}
+              servers={servers.data}
+              leases={dhcp.data}
+            />
+          )}
+        </>
       )}
     </PageShell>
   );
