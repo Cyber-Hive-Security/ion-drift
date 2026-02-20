@@ -1,0 +1,22 @@
+[server]
+listen_addr = "0.0.0.0"
+listen_port = 3000
+
+[router]
+host = "router.kaziik.xyz"
+port = 443
+tls = true
+ca_cert_path = "/app/certs/root_ca.crt"
+username = "ion-drift"
+
+[oidc]
+issuer_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet"
+client_id = "ion-drift"
+redirect_uri = "https://hiverouter.kaziik.xyz/auth/callback"
+ca_cert_path = "/app/certs/root_ca.crt"
+
+[session]
+cookie_name = "ion_drift_session"
+max_age_seconds = 86400
+secure = true
+same_site = "lax"

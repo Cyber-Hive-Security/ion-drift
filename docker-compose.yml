@@ -1,0 +1,16 @@
+services:
+  ion-drift:
+    build: .
+    container_name: ion-drift
+    restart: unless-stopped
+    ports:
+      - "3100:3000"
+    env_file: .env
+    environment:
+      - RUST_LOG=info
+      - XDG_DATA_HOME=/app/data
+    volumes:
+      - ion-drift-data:/app/data
+
+volumes:
+  ion-drift-data:
