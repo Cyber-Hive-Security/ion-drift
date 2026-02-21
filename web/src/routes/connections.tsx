@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useConnectionsPage } from "@/api/queries";
+import { useConnectionsPage, useConnectionsHistory } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
@@ -13,6 +13,9 @@ import {
   Cell,
   BarChart,
   Bar,
+  AreaChart,
+  Area,
+  CartesianGrid,
   XAxis,
   YAxis,
   ResponsiveContainer,
@@ -394,6 +397,129 @@ const connectionColumns: Column<ConnectionEntry>[] = [
   },
 ];
 
+// ── Connection History Chart ─────────────────────────────────────
+
+type HistoryRange = "24h" | "7d";
+
+function ConnectionHistoryChart() {
+  const [range, setRange] = useState<HistoryRange>("24h");
+  const history = useConnectionsHistory(range);
+  const data = history.data ?? [];
+
+  const chartData = data.map((p) => ({
+    time:
+      range === "24h"
+        ? new Date(p.timestamp * 1000).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : new Date(p.timestamp * 1000).toLocaleDateString([], {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+          }),
+    tcp: p.tcp,
+    udp: p.udp,
+    other: p.other,
+  }));
+
+  if (chartData.length < 2) return null;
+
+  return (
+    <div className="mb-4 rounded-lg border border-border bg-card p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-medium text-muted-foreground">
+          Connection History
+        </h3>
+        <div className="flex gap-2">
+          {(["24h", "7d"] as const).map((r) => (
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                range === r
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={200}>
+        <AreaChart data={chartData}>
+          <defs>
+            <linearGradient id="connTcpGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="connUdpGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="connOtherGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="oklch(0.55 0.05 285)" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="oklch(0.55 0.05 285)" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.3 0.015 285)" />
+          <XAxis
+            dataKey="time"
+            tick={{ fill: "oklch(0.65 0.01 285)", fontSize: 11 }}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            tick={{ fill: "oklch(0.65 0.01 285)", fontSize: 11 }}
+            tickFormatter={(v: number) => formatNumber(v)}
+          />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "oklch(0.175 0.015 285)",
+              border: "1px solid oklch(0.3 0.015 285)",
+              borderRadius: "6px",
+              color: "oklch(0.95 0.01 285)",
+              fontSize: "12px",
+            }}
+            formatter={(value: number, name: string) => [
+              formatNumber(value),
+              name.toUpperCase(),
+            ]}
+          />
+          <Area
+            type="monotone"
+            dataKey="tcp"
+            stackId="1"
+            stroke="oklch(0.65 0.18 250)"
+            strokeWidth={1.5}
+            fill="url(#connTcpGrad)"
+            isAnimationActive={false}
+          />
+          <Area
+            type="monotone"
+            dataKey="udp"
+            stackId="1"
+            stroke="oklch(0.65 0.2 145)"
+            strokeWidth={1.5}
+            fill="url(#connUdpGrad)"
+            isAnimationActive={false}
+          />
+          <Area
+            type="monotone"
+            dataKey="other"
+            stackId="1"
+            stroke="oklch(0.55 0.05 285)"
+            strokeWidth={1.5}
+            fill="url(#connOtherGrad)"
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 // ── Main Page ────────────────────────────────────────────────────
 
 export function ConnectionsPage() {
@@ -451,6 +577,8 @@ export function ConnectionsPage() {
       isRefreshing={isFetching}
     >
       <SummaryBar data={data} />
+
+      <ConnectionHistoryChart />
 
       {/* Filter buttons */}
       <div className="mb-3 flex gap-2">

@@ -24,7 +24,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import { useStructuredLogs } from "@/api/queries";
+import { useStructuredLogs, useLogTrends } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
@@ -150,6 +150,9 @@ export function LogsPage() {
     >
       {/* Summary Bar */}
       {analytics && <SummaryBar analytics={analytics} />}
+
+      {/* Log Trends (persistent history from SQLite) */}
+      <LogTrendsSection />
 
       {/* Filter Bar */}
       <div className="mb-4 space-y-3">
@@ -800,6 +803,129 @@ function Field({ label, value }: { label: string; value: string }) {
     <div>
       <span className="text-muted-foreground">{label}: </span>
       <span className="font-medium text-foreground">{value}</span>
+    </div>
+  );
+}
+
+// ── Log Trends Section ──────────────────────────────────────────
+
+type TrendsRange = "24h" | "7d";
+
+function LogTrendsSection() {
+  const [range, setRange] = useState<TrendsRange>("24h");
+  const trends = useLogTrends(range);
+  const data = trends.data ?? [];
+
+  if (data.length < 2) return null;
+
+  const chartData = data.map((p) => ({
+    time:
+      range === "24h"
+        ? new Date(p.timestamp * 1000).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : new Date(p.timestamp * 1000).toLocaleDateString([], {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+          }),
+    drops: p.drop_count,
+    accepts: p.accept_count,
+    total: p.total_entries,
+  }));
+
+  // Find recurring top drop sources
+  const srcCounts = new Map<string, number>();
+  for (const p of data) {
+    if (p.top_drop_source) {
+      srcCounts.set(
+        p.top_drop_source,
+        (srcCounts.get(p.top_drop_source) ?? 0) + p.top_drop_source_count,
+      );
+    }
+  }
+  const topSources = [...srcCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  return (
+    <div className="mb-4 rounded-lg border border-border bg-card p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-medium text-muted-foreground">
+          Log Trends
+        </h3>
+        <div className="flex gap-2">
+          {(["24h", "7d"] as const).map((r) => (
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                range === r
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* Drops per hour */}
+        <div>
+          <p className="mb-2 text-xs text-muted-foreground">Drops per Hour</p>
+          <ResponsiveContainer width="100%" height={120}>
+            <BarChart data={chartData}>
+              <XAxis
+                dataKey="time"
+                tick={{ fill: "oklch(0.55 0.01 285)", fontSize: 9 }}
+                interval="preserveStartEnd"
+                axisLine={false}
+                tickLine={false}
+              />
+              <Tooltip
+                contentStyle={{
+                  background: "oklch(0.2 0 0)",
+                  border: "1px solid oklch(0.3 0 0)",
+                  borderRadius: 6,
+                  fontSize: 11,
+                }}
+                formatter={(value: number, name: string) => [
+                  value.toLocaleString(),
+                  name.charAt(0).toUpperCase() + name.slice(1),
+                ]}
+              />
+              <Bar dataKey="drops" fill="oklch(0.6 0.2 25)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
+              <Bar dataKey="accepts" fill="oklch(0.6 0.18 145)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Recurring drop sources */}
+        {topSources.length > 0 && (
+          <div>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Recurring Drop Sources ({range})
+            </p>
+            <div className="space-y-1.5">
+              {topSources.map(([ip, count]) => (
+                <div
+                  key={ip}
+                  className="flex items-center justify-between text-xs"
+                >
+                  <span className="font-mono text-foreground">{ip}</span>
+                  <span className="text-muted-foreground tabular-nums">
+                    {count.toLocaleString()} drops
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

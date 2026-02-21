@@ -9,7 +9,10 @@ mod serde_helpers;
 
 pub use client::{MikrotikClient, MikrotikConfig};
 pub use error::MikrotikError;
-pub use metrics::{MetricsPoint, MetricsStore};
+pub use metrics::{
+    ConnectionMetricsPoint, DropMetricsPoint, LogAggregate, MetricsPoint, MetricsStore,
+    VlanMetricsPoint,
+};
 pub use speedtest::{ProviderResult, SpeedTestResult, SpeedTestStore};
 pub use tracker::{LifetimeTraffic, TrafficTracker};
 pub use vlan_flows::{VlanFlow, VlanFlowManager};

@@ -8,6 +8,7 @@ mod oui;
 mod routes;
 mod state;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
@@ -112,6 +113,15 @@ async fn main() -> anyhow::Result<()> {
     // Spawn background tasks
     spawn_traffic_poller(traffic_tracker.clone(), live_traffic.clone(), mikrotik.clone());
     spawn_metrics_poller(metrics_store.clone(), mikrotik.clone());
+    spawn_drops_poller(metrics_store.clone(), mikrotik.clone());
+    spawn_connection_metrics_poller(metrics_store.clone(), mikrotik.clone());
+    spawn_vlan_metrics_poller(metrics_store.clone(), mikrotik.clone());
+    spawn_log_aggregation(
+        metrics_store.clone(),
+        mikrotik.clone(),
+        app_state.geo_db.clone(),
+        app_state.oui_db.clone(),
+    );
     spawn_speedtest_runner(
         speedtest_store.clone(),
         speedtest_running.clone(),
@@ -260,12 +270,236 @@ fn spawn_metrics_poller(
                 Err(e) => tracing::warn!("metrics poll failed: {e}"),
             }
 
-            // Cleanup every 60 ticks (every hour)
+            // Cleanup all tables every 60 ticks (every hour)
             if tick_count % 60 == 0 {
                 if let Err(e) = store.cleanup(7 * 86400).await {
                     tracing::warn!("metrics cleanup failed: {e}");
                 }
             }
+        }
+    });
+}
+
+/// Poll firewall drop counters every 60 seconds, store totals in SQLite.
+fn spawn_drops_poller(
+    store: Arc<mikrotik_core::MetricsStore>,
+    client: mikrotik_core::MikrotikClient,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+
+            let rules = match client.firewall_filter_rules().await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("drops poller: failed to fetch rules: {e}");
+                    continue;
+                }
+            };
+
+            let (total_packets, total_bytes) = rules
+                .iter()
+                .filter(|r| r.action == "drop")
+                .fold((0u64, 0u64), |(p, b), r| {
+                    (p + r.packets.unwrap_or(0), b + r.bytes.unwrap_or(0))
+                });
+
+            if let Err(e) = store.record_drops(total_packets, total_bytes).await {
+                tracing::warn!("drops poller: record failed: {e}");
+            }
+        }
+    });
+}
+
+/// Poll connection tracking summary every 60 seconds, store in SQLite.
+fn spawn_connection_metrics_poller(
+    store: Arc<mikrotik_core::MetricsStore>,
+    client: mikrotik_core::MikrotikClient,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+
+            let connections = match client.firewall_connections(".id,protocol").await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("connection poller: failed to fetch connections: {e}");
+                    continue;
+                }
+            };
+
+            let mut tcp = 0u32;
+            let mut udp = 0u32;
+            let mut other = 0u32;
+            for c in &connections {
+                match c.protocol.as_deref() {
+                    Some("6") | Some("tcp") => tcp += 1,
+                    Some("17") | Some("udp") => udp += 1,
+                    _ => other += 1,
+                }
+            }
+            let total = connections.len() as u32;
+
+            if let Err(e) = store.record_connections(total, tcp, udp, other).await {
+                tracing::warn!("connection poller: record failed: {e}");
+            }
+        }
+    });
+}
+
+/// Poll VLAN throughput every 60 seconds, store in SQLite.
+fn spawn_vlan_metrics_poller(
+    store: Arc<mikrotik_core::MetricsStore>,
+    client: mikrotik_core::MikrotikClient,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+
+            let vlans = match client.vlan_interfaces().await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("VLAN poller: failed to fetch VLANs: {e}");
+                    continue;
+                }
+            };
+
+            // Monitor each VLAN concurrently
+            let mut handles = Vec::with_capacity(vlans.len());
+            for vlan in &vlans {
+                let c = client.clone();
+                let name = vlan.name.clone();
+                handles.push(tokio::spawn(async move {
+                    let result = c.monitor_traffic(&name).await;
+                    (name, result)
+                }));
+            }
+
+            let results = futures::future::join_all(handles).await;
+            let mut entries = Vec::new();
+            for result in results {
+                match result {
+                    Ok((name, Ok(samples))) => {
+                        let rx = samples.first().and_then(|s| s.rx_bits_per_second).unwrap_or(0);
+                        let tx = samples.first().and_then(|s| s.tx_bits_per_second).unwrap_or(0);
+                        entries.push((name, rx, tx));
+                    }
+                    Ok((name, Err(e))) => {
+                        tracing::debug!(vlan = %name, error = %e, "VLAN poller: monitor failed");
+                    }
+                    Err(e) => {
+                        tracing::debug!(error = %e, "VLAN poller: task panicked");
+                    }
+                }
+            }
+
+            if !entries.is_empty() {
+                if let Err(e) = store.record_vlan_metrics(&entries).await {
+                    tracing::warn!("VLAN poller: record failed: {e}");
+                }
+            }
+        }
+    });
+}
+
+/// Aggregate log statistics every hour, store roll-ups in SQLite.
+fn spawn_log_aggregation(
+    store: Arc<mikrotik_core::MetricsStore>,
+    client: mikrotik_core::MikrotikClient,
+    geo_db: Arc<geo::GeoDb>,
+    oui_db: Arc<oui::OuiDb>,
+) {
+    tokio::spawn(async move {
+        // Wait 2 minutes before first aggregation (let server stabilize)
+        tokio::time::sleep(Duration::from_secs(120)).await;
+
+        loop {
+            let period_end = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let period_start = period_end - 3600;
+
+            match client.log_entries().await {
+                Ok(raw_entries) => {
+                    let entries: Vec<_> = raw_entries
+                        .iter()
+                        .map(|e| log_parser::parse_log_entry(e, &geo_db, &oui_db))
+                        .collect();
+
+                    let total_entries = entries.len() as u32;
+                    let mut drop_count = 0u32;
+                    let mut accept_count = 0u32;
+                    let mut src_counts: HashMap<String, u32> = HashMap::new();
+                    let mut port_counts: HashMap<u32, u32> = HashMap::new();
+                    let mut iface_counts: HashMap<String, u32> = HashMap::new();
+
+                    for entry in &entries {
+                        if let Some(ref parsed) = entry.parsed {
+                            match parsed.action.as_deref() {
+                                Some("drop") => {
+                                    drop_count += 1;
+                                    if let Some(ref ip) = parsed.src_ip {
+                                        *src_counts.entry(ip.clone()).or_default() += 1;
+                                    }
+                                    if let Some(port) = parsed.dst_port {
+                                        *port_counts.entry(port as u32).or_default() += 1;
+                                    }
+                                    if let Some(ref iface) = parsed.in_interface {
+                                        *iface_counts.entry(iface.clone()).or_default() += 1;
+                                    }
+                                }
+                                Some("accept") => accept_count += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    let top_src = src_counts
+                        .iter()
+                        .max_by_key(|(_, c)| *c)
+                        .map(|(ip, c)| (ip.clone(), *c));
+                    let top_port = port_counts
+                        .iter()
+                        .max_by_key(|(_, c)| *c)
+                        .map(|(p, c)| (*p, *c));
+
+                    let drops_by_interface =
+                        serde_json::to_string(&iface_counts).unwrap_or_else(|_| "{}".into());
+
+                    if let Err(e) = store
+                        .record_log_aggregate(
+                            period_start,
+                            period_end,
+                            total_entries,
+                            drop_count,
+                            accept_count,
+                            top_src.as_ref().map(|(ip, _)| ip.as_str()),
+                            top_src.as_ref().map(|(_, c)| *c).unwrap_or(0),
+                            top_port.as_ref().map(|(p, _)| *p),
+                            top_port.as_ref().map(|(_, c)| *c).unwrap_or(0),
+                            &drops_by_interface,
+                        )
+                        .await
+                    {
+                        tracing::warn!("log aggregation: record failed: {e}");
+                    } else {
+                        tracing::info!(
+                            "log aggregation: recorded {} entries, {} drops, {} accepts",
+                            total_entries,
+                            drop_count,
+                            accept_count,
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!("log aggregation: failed to fetch logs: {e}"),
+            }
+
+            // Sleep for 1 hour
+            tokio::time::sleep(Duration::from_secs(3600)).await;
         }
     });
 }

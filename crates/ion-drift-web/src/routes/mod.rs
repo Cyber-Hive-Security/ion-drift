@@ -153,6 +153,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/traffic/vlan-activity", get(vlan_activity::vlan_activity))
         // Metrics
         .route("/metrics/history", get(metrics::history))
+        .route("/metrics/drops", get(metrics::drops_history))
+        .route("/metrics/connections", get(metrics::connections_history))
+        .route("/metrics/vlans", get(metrics::vlans_history))
+        .route("/metrics/log-trends", get(metrics::log_trends))
         // Speedtest
         .route("/speedtest/latest", get(speedtest::latest))
         .route("/speedtest/history", get(speedtest::history))

@@ -28,6 +28,10 @@ import type {
   PoolUtilization,
   FirewallDropsSummary,
   VlanActivityEntry,
+  DropMetricsPoint,
+  ConnectionMetricsPoint,
+  VlanMetricsPoint,
+  LogAggregate,
 } from "./types";
 
 // Auth
@@ -319,5 +323,42 @@ export function useRunSpeedtest() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["speedtest", "status"] });
     },
+  });
+}
+
+// Historical metrics
+
+export function useDropsHistory(range: "24h" | "7d") {
+  return useQuery({
+    queryKey: ["metrics", "drops", range],
+    queryFn: () => apiFetch<DropMetricsPoint[]>(`/api/metrics/drops?range=${range}`),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useConnectionsHistory(range: "24h" | "7d") {
+  return useQuery({
+    queryKey: ["metrics", "connections", range],
+    queryFn: () =>
+      apiFetch<ConnectionMetricsPoint[]>(`/api/metrics/connections?range=${range}`),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useVlanMetricsHistory(range: "24h" | "7d") {
+  return useQuery({
+    queryKey: ["metrics", "vlans", range],
+    queryFn: () =>
+      apiFetch<VlanMetricsPoint[]>(`/api/metrics/vlans?range=${range}`),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useLogTrends(range: "24h" | "7d") {
+  return useQuery({
+    queryKey: ["metrics", "log-trends", range],
+    queryFn: () =>
+      apiFetch<LogAggregate[]>(`/api/metrics/log-trends?range=${range}`),
+    refetchInterval: 300_000,
   });
 }

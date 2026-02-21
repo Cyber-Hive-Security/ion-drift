@@ -428,6 +428,49 @@ export interface VlanActivityEntry {
   tx_bps: number;
 }
 
+// Drop metrics history (snake_case — custom Rust structs)
+
+export interface DropMetricsPoint {
+  timestamp: number;
+  drop_packets: number;
+  drop_bytes: number;
+}
+
+// Connection metrics history (snake_case — custom Rust structs)
+
+export interface ConnectionMetricsPoint {
+  timestamp: number;
+  total: number;
+  tcp: number;
+  udp: number;
+  other: number;
+}
+
+// VLAN metrics history (snake_case — custom Rust structs)
+
+export interface VlanMetricsPoint {
+  timestamp: number;
+  vlan_name: string;
+  rx_bps: number;
+  tx_bps: number;
+}
+
+// Log aggregate roll-ups (snake_case — custom Rust structs)
+
+export interface LogAggregate {
+  timestamp: number;
+  period_start: number;
+  period_end: number;
+  total_entries: number;
+  drop_count: number;
+  accept_count: number;
+  top_drop_source: string | null;
+  top_drop_source_count: number;
+  top_target_port: number | null;
+  top_target_port_count: number;
+  drops_by_interface: string;
+}
+
 // Speedtest types (snake_case — custom Rust structs)
 
 export interface ProviderResult {
