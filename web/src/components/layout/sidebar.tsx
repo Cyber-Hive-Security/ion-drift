@@ -1,10 +1,12 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
+import { useConnectionSummary } from "@/api/queries";
 import {
   LayoutDashboard,
   Network,
   Globe,
   Shield,
+  Plug2,
   ScrollText,
   Gauge,
 } from "lucide-react";
@@ -14,6 +16,7 @@ const navItems = [
   { to: "/interfaces", label: "Interfaces", icon: Network },
   { to: "/ip", label: "IP", icon: Globe },
   { to: "/firewall", label: "Firewall", icon: Shield },
+  { to: "/connections", label: "Connections", icon: Plug2 },
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/speedtest", label: "Speedtest", icon: Gauge },
 ] as const;
@@ -21,6 +24,8 @@ const navItems = [
 export function Sidebar() {
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
+  const connectionSummary = useConnectionSummary();
+  const hasFlagged = (connectionSummary.data?.flagged_count ?? 0) > 0;
 
   return (
     <aside className="flex h-full w-56 flex-col border-r border-border bg-card">
@@ -30,6 +35,7 @@ export function Sidebar() {
       <nav className="flex-1 space-y-1 p-3">
         {navItems.map(({ to, label, icon: Icon }) => {
           const active = to === "/" ? currentPath === "/" : currentPath.startsWith(to);
+          const showDot = to === "/connections" && hasFlagged;
           return (
             <Link
               key={to}
@@ -43,6 +49,9 @@ export function Sidebar() {
             >
               <Icon className="h-4 w-4" />
               {label}
+              {showDot && (
+                <span className="ml-auto h-2 w-2 rounded-full bg-red-500" />
+              )}
             </Link>
           );
         })}

@@ -1,3 +1,4 @@
+pub mod arp;
 pub mod connections;
 pub mod firewall;
 pub mod interfaces;
@@ -90,6 +91,11 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/api/firewall/drops", get(firewall::drops))
         // Connections
         .route("/api/connections/summary", get(connections::summary))
+        .route("/api/connections/page", get(connections::page))
+        // ARP + enhanced endpoints
+        .route("/api/ip/arp", get(arp::list))
+        .route("/api/ip/dhcp-leases-status", get(arp::dhcp_leases_status))
+        .route("/api/ip/pool-utilization", get(arp::pool_utilization))
         // Logs
         .route("/api/logs", get(logs::list))
         // Traffic

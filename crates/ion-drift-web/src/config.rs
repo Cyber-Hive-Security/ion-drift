@@ -10,6 +10,14 @@ pub struct ServerConfig {
     pub oidc: OidcSection,
     #[serde(default)]
     pub session: SessionSection,
+    #[serde(default)]
+    pub data: DataSection,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DataSection {
+    /// Path to GeoLite2-Country.mmdb (optional — geo features disabled if absent).
+    pub geoip_db_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

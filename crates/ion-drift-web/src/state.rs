@@ -4,7 +4,9 @@ use std::sync::atomic::{AtomicBool, AtomicI64};
 use mikrotik_core::{MikrotikClient, MetricsStore, SpeedTestStore, TrafficTracker};
 use crate::auth::{OidcClient, SessionStore};
 use crate::config::ServerConfig;
+use crate::geo::GeoDb;
 use crate::live_traffic::LiveTrafficBuffer;
+use crate::oui::OuiDb;
 
 /// Shared application state, passed to all Axum handlers via `State<AppState>`.
 #[derive(Clone)]
@@ -31,4 +33,8 @@ pub struct AppState {
     pub speedtest_running: Arc<AtomicBool>,
     /// Unix timestamp of the last completed speed test (for cooldown).
     pub speedtest_last_completed: Arc<AtomicI64>,
+    /// MAC OUI manufacturer lookup database.
+    pub oui_db: Arc<OuiDb>,
+    /// GeoIP country lookup database (optional).
+    pub geo_db: Arc<GeoDb>,
 }

@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { Shield } from "lucide-react";
 import { StatCard } from "@/components/stat-card";
 import { formatBytes } from "@/lib/format";
+import { countryFlag } from "@/lib/country";
 import { AreaChart, Area, ResponsiveContainer } from "recharts";
 import type { FirewallDropsSummary } from "@/api/types";
 
@@ -42,6 +43,19 @@ export function FirewallDropsCard({ data }: { data: FirewallDropsSummary }) {
       <p className="mt-2 text-xs text-muted-foreground">
         packets dropped &middot; {formatBytes(data.total_drop_bytes)}
       </p>
+      {data.top_drop_countries.length > 0 && (
+        <p className="mt-1 text-xs">
+          <span className="text-muted-foreground">Top: </span>
+          {data.top_drop_countries.slice(0, 3).map((c, i) => (
+            <span key={c.code}>
+              {i > 0 && <span className="text-muted-foreground"> &middot; </span>}
+              <span className={c.flagged ? "text-red-500" : "text-muted-foreground"}>
+                {countryFlag(c.code)} {c.code} ({compactNumber(c.count)})
+              </span>
+            </span>
+          ))}
+        </p>
+      )}
       {sparkData.length > 1 && (
         <div className="mt-2">
           <ResponsiveContainer width="100%" height={60}>

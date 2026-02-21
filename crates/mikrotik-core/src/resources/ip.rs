@@ -126,6 +126,27 @@ pub struct DhcpServer {
     pub comment: Option<String>,
 }
 
+/// ARP entry — `/ip/arp`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ArpEntry {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub address: String,
+    #[serde(default)]
+    pub mac_address: Option<String>,
+    #[serde(default)]
+    pub interface: Option<String>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub dynamic: Option<bool>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub complete: Option<bool>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub disabled: Option<bool>,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
 // ── Client methods ─────────────────────────────────────────────
 
 impl MikrotikClient {
@@ -157,5 +178,10 @@ impl MikrotikClient {
     /// List DHCP servers.
     pub async fn dhcp_servers(&self) -> Result<Vec<DhcpServer>, MikrotikError> {
         self.get("ip/dhcp-server").await
+    }
+
+    /// List ARP table entries.
+    pub async fn arp_table(&self) -> Result<Vec<ArpEntry>, MikrotikError> {
+        self.get("ip/arp").await
     }
 }

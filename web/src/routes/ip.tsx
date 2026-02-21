@@ -2,18 +2,17 @@ import { useState } from "react";
 import {
   useIpAddresses,
   useIpRoutes,
-  useDhcpLeases,
-  useIpPools,
-  useDhcpServers,
+  useArpTable,
+  useDhcpLeasesStatus,
+  usePoolUtilization,
 } from "@/api/queries";
 import { DataTable, type Column } from "@/components/data-table";
-import { SubnetUtilization } from "@/components/subnet-utilization";
 import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { Badge } from "@/components/badge";
 import { cn } from "@/lib/utils";
-import type { IpAddress, Route, DhcpLease } from "@/api/types";
+import type { IpAddress, Route, ArpEntry, DhcpLeaseStatus, PoolUtilization } from "@/api/types";
 
 const addressColumns: Column<IpAddress>[] = [
   {
@@ -59,7 +58,75 @@ function ipToNum(ip: string): number {
   return parts.reduce((acc, p) => acc * 256 + Number(p), 0);
 }
 
-const dhcpColumns: Column<DhcpLease>[] = [
+// ── ARP Tab columns ──────────────────────────────────────────────
+
+const arpColumns: Column<ArpEntry>[] = [
+  {
+    key: "address",
+    header: "IP Address",
+    render: (r) => <span className="font-mono text-sm">{r.address}</span>,
+    sortValue: (r) => ipToNum(r.address),
+  },
+  {
+    key: "mac",
+    header: "MAC Address",
+    render: (r) => (
+      <div>
+        <span className="font-mono text-sm">{r.mac_address ?? "—"}</span>
+        {r.manufacturer && (
+          <p className="text-[10px] text-muted-foreground">{r.manufacturer}</p>
+        )}
+      </div>
+    ),
+    sortValue: (r) => r.mac_address ?? "",
+  },
+  {
+    key: "interface",
+    header: "Interface",
+    render: (r) => r.interface ?? "—",
+    sortValue: (r) => r.interface ?? "",
+  },
+  {
+    key: "dynamic",
+    header: "Dynamic",
+    render: (r) =>
+      r.dynamic ? (
+        <Badge active={false} label="Yes" />
+      ) : (
+        <span className="text-xs">No</span>
+      ),
+    sortValue: (r) => (r.dynamic ? 1 : 0),
+  },
+  {
+    key: "complete",
+    header: "Complete",
+    render: (r) => {
+      if (r.complete === false) {
+        return (
+          <span className="inline-flex rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-500">
+            Incomplete
+          </span>
+        );
+      }
+      return <span className="text-xs text-muted-foreground">Yes</span>;
+    },
+    sortValue: (r) => (r.complete ? 1 : 0),
+  },
+  {
+    key: "manufacturer",
+    header: "Manufacturer",
+    render: (r) => (
+      <span className="text-xs text-muted-foreground">
+        {r.manufacturer ?? "—"}
+      </span>
+    ),
+    sortValue: (r) => r.manufacturer ?? "",
+  },
+];
+
+// ── Enhanced DHCP columns ────────────────────────────────────────
+
+const dhcpStatusColumns: Column<DhcpLeaseStatus>[] = [
   {
     key: "address",
     header: "IP Address",
@@ -69,13 +136,31 @@ const dhcpColumns: Column<DhcpLease>[] = [
   {
     key: "mac",
     header: "MAC",
-    render: (r) => <span className="font-mono text-sm">{r["mac-address"] ?? "—"}</span>,
+    render: (r) => (
+      <div>
+        <span className="font-mono text-sm">{r.mac_address ?? "—"}</span>
+        {r.manufacturer && (
+          <p className="text-[10px] text-muted-foreground">{r.manufacturer}</p>
+        )}
+      </div>
+    ),
+    sortValue: (r) => r.mac_address ?? "",
   },
   {
     key: "hostname",
     header: "Hostname",
-    render: (r) => r["host-name"] ?? "—",
-    sortValue: (r) => r["host-name"] ?? "",
+    render: (r) => r.host_name ?? "—",
+    sortValue: (r) => r.host_name ?? "",
+  },
+  {
+    key: "manufacturer",
+    header: "Manufacturer",
+    render: (r) => (
+      <span className="text-xs text-muted-foreground">
+        {r.manufacturer ?? "—"}
+      </span>
+    ),
+    sortValue: (r) => r.manufacturer ?? "",
   },
   { key: "server", header: "Server", render: (r) => r.server ?? "—", sortValue: (r) => r.server ?? "" },
   {
@@ -86,46 +171,127 @@ const dhcpColumns: Column<DhcpLease>[] = [
     ),
     sortValue: (r) => r.status ?? "",
   },
-  { key: "expires", header: "Expires", render: (r) => r["expires-after"] ?? "—" },
+  {
+    key: "network_status",
+    header: "Network Status",
+    render: (r) => {
+      if (r.arp_status === "active") {
+        return (
+          <span className="inline-flex items-center gap-1 text-xs">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            Active
+          </span>
+        );
+      }
+      if (r.arp_status === "stale") {
+        return (
+          <span className="inline-flex items-center gap-1 text-xs text-amber-500">
+            <span className="h-2 w-2 rounded-full bg-amber-500" />
+            Stale
+          </span>
+        );
+      }
+      return (
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+          Offline
+        </span>
+      );
+    },
+    sortValue: (r) =>
+      r.arp_status === "active" ? 0 : r.arp_status === "stale" ? 1 : 2,
+  },
+  { key: "expires", header: "Expires", render: (r) => r.expires_after ?? "—" },
   { key: "comment", header: "Comment", render: (r) => r.comment ?? "" },
 ];
 
-type Tab = "addresses" | "routes" | "dhcp" | "utilization";
+// ── Enhanced Pool Utilization ────────────────────────────────────
+
+function EnhancedPoolUtilization({ data }: { data: PoolUtilization[] }) {
+  if (data.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No active DHCP servers found.
+      </p>
+    );
+  }
+
+  const rows = [...data].sort((a, b) => b.pct - a.pct);
+
+  return (
+    <div className="space-y-3">
+      {rows.map((r) => (
+        <div key={r.name} className="rounded-lg border border-border bg-card p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div>
+              <span className="text-sm font-medium">{r.name}</span>
+              <span className="ml-2 text-xs text-muted-foreground">
+                {r.interface} &middot; pool: {r.pool_name}
+              </span>
+            </div>
+            <span className="text-sm font-medium">
+              {r.bound_count} / {r.total_ips}
+              <span className="ml-1 text-xs text-muted-foreground">
+                ({r.pct}%)
+              </span>
+            </span>
+          </div>
+          <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn(
+                "h-full rounded-full transition-all",
+                r.pct > 90
+                  ? "bg-destructive"
+                  : r.pct > 70
+                    ? "bg-warning"
+                    : "bg-success",
+              )}
+              style={{ width: `${Math.min(r.pct, 100)}%` }}
+            />
+          </div>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            {r.active_on_network} active on network &middot;{" "}
+            {r.bound_count} leases assigned
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── IP Page ──────────────────────────────────────────────────────
+
+type Tab = "addresses" | "routes" | "dhcp" | "arp" | "utilization";
 
 export function IpPage() {
   const [tab, setTab] = useState<Tab>("addresses");
   const addresses = useIpAddresses({ enabled: tab === "addresses" });
   const routes = useIpRoutes({ enabled: tab === "routes" });
-  const dhcp = useDhcpLeases({ enabled: tab === "dhcp" || tab === "utilization" });
-  const pools = useIpPools({ enabled: tab === "utilization" });
-  const servers = useDhcpServers({ enabled: tab === "utilization" });
+  const arp = useArpTable({ enabled: tab === "arp" });
+  const dhcpStatus = useDhcpLeasesStatus({ enabled: tab === "dhcp" });
+  const poolUtil = usePoolUtilization({ enabled: tab === "utilization" });
 
-  const queries: Record<string, { isFetching: boolean; refetch: () => void; isLoading: boolean; error: Error | null }> = { addresses, routes, dhcp };
-  const query = tab === "utilization" ? pools : queries[tab];
+  const queries: Record<string, { isFetching: boolean; refetch: () => void; isLoading: boolean; error: Error | null }> = {
+    addresses,
+    routes,
+    arp,
+    dhcp: dhcpStatus,
+    utilization: poolUtil,
+  };
+  const query = queries[tab];
 
   return (
     <PageShell
       title="IP"
-      onRefresh={() => {
-        if (tab === "utilization") {
-          pools.refetch();
-          servers.refetch();
-          dhcp.refetch();
-        } else {
-          query.refetch();
-        }
-      }}
-      isRefreshing={
-        tab === "utilization"
-          ? pools.isFetching || servers.isFetching || dhcp.isFetching
-          : query.isFetching
-      }
+      onRefresh={() => query.refetch()}
+      isRefreshing={query.isFetching}
     >
       <div className="mb-4 flex gap-2">
         {([
           ["addresses", "Addresses"],
           ["routes", "Routes"],
           ["dhcp", "DHCP Leases"],
+          ["arp", "ARP"],
           ["utilization", "Utilization"],
         ] as const).map(([key, label]) => (
           <button
@@ -143,8 +309,8 @@ export function IpPage() {
         ))}
       </div>
 
-      {tab !== "utilization" && query.isLoading && <LoadingSpinner />}
-      {tab !== "utilization" && query.error && (
+      {query.isLoading && <LoadingSpinner />}
+      {query.error && (
         <ErrorDisplay message={query.error.message} onRetry={() => query.refetch()} />
       )}
 
@@ -154,23 +320,14 @@ export function IpPage() {
       {tab === "routes" && routes.data && (
         <DataTable columns={routeColumns} data={routes.data} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search routes..." />
       )}
-      {tab === "dhcp" && dhcp.data && (
-        <DataTable columns={dhcpColumns} data={dhcp.data} rowKey={(r) => r[".id"]} defaultSort={{ key: "address" }} searchable searchPlaceholder="Search leases..." />
+      {tab === "dhcp" && dhcpStatus.data && (
+        <DataTable columns={dhcpStatusColumns} data={dhcpStatus.data} rowKey={(r) => r.id} defaultSort={{ key: "address" }} searchable searchPlaceholder="Search leases..." />
       )}
-      {tab === "utilization" && (
-        <>
-          {(pools.isLoading || servers.isLoading || dhcp.isLoading) && <LoadingSpinner />}
-          {pools.error && (
-            <ErrorDisplay message={pools.error.message} onRetry={() => pools.refetch()} />
-          )}
-          {pools.data && servers.data && dhcp.data && (
-            <SubnetUtilization
-              pools={pools.data}
-              servers={servers.data}
-              leases={dhcp.data}
-            />
-          )}
-        </>
+      {tab === "arp" && arp.data && (
+        <DataTable columns={arpColumns} data={arp.data} rowKey={(r) => r.id} searchable searchPlaceholder="Search ARP table..." />
+      )}
+      {tab === "utilization" && poolUtil.data && (
+        <EnhancedPoolUtilization data={poolUtil.data} />
       )}
     </PageShell>
   );

@@ -21,6 +21,10 @@ import type {
   SpeedTestResult,
   VlanFlow,
   ConnectionSummary,
+  ConnectionsPageResponse,
+  ArpEntry,
+  DhcpLeaseStatus,
+  PoolUtilization,
   FirewallDropsSummary,
   VlanActivityEntry,
 } from "./types";
@@ -191,6 +195,41 @@ export function useConnectionSummary() {
     queryKey: ["connections", "summary"],
     queryFn: () => apiFetch<ConnectionSummary>("/api/connections/summary"),
     refetchInterval: 30_000,
+  });
+}
+
+export function useConnectionsPage() {
+  return useQuery({
+    queryKey: ["connections", "page"],
+    queryFn: () => apiFetch<ConnectionsPageResponse>("/api/connections/page"),
+    refetchInterval: 30_000,
+  });
+}
+
+// ARP
+
+export function useArpTable(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["ip", "arp"],
+    queryFn: () => apiFetch<ArpEntry[]>("/api/ip/arp"),
+    enabled: options?.enabled ?? true,
+  });
+}
+
+export function useDhcpLeasesStatus(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["ip", "dhcp-leases-status"],
+    queryFn: () => apiFetch<DhcpLeaseStatus[]>("/api/ip/dhcp-leases-status"),
+    refetchInterval: 60_000,
+    enabled: options?.enabled ?? true,
+  });
+}
+
+export function usePoolUtilization(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["ip", "pool-utilization"],
+    queryFn: () => apiFetch<PoolUtilization[]>("/api/ip/pool-utilization"),
+    enabled: options?.enabled ?? true,
   });
 }
 

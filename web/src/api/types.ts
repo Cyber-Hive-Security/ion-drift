@@ -251,13 +251,103 @@ export interface ConnectionSummary {
   udp_count: number;
   other_count: number;
   max_entries: number | null;
+  flagged_count: number;
+}
+
+// Full connections page types (snake_case — custom Rust structs)
+
+export interface CountryInfo {
+  code: string;
+  name: string;
+}
+
+export interface ConnectionEntry {
+  id: string;
+  protocol: string;
+  src_address: string;
+  src_port: string;
+  dst_address: string;
+  dst_port: string;
+  tcp_state: string | null;
+  timeout: string | null;
+  orig_bytes: number;
+  repl_bytes: number;
+  connection_mark: string | null;
+  src_country: CountryInfo | null;
+  dst_country: CountryInfo | null;
+  flagged: boolean;
+}
+
+export interface ConnectionsPageSummary {
+  total: number;
+  by_protocol: Record<string, number>;
+  by_state: Record<string, number>;
+  flagged_count: number;
+  max_entries: number | null;
+}
+
+export interface ConnectionsPageResponse {
+  connections: ConnectionEntry[];
+  summary: ConnectionsPageSummary;
+}
+
+// ARP types (snake_case — custom Rust structs)
+
+export interface ArpEntry {
+  id: string;
+  address: string;
+  mac_address: string | null;
+  interface: string | null;
+  dynamic: boolean | null;
+  complete: boolean | null;
+  disabled: boolean | null;
+  comment: string | null;
+  manufacturer: string | null;
+}
+
+// Enhanced DHCP lease with ARP status (snake_case — custom Rust structs)
+
+export interface DhcpLeaseStatus {
+  id: string;
+  address: string;
+  mac_address: string | null;
+  host_name: string | null;
+  server: string | null;
+  status: string | null;
+  expires_after: string | null;
+  last_seen: string | null;
+  dynamic: boolean | null;
+  disabled: boolean | null;
+  comment: string | null;
+  manufacturer: string | null;
+  arp_status: string;
+}
+
+// Pool utilization with ARP (snake_case — custom Rust structs)
+
+export interface PoolUtilization {
+  name: string;
+  interface: string;
+  pool_name: string;
+  total_ips: number;
+  bound_count: number;
+  active_on_network: number;
+  pct: number;
 }
 
 // Firewall drops types (snake_case — custom Rust structs)
 
+export interface DropCountryEntry {
+  code: string;
+  name: string;
+  count: number;
+  flagged: boolean;
+}
+
 export interface FirewallDropsSummary {
   total_drop_packets: number;
   total_drop_bytes: number;
+  top_drop_countries: DropCountryEntry[];
 }
 
 // VLAN activity types (snake_case — custom Rust structs)

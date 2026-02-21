@@ -1,7 +1,9 @@
 mod auth;
 mod config;
+mod geo;
 mod live_traffic;
 mod middleware;
+mod oui;
 mod routes;
 mod state;
 
@@ -83,6 +85,12 @@ async fn main() -> anyhow::Result<()> {
     let speedtest_running = Arc::new(AtomicBool::new(false));
     let speedtest_last_completed = Arc::new(AtomicI64::new(0));
 
+    // Load MAC OUI database (bundled)
+    let oui_db = oui::OuiDb::load();
+
+    // Load GeoIP database (optional)
+    let geo_db = geo::GeoDb::load(config.data.geoip_db_path.as_deref());
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),
@@ -96,6 +104,8 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         speedtest_running: speedtest_running.clone(),
         speedtest_last_completed: speedtest_last_completed.clone(),
+        oui_db,
+        geo_db,
     };
 
     // Spawn background tasks
