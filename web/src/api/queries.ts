@@ -15,6 +15,7 @@ import type {
   NatRule,
   MangleRule,
   LogEntry,
+  LogsResponse,
   LifetimeTraffic,
   TrafficSample,
   MetricsPoint,
@@ -159,6 +160,26 @@ export function useLogs(topics?: string, limit?: number, options?: { refetchInte
     queryKey: ["logs", topics, limit],
     queryFn: () => apiFetch<LogEntry[]>(`/api/logs${qs ? `?${qs}` : ""}`),
     refetchInterval: options?.refetchInterval ?? false,
+  });
+}
+
+export function useStructuredLogs(params: {
+  topics?: string;
+  limit?: number;
+  action?: string;
+  severity?: string;
+  refetchInterval?: number | false;
+}) {
+  const qs = new URLSearchParams();
+  if (params.topics) qs.set("topics", params.topics);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.action) qs.set("action", params.action);
+  if (params.severity) qs.set("severity", params.severity);
+  const qsStr = qs.toString();
+  return useQuery({
+    queryKey: ["logs", "structured", params.topics, params.limit, params.action, params.severity],
+    queryFn: () => apiFetch<LogsResponse>(`/api/logs${qsStr ? `?${qsStr}` : ""}`),
+    refetchInterval: params.refetchInterval ?? false,
   });
 }
 

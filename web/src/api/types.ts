@@ -183,13 +183,83 @@ export interface MangleRule {
   comment?: string;
 }
 
-// Log types (kebab-case)
+// Log types (kebab-case — raw from RouterOS, kept for backwards compat)
 
 export interface LogEntry {
   ".id": string;
   time: string;
   topics?: string;
   message: string;
+}
+
+// Structured log types (snake_case — custom Rust structs)
+
+export interface ParsedFields {
+  direction?: string;
+  in_interface?: string;
+  out_interface?: string;
+  src_ip?: string;
+  dst_ip?: string;
+  src_port?: number;
+  dst_port?: number;
+  protocol?: string;
+  action?: string;
+  mac?: string;
+  length?: number;
+  src_country?: CountryInfo;
+  dst_country?: CountryInfo;
+  src_flagged: boolean;
+  dst_flagged: boolean;
+  manufacturer?: string;
+}
+
+export interface StructuredLogEntry {
+  id: string;
+  timestamp: string;
+  topics: string[];
+  level: string;
+  prefix?: string;
+  message: string;
+  parsed?: ParsedFields;
+}
+
+export interface IpCount {
+  ip: string;
+  count: number;
+  country?: CountryInfo;
+  flagged: boolean;
+}
+
+export interface PortCount {
+  port: number;
+  count: number;
+  protocol?: string;
+}
+
+export interface InterfaceCount {
+  interface: string;
+  count: number;
+}
+
+export interface TimeCount {
+  minute: string;
+  count: number;
+}
+
+export interface LogAnalytics {
+  total: number;
+  by_severity: Record<string, number>;
+  by_action: Record<string, number>;
+  by_topic: Record<string, number>;
+  top_dropped_sources: IpCount[];
+  top_targeted_ports: PortCount[];
+  drops_per_interface: InterfaceCount[];
+  volume_over_time: TimeCount[];
+}
+
+export interface LogsResponse {
+  entries: StructuredLogEntry[];
+  analytics: LogAnalytics;
 }
 
 // Traffic types (snake_case — custom Rust structs, not RouterOS models)

@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod geo;
 mod live_traffic;
+mod log_parser;
 mod middleware;
 mod oui;
 mod routes;
