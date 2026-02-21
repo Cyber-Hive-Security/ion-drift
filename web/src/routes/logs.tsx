@@ -57,12 +57,6 @@ const SEVERITY_COLORS: Record<string, string> = {
   critical: "bg-red-600",
 };
 
-const SEVERITY_TEXT: Record<string, string> = {
-  info: "text-emerald-400",
-  warning: "text-yellow-400",
-  error: "text-red-400",
-  critical: "text-red-500",
-};
 
 // ── Logs Page ────────────────────────────────────────────────────
 
