@@ -221,6 +221,8 @@ export interface StructuredLogEntry {
   prefix?: string;
   message: string;
   parsed?: ParsedFields;
+  /** Raw messages from non-terminating log rules that matched the same packet. */
+  paired_messages?: string[];
 }
 
 export interface IpCount {

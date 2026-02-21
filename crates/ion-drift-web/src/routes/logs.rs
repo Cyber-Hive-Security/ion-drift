@@ -28,10 +28,14 @@ pub async fn list(
     let raw_entries = state.mikrotik.log_entries().await.map_err(api_error)?;
 
     // Parse all entries into structured form
-    let mut entries: Vec<StructuredLogEntry> = raw_entries
+    let entries: Vec<StructuredLogEntry> = raw_entries
         .iter()
         .map(|e| log_parser::parse_log_entry(e, &state.geo_db, &state.oui_db))
         .collect();
+
+    // Deduplicate log+drop/accept pairs (same packet, non-terminating log rule
+    // followed by terminating rule) before filtering and analytics.
+    let mut entries = log_parser::deduplicate_log_pairs(entries);
 
     // Filter by topics
     if let Some(ref topics) = f.topics {

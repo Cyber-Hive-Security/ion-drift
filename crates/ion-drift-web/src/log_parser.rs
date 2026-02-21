@@ -15,7 +15,7 @@
 //!   proto ICMP (type T, code C), SRC_IP->DST_IP, len LEN
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
@@ -69,6 +69,10 @@ pub struct StructuredLogEntry {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parsed: Option<ParsedFields>,
+    /// Raw messages from non-terminating log rules that matched the same packet.
+    /// Empty for normal entries; populated by [`deduplicate_log_pairs`].
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub paired_messages: Vec<String>,
 }
 
 /// Aggregated analytics over a set of log entries.
@@ -383,7 +387,123 @@ pub fn parse_log_entry(
         prefix,
         message: entry.message.clone(),
         parsed,
+        paired_messages: Vec::new(),
     }
+}
+
+/// Deduplicate log entries where the same packet triggered both a non-terminating
+/// log rule and a terminating drop/accept rule.
+///
+/// Detection: entries with matching timestamp (same second), protocol, source,
+/// destination, interfaces, and packet length — but different prefixes — where
+/// exactly one entry has a terminating action (`drop`/`accept`/`reject`).
+///
+/// The terminating entry is kept with the non-terminating message(s) stored in
+/// `paired_messages` for display in the expanded detail view.
+pub fn deduplicate_log_pairs(entries: Vec<StructuredLogEntry>) -> Vec<StructuredLogEntry> {
+    /// Build a dedup key from packet-identifying fields.
+    /// Returns None for non-firewall entries (no parsed fields / no protocol).
+    fn dedup_key(entry: &StructuredLogEntry) -> Option<String> {
+        let p = entry.parsed.as_ref()?;
+        let proto = p.protocol.as_deref()?;
+
+        // Truncate timestamp to the second (first 19 chars of "YYYY-MM-DD HH:MM:SS")
+        let ts = if entry.timestamp.len() >= 19 {
+            &entry.timestamp[..19]
+        } else {
+            &entry.timestamp
+        };
+
+        let src_ip = p.src_ip.as_deref().unwrap_or("");
+        let dst_ip = p.dst_ip.as_deref().unwrap_or("");
+        let src_port = p.src_port.map(|v| v.to_string()).unwrap_or_default();
+        let dst_port = p.dst_port.map(|v| v.to_string()).unwrap_or_default();
+        let in_iface = p.in_interface.as_deref().unwrap_or("");
+        let out_iface = p.out_interface.as_deref().unwrap_or("");
+        let length = p.length.map(|v| v.to_string()).unwrap_or_default();
+
+        Some(format!(
+            "{ts}|{proto}|{src_ip}:{src_port}|{dst_ip}:{dst_port}|{in_iface}|{out_iface}|{length}"
+        ))
+    }
+
+    fn is_terminating(entry: &StructuredLogEntry) -> bool {
+        entry
+            .parsed
+            .as_ref()
+            .and_then(|p| p.action.as_deref())
+            .is_some_and(|a| matches!(a, "drop" | "accept" | "reject"))
+    }
+
+    // Group entry indices by their dedup key
+    let mut key_groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        if let Some(key) = dedup_key(entry) {
+            key_groups.entry(key).or_default().push(i);
+        }
+    }
+
+    // Determine merges: primary_idx → vec of secondary messages
+    let mut merges: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut remove: HashSet<usize> = HashSet::new();
+
+    for indices in key_groups.values() {
+        if indices.len() < 2 {
+            continue;
+        }
+
+        // All entries in the group must have different prefixes (same prefix = same rule,
+        // likely different packets that happen to look identical).
+        let prefixes: HashSet<Option<&str>> = indices
+            .iter()
+            .map(|&i| entries[i].prefix.as_deref())
+            .collect();
+        if prefixes.len() < 2 {
+            continue;
+        }
+
+        // Partition into terminating vs non-terminating
+        let mut terminating: Vec<usize> = Vec::new();
+        let mut non_terminating: Vec<usize> = Vec::new();
+        for &i in indices {
+            if is_terminating(&entries[i]) {
+                terminating.push(i);
+            } else {
+                non_terminating.push(i);
+            }
+        }
+
+        // Only collapse when exactly 1 terminating and 1+ non-terminating.
+        // Multiple terminating entries = genuinely different packets.
+        if terminating.len() != 1 || non_terminating.is_empty() {
+            continue;
+        }
+
+        let primary = terminating[0];
+        let secondary_msgs: Vec<String> = non_terminating
+            .iter()
+            .map(|&i| entries[i].message.clone())
+            .collect();
+
+        merges.insert(primary, secondary_msgs);
+        for &i in &non_terminating {
+            remove.insert(i);
+        }
+    }
+
+    // Build result, applying merges and skipping removed entries
+    let mut result = Vec::with_capacity(entries.len() - remove.len());
+    for (i, mut entry) in entries.into_iter().enumerate() {
+        if remove.contains(&i) {
+            continue;
+        }
+        if let Some(msgs) = merges.remove(&i) {
+            entry.paired_messages = msgs;
+        }
+        result.push(entry);
+    }
+
+    result
 }
 
 /// Compute analytics over a slice of structured log entries.

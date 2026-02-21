@@ -653,6 +653,11 @@ function LogRow({
               {entry.prefix}
             </span>
           )}
+          {entry.paired_messages && entry.paired_messages.length > 0 && (
+            <span className="ml-1 inline-flex items-center rounded bg-blue-500/15 px-1 py-0.5 text-[10px] font-medium text-blue-400">
+              {1 + entry.paired_messages.length} rules
+            </span>
+          )}
         </td>
 
         {/* Protocol */}
@@ -750,12 +755,33 @@ function LogRow({
 
 function ExpandedDetail({ entry }: { entry: StructuredLogEntry }) {
   const p = entry.parsed;
+  const hasPaired = entry.paired_messages && entry.paired_messages.length > 0;
 
   return (
     <div className="space-y-2">
+      {hasPaired && (
+        <div className="text-[10px] font-medium text-blue-400 uppercase tracking-wider">
+          Terminating rule
+        </div>
+      )}
       <div className="font-mono text-xs text-foreground bg-background/50 rounded p-2 whitespace-pre-wrap break-all">
         {entry.message}
       </div>
+      {hasPaired && (
+        <>
+          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+            Non-terminating log {entry.paired_messages!.length === 1 ? "rule" : "rules"}
+          </div>
+          {entry.paired_messages!.map((msg, i) => (
+            <div
+              key={i}
+              className="font-mono text-xs text-muted-foreground bg-background/30 rounded p-2 whitespace-pre-wrap break-all border border-border/30"
+            >
+              {msg}
+            </div>
+          ))}
+        </>
+      )}
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
         <Field label="Topics" value={entry.topics.join(", ")} />
         <Field label="Level" value={entry.level} />
