@@ -5,7 +5,8 @@ use crate::MikrotikClient;
 use crate::error::MikrotikError;
 use crate::resources::firewall::CreateMangleRule;
 
-/// A single inter-VLAN traffic flow (source → target with byte counter).
+/// A single traffic flow (source → target with byte counter).
+/// Covers inter-VLAN and WAN ↔ VLAN flows.
 #[derive(Debug, Clone, Serialize)]
 pub struct VlanFlow {
     pub source: String,
@@ -19,7 +20,7 @@ pub struct VlanFlowManager;
 impl VlanFlowManager {
     const COMMENT_PREFIX: &'static str = "ion-drift-flow:";
 
-    /// Ensure mangle passthrough rules exist for every VLAN pair.
+    /// Ensure mangle passthrough rules exist for every VLAN pair and WAN ↔ VLAN pair.
     ///
     /// Creates rules in the `forward` chain with action `passthrough`.
     /// These rules have zero impact on routing — they just count bytes and pass through.
@@ -71,11 +72,49 @@ impl VlanFlowManager {
             }
         }
 
-        let already_existed = (vlan_names.len() * (vlan_names.len() - 1)) - created;
+        // 4. Create missing rules for WAN ↔ VLAN pairs
+        let wan = "1-WAN";
+        for vlan in &vlan_names {
+            // WAN → VLAN (inbound from internet)
+            let comment = format!("{}{wan}>{vlan}", Self::COMMENT_PREFIX);
+            if !existing_comments.contains(&comment.as_str()) {
+                debug!(src = wan, dst = vlan.as_str(), "creating flow counter rule");
+                client
+                    .create_mangle_rule(&CreateMangleRule {
+                        chain: "forward".into(),
+                        action: "passthrough".into(),
+                        in_interface: wan.to_string(),
+                        out_interface: vlan.clone(),
+                        comment,
+                    })
+                    .await?;
+                created += 1;
+            }
+
+            // VLAN → WAN (outbound to internet)
+            let comment = format!("{}{vlan}>{wan}", Self::COMMENT_PREFIX);
+            if !existing_comments.contains(&comment.as_str()) {
+                debug!(src = vlan.as_str(), dst = wan, "creating flow counter rule");
+                client
+                    .create_mangle_rule(&CreateMangleRule {
+                        chain: "forward".into(),
+                        action: "passthrough".into(),
+                        in_interface: vlan.clone(),
+                        out_interface: wan.to_string(),
+                        comment,
+                    })
+                    .await?;
+                created += 1;
+            }
+        }
+
+        let vlan_pair_count = vlan_names.len() * (vlan_names.len() - 1);
+        let wan_pair_count = vlan_names.len() * 2;
+        let already_existed = (vlan_pair_count + wan_pair_count) - created;
         info!(
             created,
             already_existed,
-            "VLAN flow counter setup complete"
+            "flow counter setup complete (VLAN pairs + WAN)"
         );
 
         Ok(created)
