@@ -288,9 +288,9 @@ function GeoDistribution({ connections }: { connections: ConnectionEntry[] }) {
               color: "oklch(0.95 0.01 285)",
               fontSize: "12px",
             }}
-            formatter={(value: number, _: string, props: { payload: { name: string } }) => [
+            formatter={(value: number, _: string, props: { payload?: { name?: string } }) => [
               formatNumber(value),
-              props.payload.name,
+              props.payload?.name ?? "",
             ]}
           />
           <Bar dataKey="count" isAnimationActive={false}>
