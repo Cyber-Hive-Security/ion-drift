@@ -235,6 +235,14 @@ export interface DhcpServer {
   comment?: string;
 }
 
+// VLAN flow types (snake_case — custom Rust structs)
+
+export interface VlanFlow {
+  source: string;
+  target: string;
+  bytes: number;
+}
+
 // Speedtest types (snake_case — custom Rust structs)
 
 export interface ProviderResult {

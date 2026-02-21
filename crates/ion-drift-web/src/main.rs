@@ -38,6 +38,13 @@ async fn main() -> anyhow::Result<()> {
     let router_name = mikrotik.test_connection().await?;
     tracing::info!("connected to router: {router_name}");
 
+    // Set up VLAN flow counter mangle rules (non-fatal on failure)
+    tracing::info!("setting up VLAN flow counters...");
+    match mikrotik_core::VlanFlowManager::setup_flow_counters(&mikrotik).await {
+        Ok(n) => tracing::info!("VLAN flow counter setup complete ({n} new rules created)"),
+        Err(e) => tracing::warn!("VLAN flow counter setup failed (dashboard flows unavailable): {e}"),
+    }
+
     // Build HTTP client with Smallstep CA cert (shared for OIDC + router)
     let http_client = auth::build_oidc_http_client(config.oidc.ca_cert_path.as_deref())?;
 

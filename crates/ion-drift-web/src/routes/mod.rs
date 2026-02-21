@@ -6,6 +6,7 @@ pub mod metrics;
 pub mod speedtest;
 pub mod system;
 pub mod traffic;
+pub mod vlan_flows;
 
 use axum::Router;
 use axum::http::{HeaderValue, Method, StatusCode, header};
@@ -89,6 +90,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         // Traffic
         .route("/api/traffic", get(traffic::current))
         .route("/api/traffic/live", get(traffic::live))
+        .route("/api/traffic/vlan-flows", get(vlan_flows::vlan_flows))
         // Metrics
         .route("/api/metrics/history", get(metrics::history))
         // Speedtest

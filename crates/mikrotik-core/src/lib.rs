@@ -4,6 +4,7 @@ pub mod metrics;
 pub mod resources;
 pub mod speedtest;
 pub mod tracker;
+pub mod vlan_flows;
 mod serde_helpers;
 
 pub use client::{MikrotikClient, MikrotikConfig};
@@ -11,3 +12,4 @@ pub use error::MikrotikError;
 pub use metrics::{MetricsPoint, MetricsStore};
 pub use speedtest::{ProviderResult, SpeedTestResult, SpeedTestStore};
 pub use tracker::{LifetimeTraffic, TrafficTracker};
+pub use vlan_flows::{VlanFlow, VlanFlowManager};

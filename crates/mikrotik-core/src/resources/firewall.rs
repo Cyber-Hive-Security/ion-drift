@@ -138,6 +138,17 @@ pub struct MangleRule {
     pub comment: Option<String>,
 }
 
+/// Body for creating a mangle rule via `PUT /rest/ip/firewall/mangle`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CreateMangleRule {
+    pub chain: String,
+    pub action: String,
+    pub in_interface: String,
+    pub out_interface: String,
+    pub comment: String,
+}
+
 // ── Client methods ─────────────────────────────────────────────
 
 impl MikrotikClient {
@@ -154,5 +165,10 @@ impl MikrotikClient {
     /// List firewall mangle rules.
     pub async fn firewall_mangle_rules(&self) -> Result<Vec<MangleRule>, MikrotikError> {
         self.get("ip/firewall/mangle").await
+    }
+
+    /// Create a new mangle rule.
+    pub async fn create_mangle_rule(&self, rule: &CreateMangleRule) -> Result<MangleRule, MikrotikError> {
+        self.put("ip/firewall/mangle", rule).await
     }
 }

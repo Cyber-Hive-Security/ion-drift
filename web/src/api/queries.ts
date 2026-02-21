@@ -19,6 +19,7 @@ import type {
   TrafficSample,
   MetricsPoint,
   SpeedTestResult,
+  VlanFlow,
 } from "./types";
 
 // Auth
@@ -169,6 +170,14 @@ export function useLiveTraffic() {
     queryKey: ["traffic", "live"],
     queryFn: () => apiFetch<TrafficSample[]>("/api/traffic/live"),
     refetchInterval: 5_000,
+  });
+}
+
+export function useVlanFlows() {
+  return useQuery({
+    queryKey: ["traffic", "vlan-flows"],
+    queryFn: () => apiFetch<VlanFlow[]>("/api/traffic/vlan-flows"),
+    refetchInterval: 60_000,
   });
 }
 
