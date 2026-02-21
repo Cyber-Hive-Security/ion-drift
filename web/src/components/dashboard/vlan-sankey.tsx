@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { formatBytes } from "@/lib/format";
 import { useVlanFlows } from "@/api/queries";
 import { Sankey, Tooltip, Rectangle, Layer } from "recharts";
@@ -96,32 +96,35 @@ function CustomLink(props: SankeyLinkPayload) {
     linkWidth,
     payload,
   } = props;
-  const [hovered, setHovered] = useState(false);
 
   return (
-    <Layer>
-      <path
-        d={`
-          M${sourceX},${sourceY + linkWidth / 2}
-          C${sourceControlX},${sourceY + linkWidth / 2}
-            ${targetControlX},${targetY + linkWidth / 2}
-            ${targetX},${targetY + linkWidth / 2}
-          L${targetX},${targetY - linkWidth / 2}
-          C${targetControlX},${targetY - linkWidth / 2}
-            ${sourceControlX},${sourceY - linkWidth / 2}
-            ${sourceX},${sourceY - linkWidth / 2}
-          Z
-        `}
-        fill={payload.source.color}
-        fillOpacity={hovered ? 0.5 : 0.25}
-        stroke={payload.source.color}
-        strokeWidth={hovered ? 2 : 0}
-        strokeOpacity={0.5}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        style={{ cursor: "pointer" }}
-      />
-    </Layer>
+    <path
+      d={`
+        M${sourceX},${sourceY + linkWidth / 2}
+        C${sourceControlX},${sourceY + linkWidth / 2}
+          ${targetControlX},${targetY + linkWidth / 2}
+          ${targetX},${targetY + linkWidth / 2}
+        L${targetX},${targetY - linkWidth / 2}
+        C${targetControlX},${targetY - linkWidth / 2}
+          ${sourceControlX},${sourceY - linkWidth / 2}
+          ${sourceX},${sourceY - linkWidth / 2}
+        Z
+      `}
+      fill={payload.source.color}
+      fillOpacity={0.25}
+      stroke={payload.source.color}
+      strokeWidth={0}
+      strokeOpacity={0.5}
+      onMouseEnter={(e) => {
+        e.currentTarget.setAttribute("fill-opacity", "0.5");
+        e.currentTarget.setAttribute("stroke-width", "2");
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.setAttribute("fill-opacity", "0.25");
+        e.currentTarget.setAttribute("stroke-width", "0");
+      }}
+      style={{ cursor: "pointer" }}
+    />
   );
 }
 

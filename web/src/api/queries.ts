@@ -20,6 +20,9 @@ import type {
   MetricsPoint,
   SpeedTestResult,
   VlanFlow,
+  ConnectionSummary,
+  FirewallDropsSummary,
+  VlanActivityEntry,
 } from "./types";
 
 // Auth
@@ -178,6 +181,36 @@ export function useVlanFlows() {
     queryKey: ["traffic", "vlan-flows"],
     queryFn: () => apiFetch<VlanFlow[]>("/api/traffic/vlan-flows"),
     refetchInterval: 60_000,
+  });
+}
+
+// Connections
+
+export function useConnectionSummary() {
+  return useQuery({
+    queryKey: ["connections", "summary"],
+    queryFn: () => apiFetch<ConnectionSummary>("/api/connections/summary"),
+    refetchInterval: 30_000,
+  });
+}
+
+// Firewall Drops
+
+export function useFirewallDrops() {
+  return useQuery({
+    queryKey: ["firewall", "drops"],
+    queryFn: () => apiFetch<FirewallDropsSummary>("/api/firewall/drops"),
+    refetchInterval: 30_000,
+  });
+}
+
+// VLAN Activity
+
+export function useVlanActivity() {
+  return useQuery({
+    queryKey: ["traffic", "vlan-activity"],
+    queryFn: () => apiFetch<VlanActivityEntry[]>("/api/traffic/vlan-activity"),
+    refetchInterval: 10_000,
   });
 }
 

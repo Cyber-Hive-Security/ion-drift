@@ -243,6 +243,31 @@ export interface VlanFlow {
   bytes: number;
 }
 
+// Connection summary types (snake_case — custom Rust structs)
+
+export interface ConnectionSummary {
+  total_connections: number;
+  tcp_count: number;
+  udp_count: number;
+  other_count: number;
+  max_entries: number | null;
+}
+
+// Firewall drops types (snake_case — custom Rust structs)
+
+export interface FirewallDropsSummary {
+  total_drop_packets: number;
+  total_drop_bytes: number;
+}
+
+// VLAN activity types (snake_case — custom Rust structs)
+
+export interface VlanActivityEntry {
+  name: string;
+  rx_bps: number;
+  tx_bps: number;
+}
+
 // Speedtest types (snake_case — custom Rust structs)
 
 export interface ProviderResult {

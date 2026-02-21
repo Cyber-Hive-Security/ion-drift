@@ -1,3 +1,4 @@
+pub mod connections;
 pub mod firewall;
 pub mod interfaces;
 pub mod ip;
@@ -6,6 +7,7 @@ pub mod metrics;
 pub mod speedtest;
 pub mod system;
 pub mod traffic;
+pub mod vlan_activity;
 pub mod vlan_flows;
 
 use axum::Router;
@@ -85,12 +87,16 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/api/firewall/filter", get(firewall::filter))
         .route("/api/firewall/nat", get(firewall::nat))
         .route("/api/firewall/mangle", get(firewall::mangle))
+        .route("/api/firewall/drops", get(firewall::drops))
+        // Connections
+        .route("/api/connections/summary", get(connections::summary))
         // Logs
         .route("/api/logs", get(logs::list))
         // Traffic
         .route("/api/traffic", get(traffic::current))
         .route("/api/traffic/live", get(traffic::live))
         .route("/api/traffic/vlan-flows", get(vlan_flows::vlan_flows))
+        .route("/api/traffic/vlan-activity", get(vlan_activity::vlan_activity))
         // Metrics
         .route("/api/metrics/history", get(metrics::history))
         // Speedtest

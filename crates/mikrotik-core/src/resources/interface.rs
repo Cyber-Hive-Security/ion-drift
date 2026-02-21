@@ -84,6 +84,16 @@ pub struct BridgeInterface {
     pub vlan_filtering: Option<bool>,
 }
 
+/// Real-time traffic sample from `/interface/monitor-traffic`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct MonitorTrafficEntry {
+    #[serde(default, deserialize_with = "ros_u64_opt")]
+    pub rx_bits_per_second: Option<u64>,
+    #[serde(default, deserialize_with = "ros_u64_opt")]
+    pub tx_bits_per_second: Option<u64>,
+}
+
 // ── Client methods ─────────────────────────────────────────────
 
 impl MikrotikClient {
@@ -100,5 +110,13 @@ impl MikrotikClient {
     /// List bridge interfaces.
     pub async fn bridge_interfaces(&self) -> Result<Vec<BridgeInterface>, MikrotikError> {
         self.get("interface/bridge").await
+    }
+
+    /// Monitor real-time traffic on an interface (single snapshot).
+    pub async fn monitor_traffic(&self, interface: &str) -> Result<Vec<MonitorTrafficEntry>, MikrotikError> {
+        self.post("interface/monitor-traffic", &serde_json::json!({
+            "interface": interface,
+            "once": ""
+        })).await
     }
 }

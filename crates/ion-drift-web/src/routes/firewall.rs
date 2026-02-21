@@ -1,10 +1,40 @@
 use axum::extract::{Query, State};
 use axum::response::{Json, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 use super::api_error;
+
+#[derive(Serialize)]
+pub struct FirewallDropsSummary {
+    pub total_drop_packets: u64,
+    pub total_drop_bytes: u64,
+}
+
+/// GET /api/firewall/drops
+pub async fn drops(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<FirewallDropsSummary>, Response> {
+    let rules = state
+        .mikrotik
+        .firewall_filter_rules()
+        .await
+        .map_err(api_error)?;
+
+    let (total_packets, total_bytes) = rules
+        .iter()
+        .filter(|r| r.action == "drop")
+        .fold((0u64, 0u64), |(p, b), r| {
+            (p + r.packets.unwrap_or(0), b + r.bytes.unwrap_or(0))
+        });
+
+    Ok(Json(FirewallDropsSummary {
+        total_drop_packets: total_packets,
+        total_drop_bytes: total_bytes,
+    }))
+}
 
 #[derive(Deserialize, Default)]
 pub struct ChainFilter {
