@@ -7,25 +7,24 @@ use serde::Deserialize;
 
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
+use super::internal_error;
 
 /// Minimum seconds between speed test runs.
 const SPEEDTEST_COOLDOWN_SECS: i64 = 300;
+
+/// Maximum number of history entries a client can request.
+const MAX_HISTORY_LIMIT: usize = 100;
 
 pub async fn latest(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
     let result = state.speedtest_store.latest().await.map_err(|e| {
-        tracing::error!("speedtest store error: {e}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response()
+        internal_error("speedtest store", e)
     })?;
 
     match result {
-        Some(r) => Ok(Json(serde_json::to_value(r).unwrap())),
+        Some(r) => Ok(Json(serde_json::to_value(r).map_err(|e| internal_error("serialize speedtest", e))?)),
         None => Ok(Json(serde_json::json!({ "message": "no speedtest results yet" }))),
     }
 }
@@ -40,17 +39,12 @@ pub async fn history(
     State(state): State<AppState>,
     Query(params): Query<HistoryParams>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let limit = params.limit.unwrap_or(10);
+    let limit = params.limit.unwrap_or(10).min(MAX_HISTORY_LIMIT);
     let results = state.speedtest_store.recent(limit).await.map_err(|e| {
-        tracing::error!("speedtest store error: {e}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response()
+        internal_error("speedtest store", e)
     })?;
 
-    Ok(Json(serde_json::to_value(results).unwrap()))
+    Ok(Json(serde_json::to_value(results).map_err(|e| internal_error("serialize speedtest history", e))?))
 }
 
 /// Trigger an on-demand speed test. Returns 409 if one is already running,
@@ -62,7 +56,7 @@ pub async fn run(
     // Enforce cooldown between tests
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
     let last = state.speedtest_last_completed.load(Ordering::Acquire);
     if last > 0 && (now - last) < SPEEDTEST_COOLDOWN_SECS {
@@ -70,7 +64,7 @@ pub async fn run(
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({
-                "error": format!("speed test cooldown: {remaining}s remaining"),
+                "error": "speed test cooldown active",
                 "retry_after": remaining,
             })),
         )
@@ -108,7 +102,7 @@ pub async fn run(
         }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         last_completed.store(now, Ordering::Release);
         running.store(false, Ordering::Release);

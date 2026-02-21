@@ -18,7 +18,8 @@ RUN npm run build
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app
 
 WORKDIR /app
 COPY --from=rust-builder /build/target/release/ion-drift-web ./
@@ -26,8 +27,11 @@ COPY --from=node-builder /build/web/dist ./web/dist/
 COPY config/production.toml ./config/server.toml
 COPY docker/root_ca.crt ./certs/root_ca.crt
 
+RUN mkdir -p /app/data && chown -R app:app /app
+
 ENV RUST_LOG=info
 ENV XDG_DATA_HOME=/app/data
 
+USER app
 EXPOSE 3000
 CMD ["./ion-drift-web", "--config", "/app/config/server.toml"]

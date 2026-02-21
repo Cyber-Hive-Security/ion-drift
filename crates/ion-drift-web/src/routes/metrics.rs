@@ -1,10 +1,10 @@
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Json, Response};
+use axum::response::{Json, Response};
 use serde::Deserialize;
 
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
+use super::internal_error;
 
 #[derive(Deserialize)]
 pub struct HistoryParams {
@@ -28,13 +28,8 @@ pub async fn history(
     };
 
     let points = state.metrics_store.query(since_secs_ago).await.map_err(|e| {
-        tracing::error!("metrics query error: {e}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response()
+        internal_error("metrics query", e)
     })?;
 
-    Ok(Json(serde_json::to_value(points).unwrap()))
+    Ok(Json(serde_json::to_value(points).map_err(|e| internal_error("serialize metrics", e))?))
 }

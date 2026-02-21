@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::geo::GeoDb;
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
-use super::api_error;
+use super::{api_error, internal_error};
 
 #[derive(Serialize)]
 pub struct DropCountryEntry {
@@ -108,7 +108,7 @@ pub async fn filter(
         rules.retain(|r| r.chain == *chain);
     }
 
-    Ok(Json(serde_json::to_value(rules).unwrap()))
+    Ok(Json(serde_json::to_value(rules).map_err(|e| internal_error("serialize filter rules", e))?))
 }
 
 pub async fn nat(
@@ -126,7 +126,7 @@ pub async fn nat(
         rules.retain(|r| r.chain == *chain);
     }
 
-    Ok(Json(serde_json::to_value(rules).unwrap()))
+    Ok(Json(serde_json::to_value(rules).map_err(|e| internal_error("serialize nat rules", e))?))
 }
 
 pub async fn mangle(
@@ -144,5 +144,5 @@ pub async fn mangle(
         rules.retain(|r| r.chain == *chain);
     }
 
-    Ok(Json(serde_json::to_value(rules).unwrap()))
+    Ok(Json(serde_json::to_value(rules).map_err(|e| internal_error("serialize mangle rules", e))?))
 }

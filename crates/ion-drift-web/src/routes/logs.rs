@@ -66,12 +66,11 @@ pub async fn list(
     // Compute analytics before truncating
     let analytics = log_parser::compute_analytics(&entries);
 
-    // Limit to last N entries
-    if let Some(limit) = f.limit {
-        let len = entries.len();
-        if limit < len {
-            entries = entries.split_off(len - limit);
-        }
+    // Limit to last N entries (capped at 5000)
+    let limit = f.limit.unwrap_or(500).min(5000);
+    let len = entries.len();
+    if limit < len {
+        entries = entries.split_off(len - limit);
     }
 
     Ok(Json(LogsResponse { entries, analytics }))

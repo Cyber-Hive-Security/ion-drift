@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
-use super::api_error;
+use super::{api_error, internal_error};
 
 #[derive(Deserialize, Default)]
 pub struct InterfaceFilter {
@@ -27,7 +27,7 @@ pub async fn list(
         interfaces.retain(|i| i.running == running);
     }
 
-    Ok(Json(serde_json::to_value(interfaces).unwrap()))
+    Ok(Json(serde_json::to_value(interfaces).map_err(|e| internal_error("serialize interfaces", e))?))
 }
 
 pub async fn vlans(
@@ -35,5 +35,5 @@ pub async fn vlans(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
     let vlans = state.mikrotik.vlan_interfaces().await.map_err(api_error)?;
-    Ok(Json(serde_json::to_value(vlans).unwrap()))
+    Ok(Json(serde_json::to_value(vlans).map_err(|e| internal_error("serialize vlans", e))?))
 }

@@ -12,22 +12,37 @@ pub mod vlan_activity;
 pub mod vlan_flows;
 
 use axum::Router;
-use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::extract::State;
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
+use axum_extra::extract::CookieJar;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::auth;
 use crate::state::AppState;
 
 /// Shared error handler for RouterOS API errors.
+/// Logs the full error server-side but returns a generic message to the client.
 pub(crate) fn api_error(e: mikrotik_core::MikrotikError) -> Response {
     tracing::error!("router API error: {e}");
     (
         StatusCode::BAD_GATEWAY,
-        Json(serde_json::json!({ "error": e.to_string() })),
+        Json(serde_json::json!({ "error": "upstream router communication error" })),
+    )
+        .into_response()
+}
+
+/// Internal server error helper for serialization or other internal failures.
+pub(crate) fn internal_error(context: &str, e: impl std::fmt::Display) -> Response {
+    tracing::error!("{context}: {e}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "internal server error" })),
     )
         .into_response()
 }
@@ -41,6 +56,40 @@ fn extract_origin(url: &str) -> String {
         }
     }
     url.to_string()
+}
+
+/// Health check endpoint — no auth required.
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// Global auth guard middleware for all /api/* routes.
+/// This is belt-and-suspenders on top of per-handler `RequireAuth` extractors —
+/// ensures no API route can accidentally be exposed without authentication.
+async fn require_auth_layer(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    request: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let session_id = jar
+        .get(&state.config.session.cookie_name)
+        .map(|c| c.value().to_string());
+
+    let valid = session_id
+        .as_deref()
+        .and_then(|id| state.sessions.get(id))
+        .is_some();
+
+    if !valid {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "authentication required" })),
+        )
+            .into_response();
+    }
+
+    next.run(request).await
 }
 
 /// Build the full Axum router with all routes and middleware.
@@ -60,60 +109,89 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .allow_origin(
             origin
                 .parse::<HeaderValue>()
-                .expect("valid origin from redirect_uri"),
+                .unwrap_or_else(|_| {
+                    tracing::warn!("failed to parse CORS origin from redirect_uri, using permissive default");
+                    HeaderValue::from_static("*")
+                }),
         )
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .allow_credentials(true);
 
+    // API routes — protected by global auth middleware layer
+    let api_routes = Router::new()
+        // System
+        .route("/system/resources", get(system::resources))
+        .route("/system/identity", get(system::identity))
+        // Interfaces
+        .route("/interfaces", get(interfaces::list))
+        .route("/interfaces/vlans", get(interfaces::vlans))
+        // IP
+        .route("/ip/addresses", get(ip::addresses))
+        .route("/ip/routes", get(ip::routes))
+        .route("/ip/dhcp-leases", get(ip::dhcp_leases))
+        .route("/ip/pools", get(ip::pools))
+        .route("/ip/dhcp-servers", get(ip::dhcp_servers))
+        // Firewall
+        .route("/firewall/filter", get(firewall::filter))
+        .route("/firewall/nat", get(firewall::nat))
+        .route("/firewall/mangle", get(firewall::mangle))
+        .route("/firewall/drops", get(firewall::drops))
+        // Connections
+        .route("/connections/summary", get(connections::summary))
+        .route("/connections/page", get(connections::page))
+        // ARP + enhanced endpoints
+        .route("/ip/arp", get(arp::list))
+        .route("/ip/dhcp-leases-status", get(arp::dhcp_leases_status))
+        .route("/ip/pool-utilization", get(arp::pool_utilization))
+        // Logs
+        .route("/logs", get(logs::list))
+        // Traffic
+        .route("/traffic", get(traffic::current))
+        .route("/traffic/live", get(traffic::live))
+        .route("/traffic/vlan-flows", get(vlan_flows::vlan_flows))
+        .route("/traffic/vlan-activity", get(vlan_activity::vlan_activity))
+        // Metrics
+        .route("/metrics/history", get(metrics::history))
+        // Speedtest
+        .route("/speedtest/latest", get(speedtest::latest))
+        .route("/speedtest/history", get(speedtest::history))
+        .route("/speedtest/run", post(speedtest::run))
+        .route("/speedtest/status", get(speedtest::status))
+        // Global auth middleware for all API routes
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
+
     Router::new()
+        // Health check (no auth)
+        .route("/health", get(health))
         // Auth routes (no RequireAuth)
         .route("/auth/login", get(auth::login))
         .route("/auth/callback", get(auth::callback))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/status", get(auth::status))
-        // System
-        .route("/api/system/resources", get(system::resources))
-        .route("/api/system/identity", get(system::identity))
-        // Interfaces
-        .route("/api/interfaces", get(interfaces::list))
-        .route("/api/interfaces/vlans", get(interfaces::vlans))
-        // IP
-        .route("/api/ip/addresses", get(ip::addresses))
-        .route("/api/ip/routes", get(ip::routes))
-        .route("/api/ip/dhcp-leases", get(ip::dhcp_leases))
-        .route("/api/ip/pools", get(ip::pools))
-        .route("/api/ip/dhcp-servers", get(ip::dhcp_servers))
-        // Firewall
-        .route("/api/firewall/filter", get(firewall::filter))
-        .route("/api/firewall/nat", get(firewall::nat))
-        .route("/api/firewall/mangle", get(firewall::mangle))
-        .route("/api/firewall/drops", get(firewall::drops))
-        // Connections
-        .route("/api/connections/summary", get(connections::summary))
-        .route("/api/connections/page", get(connections::page))
-        // ARP + enhanced endpoints
-        .route("/api/ip/arp", get(arp::list))
-        .route("/api/ip/dhcp-leases-status", get(arp::dhcp_leases_status))
-        .route("/api/ip/pool-utilization", get(arp::pool_utilization))
-        // Logs
-        .route("/api/logs", get(logs::list))
-        // Traffic
-        .route("/api/traffic", get(traffic::current))
-        .route("/api/traffic/live", get(traffic::live))
-        .route("/api/traffic/vlan-flows", get(vlan_flows::vlan_flows))
-        .route("/api/traffic/vlan-activity", get(vlan_activity::vlan_activity))
-        // Metrics
-        .route("/api/metrics/history", get(metrics::history))
-        // Speedtest
-        .route("/api/speedtest/latest", get(speedtest::latest))
-        .route("/api/speedtest/history", get(speedtest::history))
-        .route("/api/speedtest/run", post(speedtest::run))
-        .route("/api/speedtest/status", get(speedtest::status))
+        // Nest all API routes under /api with global auth layer
+        .nest("/api", api_routes)
         // SPA static files (fallback for all non-API routes)
         .fallback_service(spa)
         // Middleware
         .layer(TraceLayer::new_for_http())
         .layer(cors)
+        // Security headers
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-xss-protection"),
+            HeaderValue::from_static("1; mode=block"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'"),
+        ))
         .with_state(state)
 }

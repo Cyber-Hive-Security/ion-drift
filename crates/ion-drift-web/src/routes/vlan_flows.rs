@@ -4,7 +4,7 @@ use axum::response::{Json, Response};
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 
-use super::api_error;
+use super::{api_error, internal_error};
 
 /// GET /api/traffic/vlan-flows
 pub async fn vlan_flows(
@@ -14,5 +14,5 @@ pub async fn vlan_flows(
     let flows = mikrotik_core::VlanFlowManager::get_flows(&state.mikrotik)
         .await
         .map_err(api_error)?;
-    Ok(Json(serde_json::to_value(flows).unwrap()))
+    Ok(Json(serde_json::to_value(flows).map_err(|e| internal_error("serialize vlan flows", e))?))
 }

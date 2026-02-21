@@ -1,30 +1,25 @@
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Json, Response};
+use axum::response::{Json, Response};
 
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
+use super::internal_error;
 
 pub async fn current(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
     let totals = state.traffic_tracker.get_totals().await.map_err(|e| {
-        tracing::error!("traffic tracker error: {e}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response()
+        internal_error("traffic tracker", e)
     })?;
 
-    Ok(Json(serde_json::to_value(totals).unwrap()))
+    Ok(Json(serde_json::to_value(totals).map_err(|e| internal_error("serialize traffic", e))?))
 }
 
 pub async fn live(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, Response> {
     let samples = state.live_traffic.snapshot().await;
-    Json(serde_json::to_value(samples).unwrap())
+    Ok(Json(serde_json::to_value(samples).map_err(|e| internal_error("serialize live traffic", e))?))
 }
