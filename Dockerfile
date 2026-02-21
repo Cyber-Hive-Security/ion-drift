@@ -3,6 +3,7 @@ FROM rust:1-bookworm AS rust-builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
+COPY data/ data/
 RUN cargo build --release --bin ion-drift-web
 
 # Stage 2: Build frontend
