@@ -10,7 +10,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { cn } from "@/lib/utils";
-import type { VlanActivityEntry, VlanMetricsPoint } from "@/api/types";
+import type { VlanActivityEntry } from "@/api/types";
 
 type Range = "24h" | "7d";
 
