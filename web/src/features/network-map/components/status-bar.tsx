@@ -1,8 +1,10 @@
+import { useNavigate } from "@tanstack/react-router";
 import type { NetworkMapStatus } from "@/api/types";
 
 interface StatusBarProps {
   status: NetworkMapStatus | undefined;
   isLoading: boolean;
+  anomalyCount?: number;
 }
 
 function formatTimeAgo(timestamp: number): string {
@@ -14,7 +16,8 @@ function formatTimeAgo(timestamp: number): string {
   return `${Math.floor(minutes / 60)}h ago`;
 }
 
-export function StatusBar({ status, isLoading }: StatusBarProps) {
+export function StatusBar({ status, isLoading, anomalyCount = 0 }: StatusBarProps) {
+  const navigate = useNavigate();
   if (!status && !isLoading) return null;
 
   const activeDevices = status?.devices.filter((d) => d.in_arp).length ?? 0;
@@ -43,6 +46,20 @@ export function StatusBar({ status, isLoading }: StatusBarProps) {
           <span className="nm-status-total">{totalIfaces}</span>
         </span>
       </div>
+      {anomalyCount > 0 && (
+        <>
+          <div className="nm-status-divider" />
+          <div
+            className="nm-status-item"
+            style={{ cursor: "pointer" }}
+            onClick={() => navigate({ to: "/behavior" })}
+          >
+            <span className="nm-status-dot-indicator" style={{ background: "#f59e0b" }} />
+            <span className="nm-status-label" style={{ color: "#f59e0b" }}>ANOMALIES</span>
+            <span className="nm-status-value" style={{ color: "#f59e0b" }}>{anomalyCount}</span>
+          </div>
+        </>
+      )}
       <div className="nm-status-divider" />
       <div className="nm-status-item">
         <span className="nm-status-label">UPDATED</span>

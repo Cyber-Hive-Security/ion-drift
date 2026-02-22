@@ -1,4 +1,5 @@
 mod auth;
+mod behavior_engine;
 mod config;
 mod geo;
 mod live_traffic;
@@ -76,6 +77,10 @@ async fn main() -> anyhow::Result<()> {
         mikrotik_core::MetricsStore::new(&data_dir.join("metrics.db"))
             .map_err(|e| anyhow::anyhow!("failed to init metrics store: {e}"))?,
     );
+    let behavior_store = Arc::new(
+        mikrotik_core::BehaviorStore::new(&data_dir.join("behavior.db"))
+            .map_err(|e| anyhow::anyhow!("failed to init behavior store: {e}"))?,
+    );
 
     // Live traffic buffer (300 entries = 5 min at 1 sample per second, but we poll every 10s so ~50 min)
     let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
@@ -109,6 +114,8 @@ async fn main() -> anyhow::Result<()> {
         oui_db,
         geo_db,
         network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
+        behavior_store: behavior_store.clone(),
+        firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))),
     };
 
     // Spawn background tasks
@@ -129,6 +136,15 @@ async fn main() -> anyhow::Result<()> {
         speedtest_last_completed.clone(),
     );
     spawn_session_cleanup(sessions);
+    spawn_behavior_collector(
+        behavior_store.clone(),
+        mikrotik.clone(),
+        app_state.oui_db.clone(),
+        app_state.geo_db.clone(),
+        app_state.firewall_rules_cache.clone(),
+    );
+    spawn_behavior_maintenance(behavior_store.clone());
+    spawn_behavior_auto_classifier(behavior_store);
 
     // Resolve web/dist path relative to the config file's parent (project root)
     let web_dist = config_file
@@ -557,6 +573,101 @@ fn spawn_session_cleanup(sessions: auth::SessionStore) {
             interval.tick().await;
             sessions.cleanup();
             tracing::debug!("session cleanup complete");
+        }
+    });
+}
+
+/// Collect device observations, detect anomalies, and detect blocked attempts every 60s.
+/// 3-minute startup delay to let the server stabilize.
+fn spawn_behavior_collector(
+    store: Arc<mikrotik_core::BehaviorStore>,
+    client: mikrotik_core::MikrotikClient,
+    oui_db: Arc<oui::OuiDb>,
+    geo_db: Arc<geo::GeoDb>,
+    firewall_cache: Arc<tokio::sync::RwLock<(Vec<mikrotik_core::resources::firewall::FilterRule>, std::time::Instant)>>,
+) {
+    tokio::spawn(async move {
+        // Wait 3 minutes before first collection
+        tokio::time::sleep(Duration::from_secs(180)).await;
+        tracing::info!("behavior collector starting");
+
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+
+            // Refresh firewall rules cache
+            behavior_engine::refresh_firewall_cache(&client, &firewall_cache).await;
+
+            // Collect observations
+            match behavior_engine::collect_observations(&client, &store, &oui_db).await {
+                Ok(count) => {
+                    tracing::debug!("behavior: collected {count} observations");
+                }
+                Err(e) => {
+                    tracing::warn!("behavior: observation collection failed: {e}");
+                    continue;
+                }
+            }
+
+            // Detect anomalies
+            match behavior_engine::detect_anomalies(&store).await {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("behavior: detected {count} anomalies");
+                    }
+                }
+                Err(e) => tracing::warn!("behavior: anomaly detection failed: {e}"),
+            }
+
+            // Detect blocked attempts
+            match behavior_engine::detect_blocked_attempts(&client, &store, &oui_db, &geo_db).await
+            {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("behavior: detected {count} blocked attempts");
+                    }
+                }
+                Err(e) => tracing::warn!("behavior: blocked attempt detection failed: {e}"),
+            }
+        }
+    });
+}
+
+/// Recompute all device baselines nightly (3 AM) and prune old observations.
+fn spawn_behavior_maintenance(store: Arc<mikrotik_core::BehaviorStore>) {
+    tokio::spawn(async move {
+        loop {
+            // Sleep until roughly 3 AM — simplified: sleep 24 hours
+            tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+
+            tracing::info!("behavior maintenance: recomputing baselines");
+            match store.recompute_all_baselines(7 * 86400).await {
+                Ok(count) => tracing::info!("behavior: recomputed baselines for {count} devices"),
+                Err(e) => tracing::warn!("behavior: baseline recompute failed: {e}"),
+            }
+
+            match store.prune_observations(30 * 86400).await {
+                Ok(count) => tracing::info!("behavior: pruned {count} old observations"),
+                Err(e) => tracing::warn!("behavior: observation prune failed: {e}"),
+            }
+        }
+    });
+}
+
+/// Auto-resolve stale anomalies every hour based on per-VLAN timeout rules.
+fn spawn_behavior_auto_classifier(store: Arc<mikrotik_core::BehaviorStore>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            match store.auto_resolve_stale().await {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("behavior: auto-resolved {count} stale anomalies");
+                    }
+                }
+                Err(e) => tracing::warn!("behavior: auto-resolve failed: {e}"),
+            }
         }
     });
 }

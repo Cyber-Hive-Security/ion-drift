@@ -224,6 +224,30 @@ export function createMapInstance(
     const mInactive = fInactive.append("feMerge");
     mInactive.append("feMergeNode").attr("in", "tinted");
     mInactive.append("feMergeNode").attr("in", "SourceGraphic");
+
+    // Anomaly glow — amber/orange
+    const fAnomaly = defs
+      .append("filter")
+      .attr("id", "glow-anomaly")
+      .attr("x", "-50%")
+      .attr("y", "-50%")
+      .attr("width", "200%")
+      .attr("height", "200%");
+    fAnomaly.append("feGaussianBlur").attr("stdDeviation", 5).attr("result", "blur");
+    fAnomaly
+      .append("feFlood")
+      .attr("flood-color", "#ffaa00")
+      .attr("flood-opacity", 0.45)
+      .attr("result", "color");
+    fAnomaly
+      .append("feComposite")
+      .attr("in", "color")
+      .attr("in2", "blur")
+      .attr("operator", "in")
+      .attr("result", "tinted");
+    const mAnomaly = fAnomaly.append("feMerge");
+    mAnomaly.append("feMergeNode").attr("in", "tinted");
+    mAnomaly.append("feMergeNode").attr("in", "SourceGraphic");
   }
 
   const lineGlow = defs
@@ -831,7 +855,7 @@ export function createMapInstance(
         );
     },
 
-    updateDeviceStatuses(devices: DeviceStatus[]) {
+    updateDeviceStatuses(devices: DeviceStatus[], anomalyMacs?: Set<string>) {
       // Build IP → DeviceStatus lookup
       deviceStatusMap = new Map(devices.map((d) => [d.ip, d]));
 
@@ -846,7 +870,18 @@ export function createMapInstance(
           const g = d3.select(this);
           const hex = g.select<SVGPathElement>(".node-hex");
 
-          if (status) {
+          // Check if this device has pending anomalies (by MAC)
+          const hasAnomaly = status?.mac && anomalyMacs?.has(status.mac.toUpperCase());
+
+          if (hasAnomaly) {
+            // Anomaly — amber glow (highest priority)
+            g.classed("nm-node-anomaly", true)
+              .classed("nm-node-active", false)
+              .classed("nm-node-inactive", false)
+              .classed("nm-node-unknown", false);
+            hex.attr("stroke", "#ffaa00").attr("filter", "url(#glow-anomaly)");
+          } else if (status) {
+            g.classed("nm-node-anomaly", false);
             if (status.in_arp) {
               // Active — green glow
               g.classed("nm-node-active", true)
@@ -864,7 +899,8 @@ export function createMapInstance(
             }
           } else {
             // No status data — keep default
-            g.classed("nm-node-active", false)
+            g.classed("nm-node-anomaly", false)
+              .classed("nm-node-active", false)
               .classed("nm-node-inactive", false)
               .classed("nm-node-unknown", true);
             hex

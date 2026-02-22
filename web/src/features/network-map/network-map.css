@@ -240,6 +240,16 @@
 .network-map-root .nm-node-active .node-hex { filter: url(#glow-active); }
 .network-map-root .nm-node-inactive .node-hex { filter: url(#glow-inactive); }
 
+/* Anomaly glow — amber pulsing, takes priority over active/inactive */
+.network-map-root .nm-node-anomaly .node-hex {
+  filter: url(#glow-anomaly);
+  animation: nm-anomaly-pulse 2s ease-in-out infinite;
+}
+@keyframes nm-anomaly-pulse {
+  0%, 100% { stroke-opacity: 0.7; }
+  50% { stroke-opacity: 1; }
+}
+
 /* Connection pulse when both endpoints active */
 .network-map-root .nm-conn-active { animation: nm-conn-pulse 2s ease-in-out infinite; }
 @keyframes nm-conn-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }

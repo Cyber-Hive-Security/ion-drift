@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { NetworkNode, ContainerInfo, MapInstance } from "./types";
 import { useBootSequence } from "./hooks/use-boot-sequence";
-import { useNetworkMapStatus } from "@/api/queries";
+import { useNetworkMapStatus, useBehaviorAlerts } from "@/api/queries";
 import { BootOverlay } from "./components/boot-overlay";
 import { TopBar } from "./components/top-bar";
 import { MapCanvas } from "./components/map-canvas";
@@ -23,6 +23,7 @@ export function NetworkMapPage() {
 
   // Live status polling — only after boot sequence completes
   const statusQuery = useNetworkMapStatus({ enabled: boot.phase === "done" });
+  const alertsQuery = useBehaviorAlerts();
 
   // ── Node selection ──
   const handleSelectNode = useCallback(
@@ -96,9 +97,10 @@ export function NetworkMapPage() {
   // ── Sync live status to D3 map ──
   useEffect(() => {
     if (!statusQuery.data || !mapInstanceRef.current) return;
-    mapInstanceRef.current.updateDeviceStatuses(statusQuery.data.devices);
+    const anomalyMacs = new Set(alertsQuery.data?.anomaly_macs ?? []);
+    mapInstanceRef.current.updateDeviceStatuses(statusQuery.data.devices, anomalyMacs);
     mapInstanceRef.current.updateInterfaceStatuses(statusQuery.data.interfaces);
-  }, [statusQuery.data]);
+  }, [statusQuery.data, alertsQuery.data]);
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -167,6 +169,7 @@ export function NetworkMapPage() {
           <StatusBar
             status={statusQuery.data}
             isLoading={statusQuery.isLoading}
+            anomalyCount={alertsQuery.data?.pending_count ?? 0}
           />
 
           <div className="nm-scanline" />

@@ -1,4 +1,5 @@
 pub mod arp;
+pub mod behavior;
 pub mod connections;
 pub mod firewall;
 pub mod interfaces;
@@ -165,6 +166,13 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/speedtest/history", get(speedtest::history))
         .route("/speedtest/run", post(speedtest::run))
         .route("/speedtest/status", get(speedtest::status))
+        // Behavior
+        .route("/behavior/overview", get(behavior::overview))
+        .route("/behavior/vlan/{vlan_id}", get(behavior::vlan_detail))
+        .route("/behavior/device/{mac}", get(behavior::device_detail))
+        .route("/behavior/anomalies", get(behavior::anomalies))
+        .route("/behavior/anomalies/{id}/resolve", post(behavior::resolve_anomaly))
+        .route("/behavior/alerts", get(behavior::alerts))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 

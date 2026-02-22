@@ -518,3 +518,85 @@ export interface SpeedTestResult {
   median_latency_ms: number;
   timestamp: number;
 }
+
+// Behavior / Device Fingerprinting types (snake_case — custom Rust structs)
+
+export interface DeviceProfile {
+  mac: string;
+  hostname: string | null;
+  manufacturer: string | null;
+  current_ip: string | null;
+  current_vlan: number | null;
+  first_seen: number;
+  last_seen: number;
+  learning_until: number;
+  baseline_status: string;
+  notes: string | null;
+}
+
+export interface DeviceBaseline {
+  id: number;
+  mac: string;
+  protocol: string;
+  dst_port: number | null;
+  dst_subnet: string;
+  direction: string;
+  avg_bytes_per_hour: number;
+  max_bytes_per_hour: number;
+  observation_count: number;
+  computed_at: number;
+}
+
+export interface DeviceAnomaly {
+  id: number;
+  mac: string;
+  timestamp: number;
+  anomaly_type: string;
+  severity: string;
+  description: string;
+  details: string | null;
+  vlan: number;
+  firewall_correlation: string | null;
+  firewall_rule_id: string | null;
+  firewall_rule_comment: string | null;
+  status: string;
+  resolved_at: number | null;
+  resolved_by: string | null;
+}
+
+export interface VlanBehaviorSummary {
+  vlan: number;
+  device_count: number;
+  baselined_count: number;
+  learning_count: number;
+  pending_anomaly_count: number;
+}
+
+export interface BehaviorOverview {
+  total_devices: number;
+  baselined_devices: number;
+  learning_devices: number;
+  pending_anomalies: number;
+  critical_anomalies: number;
+  warning_anomalies: number;
+  vlan_summaries: VlanBehaviorSummary[];
+}
+
+export interface VlanBehaviorDetail {
+  vlan: number;
+  devices: DeviceProfile[];
+  anomalies: DeviceAnomaly[];
+}
+
+export interface DeviceDetailResponse {
+  profile: DeviceProfile;
+  baselines: DeviceBaseline[];
+  anomalies: DeviceAnomaly[];
+}
+
+export interface AlertCount {
+  pending_count: number;
+  critical_count: number;
+  warning_count: number;
+  anomaly_macs: string[];
+}

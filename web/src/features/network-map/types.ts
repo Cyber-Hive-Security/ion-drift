@@ -80,6 +80,6 @@ export interface MapInstance {
   highlightNode: (nodeId: string) => void;
   clearSelection: () => void;
   resetView: () => void;
-  updateDeviceStatuses: (devices: import("@/api/types").DeviceStatus[]) => void;
+  updateDeviceStatuses: (devices: import("@/api/types").DeviceStatus[], anomalyMacs?: Set<string>) => void;
   updateInterfaceStatuses: (interfaces: import("@/api/types").InterfaceStatus[]) => void;
 }

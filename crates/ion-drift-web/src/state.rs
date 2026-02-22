@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicBool, AtomicI64};
 
 use tokio::sync::RwLock;
 
-use mikrotik_core::{MikrotikClient, MetricsStore, SpeedTestStore, TrafficTracker};
+use mikrotik_core::{BehaviorStore, MikrotikClient, MetricsStore, SpeedTestStore, TrafficTracker};
+use mikrotik_core::resources::firewall::FilterRule;
 use crate::auth::{OidcClient, SessionStore};
 use crate::config::ServerConfig;
 use crate::geo::GeoDb;
@@ -42,4 +43,8 @@ pub struct AppState {
     pub geo_db: Arc<GeoDb>,
     /// Cached network map status (DHCP + ARP + interfaces), refreshed every 5s.
     pub network_map_cache: Arc<RwLock<Option<NetworkMapStatusCache>>>,
+    /// Device behavioral fingerprinting store (SQLite).
+    pub behavior_store: Arc<BehaviorStore>,
+    /// Cached firewall filter rules for behavior correlation.
+    pub firewall_rules_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
 }

@@ -33,6 +33,11 @@ import type {
   VlanMetricsPoint,
   LogAggregate,
   NetworkMapStatus,
+  BehaviorOverview,
+  VlanBehaviorDetail,
+  DeviceDetailResponse,
+  DeviceAnomaly,
+  AlertCount,
 } from "./types";
 
 // Auth
@@ -372,5 +377,81 @@ export function useNetworkMapStatus(options?: { enabled?: boolean }) {
     queryFn: () => apiFetch<NetworkMapStatus>("/api/network-map/status"),
     refetchInterval: 10_000,
     enabled: options?.enabled ?? true,
+  });
+}
+
+// Behavior
+
+export function useBehaviorOverview() {
+  return useQuery({
+    queryKey: ["behavior", "overview"],
+    queryFn: () => apiFetch<BehaviorOverview>("/api/behavior/overview"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useBehaviorVlan(vlanId: number) {
+  return useQuery({
+    queryKey: ["behavior", "vlan", vlanId],
+    queryFn: () =>
+      apiFetch<VlanBehaviorDetail>(`/api/behavior/vlan/${vlanId}`),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useBehaviorDevice(mac: string | null) {
+  return useQuery({
+    queryKey: ["behavior", "device", mac],
+    queryFn: () =>
+      apiFetch<DeviceDetailResponse>(
+        `/api/behavior/device/${encodeURIComponent(mac!)}`,
+      ),
+    refetchInterval: 30_000,
+    enabled: !!mac,
+  });
+}
+
+export function useBehaviorAnomalies(params?: {
+  status?: string;
+  severity?: string;
+  vlan?: number;
+  limit?: number;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.severity) qs.set("severity", params.severity);
+  if (params?.vlan != null) qs.set("vlan", String(params.vlan));
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const qsStr = qs.toString();
+  return useQuery({
+    queryKey: ["behavior", "anomalies", params],
+    queryFn: () =>
+      apiFetch<DeviceAnomaly[]>(
+        `/api/behavior/anomalies${qsStr ? `?${qsStr}` : ""}`,
+      ),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useResolveAnomaly() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, action }: { id: number; action: string }) =>
+      apiFetch<{ success: boolean }>(`/api/behavior/anomalies/${id}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["behavior"] });
+    },
+  });
+}
+
+export function useBehaviorAlerts() {
+  return useQuery({
+    queryKey: ["behavior", "alerts"],
+    queryFn: () => apiFetch<AlertCount>("/api/behavior/alerts"),
+    refetchInterval: 15_000,
   });
 }
