@@ -11,6 +11,7 @@ import { FirewallPage } from "./firewall";
 import { ConnectionsPage } from "./connections";
 import { LogsPage } from "./logs";
 import { SpeedtestPage } from "./speedtest";
+import { NetworkMapPage } from "@/features/network-map/network-map-page";
 import { NotFoundPage } from "./__root";
 
 const rootRoute = createRootRoute({
@@ -60,6 +61,12 @@ const speedtestRoute = createRoute({
   component: SpeedtestPage,
 });
 
+const networkMapRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/network-map",
+  component: NetworkMapPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   interfacesRoute,
@@ -68,6 +75,7 @@ const routeTree = rootRoute.addChildren([
   connectionsRoute,
   logsRoute,
   speedtestRoute,
+  networkMapRoute,
 ]);
 
 export const router = createRouter({ routeTree });

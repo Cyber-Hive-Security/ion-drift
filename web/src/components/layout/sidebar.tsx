@@ -9,6 +9,7 @@ import {
   Plug2,
   ScrollText,
   Gauge,
+  Map,
 } from "lucide-react";
 
 const navItems = [
@@ -19,6 +20,7 @@ const navItems = [
   { to: "/connections", label: "Connections", icon: Plug2 },
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/speedtest", label: "Speedtest", icon: Gauge },
+  { to: "/network-map", label: "Network Map", icon: Map },
 ] as const;
 
 export function Sidebar() {

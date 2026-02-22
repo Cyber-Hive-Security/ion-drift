@@ -1,0 +1,249 @@
+/* ════════════════════════════════════════════════════════════
+   THE HIVE TACTICAL DISPLAY — Scoped Styles
+   All selectors under .network-map-root to avoid Tailwind conflicts
+   ════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
+
+.network-map-root {
+  --nm-bg-primary: #05080e;
+  --nm-bg-secondary: #0a0f1a;
+  --nm-bg-panel: rgba(8, 16, 32, 0.95);
+  --nm-holo-blue: #00f0ff;
+  --nm-holo-blue-dim: #005566;
+  --nm-gold: #ffd700;
+  --nm-amber: #ffaa00;
+  --nm-tactical-green: #00ff88;
+  --nm-alert-red: #ff4444;
+  --nm-text-primary: #c8dce8;
+  --nm-text-dim: #5a7080;
+  --nm-text-bright: #e8f4ff;
+  --nm-border-color: rgba(0, 240, 255, 0.15);
+  --nm-glow-blue: 0 0 12px rgba(0, 240, 255, 0.4);
+  --nm-font-display: 'Orbitron', monospace;
+  --nm-font-mono: 'Share Tech Mono', monospace;
+  --nm-font-ui: 'Rajdhani', sans-serif;
+
+  position: relative;
+  background: var(--nm-bg-primary);
+  color: var(--nm-text-primary);
+  font-family: var(--nm-font-mono);
+  cursor: default;
+}
+
+/* ─── BOOT ──────────────────────────────────────────────── */
+.network-map-root .nm-boot-overlay {
+  position: absolute; inset: 0; z-index: 9999;
+  background: var(--nm-bg-primary);
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.8s ease;
+}
+.network-map-root .nm-boot-overlay.fade-out { opacity: 0; pointer-events: none; }
+.network-map-root .nm-boot-content { text-align: center; max-width: 600px; padding: 20px; }
+.network-map-root .nm-boot-logo svg { animation: nm-boot-pulse 2s ease-in-out infinite; }
+
+@keyframes nm-boot-pulse {
+  0%, 100% { opacity: 0.6; filter: drop-shadow(0 0 8px rgba(0,240,255,0.3)); }
+  50% { opacity: 1; filter: drop-shadow(0 0 20px rgba(0,240,255,0.7)); }
+}
+
+.network-map-root .nm-boot-text {
+  font-family: var(--nm-font-mono); font-size: 13px; color: var(--nm-holo-blue);
+  text-align: left; margin: 24px 0 16px; min-height: 200px; line-height: 1.6;
+}
+.network-map-root .nm-boot-text .line { opacity: 0; animation: nm-line-appear 0.1s forwards; }
+.network-map-root .nm-boot-progress { width: 100%; height: 3px; background: var(--nm-holo-blue-dim); border-radius: 2px; overflow: hidden; }
+.network-map-root .nm-boot-progress-bar { width: 0%; height: 100%; background: linear-gradient(90deg, var(--nm-holo-blue), var(--nm-gold)); transition: width 0.3s ease; }
+
+@keyframes nm-line-appear { to { opacity: 1; } }
+
+/* ─── TOP BAR ───────────────────────────────────────────── */
+.network-map-root .nm-top-bar {
+  height: 42px;
+  background: var(--nm-bg-panel); border-bottom: 1px solid var(--nm-border-color);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px; z-index: 100; backdrop-filter: blur(10px);
+  flex-shrink: 0;
+}
+.network-map-root .nm-top-bar-left { display: flex; align-items: center; gap: 10px; }
+.network-map-root .nm-top-bar-center { flex: 1; max-width: 420px; margin: 0 20px; }
+.network-map-root .nm-search-box {
+  display: flex; align-items: center;
+  background: rgba(0,240,255,0.05); border: 1px solid var(--nm-border-color);
+  border-radius: 4px; padding: 0 10px; transition: border-color 0.2s, box-shadow 0.2s;
+}
+.network-map-root .nm-search-box:focus-within { border-color: var(--nm-holo-blue); box-shadow: var(--nm-glow-blue); }
+.network-map-root .nm-search-icon { color: var(--nm-text-dim); margin-right: 8px; flex-shrink: 0; }
+.network-map-root .nm-search-input {
+  flex: 1; background: none; border: none; outline: none;
+  color: var(--nm-text-bright); font-family: var(--nm-font-mono); font-size: 13px; padding: 6px 0;
+}
+.network-map-root .nm-search-input::placeholder { color: var(--nm-text-dim); }
+.network-map-root .nm-search-box kbd {
+  font-family: var(--nm-font-mono); font-size: 10px; color: var(--nm-text-dim);
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 3px; padding: 2px 5px; margin-left: 6px;
+}
+.network-map-root .nm-top-bar-right { display: flex; align-items: center; gap: 8px; }
+.network-map-root .nm-top-bar-right button {
+  background: rgba(0,240,255,0.06); border: 1px solid var(--nm-border-color);
+  color: var(--nm-text-dim); border-radius: 4px; width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: all 0.2s;
+}
+.network-map-root .nm-top-bar-right button:hover { border-color: var(--nm-holo-blue); color: var(--nm-holo-blue); box-shadow: var(--nm-glow-blue); }
+.network-map-root .nm-top-bar-right button.active { background: rgba(0,240,255,0.12); border-color: var(--nm-holo-blue); color: var(--nm-holo-blue); }
+.network-map-root .nm-clock { font-family: var(--nm-font-mono); font-size: 12px; color: var(--nm-text-dim); min-width: 65px; text-align: right; }
+
+/* ─── MAP CANVAS ────────────────────────────────────────── */
+.network-map-root .nm-map-container {
+  flex: 1; overflow: hidden; position: relative;
+  background: radial-gradient(ellipse at center, rgba(0,240,255,0.02) 0%, transparent 70%), var(--nm-bg-primary);
+}
+.network-map-root .nm-map-container svg { width: 100%; height: 100%; display: block; }
+
+/* Stars */
+.network-map-root .star { fill: #fff; opacity: 0; animation: nm-twinkle var(--dur) ease-in-out infinite; animation-delay: var(--delay); }
+@keyframes nm-twinkle { 0%, 100% { opacity: 0.1; } 50% { opacity: 0.6; } }
+
+/* Grid */
+.network-map-root .grid-line { stroke: rgba(0, 240, 255, 0.04); stroke-width: 0.5; }
+
+/* VLAN Zones */
+.network-map-root .vlan-zone { fill-opacity: 0.03; stroke-opacity: 0.25; stroke-width: 1.5; stroke-dasharray: 8,4; transition: fill-opacity 0.3s, stroke-opacity 0.3s; }
+.network-map-root .vlan-zone:hover { fill-opacity: 0.06; stroke-opacity: 0.45; }
+.network-map-root .vlan-zone-group { cursor: move; }
+.network-map-root .vlan-zone-group.dragging .vlan-zone { fill-opacity: 0.08; stroke-opacity: 0.6; stroke-dasharray: none; }
+.network-map-root .vlan-label { font-family: var(--nm-font-display); font-size: 11px; letter-spacing: 3px; fill-opacity: 0.5; pointer-events: none; }
+.network-map-root .vlan-sublabel { font-family: var(--nm-font-mono); font-size: 9px; fill-opacity: 0.3; pointer-events: none; }
+
+/* Connections */
+.network-map-root .connection-line { fill: none; opacity: 0.35; transition: opacity 0.3s; }
+.network-map-root .connection-line.highlighted { opacity: 0.9; }
+.network-map-root .connection-line.dimmed { opacity: 0.08; }
+.network-map-root .connection-particle { opacity: 0.8; }
+
+/* Nodes */
+.network-map-root .node-group { cursor: grab; }
+.network-map-root .node-group:active { cursor: grabbing; }
+.network-map-root .node-group.dimmed { opacity: 0.15; }
+.network-map-root .node-group.highlighted .node-hex { filter: url(#glow-strong); }
+.network-map-root .node-hex { stroke-width: 1.5; fill-opacity: 0.08; transition: fill-opacity 0.2s; filter: url(#glow-soft); }
+.network-map-root .node-group:hover .node-hex { fill-opacity: 0.2; stroke-opacity: 1; }
+.network-map-root .node-group.selected .node-hex { fill-opacity: 0.25; stroke-width: 2.5; }
+.network-map-root .node-group.dragging .node-hex { fill-opacity: 0.3; stroke-width: 3; filter: url(#glow-strong); }
+.network-map-root .node-icon { pointer-events: none; opacity: 0.85; }
+.network-map-root .node-hostname { font-family: var(--nm-font-ui); font-size: 11px; font-weight: 600; fill: var(--nm-text-bright); text-anchor: middle; pointer-events: none; }
+.network-map-root .node-ip { font-family: var(--nm-font-mono); font-size: 9px; fill: var(--nm-text-dim); text-anchor: middle; pointer-events: none; }
+.network-map-root .node-pulse { fill: none; stroke-width: 1; opacity: 0; animation: nm-node-pulse-anim 3s ease-out infinite; }
+@keyframes nm-node-pulse-anim { 0% { r: 22; opacity: 0.6; } 100% { r: 40; opacity: 0; } }
+.network-map-root .node-status-dot { r: 3; stroke: var(--nm-bg-primary); stroke-width: 1.5; }
+.network-map-root .status-up { fill: var(--nm-tactical-green); }
+.network-map-root .status-down { fill: var(--nm-alert-red); animation: nm-blink-red 1.5s infinite; }
+.network-map-root .status-planned { fill: var(--nm-amber); }
+@keyframes nm-blink-red { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* Search match */
+.network-map-root .search-match .node-hex { stroke-width: 3 !important; filter: url(#glow-strong) !important; }
+
+/* Containers */
+.network-map-root .container-group { cursor: pointer; }
+.network-map-root .container-rect { fill: rgba(153,102,255,0.06); stroke: rgba(153,102,255,0.3); stroke-width: 1; rx: 3; transition: fill 0.2s, stroke 0.2s; }
+.network-map-root .container-group:hover .container-rect { fill: rgba(153,102,255,0.15); stroke: rgba(153,102,255,0.6); }
+.network-map-root .container-name { font-family: var(--nm-font-mono); font-size: 8px; fill: #b388ff; pointer-events: none; }
+.network-map-root .container-port { font-family: var(--nm-font-mono); font-size: 7px; fill: var(--nm-text-dim); pointer-events: none; }
+
+/* ─── DETAIL PANEL ──────────────────────────────────────── */
+.network-map-root .nm-detail-panel {
+  position: absolute; top: 42px; right: 0; width: 380px; height: calc(100% - 42px);
+  background: var(--nm-bg-panel); border-left: 1px solid var(--nm-border-color);
+  z-index: 200; overflow-y: auto; padding: 20px;
+  transform: translateX(100%); transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(12px);
+}
+.network-map-root .nm-detail-panel.visible { transform: translateX(0); }
+.network-map-root .nm-detail-close {
+  position: absolute; top: 12px; right: 14px; background: none; border: none;
+  color: var(--nm-text-dim); font-size: 24px; cursor: pointer; transition: color 0.2s; line-height: 1;
+}
+.network-map-root .nm-detail-close:hover { color: var(--nm-holo-blue); }
+.network-map-root .nm-detail-header { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--nm-border-color); }
+.network-map-root .nm-detail-icon {
+  width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; border: 1px solid var(--nm-border-color); flex-shrink: 0;
+}
+.network-map-root .nm-detail-icon svg { width: 28px; height: 28px; }
+.network-map-root .nm-detail-hostname {
+  font-family: var(--nm-font-display); font-size: 18px; font-weight: 700;
+  letter-spacing: 1px; text-shadow: 0 0 8px rgba(0,240,255,0.3); margin: 0;
+}
+.network-map-root .nm-detail-role { font-family: var(--nm-font-mono); font-size: 12px; color: var(--nm-text-dim); margin-top: 2px; }
+.network-map-root .nm-detail-section { margin-bottom: 18px; }
+.network-map-root .nm-detail-section h3 {
+  font-family: var(--nm-font-display); font-size: 10px; font-weight: 700;
+  color: var(--nm-gold); letter-spacing: 2px; margin-bottom: 8px; padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255,215,0,0.15);
+}
+.network-map-root .nm-detail-grid { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 12px; }
+.network-map-root .nm-detail-grid .label { color: var(--nm-text-dim); text-transform: uppercase; font-size: 10px; letter-spacing: 1px; }
+.network-map-root .nm-detail-grid .value { color: var(--nm-text-bright); word-break: break-all; }
+.network-map-root .nm-services-list { display: flex; flex-direction: column; gap: 4px; }
+.network-map-root .nm-service-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 8px; background: rgba(0,240,255,0.03); border: 1px solid rgba(0,240,255,0.08);
+  border-radius: 3px; font-size: 11px;
+}
+.network-map-root .nm-service-item .svc-name { color: var(--nm-holo-blue); }
+.network-map-root .nm-service-item .svc-port { color: var(--nm-text-dim); font-size: 10px; }
+.network-map-root .nm-service-item .svc-role { color: var(--nm-text-dim); font-size: 10px; }
+.network-map-root .nm-detail-notes { list-style: none; font-size: 12px; line-height: 1.6; padding: 0; margin: 0; }
+.network-map-root .nm-detail-notes li { padding: 3px 0 3px 14px; position: relative; color: var(--nm-text-primary); }
+.network-map-root .nm-detail-notes li::before { content: "\25B8"; position: absolute; left: 0; color: var(--nm-amber); }
+.network-map-root .nm-detail-footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--nm-border-color); text-align: center; }
+.network-map-root .nm-classification { font-family: var(--nm-font-display); font-size: 9px; letter-spacing: 3px; color: var(--nm-alert-red); opacity: 0.6; }
+.network-map-root .nm-detail-panel::-webkit-scrollbar { width: 4px; }
+.network-map-root .nm-detail-panel::-webkit-scrollbar-track { background: transparent; }
+.network-map-root .nm-detail-panel::-webkit-scrollbar-thumb { background: var(--nm-holo-blue-dim); border-radius: 2px; }
+
+/* ─── LEGEND ────────────────────────────────────────────── */
+.network-map-root .nm-legend-panel {
+  position: absolute; bottom: 16px; left: 16px; width: 220px;
+  background: var(--nm-bg-panel); border: 1px solid var(--nm-border-color); border-radius: 6px;
+  padding: 14px; z-index: 150; backdrop-filter: blur(10px);
+  transition: opacity 0.3s, transform 0.3s; max-height: calc(100% - 80px); overflow-y: auto;
+}
+.network-map-root .nm-legend-panel.hidden { opacity: 0; transform: translateY(10px); pointer-events: none; }
+.network-map-root .nm-legend-panel h3 {
+  font-family: var(--nm-font-display); font-size: 9px; font-weight: 700;
+  color: var(--nm-gold); letter-spacing: 2px; margin-bottom: 8px; margin-top: 0;
+}
+.network-map-root .nm-legend-panel h3 + h3 { margin-top: 12px; }
+.network-map-root .nm-legend-item { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-bottom: 4px; color: var(--nm-text-primary); }
+.network-map-root .nm-legend-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+.network-map-root .nm-legend-line { width: 24px; height: 2px; flex-shrink: 0; border-radius: 1px; }
+.network-map-root .nm-legend-controls kbd {
+  font-family: var(--nm-font-mono); font-size: 9px; color: var(--nm-text-dim);
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 3px; padding: 1px 5px; min-width: 40px; text-align: center;
+}
+.network-map-root .nm-legend-panel::-webkit-scrollbar { width: 3px; }
+.network-map-root .nm-legend-panel::-webkit-scrollbar-thumb { background: var(--nm-holo-blue-dim); border-radius: 2px; }
+
+/* ─── SCANLINE OVERLAY ──────────────────────────────────── */
+.network-map-root .nm-scanline {
+  position: absolute; inset: 0; z-index: 9998; pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+  mix-blend-mode: multiply;
+}
+
+/* ─── TOOLTIP ───────────────────────────────────────────── */
+.nm-tooltip {
+  position: fixed; padding: 6px 10px;
+  background: rgba(8,16,32,0.95); border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 4px; font-family: 'Share Tech Mono', monospace; font-size: 11px;
+  color: #e8f4ff; pointer-events: none; z-index: 10000; max-width: 250px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5); backdrop-filter: blur(8px);
+}
+.nm-tooltip .tt-name { color: #00f0ff; font-weight: 600; }
+.nm-tooltip .tt-ip { color: #5a7080; }
+.nm-tooltip .tt-role { color: #ffaa00; font-size: 10px; }
