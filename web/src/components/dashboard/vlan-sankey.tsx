@@ -21,13 +21,22 @@ function getColor(index: number): string {
   return VLAN_COLORS[index % VLAN_COLORS.length];
 }
 
+/** Minimum scaled value so tiny flows still get visible band width. */
+const MIN_SCALED_VALUE = 2;
+
+/** Scale raw bytes to a log10 value for proportional band width.
+ *  Compresses the 100,000x+ range between dominant and minor flows into ~3-5x. */
+function scaleBytes(bytes: number): number {
+  return Math.max(MIN_SCALED_VALUE, Math.log10(bytes + 1));
+}
+
 interface SankeyNodePayload {
   x: number;
   y: number;
   width: number;
   height: number;
   index: number;
-  payload: { name: string; color: string; value: number };
+  payload: { name: string; color: string; value: number; rawValue: number };
   containerWidth: number;
 }
 
@@ -63,7 +72,7 @@ function CustomNode(props: SankeyNodePayload) {
         fill="oklch(0.55 0.01 285)"
         fontSize={10}
       >
-        {formatBytes(payload.value)}
+        {formatBytes(payload.rawValue)}
       </text>
     </Layer>
   );
@@ -82,6 +91,7 @@ interface SankeyLinkPayload {
     source: { name: string; color: string };
     target: { name: string };
     value: number;
+    rawBytes: number;
   };
 }
 
@@ -136,6 +146,8 @@ interface CustomTooltipProps {
       source?: { name: string };
       target?: { name: string };
       value?: number;
+      rawBytes?: number;
+      rawValue?: number;
       name?: string;
     };
   }>;
@@ -147,8 +159,8 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
   const item = payload[0]?.payload;
   if (!item) return null;
 
-  // Link tooltip
-  if (item.source && item.target && item.value !== undefined) {
+  // Link tooltip — show original byte count, not log-scaled value
+  if (item.source && item.target && item.rawBytes !== undefined) {
     return (
       <div
         className="rounded-md border px-3 py-2 text-xs"
@@ -162,13 +174,13 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
           {item.source.name} &rarr; {item.target.name}
         </span>
         <br />
-        {formatBytes(item.value)}
+        {formatBytes(item.rawBytes)}
       </div>
     );
   }
 
-  // Node tooltip
-  if (item.name && item.value !== undefined) {
+  // Node tooltip — show original byte total, not log-scaled sum
+  if (item.name && item.rawValue !== undefined) {
     return (
       <div
         className="rounded-md border px-3 py-2 text-xs"
@@ -180,7 +192,7 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
       >
         <span className="font-medium">{item.name}</span>
         <br />
-        {formatBytes(item.value)}
+        {formatBytes(item.rawValue)}
       </div>
     );
   }
@@ -194,36 +206,49 @@ export function VlanTrafficBreakdown() {
   const sankeyData = useMemo(() => {
     if (!flows || flows.length === 0) return null;
 
-    // Collect unique VLAN names from flows
-    const vlanSet = new Set<string>();
+    // Collect unique node names from flows
+    const nameSet = new Set<string>();
     for (const f of flows) {
-      vlanSet.add(f.source);
-      vlanSet.add(f.target);
+      nameSet.add(f.source);
+      nameSet.add(f.target);
     }
-    const vlanNames = Array.from(vlanSet).sort();
-    const n = vlanNames.length;
+    const nodeNames = Array.from(nameSet).sort();
+    const n = nodeNames.length;
+
+    // Compute raw byte totals per sender/receiver for display labels
+    const senderTotals = new Map<number, number>();
+    const receiverTotals = new Map<number, number>();
+    for (const f of flows) {
+      const srcIdx = nodeNames.indexOf(f.source);
+      const dstIdx = nodeNames.indexOf(f.target);
+      senderTotals.set(srcIdx, (senderTotals.get(srcIdx) ?? 0) + f.bytes);
+      receiverTotals.set(dstIdx, (receiverTotals.get(dstIdx) ?? 0) + f.bytes);
+    }
 
     // Build nodes: left column (sender) + right column (receiver)
     // Index 0..n-1 = senders, n..2n-1 = receivers
     const nodes = [
-      ...vlanNames.map((name, i) => ({
+      ...nodeNames.map((name, i) => ({
         name: `${name} `,  // trailing space distinguishes sender node labels
         color: getColor(i),
+        rawValue: senderTotals.get(i) ?? 0,
       })),
-      ...vlanNames.map((name, i) => ({
+      ...nodeNames.map((name, i) => ({
         name: ` ${name}`,  // leading space distinguishes receiver node labels
         color: getColor(i),
+        rawValue: receiverTotals.get(i) ?? 0,
       })),
     ];
 
-    // Build links
+    // Build links with log-scaled values for band width, raw bytes for labels
     const links = flows.map((f) => {
-      const srcIdx = vlanNames.indexOf(f.source);
-      const dstIdx = vlanNames.indexOf(f.target);
+      const srcIdx = nodeNames.indexOf(f.source);
+      const dstIdx = nodeNames.indexOf(f.target);
       return {
         source: srcIdx,
         target: n + dstIdx,
-        value: f.bytes,
+        value: scaleBytes(f.bytes),
+        rawBytes: f.bytes,
       };
     });
 
@@ -255,8 +280,9 @@ export function VlanTrafficBreakdown() {
     );
   }
 
-  const nodeCount = sankeyData.nodes.length / 2;
-  const chartHeight = Math.max(300, nodeCount * 50 + 60);
+  // Auto-height: enough room for each node row (band + padding) on the larger side
+  const sideNodes = sankeyData.nodes.length / 2;
+  const chartHeight = Math.max(400, sideNodes * 55);
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
