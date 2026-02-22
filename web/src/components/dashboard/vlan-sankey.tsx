@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { formatBytes } from "@/lib/format";
 import { useVlanFlows } from "@/api/queries";
-import { Sankey, Tooltip, Rectangle, Layer } from "recharts";
+import { Sankey, Rectangle, Layer } from "recharts";
 
 // Distinct colors for VLAN sources
 const VLAN_COLORS = [
@@ -95,113 +95,78 @@ interface SankeyLinkPayload {
   };
 }
 
-function CustomLink(props: SankeyLinkPayload) {
-  const {
-    sourceX,
-    targetX,
-    sourceY,
-    targetY,
-    sourceControlX,
-    targetControlX,
-    linkWidth,
-    payload,
-  } = props;
-
-  return (
-    <path
-      d={`
-        M${sourceX},${sourceY + linkWidth / 2}
-        C${sourceControlX},${sourceY + linkWidth / 2}
-          ${targetControlX},${targetY + linkWidth / 2}
-          ${targetX},${targetY + linkWidth / 2}
-        L${targetX},${targetY - linkWidth / 2}
-        C${targetControlX},${targetY - linkWidth / 2}
-          ${sourceControlX},${sourceY - linkWidth / 2}
-          ${sourceX},${sourceY - linkWidth / 2}
-        Z
-      `}
-      fill={payload.source.color}
-      fillOpacity={0.25}
-      stroke={payload.source.color}
-      strokeWidth={0}
-      strokeOpacity={0.5}
-      onMouseEnter={(e) => {
-        e.currentTarget.setAttribute("fill-opacity", "0.5");
-        e.currentTarget.setAttribute("stroke-width", "2");
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.setAttribute("fill-opacity", "0.25");
-        e.currentTarget.setAttribute("stroke-width", "0");
-      }}
-      style={{ cursor: "pointer" }}
-    />
-  );
-}
-
-interface CustomTooltipProps {
-  active?: boolean;
-  payload?: Array<{
-    name?: string;
-    payload?: {
-      source?: { name: string };
-      target?: { name: string };
-      value?: number;
-      rawBytes?: number;
-      rawValue?: number;
-      name?: string;
-    };
-  }>;
-}
-
-function CustomTooltip({ active, payload }: CustomTooltipProps) {
-  if (!active || !payload || payload.length === 0) return null;
-
-  const item = payload[0]?.payload;
-  if (!item) return null;
-
-  // Link tooltip — show original byte count, not log-scaled value
-  if (item.source && item.target && item.rawBytes !== undefined) {
-    return (
-      <div
-        className="rounded-md border px-3 py-2 text-xs"
-        style={{
-          backgroundColor: "oklch(0.175 0.015 285)",
-          borderColor: "oklch(0.3 0.015 285)",
-          color: "oklch(0.95 0.01 285)",
-        }}
-      >
-        <span className="font-medium">
-          {item.source.name} &rarr; {item.target.name}
-        </span>
-        <br />
-        {formatBytes(item.rawBytes)}
-      </div>
-    );
-  }
-
-  // Node tooltip — show original byte total, not log-scaled sum
-  if (item.name && item.rawValue !== undefined) {
-    return (
-      <div
-        className="rounded-md border px-3 py-2 text-xs"
-        style={{
-          backgroundColor: "oklch(0.175 0.015 285)",
-          borderColor: "oklch(0.3 0.015 285)",
-          color: "oklch(0.95 0.01 285)",
-        }}
-      >
-        <span className="font-medium">{item.name}</span>
-        <br />
-        {formatBytes(item.rawValue)}
-      </div>
-    );
-  }
-
-  return null;
-}
+// CustomLink is created inside VlanTrafficBreakdown (needs closure access to tooltip ref)
 
 export function VlanTrafficBreakdown() {
   const { data: flows, isLoading } = useVlanFlows();
+  const tooltipRef = useRef<HTMLDivElement>(null);
+
+  // Link component created here so it has closure access to tooltipRef.
+  // Uses direct DOM manipulation for the tooltip to avoid re-rendering
+  // the entire Sankey on every mouse move.
+  const LinkWithTooltip = useMemo(() => {
+    return function SankeyLink(props: SankeyLinkPayload) {
+      const {
+        sourceX, targetX, sourceY, targetY,
+        sourceControlX, targetControlX, linkWidth, payload,
+      } = props;
+
+      const updateTooltip = (e: React.MouseEvent) => {
+        const el = tooltipRef.current;
+        if (!el) return;
+        el.style.display = "block";
+        el.style.left = `${e.clientX + 14}px`;
+        el.style.top = `${e.clientY - 12}px`;
+        const src = payload.source.name.trim();
+        const dst = payload.target.name.trim();
+        el.textContent = "";
+        const line1 = document.createElement("span");
+        line1.style.fontWeight = "500";
+        line1.textContent = `${src} \u2192 ${dst}`;
+        el.appendChild(line1);
+        el.appendChild(document.createElement("br"));
+        el.appendChild(document.createTextNode(formatBytes(payload.rawBytes)));
+      };
+
+      const hideTooltip = () => {
+        const el = tooltipRef.current;
+        if (el) el.style.display = "none";
+      };
+
+      return (
+        <path
+          d={`
+            M${sourceX},${sourceY + linkWidth / 2}
+            C${sourceControlX},${sourceY + linkWidth / 2}
+              ${targetControlX},${targetY + linkWidth / 2}
+              ${targetX},${targetY + linkWidth / 2}
+            L${targetX},${targetY - linkWidth / 2}
+            C${targetControlX},${targetY - linkWidth / 2}
+              ${sourceControlX},${sourceY - linkWidth / 2}
+              ${sourceX},${sourceY - linkWidth / 2}
+            Z
+          `}
+          fill={payload.source.color}
+          fillOpacity={0.25}
+          stroke={payload.source.color}
+          strokeWidth={0}
+          strokeOpacity={0.5}
+          onMouseEnter={(e) => {
+            e.currentTarget.setAttribute("fill-opacity", "0.5");
+            e.currentTarget.setAttribute("stroke-width", "2");
+            updateTooltip(e);
+          }}
+          onMouseMove={updateTooltip}
+          onMouseLeave={(e) => {
+            e.currentTarget.setAttribute("fill-opacity", "0.25");
+            e.currentTarget.setAttribute("stroke-width", "0");
+            hideTooltip();
+          }}
+          style={{ cursor: "pointer" }}
+        />
+      );
+    };
+  }, []); // tooltipRef is stable, formatBytes is a module import
 
   const sankeyData = useMemo(() => {
     if (!flows || flows.length === 0) return null;
@@ -307,11 +272,25 @@ export function VlanTrafficBreakdown() {
               <CustomNode {...props} containerWidth={800} />
             )) as any
           }
-          link={CustomLink as any}
-        >
-          <Tooltip content={<CustomTooltip />} />
-        </Sankey>
+          link={LinkWithTooltip as any}
+        />
       </div>
+      <div
+        ref={tooltipRef}
+        style={{
+          display: "none",
+          position: "fixed",
+          pointerEvents: "none",
+          zIndex: 50,
+          backgroundColor: "oklch(0.175 0.015 285)",
+          border: "1px solid oklch(0.3 0.015 285)",
+          color: "oklch(0.95 0.01 285)",
+          borderRadius: "6px",
+          padding: "6px 12px",
+          fontSize: "12px",
+          lineHeight: "1.5",
+        }}
+      />
     </div>
   );
 }
