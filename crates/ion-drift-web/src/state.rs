@@ -1,12 +1,15 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64};
 
+use tokio::sync::RwLock;
+
 use mikrotik_core::{MikrotikClient, MetricsStore, SpeedTestStore, TrafficTracker};
 use crate::auth::{OidcClient, SessionStore};
 use crate::config::ServerConfig;
 use crate::geo::GeoDb;
 use crate::live_traffic::LiveTrafficBuffer;
 use crate::oui::OuiDb;
+use crate::routes::network_map_status::NetworkMapStatusCache;
 
 /// Shared application state, passed to all Axum handlers via `State<AppState>`.
 #[derive(Clone)]
@@ -37,4 +40,6 @@ pub struct AppState {
     pub oui_db: Arc<OuiDb>,
     /// GeoIP country lookup database (optional).
     pub geo_db: Arc<GeoDb>,
+    /// Cached network map status (DHCP + ARP + interfaces), refreshed every 5s.
+    pub network_map_cache: Arc<RwLock<Option<NetworkMapStatusCache>>>,
 }

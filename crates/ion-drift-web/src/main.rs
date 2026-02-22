@@ -108,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
         speedtest_last_completed: speedtest_last_completed.clone(),
         oui_db,
         geo_db,
+        network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
     };
 
     // Spawn background tasks

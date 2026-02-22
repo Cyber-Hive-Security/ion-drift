@@ -473,6 +473,34 @@ export interface LogAggregate {
   drops_by_interface: string;
 }
 
+// Network map live status (snake_case — custom Rust structs)
+
+export interface DeviceStatus {
+  ip: string;
+  mac: string | null;
+  hostname: string | null;
+  manufacturer: string | null;
+  in_arp: boolean;
+  dhcp_status: string | null;
+  dhcp_server: string | null;
+  expires_after: string | null;
+  last_seen: string | null;
+}
+
+export interface InterfaceStatus {
+  name: string;
+  running: boolean;
+  rx_byte: number;
+  tx_byte: number;
+  disabled: boolean;
+}
+
+export interface NetworkMapStatus {
+  devices: DeviceStatus[];
+  interfaces: InterfaceStatus[];
+  timestamp: number;
+}
+
 // Speedtest types (snake_case — custom Rust structs)
 
 export interface ProviderResult {

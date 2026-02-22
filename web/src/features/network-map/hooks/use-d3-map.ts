@@ -3,6 +3,13 @@
 //  D3 owns the SVG canvas; React owns the UI chrome.
 // ============================================================
 
+// Extend SVGLineElement for connection tooltip storage
+declare global {
+  interface SVGLineElement {
+    __connTooltip?: HTMLDivElement;
+  }
+}
+
 import * as d3 from "d3";
 import type {
   NetworkNode,
@@ -11,6 +18,7 @@ import type {
   MapInstance,
   VlanLayout,
 } from "../types";
+import type { DeviceStatus, InterfaceStatus } from "@/api/types";
 import {
   MAP_WIDTH,
   MAP_HEIGHT,
@@ -167,6 +175,56 @@ export function createMapInstance(
     merge.append("feMergeNode").attr("in", "blur");
     merge.append("feMergeNode").attr("in", "SourceGraphic");
   });
+
+  // Live status glow filters (green = active, red = inactive)
+  {
+    const fActive = defs
+      .append("filter")
+      .attr("id", "glow-active")
+      .attr("x", "-50%")
+      .attr("y", "-50%")
+      .attr("width", "200%")
+      .attr("height", "200%");
+    fActive.append("feGaussianBlur").attr("stdDeviation", 4).attr("result", "blur");
+    // Tint the glow green
+    fActive
+      .append("feFlood")
+      .attr("flood-color", "#00ff88")
+      .attr("flood-opacity", 0.3)
+      .attr("result", "color");
+    fActive
+      .append("feComposite")
+      .attr("in", "color")
+      .attr("in2", "blur")
+      .attr("operator", "in")
+      .attr("result", "tinted");
+    const mActive = fActive.append("feMerge");
+    mActive.append("feMergeNode").attr("in", "tinted");
+    mActive.append("feMergeNode").attr("in", "SourceGraphic");
+
+    const fInactive = defs
+      .append("filter")
+      .attr("id", "glow-inactive")
+      .attr("x", "-50%")
+      .attr("y", "-50%")
+      .attr("width", "200%")
+      .attr("height", "200%");
+    fInactive.append("feGaussianBlur").attr("stdDeviation", 4).attr("result", "blur");
+    fInactive
+      .append("feFlood")
+      .attr("flood-color", "#ff4444")
+      .attr("flood-opacity", 0.3)
+      .attr("result", "color");
+    fInactive
+      .append("feComposite")
+      .attr("in", "color")
+      .attr("in2", "blur")
+      .attr("operator", "in")
+      .attr("result", "tinted");
+    const mInactive = fInactive.append("feMerge");
+    mInactive.append("feMergeNode").attr("in", "tinted");
+    mInactive.append("feMergeNode").attr("in", "SourceGraphic");
+  }
 
   const lineGlow = defs
     .append("filter")
@@ -427,6 +485,54 @@ export function createMapInstance(
       .attr("cy", fwd ? tgt.y : src.y)
       .on("end", () => animateParticle(p, conn));
   }
+
+  // ── Connection hover tooltips ──
+  layerConnections
+    .selectAll<SVGLineElement, unknown>(".connection-line")
+    .on("mouseenter", function (event: MouseEvent) {
+      const el = d3.select(this);
+      const srcId = el.attr("data-source")!;
+      const tgtId = el.attr("data-target")!;
+      const src = nodeById[srcId];
+      const tgt = nodeById[tgtId];
+      // Find connection type
+      const conn = connections.find(
+        (c) =>
+          (c.source === srcId && c.target === tgtId) ||
+          (c.source === tgtId && c.target === srcId),
+      );
+      const style = conn ? CONNECTION_STYLES[conn.type] : null;
+      const label = style?.label || conn?.type || "link";
+
+      const tip = document.createElement("div");
+      tip.className = "nm-tooltip nm-conn-tooltip";
+      tip.innerHTML = `<div class="tt-name">${label}</div><div class="tt-ip">${src?.hostname || srcId} &harr; ${tgt?.hostname || tgtId}</div>`;
+      document.body.appendChild(tip);
+      tip.style.left = event.clientX + 14 + "px";
+      tip.style.top = event.clientY + 14 + "px";
+      (this as SVGLineElement).__connTooltip = tip;
+    })
+    .on("mousemove", function (event: MouseEvent) {
+      const tip = (this as SVGLineElement).__connTooltip;
+      if (tip) {
+        tip.style.left = event.clientX + 14 + "px";
+        tip.style.top = event.clientY + 14 + "px";
+      }
+    })
+    .on("mouseleave", function () {
+      const tip = (this as SVGLineElement).__connTooltip;
+      if (tip) {
+        tip.remove();
+        (this as SVGLineElement).__connTooltip = undefined;
+      }
+    });
+
+  // Live status data stores
+  let deviceStatusMap: Map<string, DeviceStatus> = new Map();
+  // eslint-disable-next-line prefer-const
+  let interfaceStatusMap: Map<string, InterfaceStatus> = new Map();
+  // Expose for connection tooltip access
+  void interfaceStatusMap;
 
   // ── Render nodes (draggable) ──
   const nodeDrag = d3
@@ -723,6 +829,65 @@ export function createMapInstance(
             )
             .scale(0.55),
         );
+    },
+
+    updateDeviceStatuses(devices: DeviceStatus[]) {
+      // Build IP → DeviceStatus lookup
+      deviceStatusMap = new Map(devices.map((d) => [d.ip, d]));
+
+      // Update each node group
+      layerNodes
+        .selectAll<SVGGElement, NetworkNode>(".node-group")
+        .each(function (d) {
+          const status = deviceStatusMap.get(d.ip);
+          // Store on datum for tooltip access
+          d.liveStatus = status;
+
+          const g = d3.select(this);
+          const hex = g.select<SVGPathElement>(".node-hex");
+
+          if (status) {
+            if (status.in_arp) {
+              // Active — green glow
+              g.classed("nm-node-active", true)
+                .classed("nm-node-inactive", false)
+                .classed("nm-node-unknown", false);
+              hex.attr("stroke", "#00ff88").attr("filter", "url(#glow-active)");
+            } else {
+              // In DHCP but not in ARP — red glow
+              g.classed("nm-node-active", false)
+                .classed("nm-node-inactive", true)
+                .classed("nm-node-unknown", false);
+              hex
+                .attr("stroke", "#ff4444")
+                .attr("filter", "url(#glow-inactive)");
+            }
+          } else {
+            // No status data — keep default
+            g.classed("nm-node-active", false)
+              .classed("nm-node-inactive", false)
+              .classed("nm-node-unknown", true);
+            hex
+              .attr("stroke", getNodeColor(d))
+              .attr("filter", "url(#glow-soft)");
+          }
+        });
+
+      // Update connection pulse classes based on endpoint statuses
+      layerConnections
+        .selectAll<SVGLineElement, unknown>(".connection-line")
+        .each(function () {
+          const el = d3.select(this);
+          const srcIp = nodeById[el.attr("data-source")!]?.ip;
+          const tgtIp = nodeById[el.attr("data-target")!]?.ip;
+          const srcActive = srcIp ? deviceStatusMap.get(srcIp)?.in_arp : false;
+          const tgtActive = tgtIp ? deviceStatusMap.get(tgtIp)?.in_arp : false;
+          el.classed("nm-conn-active", !!(srcActive && tgtActive));
+        });
+    },
+
+    updateInterfaceStatuses(interfaces: InterfaceStatus[]) {
+      interfaceStatusMap = new Map(interfaces.map((i) => [i.name, i]));
     },
   };
 }

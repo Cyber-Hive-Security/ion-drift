@@ -38,6 +38,8 @@ export interface NetworkNode {
   // Mutable layout positions — set at runtime
   x: number;
   y: number;
+  // Live status data — populated by updateDeviceStatuses
+  liveStatus?: import("@/api/types").DeviceStatus;
 }
 
 /** Raw node data without x/y (as authored in data.ts) */
@@ -78,4 +80,6 @@ export interface MapInstance {
   highlightNode: (nodeId: string) => void;
   clearSelection: () => void;
   resetView: () => void;
+  updateDeviceStatuses: (devices: import("@/api/types").DeviceStatus[]) => void;
+  updateInterfaceStatuses: (interfaces: import("@/api/types").InterfaceStatus[]) => void;
 }

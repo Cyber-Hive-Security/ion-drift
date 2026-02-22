@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { NetworkNode, ContainerInfo, MapInstance } from "./types";
 import { useBootSequence } from "./hooks/use-boot-sequence";
+import { useNetworkMapStatus } from "@/api/queries";
 import { BootOverlay } from "./components/boot-overlay";
 import { TopBar } from "./components/top-bar";
 import { MapCanvas } from "./components/map-canvas";
 import { DetailPanel } from "./components/detail-panel";
 import { LegendPanel } from "./components/legend-panel";
+import { StatusBar } from "./components/status-bar";
 import "./network-map.css";
 
 export function NetworkMapPage() {
@@ -19,6 +21,9 @@ export function NetworkMapPage() {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
 
+  // Live status polling — only after boot sequence completes
+  const statusQuery = useNetworkMapStatus({ enabled: boot.phase === "done" });
+
   // ── Node selection ──
   const handleSelectNode = useCallback(
     (node: NetworkNode, _container?: ContainerInfo) => {
@@ -31,7 +36,7 @@ export function NetworkMapPage() {
     setSelectedNode(null);
   }, []);
 
-  // ── Tooltip ──
+  // ── Tooltip (enhanced with live status) ──
   const handleHover = useCallback((event: MouseEvent, node: NetworkNode) => {
     if (tooltipRef.current) {
       tooltipRef.current.remove();
@@ -39,7 +44,25 @@ export function NetworkMapPage() {
     }
     const el = document.createElement("div");
     el.className = "nm-tooltip";
-    el.innerHTML = `<div class="tt-name">${node.hostname}</div><div class="tt-ip">${node.ip}</div><div class="tt-role">${node.role}</div>`;
+
+    let html = `<div class="tt-name">${node.hostname}</div><div class="tt-ip">${node.ip}</div><div class="tt-role">${node.role}</div>`;
+
+    // Append live status details if available
+    const ls = node.liveStatus;
+    if (ls) {
+      const parts: string[] = [];
+      if (ls.mac) parts.push(`<span class="tt-dim">MAC</span> ${ls.mac}`);
+      if (ls.manufacturer) parts.push(`<span class="tt-dim">MFG</span> ${ls.manufacturer}`);
+      if (ls.dhcp_status) parts.push(`<span class="tt-dim">DHCP</span> ${ls.dhcp_status}`);
+      if (ls.expires_after) parts.push(`<span class="tt-dim">EXP</span> ${ls.expires_after}`);
+      if (ls.last_seen) parts.push(`<span class="tt-dim">SEEN</span> ${ls.last_seen}`);
+      parts.push(
+        `<span class="tt-dim">ARP</span> <span class="${ls.in_arp ? "tt-green" : "tt-red"}">${ls.in_arp ? "active" : "offline"}</span>`,
+      );
+      html += `<div class="tt-status">${parts.join("<br>")}</div>`;
+    }
+
+    el.innerHTML = html;
     document.body.appendChild(el);
     el.style.left = event.clientX + 14 + "px";
     el.style.top = event.clientY + 14 + "px";
@@ -69,6 +92,13 @@ export function NetworkMapPage() {
       }
     };
   }, []);
+
+  // ── Sync live status to D3 map ──
+  useEffect(() => {
+    if (!statusQuery.data || !mapInstanceRef.current) return;
+    mapInstanceRef.current.updateDeviceStatuses(statusQuery.data.devices);
+    mapInstanceRef.current.updateInterfaceStatuses(statusQuery.data.interfaces);
+  }, [statusQuery.data]);
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -134,6 +164,10 @@ export function NetworkMapPage() {
 
           <DetailPanel node={selectedNode} onClose={handleClearSelection} />
           <LegendPanel show={showLegend} />
+          <StatusBar
+            status={statusQuery.data}
+            isLoading={statusQuery.isLoading}
+          />
 
           <div className="nm-scanline" />
         </>

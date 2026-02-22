@@ -32,6 +32,7 @@ import type {
   ConnectionMetricsPoint,
   VlanMetricsPoint,
   LogAggregate,
+  NetworkMapStatus,
 } from "./types";
 
 // Auth
@@ -360,5 +361,16 @@ export function useLogTrends(range: "24h" | "7d") {
     queryFn: () =>
       apiFetch<LogAggregate[]>(`/api/metrics/log-trends?range=${range}`),
     refetchInterval: 300_000,
+  });
+}
+
+// Network Map Status
+
+export function useNetworkMapStatus(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["network-map", "status"],
+    queryFn: () => apiFetch<NetworkMapStatus>("/api/network-map/status"),
+    refetchInterval: 10_000,
+    enabled: options?.enabled ?? true,
   });
 }

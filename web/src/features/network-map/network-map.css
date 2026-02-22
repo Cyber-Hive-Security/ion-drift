@@ -236,14 +236,48 @@
   mix-blend-mode: multiply;
 }
 
+/* ─── LIVE STATUS GLOW ─────────────────────────────────── */
+.network-map-root .nm-node-active .node-hex { filter: url(#glow-active); }
+.network-map-root .nm-node-inactive .node-hex { filter: url(#glow-inactive); }
+
+/* Connection pulse when both endpoints active */
+.network-map-root .nm-conn-active { animation: nm-conn-pulse 2s ease-in-out infinite; }
+@keyframes nm-conn-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+
+/* ─── STATUS BAR ───────────────────────────────────────── */
+.network-map-root .nm-status-bar {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 28px;
+  background: var(--nm-bg-panel); border-top: 1px solid var(--nm-border-color);
+  display: flex; align-items: center; justify-content: center; gap: 16px;
+  padding: 0 20px; z-index: 150; backdrop-filter: blur(10px);
+  font-family: var(--nm-font-mono); font-size: 11px;
+}
+.network-map-root .nm-status-item { display: flex; align-items: center; gap: 6px; }
+.network-map-root .nm-status-label { color: var(--nm-text-dim); font-size: 9px; letter-spacing: 1.5px; }
+.network-map-root .nm-status-value { color: var(--nm-text-bright); }
+.network-map-root .nm-status-active { color: var(--nm-tactical-green); }
+.network-map-root .nm-status-sep { color: var(--nm-text-dim); margin: 0 1px; }
+.network-map-root .nm-status-total { color: var(--nm-text-dim); }
+.network-map-root .nm-status-time { color: var(--nm-text-dim); }
+.network-map-root .nm-status-divider { width: 1px; height: 14px; background: var(--nm-border-color); }
+.network-map-root .nm-status-dot-indicator {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.network-map-root .nm-dot-green { background: var(--nm-tactical-green); box-shadow: 0 0 6px var(--nm-tactical-green); }
+.network-map-root .nm-dot-blue { background: var(--nm-holo-blue); box-shadow: 0 0 6px var(--nm-holo-blue); }
+
 /* ─── TOOLTIP ───────────────────────────────────────────── */
 .nm-tooltip {
   position: fixed; padding: 6px 10px;
   background: rgba(8,16,32,0.95); border: 1px solid rgba(0, 240, 255, 0.15);
   border-radius: 4px; font-family: 'Share Tech Mono', monospace; font-size: 11px;
-  color: #e8f4ff; pointer-events: none; z-index: 10000; max-width: 250px;
+  color: #e8f4ff; pointer-events: none; z-index: 10000; max-width: 280px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.5); backdrop-filter: blur(8px);
 }
 .nm-tooltip .tt-name { color: #00f0ff; font-weight: 600; }
 .nm-tooltip .tt-ip { color: #5a7080; }
 .nm-tooltip .tt-role { color: #ffaa00; font-size: 10px; }
+.nm-tooltip .tt-status { margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(0,240,255,0.1); font-size: 10px; line-height: 1.5; }
+.nm-tooltip .tt-dim { color: #5a7080; margin-right: 4px; }
+.nm-tooltip .tt-green { color: #00ff88; }
+.nm-tooltip .tt-red { color: #ff4444; }
