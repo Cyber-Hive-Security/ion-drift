@@ -30,6 +30,8 @@ import {
 // ── VLAN names for display ───────────────────────────────────
 
 const VLAN_NAMES: Record<number, string> = {
+  [-1]: "WAN / External",
+  0: "Unclassified",
   2: "Network Mgmt",
   6: "Employer Isolated",
   10: "Cyber Hive Security",
@@ -40,6 +42,22 @@ const VLAN_NAMES: Record<number, string> = {
   90: "IoT Internet",
   99: "IoT Restricted",
 };
+
+function vlanLabel(vlan: number): string {
+  const name = VLAN_NAMES[vlan];
+  if (vlan <= 0) return name ?? "Unclassified";
+  return name ? `VLAN ${vlan}: ${name}` : `VLAN ${vlan}`;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseDetails(details: string | null): Record<string, any> {
+  if (!details) return {};
+  try {
+    return JSON.parse(details);
+  } catch {
+    return {};
+  }
+}
 
 // ── Severity styling ─────────────────────────────────────────
 
@@ -139,10 +157,15 @@ function AlertBanners({ data }: { data: BehaviorOverview }) {
   return (
     <>
       {learningCount > 0 && (
-        <div className="mb-3 flex items-center gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm text-blue-400">
-          <Brain className="h-4 w-4" />
-          Baseline learning in progress — {learningCount} device
-          {learningCount !== 1 ? "s" : ""} building profiles...
+        <div className="mb-3 flex items-start gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm text-blue-400">
+          <Brain className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            Baseline learning in progress — {learningCount} device
+            {learningCount !== 1 ? "s" : ""} building profiles (7 days).
+            <span className="ml-1 text-blue-400/70">
+              Blocked connection attempts are flagged immediately. Behavioral anomalies will activate after learning completes.
+            </span>
+          </div>
         </div>
       )}
       {(hasCritical || hasWarning) && (
@@ -202,8 +225,7 @@ function VlanSection({
           <ChevronRight className="h-4 w-4 text-muted-foreground" />
         )}
         <span className="font-medium">
-          VLAN {summary.vlan}:{" "}
-          {VLAN_NAMES[summary.vlan] ?? "Unknown"}
+          {vlanLabel(summary.vlan)}
         </span>
         <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
           <span>{summary.device_count} devices</span>
@@ -255,6 +277,25 @@ function AnomalyCard({
   resolveMutation: ReturnType<typeof useResolveAnomaly>;
 }) {
   const isPending = anomaly.status === "pending";
+  const d = parseDetails(anomaly.details);
+
+  // Build source label
+  const srcIp = d.src_ip ?? "";
+  const srcHostname = d.src_hostname;
+  const srcMfg = d.src_manufacturer;
+
+  // Build destination label
+  const dstIp = d.dst_ip ?? d.dst_subnet ?? "";
+  const dstPort = d.dst_port != null ? `:${d.dst_port}` : "";
+  const proto = d.protocol ?? "";
+
+  // Destination context
+  const dstContext = (() => {
+    if (d.dst_vlan_name) return `${d.dst_vlan_name}`;
+    if (d.dst_country?.name) return d.dst_country.name;
+    if (dstIp === "external") return "External";
+    return null;
+  })();
 
   return (
     <div
@@ -264,7 +305,8 @@ function AnomalyCard({
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
+          {/* Header: severity + type + time */}
           <div className="flex items-center gap-2">
             <span
               className={cn(
@@ -281,15 +323,48 @@ function AnomalyCard({
               {formatTimeAgo(anomaly.timestamp)}
             </span>
           </div>
-          <p className="mt-1 text-xs">{anomaly.description}</p>
+
+          {/* Flow line: source → destination */}
+          {srcIp && (
+            <p className="mt-1 font-mono text-xs font-medium">
+              {anomaly.mac} ({srcIp}) &rarr; {dstIp}{dstPort}
+              {proto && <span className="text-muted-foreground"> ({proto.toUpperCase()})</span>}
+            </p>
+          )}
+
+          {/* Source context */}
           <p className="mt-0.5 text-xs text-muted-foreground">
-            MAC: {anomaly.mac}
-            {anomaly.firewall_correlation && (
-              <span className="ml-2">
-                FW: {anomaly.firewall_correlation}
-              </span>
-            )}
+            <span className="font-medium text-foreground/70">Src:</span>{" "}
+            {anomaly.mac}
+            {srcIp && <span className="ml-1">&middot; {srcIp}</span>}
+            {srcHostname && <span className="ml-1">&middot; {srcHostname}</span>}
+            {srcMfg && <span className="ml-1">&middot; {srcMfg}</span>}
           </p>
+
+          {/* Destination context */}
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground/70">Dst:</span>{" "}
+            {dstIp}{dstPort}
+            {proto && <span className="ml-1">({proto.toUpperCase()})</span>}
+            {dstContext && <span className="ml-1">&middot; {dstContext}</span>}
+            {d.dst_hostname && <span className="ml-1">&middot; {d.dst_hostname}</span>}
+          </p>
+
+          {/* Firewall correlation */}
+          {anomaly.firewall_correlation && (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground/70">FW:</span>{" "}
+              {anomaly.firewall_correlation}
+              {anomaly.firewall_rule_comment && (
+                <span className="ml-1">&middot; {anomaly.firewall_rule_comment}</span>
+              )}
+            </p>
+          )}
+
+          {/* Fallback: show description if no details available */}
+          {!srcIp && !dstIp && (
+            <p className="mt-1 text-xs">{anomaly.description}</p>
+          )}
         </div>
         {isPending && (
           <div className="flex shrink-0 items-center gap-1">
@@ -353,7 +428,15 @@ const anomalyColumns: Column<DeviceAnomaly>[] = [
   {
     key: "mac",
     header: "Device",
-    render: (r) => <span className="font-mono text-xs">{r.mac}</span>,
+    render: (r) => {
+      const d = parseDetails(r.details);
+      return (
+        <span className="text-xs">
+          {d.src_hostname && <span className="mr-1">{d.src_hostname}</span>}
+          <span className="font-mono text-muted-foreground">{r.mac}</span>
+        </span>
+      );
+    },
     sortValue: (r) => r.mac,
   },
   {
@@ -366,17 +449,31 @@ const anomalyColumns: Column<DeviceAnomaly>[] = [
   },
   {
     key: "description",
-    header: "Description",
-    render: (r) => (
-      <span className="max-w-xs truncate text-xs" title={r.description}>
-        {r.description}
-      </span>
-    ),
+    header: "Flow",
+    render: (r) => {
+      const d = parseDetails(r.details);
+      const srcIp = d.src_ip ?? "";
+      const dstIp = d.dst_ip ?? d.dst_subnet ?? "";
+      const dstPort = d.dst_port != null ? `:${d.dst_port}` : "";
+      const proto = d.protocol ? ` ${(d.protocol as string).toUpperCase()}` : "";
+      if (srcIp || dstIp) {
+        return (
+          <span className="max-w-xs truncate font-mono text-xs" title={r.description}>
+            {srcIp} &rarr; {dstIp}{dstPort}{proto}
+          </span>
+        );
+      }
+      return (
+        <span className="max-w-xs truncate text-xs" title={r.description}>
+          {r.description}
+        </span>
+      );
+    },
   },
   {
     key: "vlan",
     header: "VLAN",
-    render: (r) => <span className="text-xs">{r.vlan}</span>,
+    render: (r) => <span className="text-xs">{vlanLabel(r.vlan)}</span>,
     sortValue: (r) => r.vlan,
   },
   {

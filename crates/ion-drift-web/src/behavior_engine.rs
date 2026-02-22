@@ -38,6 +38,15 @@ fn split_addr_port(addr: &str) -> (&str, Option<u16>) {
     (addr, None)
 }
 
+/// Classify IP to VLAN: known VLAN → that VLAN, external → -1, unknown internal → 0.
+fn classify_vlan(ip: &str) -> i64 {
+    match behavior::ip_to_vlan(ip) {
+        Some(v) => v as i64,
+        None if !behavior::is_internal_ip(ip) => -1, // WAN / External
+        None => 0,                                    // Unclassified internal
+    }
+}
+
 // ── Observation Collection ───────────────────────────────────
 
 /// Collect device observations from ARP + DHCP + connection tracking.
@@ -77,7 +86,7 @@ pub async fn collect_observations(
     for (ip, mac) in &ip_to_mac {
         let hostname = ip_to_hostname.get(ip).map(|s| s.as_str());
         let manufacturer = oui_db.lookup(mac).map(|s| s.to_string());
-        let vlan = behavior::ip_to_vlan(ip).unwrap_or(0) as i64;
+        let vlan = classify_vlan(ip);
         if let Err(e) = store.upsert_profile(mac, hostname, manufacturer.as_deref(), ip, vlan).await {
             tracing::debug!(mac, error = %e, "profile upsert failed");
         }
@@ -144,7 +153,7 @@ pub async fn collect_observations(
             .find(|(_, m)| *m == mac)
             .map(|(ip, _)| ip.clone())
             .unwrap_or_default();
-        let vlan = behavior::ip_to_vlan(&ip).unwrap_or(0) as i64;
+        let vlan = classify_vlan(&ip);
 
         for ((protocol, dst_port, dst_subnet, direction), (bytes_sent, bytes_recv, conn_count)) in flows {
             obs_records.push(DeviceObservation {
@@ -218,7 +227,8 @@ pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
                         .has_recent_anomaly(&profile.mac, "volume_spike", &dedup_key, 3600)
                         .await?
                     {
-                        let severity = behavior::anomaly_severity(vlan as u16, "volume_spike");
+                        let severity = behavior::anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "volume_spike");
+                        let dst_vlan_val = behavior::ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
                         store
                             .record_anomaly(&NewAnomaly {
                                 mac: profile.mac.clone(),
@@ -233,9 +243,15 @@ pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
                                     baseline.max_bytes_per_hour,
                                 ),
                                 details: Some(serde_json::json!({
+                                    "src_ip": profile.current_ip,
+                                    "src_hostname": profile.hostname,
+                                    "src_manufacturer": profile.manufacturer,
                                     "dst_subnet": obs.dst_subnet,
+                                    "dst_vlan": dst_vlan_val,
+                                    "dst_vlan_name": dst_vlan_val.map(|v| behavior::vlan_name(v as i64)),
                                     "protocol": obs.protocol,
                                     "dst_port": obs.dst_port,
+                                    "direction": obs.direction,
                                     "projected_hourly": hourly_projected,
                                     "baseline_max": baseline.max_bytes_per_hour,
                                 }).to_string()),
@@ -270,8 +286,9 @@ pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
                     .has_recent_anomaly(&profile.mac, anomaly_type, &dedup_key, 3600)
                     .await?
                 {
-                    let severity = behavior::anomaly_severity(vlan as u16, anomaly_type);
+                    let severity = behavior::anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, anomaly_type);
                     let hostname = profile.hostname.as_deref().unwrap_or(&profile.mac);
+                    let dst_vlan_val = behavior::ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
                     store
                         .record_anomaly(&NewAnomaly {
                             mac: profile.mac.clone(),
@@ -286,7 +303,12 @@ pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
                                 obs.dst_subnet,
                             ),
                             details: Some(serde_json::json!({
+                                "src_ip": profile.current_ip,
+                                "src_hostname": profile.hostname,
+                                "src_manufacturer": profile.manufacturer,
                                 "dst_subnet": obs.dst_subnet,
+                                "dst_vlan": dst_vlan_val,
+                                "dst_vlan_name": dst_vlan_val.map(|v| behavior::vlan_name(v as i64)),
                                 "protocol": obs.protocol,
                                 "dst_port": obs.dst_port,
                                 "direction": obs.direction,
@@ -323,19 +345,29 @@ pub async fn detect_blocked_attempts(
 
     let mut anomaly_count = 0;
 
-    // Fetch ARP for MAC lookup
-    let arp_entries = client
-        .arp_table()
-        .await
-        .map_err(|e| format!("ARP fetch failed: {e}"))?;
-    let ip_to_mac: HashMap<String, String> = arp_entries
-        .iter()
-        .filter_map(|a| {
-            a.mac_address
-                .as_ref()
-                .map(|m| (a.address.clone(), m.to_uppercase()))
-        })
-        .collect();
+    // Fetch ARP + DHCP for MAC/hostname lookup
+    let (arp_result, dhcp_result) = tokio::join!(
+        client.arp_table(),
+        client.dhcp_leases(),
+    );
+    let arp_entries = arp_result.map_err(|e| format!("ARP fetch failed: {e}"))?;
+    let dhcp_leases = dhcp_result.map_err(|e| format!("DHCP fetch failed: {e}"))?;
+
+    let mut ip_to_mac: HashMap<String, String> = HashMap::new();
+    let mut ip_to_hostname: HashMap<String, String> = HashMap::new();
+    for lease in &dhcp_leases {
+        if let Some(ref m) = lease.mac_address {
+            ip_to_mac.insert(lease.address.clone(), m.to_uppercase());
+            if let Some(ref h) = lease.host_name {
+                ip_to_hostname.insert(lease.address.clone(), h.clone());
+            }
+        }
+    }
+    for arp in &arp_entries {
+        if let Some(ref m) = arp.mac_address {
+            ip_to_mac.entry(arp.address.clone()).or_insert_with(|| m.to_uppercase());
+        }
+    }
 
     for entry in &log_entries {
         let topics = entry.topics.as_deref().unwrap_or("");
@@ -367,7 +399,7 @@ pub async fn detect_blocked_attempts(
         let dst_ip = fields.dst_ip.as_deref().unwrap_or("unknown");
         let dst_port = fields.dst_port.unwrap_or(0);
         let protocol = fields.protocol.as_deref().unwrap_or("unknown");
-        let vlan = behavior::ip_to_vlan(src_ip).unwrap_or(0) as i64;
+        let vlan = classify_vlan(src_ip);
 
         // Dedup: same device + dst_ip + dst_port within 1 hour
         let dedup_key = format!("{dst_ip}:{dst_port}");
@@ -378,7 +410,16 @@ pub async fn detect_blocked_attempts(
             continue;
         }
 
-        let severity = behavior::anomaly_severity(vlan as u16, "blocked_attempt");
+        let severity = behavior::anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "blocked_attempt");
+
+        // Enrich source context
+        let src_hostname = ip_to_hostname.get(src_ip).cloned();
+        let src_manufacturer = oui_db.lookup(&mac).map(|s| s.to_string());
+
+        // Enrich destination context
+        let dst_vlan = behavior::ip_to_vlan(dst_ip).map(|v| v as i64);
+        let dst_vlan_name = dst_vlan.map(|v| behavior::vlan_name(v).to_string());
+        let dst_hostname = ip_to_hostname.get(dst_ip).cloned();
 
         // GeoIP enrichment for description
         let dst_country = if let Some(ref country) = fields.dst_country {
@@ -398,8 +439,13 @@ pub async fn detect_blocked_attempts(
                 ),
                 details: Some(serde_json::json!({
                     "src_ip": src_ip,
+                    "src_hostname": src_hostname,
+                    "src_manufacturer": src_manufacturer,
                     "dst_ip": dst_ip,
                     "dst_port": dst_port,
+                    "dst_hostname": dst_hostname,
+                    "dst_vlan": dst_vlan,
+                    "dst_vlan_name": dst_vlan_name,
                     "protocol": protocol,
                     "direction": fields.direction,
                     "in_interface": fields.in_interface,

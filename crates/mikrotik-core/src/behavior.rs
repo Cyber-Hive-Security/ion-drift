@@ -43,9 +43,32 @@ pub fn ip_to_vlan(ip: &str) -> Option<u16> {
         (10, 2, 2) => Some(2),
         (172, 20, 10) => Some(10),
         (172, 20, 6) => Some(6),
+        (192, 168, 40) => Some(40),
         (192, 168, 90) => Some(90),
         (192, 168, 99) => Some(99),
         _ => None,
+    }
+}
+
+/// Returns true if the IP belongs to any known internal VLAN subnet.
+pub fn is_internal_ip(ip: &str) -> bool {
+    ip_to_vlan(ip).is_some()
+}
+
+/// Human-readable VLAN name.
+pub fn vlan_name(vlan: i64) -> &'static str {
+    match vlan {
+        2 => "Network Mgmt",
+        6 => "Employer Isolated",
+        10 => "Cyber Hive Security",
+        25 => "Trusted Services",
+        30 => "Trusted Wired",
+        35 => "Trusted Wireless",
+        40 => "Guest",
+        90 => "IoT Internet",
+        99 => "IoT Restricted",
+        -1 => "WAN / External",
+        _ => "Unclassified",
     }
 }
 
@@ -102,6 +125,7 @@ pub fn classify_destination(dst_ip: &str) -> String {
         (10, 2, 2) => "10.2.2.0/24".to_string(),
         (172, 20, 10) => "172.20.10.0/24".to_string(),
         (172, 20, 6) => "172.20.6.0/24".to_string(),
+        (192, 168, 40) => "192.168.40.0/24".to_string(),
         (192, 168, 90) => "192.168.90.0/24".to_string(),
         (192, 168, 99) => "192.168.99.0/24".to_string(),
         // RFC1918 catch-all
