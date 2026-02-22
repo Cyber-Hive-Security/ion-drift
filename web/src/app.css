@@ -37,3 +37,8 @@ body {
 * {
   border-color: var(--color-border);
 }
+
+/* Recharts sets overflow:hidden on SVGs which clips the bottom nodes' labels */
+.sankey-container svg {
+  overflow: visible !important;
+}

@@ -280,34 +280,38 @@ export function VlanTrafficBreakdown() {
     );
   }
 
-  // Auto-height: enough room for each node row (band + padding) on the larger side
+  // Auto-height: node padding (24) + band height + room for the 14px subtitle
+  // below the last node. Use 70px per node to be generous, and add extra bottom
+  // margin so the last row's subtitle text is never clipped.
   const sideNodes = sankeyData.nodes.length / 2;
-  const chartHeight = Math.max(400, sideNodes * 55);
+  const chartHeight = Math.max(400, sideNodes * 70);
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
+    <div className="rounded-lg border border-border bg-card p-4 overflow-visible">
       <h3 className="mb-3 text-sm font-medium text-muted-foreground">
         Inter-VLAN Traffic Flows
       </h3>
-      <Sankey
-        width={800}
-        height={chartHeight}
-        data={sankeyData}
-        nodeWidth={10}
-        nodePadding={24}
-        linkCurvature={0.5}
-        iterations={64}
-        sort={true}
-        margin={{ top: 10, right: 120, bottom: 10, left: 120 }}
-        node={
-          ((props: SankeyNodePayload) => (
-            <CustomNode {...props} containerWidth={800} />
-          )) as any
-        }
-        link={CustomLink as any}
-      >
-        <Tooltip content={<CustomTooltip />} />
-      </Sankey>
+      <div className="sankey-container" style={{ overflow: "visible" }}>
+        <Sankey
+          width={800}
+          height={chartHeight}
+          data={sankeyData}
+          nodeWidth={10}
+          nodePadding={24}
+          linkCurvature={0.5}
+          iterations={64}
+          sort={true}
+          margin={{ top: 10, right: 120, bottom: 30, left: 120 }}
+          node={
+            ((props: SankeyNodePayload) => (
+              <CustomNode {...props} containerWidth={800} />
+            )) as any
+          }
+          link={CustomLink as any}
+        >
+          <Tooltip content={<CustomTooltip />} />
+        </Sankey>
+      </div>
     </div>
   );
 }
