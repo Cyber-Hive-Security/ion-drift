@@ -20,3 +20,6 @@ cookie_name = "ion_drift_session"
 max_age_seconds = 86400
 secure = true
 same_site = "lax"
+
+[tls]
+key_path = "/app/certs/server.key"

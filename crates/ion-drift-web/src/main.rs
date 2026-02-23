@@ -7,6 +7,8 @@ mod log_parser;
 mod middleware;
 mod oui;
 mod routes;
+mod secrets;
+mod setup;
 mod state;
 
 use std::collections::HashMap;
@@ -14,10 +16,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
+use secrecy::ExposeSecret;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::ServerConfig;
 use crate::live_traffic::{LiveTrafficBuffer, TrafficSample};
+use crate::secrets::{DecryptedSecrets, SecretsManager};
 use crate::state::AppState;
 
 #[tokio::main]
@@ -34,7 +38,90 @@ async fn main() -> anyhow::Result<()> {
     let config_file = ServerConfig::resolve_path(config_path.as_deref());
 
     tracing::info!("loading config from {}", config_file.display());
-    let config = ServerConfig::load(&config_file)?;
+    let mut config = ServerConfig::load(&config_file)?;
+
+    // Set up data directory for SQLite databases
+    let data_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("ion-drift");
+    std::fs::create_dir_all(&data_dir)?;
+
+    // ── Secrets management ───────────────────────────────────────
+    let secrets_manager: Option<Arc<tokio::sync::RwLock<SecretsManager>>> =
+        if let Some(ref key_path) = config.tls.key_path {
+            tracing::info!("TLS key path configured, initializing secrets manager");
+            let db_path = data_dir.join("secrets.db");
+
+            let sm = if let Some(ref prev_path) = config.tls.previous_key_path {
+                SecretsManager::new_with_previous(&db_path, key_path, prev_path)?
+            } else {
+                SecretsManager::new(&db_path, key_path)?
+            };
+
+            let has_secrets = sm.has_secrets().await?;
+            let has_env_vars = !config.router.password.is_empty()
+                && !config.oidc.client_secret.is_empty();
+
+            if has_secrets {
+                // Decrypt from DB and inject into config
+                tracing::info!("loading encrypted secrets from database");
+                let decrypted = sm
+                    .load_all()
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("secrets DB exists but some secrets are missing"))?;
+                config.router.username = decrypted.router_username;
+                config.router.password = decrypted.router_password.expose_secret().to_string();
+                config.oidc.client_secret = decrypted.oidc_client_secret.expose_secret().to_string();
+                config.session.session_secret = decrypted.session_secret.expose_secret().to_string();
+            } else if has_env_vars {
+                // Migrate env vars into encrypted DB
+                tracing::info!("migrating env var secrets to encrypted storage");
+                let session_secret = if config.session.session_secret.is_empty() {
+                    let bytes: [u8; 32] = rand::random();
+                    hex::encode(bytes)
+                } else {
+                    config.session.session_secret.clone()
+                };
+                let decrypted = DecryptedSecrets {
+                    router_username: config.router.username.clone(),
+                    router_password: secrecy::SecretString::from(config.router.password.clone()),
+                    oidc_client_secret: secrecy::SecretString::from(config.oidc.client_secret.clone()),
+                    session_secret: secrecy::SecretString::from(session_secret.clone()),
+                };
+                sm.store_all(&decrypted).await?;
+                config.session.session_secret = session_secret;
+                tracing::info!("secrets migrated to encrypted storage");
+            } else {
+                // No secrets anywhere — enter setup mode
+                tracing::warn!("no secrets found — starting in setup mode");
+                let sm_arc = Arc::new(sm);
+                let setup_state = setup::SetupState {
+                    secrets_manager: sm_arc,
+                    router_username: config.router.username.clone(),
+                };
+
+                let app = axum::Router::new()
+                    .route("/setup", axum::routing::get(setup::setup_page).post(setup::setup_submit))
+                    .route("/health", axum::routing::get(|| async {
+                        axum::Json(serde_json::json!({ "status": "setup_required" }))
+                    }))
+                    .fallback(|| async { axum::response::Redirect::temporary("/setup") })
+                    .with_state(setup_state);
+
+                let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
+                let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+                tracing::info!("ion-drift setup server listening on {bind_addr}");
+                tracing::info!("navigate to http://{bind_addr}/setup to configure secrets");
+
+                axum::serve(listener, app).await?;
+                return Ok(());
+            }
+
+            Some(Arc::new(tokio::sync::RwLock::new(sm)))
+        } else {
+            None
+        };
+
     let config = Arc::new(config);
 
     // Build MikrotikClient and test connectivity
@@ -57,12 +144,6 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("discovering OIDC provider at {}", config.oidc.issuer_url);
     let oidc_client = auth::discover_oidc(&config, &http_client).await?;
     tracing::info!("OIDC provider discovered successfully");
-
-    // Set up data directory for SQLite databases
-    let data_dir = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("ion-drift");
-    std::fs::create_dir_all(&data_dir)?;
 
     // Initialize traffic tracker and speedtest store
     let traffic_tracker = Arc::new(
@@ -116,6 +197,7 @@ async fn main() -> anyhow::Result<()> {
         network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
         behavior_store: behavior_store.clone(),
         firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))),
+        secrets_manager: secrets_manager.clone(),
     };
 
     // Spawn background tasks
@@ -145,6 +227,13 @@ async fn main() -> anyhow::Result<()> {
     );
     spawn_behavior_maintenance(behavior_store.clone());
     spawn_behavior_auto_classifier(behavior_store);
+
+    // Spawn cert rotation watcher if secrets manager is active
+    if let Some(ref sm) = secrets_manager {
+        if let Some(ref key_path) = config.tls.key_path {
+            spawn_cert_rotation_watcher(sm.clone(), key_path.clone());
+        }
+    }
 
     // Resolve web/dist path relative to the config file's parent (project root)
     let web_dist = config_file
@@ -179,6 +268,46 @@ fn parse_config_arg() -> Option<String> {
         }
     }
     None
+}
+
+/// Watch the TLS key file for changes and re-encrypt secrets when the key rotates.
+fn spawn_cert_rotation_watcher(
+    sm: Arc<tokio::sync::RwLock<SecretsManager>>,
+    key_path: String,
+) {
+    tokio::spawn(async move {
+        let mut last_mtime = std::fs::metadata(&key_path)
+            .and_then(|m| m.modified())
+            .ok();
+
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.tick().await; // skip immediate tick
+
+        loop {
+            interval.tick().await;
+
+            let current_mtime = match std::fs::metadata(&key_path).and_then(|m| m.modified()) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("cert rotation watcher: failed to stat key file: {e}");
+                    continue;
+                }
+            };
+
+            if last_mtime.map_or(true, |prev| current_mtime != prev) {
+                if last_mtime.is_some() {
+                    // Key file actually changed (not first check)
+                    tracing::info!("TLS key file changed, rotating secrets encryption key");
+                    let mut sm = sm.write().await;
+                    match sm.rotate_key(&key_path).await {
+                        Ok(fp) => tracing::info!(fingerprint = %fp, "secrets re-encrypted with new key"),
+                        Err(e) => tracing::error!("key rotation failed: {e}"),
+                    }
+                }
+                last_mtime = Some(current_mtime);
+            }
+        }
+    });
 }
 
 /// Poll WAN traffic counters every 10 seconds for live rates,

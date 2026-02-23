@@ -11,6 +11,7 @@ use crate::geo::GeoDb;
 use crate::live_traffic::LiveTrafficBuffer;
 use crate::oui::OuiDb;
 use crate::routes::network_map_status::NetworkMapStatusCache;
+use crate::secrets::SecretsManager;
 
 /// Shared application state, passed to all Axum handlers via `State<AppState>`.
 #[derive(Clone)]
@@ -47,4 +48,6 @@ pub struct AppState {
     pub behavior_store: Arc<BehaviorStore>,
     /// Cached firewall filter rules for behavior correlation.
     pub firewall_rules_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
+    /// Encrypted secrets manager (None if tls.key_path not configured).
+    pub secrets_manager: Option<Arc<RwLock<SecretsManager>>>,
 }

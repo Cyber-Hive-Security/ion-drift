@@ -12,6 +12,16 @@ pub struct ServerConfig {
     pub session: SessionSection,
     #[serde(default)]
     pub data: DataSection,
+    #[serde(default)]
+    pub tls: TlsSection,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TlsSection {
+    /// Path to PEM-encoded TLS private key (used to derive encryption key for secrets).
+    pub key_path: Option<String>,
+    /// Path to previous TLS key for offline cert rotation.
+    pub previous_key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -124,6 +134,8 @@ fn default_same_site() -> String {
 
 impl ServerConfig {
     /// Load config from a TOML file, then overlay secrets from env vars.
+    /// If `tls.key_path` is set, env var secrets are optional (managed via SecretsManager).
+    /// If `tls.key_path` is not set, env var secrets are required (legacy mode).
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("failed to read config {}: {e}", path.display()))?;
@@ -131,18 +143,25 @@ impl ServerConfig {
         let mut config: ServerConfig = toml::from_str(&contents)
             .map_err(|e| anyhow::anyhow!("failed to parse config: {e}"))?;
 
-        // Overlay secrets from environment variables
-        config.router.password = std::env::var("HIVE_ROUTER_PASSWORD")
-            .map_err(|_| anyhow::anyhow!("HIVE_ROUTER_PASSWORD env var is required"))?;
+        if config.tls.key_path.is_some() {
+            // Secrets-at-rest mode: env vars are optional fallbacks
+            config.router.password = std::env::var("HIVE_ROUTER_PASSWORD").unwrap_or_default();
+            config.oidc.client_secret = std::env::var("HIVE_ROUTER_OIDC_SECRET").unwrap_or_default();
+            config.session.session_secret = std::env::var("HIVE_ROUTER_SESSION_SECRET").unwrap_or_default();
+        } else {
+            // Legacy mode: env vars are required
+            config.router.password = std::env::var("HIVE_ROUTER_PASSWORD")
+                .map_err(|_| anyhow::anyhow!("HIVE_ROUTER_PASSWORD env var is required"))?;
 
-        config.oidc.client_secret = std::env::var("HIVE_ROUTER_OIDC_SECRET")
-            .map_err(|_| anyhow::anyhow!("HIVE_ROUTER_OIDC_SECRET env var is required"))?;
+            config.oidc.client_secret = std::env::var("HIVE_ROUTER_OIDC_SECRET")
+                .map_err(|_| anyhow::anyhow!("HIVE_ROUTER_OIDC_SECRET env var is required"))?;
 
-        config.session.session_secret = std::env::var("HIVE_ROUTER_SESSION_SECRET")
-            .unwrap_or_else(|_| {
-                tracing::warn!("HIVE_ROUTER_SESSION_SECRET not set, generating random secret");
-                uuid::Uuid::new_v4().to_string()
-            });
+            config.session.session_secret = std::env::var("HIVE_ROUTER_SESSION_SECRET")
+                .unwrap_or_else(|_| {
+                    tracing::warn!("HIVE_ROUTER_SESSION_SECRET not set, generating random secret");
+                    uuid::Uuid::new_v4().to_string()
+                });
+        }
 
         // Allow env overrides for non-secret router fields
         if let Ok(host) = std::env::var("HIVE_ROUTER_HOST") {

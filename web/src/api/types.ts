@@ -600,3 +600,38 @@ export interface AlertCount {
   warning_count: number;
   anomaly_macs: string[];
 }
+
+// Settings / Secrets types (snake_case — custom Rust structs)
+
+export interface SecretStatus {
+  name: string;
+  updated_at: number;
+  key_current: boolean;
+  auto_generated?: boolean;
+}
+
+export interface SecretsStatusResponse {
+  secrets: SecretStatus[];
+  key_fingerprint: string;
+}
+
+export interface UpdateSecretsRequest {
+  router_username?: string;
+  router_password?: string;
+  oidc_client_secret?: string;
+}
+
+export interface UpdateSecretsResponse {
+  updated: string[];
+}
+
+export interface RegenerateSessionResponse {
+  status: string;
+}
+
+export interface TlsStatusResponse {
+  key_fingerprint: string;
+  key_path: string;
+  all_secrets_current: boolean;
+  previous_key_path: string | null;
+}

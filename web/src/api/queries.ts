@@ -38,6 +38,11 @@ import type {
   DeviceDetailResponse,
   DeviceAnomaly,
   AlertCount,
+  SecretsStatusResponse,
+  UpdateSecretsRequest,
+  UpdateSecretsResponse,
+  RegenerateSessionResponse,
+  TlsStatusResponse,
 } from "./types";
 
 // Auth
@@ -453,5 +458,52 @@ export function useBehaviorAlerts() {
     queryKey: ["behavior", "alerts"],
     queryFn: () => apiFetch<AlertCount>("/api/behavior/alerts"),
     refetchInterval: 15_000,
+  });
+}
+
+// Settings / Secrets
+
+export function useSecretsStatus() {
+  return useQuery({
+    queryKey: ["settings", "secrets"],
+    queryFn: () => apiFetch<SecretsStatusResponse>("/api/settings/secrets"),
+    retry: false,
+  });
+}
+
+export function useTlsStatus() {
+  return useQuery({
+    queryKey: ["settings", "tls"],
+    queryFn: () => apiFetch<TlsStatusResponse>("/api/settings/tls"),
+    retry: false,
+  });
+}
+
+export function useUpdateSecrets() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: UpdateSecretsRequest) =>
+      apiFetch<UpdateSecretsResponse>("/api/settings/secrets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "secrets"] });
+    },
+  });
+}
+
+export function useRegenerateSession() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<RegenerateSessionResponse>(
+        "/api/settings/secrets/session/regenerate",
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "secrets"] });
+    },
   });
 }

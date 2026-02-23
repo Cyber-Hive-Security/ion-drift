@@ -11,6 +11,7 @@ import {
   Gauge,
   Activity,
   Map,
+  Settings,
 } from "lucide-react";
 
 const navItems = [
@@ -68,6 +69,20 @@ export function Sidebar() {
           );
         })}
       </nav>
+      <div className="border-t border-border p-3">
+        <Link
+          to="/settings"
+          className={cn(
+            "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+            currentPath.startsWith("/settings")
+              ? "bg-primary/10 text-primary"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          <Settings className="h-4 w-4" />
+          Settings
+        </Link>
+      </div>
     </aside>
   );
 }

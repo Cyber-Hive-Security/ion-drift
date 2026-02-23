@@ -7,6 +7,7 @@ pub mod ip;
 pub mod logs;
 pub mod metrics;
 pub mod network_map_status;
+pub mod settings;
 pub mod speedtest;
 pub mod system;
 pub mod traffic;
@@ -116,7 +117,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
                     HeaderValue::from_static("*")
                 }),
         )
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .allow_credentials(true);
 
@@ -173,6 +174,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/behavior/anomalies", get(behavior::anomalies))
         .route("/behavior/anomalies/{id}/resolve", post(behavior::resolve_anomaly))
         .route("/behavior/alerts", get(behavior::alerts))
+        // Settings
+        .route("/settings/secrets", get(settings::secrets_status).put(settings::update_secrets))
+        .route("/settings/secrets/session/regenerate", post(settings::regenerate_session))
+        .route("/settings/tls", get(settings::tls_status))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 

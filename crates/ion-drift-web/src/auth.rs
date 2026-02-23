@@ -102,6 +102,12 @@ impl SessionStore {
         Some((pending.nonce, pending.pkce_verifier))
     }
 
+    /// Remove all sessions (used when session secret is regenerated).
+    pub fn clear_all(&self) {
+        self.sessions.clear();
+        self.pending_auth.clear();
+    }
+
     /// Remove expired sessions and stale pending auth entries.
     pub fn cleanup(&self) {
         let now = now_secs();

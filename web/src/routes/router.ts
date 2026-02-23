@@ -13,6 +13,7 @@ import { LogsPage } from "./logs";
 import { SpeedtestPage } from "./speedtest";
 import { BehaviorPage } from "./behavior";
 import { NetworkMapPage } from "@/features/network-map/network-map-page";
+import { SettingsPage } from "./settings";
 import { NotFoundPage } from "./__root";
 
 const rootRoute = createRootRoute({
@@ -74,6 +75,12 @@ const networkMapRoute = createRoute({
   component: NetworkMapPage,
 });
 
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   interfacesRoute,
@@ -84,6 +91,7 @@ const routeTree = rootRoute.addChildren([
   speedtestRoute,
   behaviorRoute,
   networkMapRoute,
+  settingsRoute,
 ]);
 
 export const router = createRouter({ routeTree });

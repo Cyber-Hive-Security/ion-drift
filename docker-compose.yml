@@ -11,6 +11,7 @@ services:
       - XDG_DATA_HOME=/app/data
     volumes:
       - ion-drift-data:/app/data
+      - /opt/certwarden-client/certificates/hiverouter.kaziik.xyz/hiverouter.kaziik.xyz.key:/app/certs/server.key:ro
 
 volumes:
   ion-drift-data:
