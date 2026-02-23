@@ -2,6 +2,7 @@ services:
   ion-drift:
     build: .
     container_name: ion-drift
+    hostname: hiverouter
     restart: unless-stopped
     ports:
       - "3100:3000"
@@ -12,6 +13,7 @@ services:
     volumes:
       - ion-drift-data:/app/data
       - /opt/certwarden-client/certificates/hiverouter.kaziik.xyz/hiverouter.kaziik.xyz.key:/app/certs/server.key:ro
+      - /opt/certwarden-client/certificates/hiverouter.kaziik.xyz/hiverouter.kaziik.xyz.pem:/app/certs/server.crt:ro
 
 volumes:
   ion-drift-data:

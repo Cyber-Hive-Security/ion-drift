@@ -21,5 +21,10 @@ max_age_seconds = 86400
 secure = true
 same_site = "lax"
 
-[tls]
+[bootstrap]
+cert_path = "/app/certs/server.crt"
 key_path = "/app/certs/server.key"
+keycloak_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet"
+keycloak_base_url = "https://holonetid.kaziik.xyz:8443"
+realm = "TheHolonet"
+client_id = "ion-drift-bootstrap"

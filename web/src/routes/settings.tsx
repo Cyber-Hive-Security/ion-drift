@@ -4,7 +4,7 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import {
   useSecretsStatus,
-  useTlsStatus,
+  useEncryptionStatus,
   useUpdateSecrets,
   useRegenerateSession,
 } from "@/api/queries";
@@ -22,7 +22,7 @@ export function SettingsPage() {
     <PageShell title="Settings">
       <div className="space-y-6">
         <SecretsSection />
-        <TlsSection />
+        <EncryptionSection />
       </div>
     </PageShell>
   );
@@ -50,11 +50,11 @@ function SecretsSection() {
             <h2 className="text-lg font-semibold">Encrypted Secrets</h2>
           </div>
           <p className="text-sm text-muted-foreground">
-            Secrets encryption is not enabled. Set{" "}
+            Secrets encryption is not enabled. Add a{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-              tls.key_path
+              [bootstrap]
             </code>{" "}
-            in your config to enable encrypted secrets at rest.
+            section to your config to enable encrypted secrets at rest.
           </p>
         </div>
       );
@@ -122,7 +122,7 @@ function SecretsSection() {
                   <AlertTriangle className="h-3 w-3 text-amber-500" />
                 )}
                 <span className="text-xs text-muted-foreground">
-                  {secret.key_current ? "Encrypted" : "Needs rotation"} &middot;
+                  {secret.key_current ? "Encrypted" : "Key mismatch"} &middot;
                   Updated{" "}
                   {new Date(secret.updated_at * 1000).toLocaleDateString(
                     undefined,
@@ -223,17 +223,17 @@ function SecretsSection() {
   );
 }
 
-// ── TLS Key Section ─────────────────────────────────────────────
+// ── Encryption Key Section ──────────────────────────────────────
 
-function TlsSection() {
-  const { data, isLoading, error } = useTlsStatus();
+function EncryptionSection() {
+  const { data, isLoading, error } = useEncryptionStatus();
 
   if (isLoading) return <LoadingSpinner />;
   if (error) {
     if ("status" in error && (error as { status: number }).status === 404) {
-      return null; // Don't show TLS section if not enabled
+      return null; // Don't show encryption section if not enabled
     }
-    return <ErrorDisplay message={error instanceof Error ? error.message : "Failed to load secrets"} />;
+    return <ErrorDisplay message={error instanceof Error ? error.message : "Failed to load encryption status"} />;
   }
   if (!data) return null;
 
@@ -241,19 +241,19 @@ function TlsSection() {
     <div className="rounded-lg border border-border bg-card">
       <div className="flex items-center gap-3 border-b border-border p-4">
         <Key className="h-5 w-5 text-primary" />
-        <h2 className="text-lg font-semibold">TLS Key</h2>
+        <h2 className="text-lg font-semibold">Encryption Key</h2>
       </div>
 
       <div className="p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">Key Fingerprint</span>
+          <span className="text-sm text-muted-foreground">KEK Fingerprint</span>
           <code className="text-sm font-mono">{data.key_fingerprint}</code>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">Key File</span>
-          <code className="text-xs font-mono text-muted-foreground">
-            {data.key_path}
-          </code>
+          <span className="text-sm text-muted-foreground">Key Source</span>
+          <span className="text-sm">
+            {data.source === "keycloak_mtls" ? "Keycloak mTLS" : data.source}
+          </span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-muted-foreground">Secrets Status</span>
@@ -269,22 +269,12 @@ function TlsSection() {
               <>
                 <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
                 <span className="text-sm text-amber-500">
-                  Rotation needed
+                  Key mismatch detected
                 </span>
               </>
             )}
           </div>
         </div>
-        {data.previous_key_path && (
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">
-              Previous Key File
-            </span>
-            <code className="text-xs font-mono text-muted-foreground">
-              {data.previous_key_path}
-            </code>
-          </div>
-        )}
       </div>
     </div>
   );

@@ -20,7 +20,7 @@ pub async fn secrets_status(State(state): State<AppState>) -> Result<Json<Secret
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "secrets manager not enabled (no tls.key_path configured)" })),
+            Json(serde_json::json!({ "error": "secrets manager not enabled (no bootstrap configured)" })),
         )
             .into_response()
     })?;
@@ -138,17 +138,16 @@ pub async fn regenerate_session(
     }))
 }
 
-// ── GET /api/settings/tls ────────────────────────────────────────
+// ── GET /api/settings/encryption ────────────────────────────────
 
 #[derive(Serialize)]
-pub struct TlsStatusResponse {
+pub struct EncryptionStatusResponse {
     key_fingerprint: String,
-    key_path: String,
+    source: String,
     all_secrets_current: bool,
-    previous_key_path: Option<String>,
 }
 
-pub async fn tls_status(State(state): State<AppState>) -> Result<Json<TlsStatusResponse>, Response> {
+pub async fn encryption_status(State(state): State<AppState>) -> Result<Json<EncryptionStatusResponse>, Response> {
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
@@ -161,23 +160,14 @@ pub async fn tls_status(State(state): State<AppState>) -> Result<Json<TlsStatusR
     let statuses = sm
         .secret_status()
         .await
-        .map_err(|e| internal_error("tls status", e))?;
+        .map_err(|e| internal_error("encryption status", e))?;
 
     let all_current = statuses.iter().all(|s| s.key_current);
     let fingerprint = sm.fingerprint().to_string();
 
-    let key_path = state
-        .config
-        .tls
-        .key_path
-        .clone()
-        .unwrap_or_default();
-    let previous_key_path = state.config.tls.previous_key_path.clone();
-
-    Ok(Json(TlsStatusResponse {
+    Ok(Json(EncryptionStatusResponse {
         key_fingerprint: fingerprint,
-        key_path,
+        source: "keycloak_mtls".to_string(),
         all_secrets_current: all_current,
-        previous_key_path,
     }))
 }

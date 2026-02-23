@@ -629,9 +629,8 @@ export interface RegenerateSessionResponse {
   status: string;
 }
 
-export interface TlsStatusResponse {
+export interface EncryptionStatusResponse {
   key_fingerprint: string;
-  key_path: string;
+  source: string;
   all_secrets_current: boolean;
-  previous_key_path: string | null;
 }

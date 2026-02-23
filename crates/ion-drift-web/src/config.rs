@@ -13,15 +13,68 @@ pub struct ServerConfig {
     #[serde(default)]
     pub data: DataSection,
     #[serde(default)]
-    pub tls: TlsSection,
+    pub bootstrap: BootstrapSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct TlsSection {
-    /// Path to PEM-encoded TLS private key (used to derive encryption key for secrets).
+pub struct BootstrapSection {
+    /// Path to PEM-encoded TLS certificate (for mTLS to Keycloak).
+    pub cert_path: Option<String>,
+    /// Path to PEM-encoded TLS private key (for mTLS to Keycloak).
     pub key_path: Option<String>,
-    /// Path to previous TLS key for offline cert rotation.
-    pub previous_key_path: Option<String>,
+    /// Keycloak realm URL (e.g., https://holonetid.kaziik.xyz:8443/realms/TheHolonet).
+    pub keycloak_url: Option<String>,
+    /// Keycloak base URL for Admin API (e.g., https://holonetid.kaziik.xyz:8443).
+    pub keycloak_base_url: Option<String>,
+    /// Keycloak realm name.
+    pub realm: Option<String>,
+    /// Bootstrap client ID (e.g., ion-drift-bootstrap).
+    pub client_id: Option<String>,
+}
+
+/// Resolved bootstrap config (all fields validated as present).
+pub struct ResolvedBootstrap {
+    pub cert_path: String,
+    pub key_path: String,
+    pub keycloak_url: String,
+    pub keycloak_base_url: String,
+    pub realm: String,
+    pub client_id: String,
+}
+
+impl BootstrapSection {
+    /// Validate and resolve all required bootstrap fields.
+    /// Returns None if bootstrap is not configured (no cert_path).
+    pub fn resolve(&self) -> anyhow::Result<Option<ResolvedBootstrap>> {
+        let cert_path = match &self.cert_path {
+            Some(p) => p.clone(),
+            None => return Ok(None),
+        };
+        let key_path = self.key_path.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("bootstrap.key_path required when cert_path is set"))?
+            .clone();
+        let keycloak_url = self.keycloak_url.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("bootstrap.keycloak_url required"))?
+            .clone();
+        let keycloak_base_url = self.keycloak_base_url.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("bootstrap.keycloak_base_url required"))?
+            .clone();
+        let realm = self.realm.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("bootstrap.realm required"))?
+            .clone();
+        let client_id = self.client_id.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("bootstrap.client_id required"))?
+            .clone();
+
+        Ok(Some(ResolvedBootstrap {
+            cert_path,
+            key_path,
+            keycloak_url,
+            keycloak_base_url,
+            realm,
+            client_id,
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -134,8 +187,8 @@ fn default_same_site() -> String {
 
 impl ServerConfig {
     /// Load config from a TOML file, then overlay secrets from env vars.
-    /// If `tls.key_path` is set, env var secrets are optional (managed via SecretsManager).
-    /// If `tls.key_path` is not set, env var secrets are required (legacy mode).
+    /// If `bootstrap.cert_path` is set, env var secrets are optional (managed via SecretsManager).
+    /// If `bootstrap.cert_path` is not set, env var secrets are required (legacy mode).
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("failed to read config {}: {e}", path.display()))?;
@@ -143,7 +196,7 @@ impl ServerConfig {
         let mut config: ServerConfig = toml::from_str(&contents)
             .map_err(|e| anyhow::anyhow!("failed to parse config: {e}"))?;
 
-        if config.tls.key_path.is_some() {
+        if config.bootstrap.cert_path.is_some() {
             // Secrets-at-rest mode: env vars are optional fallbacks
             config.router.password = std::env::var("HIVE_ROUTER_PASSWORD").unwrap_or_default();
             config.oidc.client_secret = std::env::var("HIVE_ROUTER_OIDC_SECRET").unwrap_or_default();

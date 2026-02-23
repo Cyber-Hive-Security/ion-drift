@@ -4,11 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use hkdf::Hkdf;
 use rusqlite::params;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
-use sha2::Sha256;
 use tokio::sync::Mutex;
 
 // Secret name constants
@@ -35,20 +33,17 @@ pub struct SecretStatus {
     pub auto_generated: bool,
 }
 
-/// Manages encryption/decryption of secrets using a key derived from a TLS private key.
+/// Manages encryption/decryption of secrets using a KEK retrieved from Keycloak.
 pub struct SecretsManager {
     db: Arc<Mutex<rusqlite::Connection>>,
-    derived_key: Key<Aes256Gcm>,
+    kek: Key<Aes256Gcm>,
     key_fingerprint: String,
-    previous_key: Option<Key<Aes256Gcm>>,
-    previous_fingerprint: Option<String>,
 }
 
 impl SecretsManager {
-    /// Initialize with a single TLS key file.
-    pub fn new(db_path: &Path, key_path: &str) -> anyhow::Result<Self> {
-        let derived_key = derive_key_from_pem(key_path)?;
-        let key_fingerprint = compute_fingerprint(&derived_key);
+    /// Initialize with a raw 32-byte KEK (retrieved from Keycloak mTLS bootstrap).
+    pub fn new(db_path: &Path, kek: Key<Aes256Gcm>) -> anyhow::Result<Self> {
+        let key_fingerprint = compute_fingerprint(&kek);
         let db = open_db(db_path)?;
 
         tracing::info!(
@@ -58,43 +53,14 @@ impl SecretsManager {
 
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
-            derived_key,
+            kek,
             key_fingerprint,
-            previous_key: None,
-            previous_fingerprint: None,
-        })
-    }
-
-    /// Initialize with current + previous TLS key for rotation support.
-    pub fn new_with_previous(
-        db_path: &Path,
-        key_path: &str,
-        previous_key_path: &str,
-    ) -> anyhow::Result<Self> {
-        let derived_key = derive_key_from_pem(key_path)?;
-        let key_fingerprint = compute_fingerprint(&derived_key);
-        let previous_key = derive_key_from_pem(previous_key_path)?;
-        let previous_fingerprint = compute_fingerprint(&previous_key);
-        let db = open_db(db_path)?;
-
-        tracing::info!(
-            fingerprint = %key_fingerprint,
-            previous_fingerprint = %previous_fingerprint,
-            "secrets manager initialized with key rotation support"
-        );
-
-        Ok(Self {
-            db: Arc::new(Mutex::new(db)),
-            derived_key,
-            key_fingerprint,
-            previous_key: Some(previous_key),
-            previous_fingerprint: Some(previous_fingerprint),
         })
     }
 
     /// Encrypt and store a secret.
     pub async fn encrypt_secret(&self, name: &str, plaintext: &str) -> anyhow::Result<()> {
-        let cipher = Aes256Gcm::new(&self.derived_key);
+        let cipher = Aes256Gcm::new(&self.kek);
         let nonce_bytes: [u8; 12] = rand::random();
         let nonce = Nonce::from_slice(&nonce_bytes);
 
@@ -124,8 +90,6 @@ impl SecretsManager {
     }
 
     /// Decrypt a secret by name. Returns None if not found.
-    /// If the stored fingerprint doesn't match the current key but matches the previous key,
-    /// decrypts with the previous key and re-encrypts with the current key.
     pub async fn decrypt_secret(&self, name: &str) -> anyhow::Result<Option<SecretString>> {
         let (ciphertext, nonce_bytes, stored_fp) = {
             let db = self.db.lock().await;
@@ -148,50 +112,27 @@ impl SecretsManager {
             }
         }; // db lock released here
 
+        if stored_fp != self.key_fingerprint {
+            return Err(anyhow::anyhow!(
+                "secret '{name}' encrypted with unknown key (fingerprint: {stored_fp}, current: {})",
+                self.key_fingerprint
+            ));
+        }
+
         let nonce = Nonce::from_slice(&nonce_bytes);
         let payload = Payload {
             msg: &ciphertext,
             aad: name.as_bytes(),
         };
 
-        // Try current key first
-        if stored_fp == self.key_fingerprint {
-            let cipher = Aes256Gcm::new(&self.derived_key);
-            let plaintext = cipher
-                .decrypt(nonce, payload)
-                .map_err(|e| anyhow::anyhow!("decryption failed for '{name}': {e}"))?;
-            let secret = String::from_utf8(plaintext)
-                .map_err(|e| anyhow::anyhow!("decrypted value is not valid UTF-8: {e}"))?;
-            return Ok(Some(SecretString::from(secret)));
-        }
+        let cipher = Aes256Gcm::new(&self.kek);
+        let plaintext = cipher
+            .decrypt(nonce, payload)
+            .map_err(|e| anyhow::anyhow!("decryption failed for '{name}': {e}"))?;
+        let secret = String::from_utf8(plaintext)
+            .map_err(|e| anyhow::anyhow!("decrypted value is not valid UTF-8: {e}"))?;
 
-        // Try previous key for rotation
-        if let (Some(prev_key), Some(prev_fp)) =
-            (&self.previous_key, &self.previous_fingerprint)
-        {
-            if stored_fp == *prev_fp {
-                let cipher = Aes256Gcm::new(prev_key);
-                let payload = Payload {
-                    msg: &ciphertext,
-                    aad: name.as_bytes(),
-                };
-                let plaintext = cipher
-                    .decrypt(nonce, payload)
-                    .map_err(|e| anyhow::anyhow!("decryption with previous key failed for '{name}': {e}"))?;
-                let secret = String::from_utf8(plaintext)
-                    .map_err(|e| anyhow::anyhow!("decrypted value is not valid UTF-8: {e}"))?;
-
-                // Re-encrypt with current key
-                tracing::info!(secret = name, "re-encrypting secret with new key");
-                self.encrypt_secret(name, &secret).await?;
-
-                return Ok(Some(SecretString::from(secret)));
-            }
-        }
-
-        Err(anyhow::anyhow!(
-            "secret '{name}' encrypted with unknown key (fingerprint: {stored_fp})"
-        ))
+        Ok(Some(SecretString::from(secret)))
     }
 
     /// Check if any secrets exist in the database.
@@ -242,7 +183,7 @@ impl SecretsManager {
             (SECRET_SESSION_SECRET, secrets.session_secret.expose_secret()),
         ];
 
-        let cipher = Aes256Gcm::new(&self.derived_key);
+        let cipher = Aes256Gcm::new(&self.kek);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -321,119 +262,10 @@ impl SecretsManager {
     pub fn fingerprint(&self) -> &str {
         &self.key_fingerprint
     }
-
-    /// Re-derive key from a new key file and re-encrypt all secrets.
-    /// Returns the new fingerprint.
-    pub async fn rotate_key(&mut self, new_key_path: &str) -> anyhow::Result<String> {
-        let old_key = self.derived_key;
-        let old_fingerprint = self.key_fingerprint.clone();
-        let new_key = derive_key_from_pem(new_key_path)?;
-        let new_fingerprint = compute_fingerprint(&new_key);
-
-        if new_fingerprint == old_fingerprint {
-            return Ok(new_fingerprint);
-        }
-
-        // Load all secret names and their encrypted data
-        let db = self.db.lock().await;
-        let mut stmt = db.prepare(
-            "SELECT name, ciphertext, nonce, key_fingerprint FROM encrypted_secrets",
-        )?;
-        let rows: Vec<(String, Vec<u8>, Vec<u8>, String)> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                ))
-            })?
-            .collect::<Result<_, _>>()?;
-        drop(stmt);
-
-        let old_cipher = Aes256Gcm::new(&old_key);
-        let new_cipher = Aes256Gcm::new(&new_key);
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        db.execute_batch("BEGIN TRANSACTION")?;
-        for (name, ciphertext, nonce_bytes, stored_fp) in &rows {
-            if *stored_fp != old_fingerprint {
-                tracing::warn!(
-                    secret = %name,
-                    stored_fp = %stored_fp,
-                    "skipping secret with unknown fingerprint during rotation"
-                );
-                continue;
-            }
-
-            let nonce = Nonce::from_slice(nonce_bytes);
-            let payload = Payload {
-                msg: ciphertext.as_slice(),
-                aad: name.as_bytes(),
-            };
-            let plaintext = old_cipher
-                .decrypt(nonce, payload)
-                .map_err(|e| anyhow::anyhow!("decryption failed for '{name}' during rotation: {e}"))?;
-
-            let new_nonce_bytes: [u8; 12] = rand::random();
-            let new_nonce = Nonce::from_slice(&new_nonce_bytes);
-            let new_payload = Payload {
-                msg: &plaintext,
-                aad: name.as_bytes(),
-            };
-            let new_ciphertext = new_cipher
-                .encrypt(new_nonce, new_payload)
-                .map_err(|e| anyhow::anyhow!("re-encryption failed for '{name}': {e}"))?;
-
-            db.execute(
-                "UPDATE encrypted_secrets SET ciphertext = ?1, nonce = ?2, key_fingerprint = ?3, updated_at = ?4 WHERE name = ?5",
-                params![new_ciphertext, new_nonce_bytes.as_slice(), new_fingerprint, now, name],
-            )?;
-        }
-        db.execute_batch("COMMIT")?;
-        drop(db);
-
-        self.previous_key = Some(old_key);
-        self.previous_fingerprint = Some(old_fingerprint);
-        self.derived_key = new_key;
-        self.key_fingerprint = new_fingerprint.clone();
-
-        tracing::info!(
-            new_fingerprint = %new_fingerprint,
-            secrets_rotated = rows.len(),
-            "TLS key rotated, secrets re-encrypted"
-        );
-
-        Ok(new_fingerprint)
-    }
-}
-
-/// Derive a 32-byte AES-256 key from a PEM-encoded private key file using HKDF-SHA256.
-fn derive_key_from_pem(key_path: &str) -> anyhow::Result<Key<Aes256Gcm>> {
-    let pem_data = std::fs::read_to_string(key_path)
-        .map_err(|e| anyhow::anyhow!("failed to read TLS key file {key_path}: {e}"))?;
-
-    let parsed = pem::parse(&pem_data)
-        .map_err(|e| anyhow::anyhow!("failed to parse PEM from {key_path}: {e}"))?;
-
-    let ikm = parsed.contents();
-    if ikm.is_empty() {
-        return Err(anyhow::anyhow!("TLS key file {key_path} contains no key data"));
-    }
-
-    let hkdf = Hkdf::<Sha256>::new(None, ikm);
-    let mut okm = [0u8; 32];
-    hkdf.expand(b"iondrift-secrets-v1", &mut okm)
-        .map_err(|e| anyhow::anyhow!("HKDF expansion failed: {e}"))?;
-
-    Ok(*Key::<Aes256Gcm>::from_slice(&okm))
 }
 
 /// Compute a fingerprint: first 8 bytes of SHA-256(key) as hex (16 chars).
-fn compute_fingerprint(key: &Key<Aes256Gcm>) -> String {
+pub fn compute_fingerprint(key: &Key<Aes256Gcm>) -> String {
     use sha2::Digest;
     let hash = sha2::Sha256::digest(key.as_slice());
     hex::encode(&hash[..8])

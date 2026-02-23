@@ -1,5 +1,6 @@
 mod auth;
 mod behavior_engine;
+mod bootstrap;
 mod config;
 mod geo;
 mod live_traffic;
@@ -46,17 +47,22 @@ async fn main() -> anyhow::Result<()> {
         .join("ion-drift");
     std::fs::create_dir_all(&data_dir)?;
 
-    // ── Secrets management ───────────────────────────────────────
+    // ── Secrets management (Keycloak mTLS bootstrap) ────────────
     let secrets_manager: Option<Arc<tokio::sync::RwLock<SecretsManager>>> =
-        if let Some(ref key_path) = config.tls.key_path {
-            tracing::info!("TLS key path configured, initializing secrets manager");
+        if let Some(resolved) = config.bootstrap.resolve()? {
+            tracing::info!("bootstrap config found, fetching KEK from Keycloak via mTLS");
             let db_path = data_dir.join("secrets.db");
 
-            let sm = if let Some(ref prev_path) = config.tls.previous_key_path {
-                SecretsManager::new_with_previous(&db_path, key_path, prev_path)?
-            } else {
-                SecretsManager::new(&db_path, key_path)?
-            };
+            // Build mTLS client for Keycloak authentication
+            let ca_cert_path = config.oidc.ca_cert_path.as_deref()
+                .ok_or_else(|| anyhow::anyhow!("oidc.ca_cert_path required for mTLS bootstrap"))?;
+            let mtls_client = bootstrap::build_mtls_client(&resolved, ca_cert_path)?;
+
+            // Fetch or generate KEK from Keycloak
+            let result = bootstrap::fetch_or_generate_kek(&mtls_client, &resolved).await?;
+
+            // Initialize SecretsManager with the KEK
+            let sm = SecretsManager::new(&db_path, result.kek)?;
 
             let has_secrets = sm.has_secrets().await?;
             let has_env_vars = !config.router.password.is_empty()
@@ -228,13 +234,6 @@ async fn main() -> anyhow::Result<()> {
     spawn_behavior_maintenance(behavior_store.clone());
     spawn_behavior_auto_classifier(behavior_store);
 
-    // Spawn cert rotation watcher if secrets manager is active
-    if let Some(ref sm) = secrets_manager {
-        if let Some(ref key_path) = config.tls.key_path {
-            spawn_cert_rotation_watcher(sm.clone(), key_path.clone());
-        }
-    }
-
     // Resolve web/dist path relative to the config file's parent (project root)
     let web_dist = config_file
         .parent()
@@ -268,46 +267,6 @@ fn parse_config_arg() -> Option<String> {
         }
     }
     None
-}
-
-/// Watch the TLS key file for changes and re-encrypt secrets when the key rotates.
-fn spawn_cert_rotation_watcher(
-    sm: Arc<tokio::sync::RwLock<SecretsManager>>,
-    key_path: String,
-) {
-    tokio::spawn(async move {
-        let mut last_mtime = std::fs::metadata(&key_path)
-            .and_then(|m| m.modified())
-            .ok();
-
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-        interval.tick().await; // skip immediate tick
-
-        loop {
-            interval.tick().await;
-
-            let current_mtime = match std::fs::metadata(&key_path).and_then(|m| m.modified()) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!("cert rotation watcher: failed to stat key file: {e}");
-                    continue;
-                }
-            };
-
-            if last_mtime.map_or(true, |prev| current_mtime != prev) {
-                if last_mtime.is_some() {
-                    // Key file actually changed (not first check)
-                    tracing::info!("TLS key file changed, rotating secrets encryption key");
-                    let mut sm = sm.write().await;
-                    match sm.rotate_key(&key_path).await {
-                        Ok(fp) => tracing::info!(fingerprint = %fp, "secrets re-encrypted with new key"),
-                        Err(e) => tracing::error!("key rotation failed: {e}"),
-                    }
-                }
-                last_mtime = Some(current_mtime);
-            }
-        }
-    });
 }
 
 /// Poll WAN traffic counters every 10 seconds for live rates,

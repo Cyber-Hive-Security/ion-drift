@@ -133,7 +133,7 @@ fn render_setup_html(username: &str, error: Option<&str>) -> String {
 <body>
 <div class="card">
   <h1>ion-drift setup</h1>
-  <p class="subtitle">TLS key detected. Configure your encrypted secrets to get started.</p>
+  <p class="subtitle">Encryption key loaded. Configure your secrets to get started.</p>
   {error_html}
   <form method="POST" action="/setup">
     <label for="router_username">Router Username</label>

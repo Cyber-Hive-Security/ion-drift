@@ -42,7 +42,7 @@ import type {
   UpdateSecretsRequest,
   UpdateSecretsResponse,
   RegenerateSessionResponse,
-  TlsStatusResponse,
+  EncryptionStatusResponse,
 } from "./types";
 
 // Auth
@@ -471,10 +471,10 @@ export function useSecretsStatus() {
   });
 }
 
-export function useTlsStatus() {
+export function useEncryptionStatus() {
   return useQuery({
-    queryKey: ["settings", "tls"],
-    queryFn: () => apiFetch<TlsStatusResponse>("/api/settings/tls"),
+    queryKey: ["settings", "encryption"],
+    queryFn: () => apiFetch<EncryptionStatusResponse>("/api/settings/encryption"),
     retry: false,
   });
 }

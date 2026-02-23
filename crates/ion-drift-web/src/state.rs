@@ -48,6 +48,6 @@ pub struct AppState {
     pub behavior_store: Arc<BehaviorStore>,
     /// Cached firewall filter rules for behavior correlation.
     pub firewall_rules_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
-    /// Encrypted secrets manager (None if tls.key_path not configured).
+    /// Encrypted secrets manager (None if bootstrap not configured).
     pub secrets_manager: Option<Arc<RwLock<SecretsManager>>>,
 }
