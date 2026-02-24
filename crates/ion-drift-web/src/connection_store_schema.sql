@@ -83,6 +83,32 @@ CREATE INDEX IF NOT EXISTS idx_ch_port_direction
 CREATE INDEX IF NOT EXISTS idx_ch_prune
     ON connection_history(last_seen, closed) WHERE closed = 1;
 
+-- Port flow baselines for anomaly detection
+
+CREATE TABLE IF NOT EXISTS port_flow_baseline (
+    id INTEGER PRIMARY KEY,
+    flow_direction TEXT NOT NULL,          -- 'outbound', 'internal'
+    protocol TEXT NOT NULL,                -- 'tcp', 'udp', 'icmp'
+    dst_port INTEGER NOT NULL,
+    service_name TEXT,                     -- 'HTTPS', 'SSH', 'DNS', etc.
+
+    -- Baseline metrics (computed from last 7 days)
+    avg_bytes_per_day INTEGER NOT NULL,
+    max_bytes_per_day INTEGER NOT NULL,
+    avg_connections_per_day INTEGER NOT NULL,
+    max_connections_per_day INTEGER NOT NULL,
+    days_present INTEGER NOT NULL,         -- out of 7, how many days this port appeared
+
+    -- Source context
+    typical_sources TEXT,                  -- JSON array of src_ips/VLANs
+    typical_destinations TEXT,             -- JSON array of dst_ips
+
+    computed_at TEXT NOT NULL              -- ISO 8601
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pfb_lookup
+    ON port_flow_baseline(flow_direction, protocol, dst_port);
+
 -- Weekly snapshots
 
 CREATE TABLE IF NOT EXISTS weekly_snapshots (

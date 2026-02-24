@@ -122,6 +122,68 @@ pub struct PortSummaryEntry {
     pub unique_destinations: i64,
 }
 
+/// A row in the port_flow_baseline table.
+#[derive(Debug, Clone, Serialize)]
+pub struct PortFlowBaseline {
+    pub flow_direction: String,
+    pub protocol: String,
+    pub dst_port: i64,
+    pub service_name: Option<String>,
+    pub avg_bytes_per_day: i64,
+    pub max_bytes_per_day: i64,
+    pub avg_connections_per_day: i64,
+    pub max_connections_per_day: i64,
+    pub days_present: i64,
+    pub typical_sources: Option<String>,
+    pub typical_destinations: Option<String>,
+    pub computed_at: String,
+}
+
+/// Anomaly classification for a port flow.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowClassification {
+    Normal,
+    NewPort,
+    VolumeSpike,
+    SourceAnomaly,
+    Disappeared,
+}
+
+/// Enhanced port summary entry with anomaly classification.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClassifiedPortFlow {
+    pub dst_port: i64,
+    pub protocol: String,
+    pub total_bytes: i64,
+    pub flow_count: i64,
+    pub unique_sources: i64,
+    pub unique_destinations: i64,
+    pub classification: FlowClassification,
+    pub baseline_avg_bytes: Option<i64>,
+    pub volume_ratio: Option<f64>,
+    pub days_in_baseline: i64,
+    pub top_sources: Vec<String>,
+    pub new_sources: Vec<String>,
+}
+
+/// Summary for a direction's classified flows.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClassifiedPortSummary {
+    pub anomaly_count: usize,
+    pub flows: Vec<ClassifiedPortFlow>,
+    pub disappeared: Vec<ClassifiedPortFlow>,
+}
+
+/// Port flow baseline status for the settings/debug endpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct PortBaselineStatus {
+    pub total_baselines: i64,
+    pub outbound_count: i64,
+    pub internal_count: i64,
+    pub last_computed: Option<String>,
+}
+
 /// Well-known service ports that should never be treated as ephemeral.
 const KNOWN_SERVICE_PORTS: &[i64] = &[
     20, 21, 22, 25, 53, 67, 68, 80, 110, 123, 143, 161,
@@ -800,6 +862,411 @@ impl ConnectionStore {
             .ok();
 
         Ok(result)
+    }
+
+    /// Look up a well-known service name for a port number.
+    fn service_name(port: i64) -> Option<&'static str> {
+        match port {
+            20 => Some("FTP-Data"),
+            21 => Some("FTP"),
+            22 => Some("SSH"),
+            25 => Some("SMTP"),
+            53 => Some("DNS"),
+            67 => Some("DHCP-S"),
+            68 => Some("DHCP-C"),
+            80 => Some("HTTP"),
+            110 => Some("POP3"),
+            123 => Some("NTP"),
+            143 => Some("IMAP"),
+            161 => Some("SNMP"),
+            443 => Some("HTTPS"),
+            445 => Some("SMB"),
+            465 => Some("SMTPS"),
+            554 => Some("RTSP"),
+            587 => Some("Submission"),
+            993 => Some("IMAPS"),
+            995 => Some("POP3S"),
+            1433 => Some("MSSQL"),
+            1883 => Some("MQTT"),
+            3000 => Some("Dev"),
+            3306 => Some("MySQL"),
+            3389 => Some("RDP"),
+            4444 => Some("Metasploit"),
+            5060 => Some("SIP"),
+            5228 => Some("GCM"),
+            5432 => Some("PostgreSQL"),
+            5514 => Some("Syslog"),
+            5672 => Some("AMQP"),
+            6379 => Some("Redis"),
+            8080 => Some("HTTP-Alt"),
+            8443 => Some("HTTPS-Alt"),
+            8554 => Some("RTSP-Alt"),
+            8883 => Some("MQTT-TLS"),
+            9001 => Some("Portainer"),
+            9090 => Some("Prometheus"),
+            9443 => Some("Alt-HTTPS"),
+            27017 => Some("MongoDB"),
+            32400 => Some("Plex"),
+            _ => None,
+        }
+    }
+
+    /// Compute and store port flow baselines from the last 7 days of connection history.
+    /// Returns the number of baselines upserted.
+    pub fn compute_port_flow_baselines(&self) -> anyhow::Result<usize> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let now = now_iso();
+        let cutoff = now_iso_minus_secs(7 * 86400);
+
+        // Query per-day aggregates for each (direction, protocol, dst_port) combination.
+        // We use julianday to bucket by day.
+        let mut stmt = db.prepare(
+            "SELECT
+                CASE
+                    WHEN dst_is_external = 1 THEN 'outbound'
+                    WHEN src_vlan IS NOT NULL THEN 'internal'
+                    ELSE 'other'
+                END AS flow_dir,
+                protocol,
+                dst_port,
+                CAST(julianday(first_seen) - 0.5 AS INTEGER) AS day_bucket,
+                SUM(bytes_tx + bytes_rx) AS day_bytes,
+                COUNT(*) AS day_connections,
+                GROUP_CONCAT(DISTINCT src_ip) AS sources,
+                GROUP_CONCAT(DISTINCT dst_ip) AS destinations
+             FROM connection_history
+             WHERE first_seen >= ?1
+               AND dst_port IS NOT NULL
+             GROUP BY flow_dir, protocol, dst_port, day_bucket
+             HAVING flow_dir IN ('outbound', 'internal')"
+        )?;
+
+        // Collect into a map: (direction, protocol, port) -> Vec<(day_bytes, day_conns, sources, dests)>
+        struct DayData {
+            bytes: i64,
+            connections: i64,
+            sources: Vec<String>,
+            destinations: Vec<String>,
+        }
+
+        let mut baselines: std::collections::HashMap<(String, String, i64), Vec<DayData>> =
+            std::collections::HashMap::new();
+
+        let rows = stmt.query_map(params![cutoff], |row| {
+            let dir: String = row.get(0)?;
+            let proto: String = row.get(1)?;
+            let port: i64 = row.get(2)?;
+            let _day: i64 = row.get(3)?;
+            let bytes: i64 = row.get::<_, i64>(4).unwrap_or(0);
+            let conns: i64 = row.get(5)?;
+            let srcs: Option<String> = row.get(6)?;
+            let dsts: Option<String> = row.get(7)?;
+            Ok((dir, proto, port, bytes, conns, srcs, dsts))
+        })?;
+
+        for row in rows {
+            let (dir, proto, port, bytes, conns, srcs, dsts) = row?;
+            let key = (dir, proto, port);
+            let sources: Vec<String> = srcs
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            let destinations: Vec<String> = dsts
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            baselines.entry(key).or_default().push(DayData {
+                bytes,
+                connections: conns,
+                sources,
+                destinations,
+            });
+        }
+
+        // Upsert baselines
+        let mut upsert_stmt = db.prepare(
+            "INSERT OR REPLACE INTO port_flow_baseline (
+                flow_direction, protocol, dst_port, service_name,
+                avg_bytes_per_day, max_bytes_per_day,
+                avg_connections_per_day, max_connections_per_day,
+                days_present, typical_sources, typical_destinations,
+                computed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
+        )?;
+
+        let mut count = 0usize;
+        for ((direction, protocol, port), days) in &baselines {
+            let days_present = days.len() as i64;
+            let total_bytes: i64 = days.iter().map(|d| d.bytes).sum();
+            let max_bytes: i64 = days.iter().map(|d| d.bytes).max().unwrap_or(0);
+            let avg_bytes = total_bytes / days_present.max(1);
+            let total_conns: i64 = days.iter().map(|d| d.connections).sum();
+            let max_conns: i64 = days.iter().map(|d| d.connections).max().unwrap_or(0);
+            let avg_conns = total_conns / days_present.max(1);
+
+            // Collect unique sources/destinations across all days
+            let mut all_sources: Vec<String> = days
+                .iter()
+                .flat_map(|d| d.sources.iter().cloned())
+                .collect();
+            all_sources.sort();
+            all_sources.dedup();
+            let all_sources: Vec<&str> = all_sources.iter().take(50).map(|s| s.as_str()).collect();
+
+            let mut all_dests: Vec<String> = days
+                .iter()
+                .flat_map(|d| d.destinations.iter().cloned())
+                .collect();
+            all_dests.sort();
+            all_dests.dedup();
+            let all_dests: Vec<&str> = all_dests.iter().take(50).map(|s| s.as_str()).collect();
+
+            let sources_json = serde_json::to_string(&all_sources).unwrap_or_else(|_| "[]".into());
+            let dests_json = serde_json::to_string(&all_dests).unwrap_or_else(|_| "[]".into());
+            let svc_name = Self::service_name(*port);
+
+            upsert_stmt.execute(params![
+                direction,
+                protocol,
+                port,
+                svc_name,
+                avg_bytes,
+                max_bytes,
+                avg_conns,
+                max_conns,
+                days_present,
+                sources_json,
+                dests_json,
+                now,
+            ])?;
+            count += 1;
+        }
+
+        // Prune stale baselines: remove rows not recomputed in 14 days
+        let stale_cutoff = now_iso_minus_secs(14 * 86400);
+        db.execute(
+            "DELETE FROM port_flow_baseline WHERE computed_at < ?1",
+            params![stale_cutoff],
+        )?;
+
+        Ok(count)
+    }
+
+    /// Get all port flow baselines for a specific direction.
+    pub fn get_baselines_for_direction(&self, direction: &str) -> anyhow::Result<Vec<PortFlowBaseline>> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let mut stmt = db.prepare(
+            "SELECT flow_direction, protocol, dst_port, service_name,
+                    avg_bytes_per_day, max_bytes_per_day,
+                    avg_connections_per_day, max_connections_per_day,
+                    days_present, typical_sources, typical_destinations, computed_at
+             FROM port_flow_baseline
+             WHERE flow_direction = ?1"
+        )?;
+        let rows = stmt.query_map(params![direction], |row| {
+            Ok(PortFlowBaseline {
+                flow_direction: row.get(0)?,
+                protocol: row.get(1)?,
+                dst_port: row.get(2)?,
+                service_name: row.get(3)?,
+                avg_bytes_per_day: row.get(4)?,
+                max_bytes_per_day: row.get(5)?,
+                avg_connections_per_day: row.get(6)?,
+                max_connections_per_day: row.get(7)?,
+                days_present: row.get(8)?,
+                typical_sources: row.get(9)?,
+                typical_destinations: row.get(10)?,
+                computed_at: row.get(11)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Get port flow baseline status summary.
+    pub fn port_baseline_status(&self) -> anyhow::Result<PortBaselineStatus> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let total: i64 = db.query_row(
+            "SELECT COUNT(*) FROM port_flow_baseline", [], |row| row.get(0),
+        )?;
+        let outbound: i64 = db.query_row(
+            "SELECT COUNT(*) FROM port_flow_baseline WHERE flow_direction = 'outbound'",
+            [], |row| row.get(0),
+        )?;
+        let internal: i64 = db.query_row(
+            "SELECT COUNT(*) FROM port_flow_baseline WHERE flow_direction = 'internal'",
+            [], |row| row.get(0),
+        )?;
+        let last_computed: Option<String> = db.query_row(
+            "SELECT MAX(computed_at) FROM port_flow_baseline",
+            [], |row| row.get(0),
+        ).ok().flatten();
+
+        Ok(PortBaselineStatus {
+            total_baselines: total,
+            outbound_count: outbound,
+            internal_count: internal,
+            last_computed,
+        })
+    }
+
+    /// Enhanced port summary with anomaly classification.
+    /// Compares current flows against the baseline and classifies each flow.
+    pub fn classified_port_summary(&self, days: i64, direction: &str) -> anyhow::Result<ClassifiedPortSummary> {
+        // Get current flows
+        let current_flows = self.port_summary(days, direction)?;
+
+        // Get baselines for this direction
+        let baselines = self.get_baselines_for_direction(direction)?;
+
+        // Build baseline lookup: (protocol, port) -> baseline
+        let baseline_map: std::collections::HashMap<(String, i64), &PortFlowBaseline> =
+            baselines.iter().map(|b| ((b.protocol.clone(), b.dst_port), b)).collect();
+
+        // Get top sources per flow for source anomaly detection
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let cutoff = now_iso_minus_secs(days * 86400);
+
+        let direction_filter = match direction {
+            "outbound" => "AND dst_is_external = 1",
+            "inbound" => "AND dst_is_external = 0 AND src_vlan IS NULL",
+            "internal" => "AND dst_is_external = 0 AND src_vlan IS NOT NULL",
+            _ => "",
+        };
+
+        let mut classified_flows = Vec::new();
+        let mut anomaly_count = 0;
+
+        for flow in &current_flows {
+            let key = (flow.protocol.clone(), flow.dst_port);
+
+            // Get current top sources for this flow
+            let source_sql = format!(
+                "SELECT src_ip, COUNT(*) as cnt FROM connection_history
+                 WHERE first_seen >= ?1 AND dst_port = ?2 AND protocol = ?3
+                   AND dst_port IS NOT NULL {direction_filter}
+                 GROUP BY src_ip ORDER BY cnt DESC LIMIT 20"
+            );
+            let mut src_stmt = db.prepare(&source_sql)?;
+            let top_sources: Vec<String> = src_stmt
+                .query_map(params![cutoff, flow.dst_port, flow.protocol], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            let (classification, baseline_avg, volume_ratio, days_in_baseline, new_sources) =
+                if let Some(baseline) = baseline_map.get(&key) {
+                    // Check volume spike: > 4x max_bytes_per_day
+                    let ratio = if baseline.max_bytes_per_day > 0 {
+                        flow.total_bytes as f64 / baseline.max_bytes_per_day as f64
+                    } else {
+                        1.0
+                    };
+
+                    if ratio > 4.0 {
+                        (
+                            FlowClassification::VolumeSpike,
+                            Some(baseline.avg_bytes_per_day),
+                            Some(ratio),
+                            baseline.days_present,
+                            Vec::new(),
+                        )
+                    } else {
+                        // Check source anomaly
+                        let typical: Vec<String> = baseline
+                            .typical_sources
+                            .as_deref()
+                            .and_then(|s| serde_json::from_str(s).ok())
+                            .unwrap_or_default();
+                        let new_srcs: Vec<String> = top_sources
+                            .iter()
+                            .filter(|s| !typical.contains(s))
+                            .cloned()
+                            .collect();
+
+                        if !new_srcs.is_empty() && !typical.is_empty() {
+                            (
+                                FlowClassification::SourceAnomaly,
+                                Some(baseline.avg_bytes_per_day),
+                                Some(ratio),
+                                baseline.days_present,
+                                new_srcs,
+                            )
+                        } else {
+                            (
+                                FlowClassification::Normal,
+                                Some(baseline.avg_bytes_per_day),
+                                Some(ratio),
+                                baseline.days_present,
+                                Vec::new(),
+                            )
+                        }
+                    }
+                } else {
+                    // No baseline — this is a new port
+                    (
+                        FlowClassification::NewPort,
+                        None,
+                        None,
+                        0,
+                        top_sources.clone(),
+                    )
+                };
+
+            if !matches!(classification, FlowClassification::Normal) {
+                anomaly_count += 1;
+            }
+
+            classified_flows.push(ClassifiedPortFlow {
+                dst_port: flow.dst_port,
+                protocol: flow.protocol.clone(),
+                total_bytes: flow.total_bytes,
+                flow_count: flow.flow_count,
+                unique_sources: flow.unique_sources,
+                unique_destinations: flow.unique_destinations,
+                classification,
+                baseline_avg_bytes: baseline_avg,
+                volume_ratio,
+                days_in_baseline,
+                top_sources,
+                new_sources,
+            });
+        }
+
+        // Find disappeared ports: baselines with days_present >= 5 that aren't in current flows
+        let current_keys: std::collections::HashSet<(String, i64)> =
+            current_flows.iter().map(|f| (f.protocol.clone(), f.dst_port)).collect();
+
+        let disappeared: Vec<ClassifiedPortFlow> = baselines
+            .iter()
+            .filter(|b| b.days_present >= 5 && !current_keys.contains(&(b.protocol.clone(), b.dst_port)))
+            .map(|b| ClassifiedPortFlow {
+                dst_port: b.dst_port,
+                protocol: b.protocol.clone(),
+                total_bytes: 0,
+                flow_count: 0,
+                unique_sources: 0,
+                unique_destinations: 0,
+                classification: FlowClassification::Disappeared,
+                baseline_avg_bytes: Some(b.avg_bytes_per_day),
+                volume_ratio: None,
+                days_in_baseline: b.days_present,
+                top_sources: Vec::new(),
+                new_sources: Vec::new(),
+            })
+            .collect();
+
+        drop(db);
+
+        Ok(ClassifiedPortSummary {
+            anomaly_count,
+            flows: classified_flows,
+            disappeared,
+        })
     }
 
     /// Get the count of syslog events recorded today.

@@ -42,3 +42,27 @@ body {
 .sankey-container svg {
   overflow: visible !important;
 }
+
+/* Sankey anomaly animations */
+@keyframes anomaly-pulse-critical {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.3)); opacity: 1; }
+  50% { filter: drop-shadow(0 0 12px rgba(239, 68, 68, 0.7)); opacity: 0.9; }
+}
+
+@keyframes anomaly-pulse-warning {
+  0%, 100% { filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.2)); opacity: 1; }
+  50% { filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.5)); opacity: 0.95; }
+}
+
+.flow-new-port {
+  animation: anomaly-pulse-critical 1.5s ease-in-out infinite;
+}
+
+.flow-volume-spike {
+  animation: anomaly-pulse-warning 3s ease-in-out infinite;
+}
+
+.flow-disappeared {
+  stroke-dasharray: 8 4;
+  opacity: 0.4;
+}

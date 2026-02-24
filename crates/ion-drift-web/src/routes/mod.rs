@@ -147,6 +147,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/connections/history", get(connections::history))
         .route("/connections/geo-summary", get(connections::geo_summary))
         .route("/connections/port-summary", get(connections::port_summary))
+        .route("/connections/port-summary-classified", get(connections::port_summary_classified))
         .route("/connections/city-summary", get(connections::city_summary))
         .route("/connections/stats", get(connections::history_stats))
         // ARP + enhanced endpoints
@@ -180,6 +181,8 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/behavior/anomalies", get(behavior::anomalies))
         .route("/behavior/anomalies/{id}/resolve", post(behavior::resolve_anomaly))
         .route("/behavior/alerts", get(behavior::alerts))
+        .route("/behavior/port-baseline", get(connections::port_baseline_status))
+        .route("/behavior/port-baseline/compute", post(connections::compute_port_baselines))
         // History (snapshots)
         .route("/history/snapshots", get(history::list_snapshots))
         .route("/history/snapshot/{week}/{snapshot_type}", get(history::get_snapshot))

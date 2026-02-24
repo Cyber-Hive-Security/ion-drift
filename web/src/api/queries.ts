@@ -48,6 +48,8 @@ import type {
   GeoSummaryEntry,
   PortSummaryEntry,
   PortDirection,
+  ClassifiedPortSummary,
+  PortBaselineStatus,
   CitySummaryEntry,
   SnapshotListEntry,
   WeeklySnapshot,
@@ -579,6 +581,27 @@ export function usePortSummary(days = 7, direction?: PortDirection) {
         `/api/connections/port-summary?days=${days}${dirParam}`,
       ),
     refetchInterval: 60_000,
+  });
+}
+
+export function useClassifiedPortSummary(days = 1, direction?: PortDirection) {
+  const dirParam = direction ? `&direction=${direction}` : "";
+  return useQuery({
+    queryKey: ["connections", "port-summary-classified", days, direction ?? "all"],
+    queryFn: () =>
+      apiFetch<ClassifiedPortSummary>(
+        `/api/connections/port-summary-classified?days=${days}${dirParam}`,
+      ),
+    refetchInterval: 60_000,
+  });
+}
+
+export function usePortBaselineStatus() {
+  return useQuery({
+    queryKey: ["behavior", "port-baseline"],
+    queryFn: () =>
+      apiFetch<PortBaselineStatus>("/api/behavior/port-baseline"),
+    staleTime: 300_000,
   });
 }
 

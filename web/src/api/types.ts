@@ -741,6 +741,41 @@ export interface PortSummaryEntry {
 
 export type PortDirection = "outbound" | "inbound" | "internal";
 
+export type FlowClassification =
+  | "normal"
+  | "new_port"
+  | "volume_spike"
+  | "source_anomaly"
+  | "disappeared";
+
+export interface ClassifiedPortFlow {
+  dst_port: number;
+  protocol: string;
+  total_bytes: number;
+  flow_count: number;
+  unique_sources: number;
+  unique_destinations: number;
+  classification: FlowClassification;
+  baseline_avg_bytes: number | null;
+  volume_ratio: number | null;
+  days_in_baseline: number;
+  top_sources: string[];
+  new_sources: string[];
+}
+
+export interface ClassifiedPortSummary {
+  anomaly_count: number;
+  flows: ClassifiedPortFlow[];
+  disappeared: ClassifiedPortFlow[];
+}
+
+export interface PortBaselineStatus {
+  total_baselines: number;
+  outbound_count: number;
+  internal_count: number;
+  last_computed: string | null;
+}
+
 export interface WeeklySnapshot {
   id: number;
   snapshot_week: string;

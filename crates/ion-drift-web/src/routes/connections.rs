@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::connection_store::{
-    CitySummaryEntry, ConnectionHistoryStats, GeoSummaryEntry, HistoryFilters, PaginatedHistory,
-    PortSummaryEntry,
+    CitySummaryEntry, ClassifiedPortSummary, ConnectionHistoryStats, GeoSummaryEntry,
+    HistoryFilters, PaginatedHistory, PortBaselineStatus, PortSummaryEntry,
 };
 use crate::geo::{GeoCache, GeoInfo};
 use crate::middleware::RequireAuth;
@@ -294,6 +294,44 @@ pub async fn port_summary(
         .port_summary(query.days, direction)
         .map_err(|e| internal_error("port summary", e))?;
     Ok(Json(result))
+}
+
+/// GET /api/connections/port-summary-classified — port flows with anomaly classification.
+pub async fn port_summary_classified(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(query): Query<PortSummaryQuery>,
+) -> Result<Json<ClassifiedPortSummary>, Response> {
+    let direction = query.direction.as_deref().unwrap_or("");
+    let result = state
+        .connection_store
+        .classified_port_summary(query.days, direction)
+        .map_err(|e| internal_error("classified port summary", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/behavior/port-baseline — port flow baseline status.
+pub async fn port_baseline_status(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<PortBaselineStatus>, Response> {
+    let result = state
+        .connection_store
+        .port_baseline_status()
+        .map_err(|e| internal_error("port baseline status", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/behavior/port-baseline/compute — trigger baseline computation.
+pub async fn compute_port_baselines(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let count = state
+        .connection_store
+        .compute_port_flow_baselines()
+        .map_err(|e| internal_error("compute port baselines", e))?;
+    Ok(Json(serde_json::json!({ "baselines_computed": count })))
 }
 
 /// Query params for city-summary.

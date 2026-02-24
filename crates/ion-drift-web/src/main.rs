@@ -225,11 +225,12 @@ async fn main() -> anyhow::Result<()> {
         app_state.geo_cache.clone(),
         app_state.oui_db.clone(),
     );
-    spawn_speedtest_runner(
-        speedtest_store.clone(),
-        speedtest_running.clone(),
-        speedtest_last_completed.clone(),
-    );
+    // Automatic speedtest disabled — use on-demand /api/speedtest/run instead
+    // spawn_speedtest_runner(
+    //     speedtest_store.clone(),
+    //     speedtest_running.clone(),
+    //     speedtest_last_completed.clone(),
+    // );
     spawn_session_cleanup(sessions);
     spawn_behavior_collector(
         behavior_store.clone(),
@@ -238,7 +239,7 @@ async fn main() -> anyhow::Result<()> {
         app_state.geo_cache.clone(),
         app_state.firewall_rules_cache.clone(),
     );
-    spawn_behavior_maintenance(behavior_store.clone());
+    spawn_behavior_maintenance(behavior_store.clone(), connection_store.clone());
     spawn_behavior_auto_classifier(behavior_store);
 
     // Spawn connection history persistence + pruning
@@ -869,7 +870,10 @@ fn spawn_behavior_collector(
 }
 
 /// Recompute all device baselines nightly (3 AM) and prune old observations.
-fn spawn_behavior_maintenance(store: Arc<mikrotik_core::BehaviorStore>) {
+fn spawn_behavior_maintenance(
+    store: Arc<mikrotik_core::BehaviorStore>,
+    connection_store: Arc<connection_store::ConnectionStore>,
+) {
     tokio::spawn(async move {
         loop {
             // Sleep until roughly 3 AM — simplified: sleep 24 hours
@@ -884,6 +888,13 @@ fn spawn_behavior_maintenance(store: Arc<mikrotik_core::BehaviorStore>) {
             match store.prune_observations(30 * 86400).await {
                 Ok(count) => tracing::info!("behavior: pruned {count} old observations"),
                 Err(e) => tracing::warn!("behavior: observation prune failed: {e}"),
+            }
+
+            // Compute port flow baselines for Sankey anomaly detection
+            tracing::info!("computing port flow baselines");
+            match connection_store.compute_port_flow_baselines() {
+                Ok(count) => tracing::info!("port flow baselines: computed {count} baselines"),
+                Err(e) => tracing::warn!("port flow baseline computation failed: {e}"),
             }
         }
     });
