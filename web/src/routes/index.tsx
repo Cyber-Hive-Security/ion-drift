@@ -220,7 +220,7 @@ export function DashboardPage() {
         {system.data && <UptimeCard data={system.data} />}
         {drops.data ? <FirewallDropsCard data={drops.data} /> : <CardSkeleton title="Firewall Drops" />}
         {traffic.data ? <TrafficCard data={traffic.data} /> : <CardSkeleton title="WAN Traffic" />}
-        <SpeedtestCard data={speedtest.data ?? null} />
+        <SpeedtestCard data={speedtest.data && "median_download_mbps" in speedtest.data ? speedtest.data : null} />
         {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
         {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
       </div>

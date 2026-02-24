@@ -25,7 +25,10 @@ pub async fn latest(
 
     match result {
         Some(r) => Ok(Json(serde_json::to_value(r).map_err(|e| internal_error("serialize speedtest", e))?)),
-        None => Ok(Json(serde_json::json!({ "message": "no speedtest results yet" }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "message": "no speedtest results yet" })),
+        ).into_response()),
     }
 }
 
