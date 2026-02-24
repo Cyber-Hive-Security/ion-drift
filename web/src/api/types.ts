@@ -619,6 +619,8 @@ export interface UpdateSecretsRequest {
   router_username?: string;
   router_password?: string;
   oidc_client_secret?: string;
+  certwarden_cert_api_key?: string;
+  certwarden_key_api_key?: string;
 }
 
 export interface UpdateSecretsResponse {
@@ -633,4 +635,16 @@ export interface EncryptionStatusResponse {
   key_fingerprint: string;
   source: string;
   all_secrets_current: boolean;
+}
+
+export interface CertStatusResponse {
+  subject_cn: string;
+  issuer_cn: string;
+  not_before: number;
+  not_after: number;
+  seconds_until_expiry: number;
+  serial: string;
+  auto_renewal_enabled: boolean;
+  renewal_threshold_days: number;
+  check_interval_hours: number;
 }

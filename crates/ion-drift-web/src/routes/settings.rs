@@ -45,6 +45,8 @@ pub struct UpdateSecretsRequest {
     pub router_username: Option<String>,
     pub router_password: Option<String>,
     pub oidc_client_secret: Option<String>,
+    pub certwarden_cert_api_key: Option<String>,
+    pub certwarden_key_api_key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -91,6 +93,24 @@ pub async fn update_secrets(
                 .await
                 .map_err(|e| internal_error("encrypt oidc_client_secret", e))?;
             updated.push(secrets::SECRET_OIDC_CLIENT_SECRET.to_string());
+        }
+    }
+
+    if let Some(ref key) = req.certwarden_cert_api_key {
+        if !key.is_empty() {
+            sm.encrypt_secret(secrets::SECRET_CW_CERT_API_KEY, key)
+                .await
+                .map_err(|e| internal_error("encrypt certwarden_cert_api_key", e))?;
+            updated.push(secrets::SECRET_CW_CERT_API_KEY.to_string());
+        }
+    }
+
+    if let Some(ref key) = req.certwarden_key_api_key {
+        if !key.is_empty() {
+            sm.encrypt_secret(secrets::SECRET_CW_KEY_API_KEY, key)
+                .await
+                .map_err(|e| internal_error("encrypt certwarden_key_api_key", e))?;
+            updated.push(secrets::SECRET_CW_KEY_API_KEY.to_string());
         }
     }
 
@@ -169,5 +189,45 @@ pub async fn encryption_status(State(state): State<AppState>) -> Result<Json<Enc
         key_fingerprint: fingerprint,
         source: "keycloak_mtls".to_string(),
         all_secrets_current: all_current,
+    }))
+}
+
+// ── GET /api/settings/cert ──────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct CertStatusResponse {
+    subject_cn: String,
+    issuer_cn: String,
+    not_before: i64,
+    not_after: i64,
+    seconds_until_expiry: i64,
+    serial: String,
+    auto_renewal_enabled: bool,
+    renewal_threshold_days: u32,
+    check_interval_hours: u32,
+}
+
+pub async fn cert_status(State(state): State<AppState>) -> Result<Json<CertStatusResponse>, Response> {
+    let cert_path = &state.config.tls.client_cert;
+
+    let status = crate::certwarden::check_cert_status(cert_path)
+        .map_err(|e| internal_error("cert status", e))?;
+
+    let cw = state.config.certwarden.resolve();
+    let (auto_renewal, threshold, interval) = match cw {
+        Some(ref c) => (true, c.renewal_threshold_days, c.check_interval_hours),
+        None => (false, 0, 0),
+    };
+
+    Ok(Json(CertStatusResponse {
+        subject_cn: status.subject_cn,
+        issuer_cn: status.issuer_cn,
+        not_before: status.not_before,
+        not_after: status.not_after,
+        seconds_until_expiry: status.seconds_until_expiry,
+        serial: status.serial,
+        auto_renewal_enabled: auto_renewal,
+        renewal_threshold_days: threshold,
+        check_interval_hours: interval,
     }))
 }

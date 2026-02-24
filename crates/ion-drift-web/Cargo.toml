@@ -38,3 +38,4 @@ aes-gcm = "0.10"
 secrecy = { version = "0.10", features = ["serde"] }
 base64 = "0.22"
 hex = "0.4"
+x509-parser = "0.16"

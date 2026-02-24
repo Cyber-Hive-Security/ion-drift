@@ -43,6 +43,7 @@ import type {
   UpdateSecretsResponse,
   RegenerateSessionResponse,
   EncryptionStatusResponse,
+  CertStatusResponse,
 } from "./types";
 
 // Auth
@@ -475,6 +476,15 @@ export function useEncryptionStatus() {
   return useQuery({
     queryKey: ["settings", "encryption"],
     queryFn: () => apiFetch<EncryptionStatusResponse>("/api/settings/encryption"),
+    retry: false,
+  });
+}
+
+export function useCertStatus() {
+  return useQuery({
+    queryKey: ["settings", "cert"],
+    queryFn: () => apiFetch<CertStatusResponse>("/api/settings/cert"),
+    refetchInterval: 300_000,
     retry: false,
   });
 }

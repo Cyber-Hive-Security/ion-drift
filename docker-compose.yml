@@ -6,14 +6,11 @@ services:
     restart: unless-stopped
     ports:
       - "3100:3000"
-    env_file: .env
     environment:
       - RUST_LOG=info
       - XDG_DATA_HOME=/app/data
     volumes:
       - ion-drift-data:/app/data
-      - /opt/certwarden-client/certificates/hiverouter.kaziik.xyz/hiverouter.kaziik.xyz.key:/app/certs/server.key:ro
-      - /opt/certwarden-client/certificates/hiverouter.kaziik.xyz/hiverouter.kaziik.xyz.pem:/app/certs/server.crt:ro
 
 volumes:
   ion-drift-data:

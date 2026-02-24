@@ -178,6 +178,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/settings/secrets", get(settings::secrets_status).put(settings::update_secrets))
         .route("/settings/secrets/session/regenerate", post(settings::regenerate_session))
         .route("/settings/encryption", get(settings::encryption_status))
+        .route("/settings/cert", get(settings::cert_status))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 

@@ -28,7 +28,7 @@ COPY config/production.toml ./config/server.toml
 COPY docker/root_ca.crt ./certs/root_ca.crt
 COPY docker/entrypoint.sh /entrypoint.sh
 
-RUN mkdir -p /app/data && chown -R app:app /app
+RUN mkdir -p /app/data/certs && chown -R app:app /app
 
 ENV RUST_LOG=info
 ENV XDG_DATA_HOME=/app/data

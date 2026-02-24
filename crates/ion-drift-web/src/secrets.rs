@@ -14,6 +14,8 @@ pub const SECRET_ROUTER_USERNAME: &str = "router_username";
 pub const SECRET_ROUTER_PASSWORD: &str = "router_password";
 pub const SECRET_OIDC_CLIENT_SECRET: &str = "oidc_client_secret";
 pub const SECRET_SESSION_SECRET: &str = "session_secret";
+pub const SECRET_CW_CERT_API_KEY: &str = "certwarden_cert_api_key";
+pub const SECRET_CW_KEY_API_KEY: &str = "certwarden_key_api_key";
 
 /// All decrypted secrets needed by the application.
 pub struct DecryptedSecrets {
@@ -21,6 +23,10 @@ pub struct DecryptedSecrets {
     pub router_password: SecretString,
     pub oidc_client_secret: SecretString,
     pub session_secret: SecretString,
+    /// CertWarden certificate API key (optional — not present in legacy setups).
+    pub certwarden_cert_api_key: Option<SecretString>,
+    /// CertWarden private key API key (optional — not present in legacy setups).
+    pub certwarden_key_api_key: Option<SecretString>,
 }
 
 /// Status of a single stored secret.
@@ -175,13 +181,21 @@ impl SecretsManager {
 
     /// Store all secrets atomically in a single transaction.
     pub async fn store_all(&self, secrets: &DecryptedSecrets) -> anyhow::Result<()> {
-        // Encrypt all values first
-        let pairs = [
+        // Encrypt all values first — core secrets always present
+        let mut pairs: Vec<(&str, &str)> = vec![
             (SECRET_ROUTER_USERNAME, secrets.router_username.as_str()),
             (SECRET_ROUTER_PASSWORD, secrets.router_password.expose_secret()),
             (SECRET_OIDC_CLIENT_SECRET, secrets.oidc_client_secret.expose_secret()),
             (SECRET_SESSION_SECRET, secrets.session_secret.expose_secret()),
         ];
+
+        // CertWarden secrets are optional
+        if let Some(ref key) = secrets.certwarden_cert_api_key {
+            pairs.push((SECRET_CW_CERT_API_KEY, key.expose_secret()));
+        }
+        if let Some(ref key) = secrets.certwarden_key_api_key {
+            pairs.push((SECRET_CW_KEY_API_KEY, key.expose_secret()));
+        }
 
         let cipher = Aes256Gcm::new(&self.kek);
         let now = SystemTime::now()
@@ -224,7 +238,8 @@ impl SecretsManager {
         Ok(())
     }
 
-    /// Load and decrypt all secrets. Returns None if any are missing.
+    /// Load and decrypt all secrets. Returns None if core secrets are missing.
+    /// CertWarden secrets are optional and loaded as Option.
     pub async fn load_all(&self) -> anyhow::Result<Option<DecryptedSecrets>> {
         let username = match self.decrypt_secret(SECRET_ROUTER_USERNAME).await? {
             Some(s) => s.expose_secret().to_string(),
@@ -243,11 +258,17 @@ impl SecretsManager {
             None => return Ok(None),
         };
 
+        // CertWarden secrets are optional (not present in legacy setups)
+        let cw_cert_key = self.decrypt_secret(SECRET_CW_CERT_API_KEY).await?;
+        let cw_key_key = self.decrypt_secret(SECRET_CW_KEY_API_KEY).await?;
+
         Ok(Some(DecryptedSecrets {
             router_username: username,
             router_password: password,
             oidc_client_secret: oidc_secret,
             session_secret,
+            certwarden_cert_api_key: cw_cert_key,
+            certwarden_key_api_key: cw_key_key,
         }))
     }
 

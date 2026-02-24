@@ -7,6 +7,7 @@ import {
   useEncryptionStatus,
   useUpdateSecrets,
   useRegenerateSession,
+  useCertStatus,
 } from "@/api/queries";
 import {
   Shield,
@@ -15,6 +16,7 @@ import {
   Check,
   AlertTriangle,
   X,
+  FileKey,
 } from "lucide-react";
 
 export function SettingsPage() {
@@ -22,6 +24,7 @@ export function SettingsPage() {
     <PageShell title="Settings">
       <div className="space-y-6">
         <SecretsSection />
+        <CertWardenSection />
         <EncryptionSection />
       </div>
     </PageShell>
@@ -50,9 +53,9 @@ function SecretsSection() {
             <h2 className="text-lg font-semibold">Encrypted Secrets</h2>
           </div>
           <p className="text-sm text-muted-foreground">
-            Secrets encryption is not enabled. Add a{" "}
+            Secrets encryption is not enabled. Add an{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-              [bootstrap]
+              [oidc.bootstrap]
             </code>{" "}
             section to your config to enable encrypted secrets at rest.
           </p>
@@ -83,10 +86,15 @@ function SecretsSection() {
     router_password: "Router Password",
     oidc_client_secret: "OIDC Client Secret",
     session_secret: "Session Secret",
+    certwarden_cert_api_key: "CertWarden Certificate API Key",
+    certwarden_key_api_key: "CertWarden Private Key API Key",
   };
 
   const isPasswordField = (name: string) =>
-    name === "router_password" || name === "oidc_client_secret";
+    name === "router_password" ||
+    name === "oidc_client_secret" ||
+    name === "certwarden_cert_api_key" ||
+    name === "certwarden_key_api_key";
 
   return (
     <div className="rounded-lg border border-border bg-card">
@@ -218,6 +226,119 @@ function SecretsSection() {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ── CertWarden Section ──────────────────────────────────────────
+
+function CertWardenSection() {
+  const { data, isLoading, error } = useCertStatus();
+
+  if (isLoading) return <LoadingSpinner />;
+  if (error) {
+    if ("status" in error && (error as { status: number }).status === 500) {
+      return (
+        <div className="rounded-lg border border-border bg-card p-6">
+          <div className="flex items-center gap-3 mb-3">
+            <FileKey className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-lg font-semibold">mTLS Certificate</h2>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            No certificate found on disk. Complete setup to provision a certificate from CertWarden.
+          </p>
+        </div>
+      );
+    }
+    return null;
+  }
+  if (!data) return null;
+
+  const daysUntilExpiry = Math.floor(data.seconds_until_expiry / 86400);
+  const isExpiringSoon = daysUntilExpiry <= data.renewal_threshold_days && daysUntilExpiry > 0;
+  const isExpired = data.seconds_until_expiry <= 0;
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-3 border-b border-border p-4">
+        <FileKey className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">mTLS Certificate</h2>
+      </div>
+
+      <div className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Subject</span>
+          <code className="text-sm font-mono">{data.subject_cn}</code>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Issuer</span>
+          <code className="text-sm font-mono">{data.issuer_cn}</code>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Not Before</span>
+          <span className="text-sm">
+            {new Date(data.not_before * 1000).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Expires</span>
+          <div className="flex items-center gap-1.5">
+            {isExpired ? (
+              <>
+                <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
+                <span className="text-sm text-red-500">Expired</span>
+              </>
+            ) : isExpiringSoon ? (
+              <>
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                <span className="text-sm text-amber-500">
+                  {new Date(data.not_after * 1000).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })}{" "}
+                  ({daysUntilExpiry}d remaining)
+                </span>
+              </>
+            ) : (
+              <>
+                <Check className="h-3.5 w-3.5 text-green-500" />
+                <span className="text-sm">
+                  {new Date(data.not_after * 1000).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })}{" "}
+                  ({daysUntilExpiry}d remaining)
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Serial</span>
+          <code className="text-xs font-mono text-muted-foreground">{data.serial}</code>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Auto-Renewal</span>
+          <div className="flex items-center gap-1.5">
+            {data.auto_renewal_enabled ? (
+              <>
+                <Check className="h-3.5 w-3.5 text-green-500" />
+                <span className="text-sm text-green-500">
+                  Enabled (every {data.check_interval_hours}h, renew within {data.renewal_threshold_days}d)
+                </span>
+              </>
+            ) : (
+              <span className="text-sm text-muted-foreground">Disabled</span>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

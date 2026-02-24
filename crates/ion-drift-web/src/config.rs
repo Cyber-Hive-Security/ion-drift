@@ -13,69 +13,115 @@ pub struct ServerConfig {
     #[serde(default)]
     pub data: DataSection,
     #[serde(default)]
-    pub bootstrap: BootstrapSection,
+    pub tls: TlsSection,
+    #[serde(default)]
+    pub certwarden: CertWardenSection,
 }
 
+// ── OIDC Bootstrap (nested under [oidc.bootstrap]) ──────────────
+
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct BootstrapSection {
-    /// Path to PEM-encoded TLS certificate (for mTLS to Keycloak).
-    pub cert_path: Option<String>,
-    /// Path to PEM-encoded TLS private key (for mTLS to Keycloak).
-    pub key_path: Option<String>,
-    /// Keycloak realm URL (e.g., https://holonetid.kaziik.xyz:8443/realms/TheHolonet).
-    pub keycloak_url: Option<String>,
-    /// Keycloak base URL for Admin API (e.g., https://holonetid.kaziik.xyz:8443).
-    pub keycloak_base_url: Option<String>,
-    /// Keycloak realm name.
-    pub realm: Option<String>,
-    /// Bootstrap client ID (e.g., ion-drift-bootstrap).
+pub struct OidcBootstrapSection {
+    /// Bootstrap client ID (e.g., "ion-drift-bootstrap").
     pub client_id: Option<String>,
+    /// Full Keycloak token endpoint URL.
+    pub token_url: Option<String>,
+    /// Full Keycloak Admin API URL (e.g., .../admin/realms/TheHolonet).
+    pub admin_url: Option<String>,
+    /// Keycloak user attribute name for storing the KEK.
+    #[serde(default = "default_kek_attribute")]
+    pub kek_attribute: String,
+}
+
+fn default_kek_attribute() -> String {
+    "ion_drift_kek".into()
 }
 
 /// Resolved bootstrap config (all fields validated as present).
 pub struct ResolvedBootstrap {
     pub cert_path: String,
     pub key_path: String,
-    pub keycloak_url: String,
-    pub keycloak_base_url: String,
-    pub realm: String,
     pub client_id: String,
+    pub token_url: String,
+    pub admin_url: String,
+    pub kek_attribute: String,
 }
 
-impl BootstrapSection {
-    /// Validate and resolve all required bootstrap fields.
-    /// Returns None if bootstrap is not configured (no cert_path).
-    pub fn resolve(&self) -> anyhow::Result<Option<ResolvedBootstrap>> {
-        let cert_path = match &self.cert_path {
-            Some(p) => p.clone(),
-            None => return Ok(None),
-        };
-        let key_path = self.key_path.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("bootstrap.key_path required when cert_path is set"))?
-            .clone();
-        let keycloak_url = self.keycloak_url.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("bootstrap.keycloak_url required"))?
-            .clone();
-        let keycloak_base_url = self.keycloak_base_url.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("bootstrap.keycloak_base_url required"))?
-            .clone();
-        let realm = self.realm.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("bootstrap.realm required"))?
-            .clone();
-        let client_id = self.client_id.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("bootstrap.client_id required"))?
-            .clone();
+// ── TLS Section ─────────────────────────────────────────────────
 
-        Ok(Some(ResolvedBootstrap {
-            cert_path,
-            key_path,
-            keycloak_url,
-            keycloak_base_url,
-            realm,
-            client_id,
-        }))
+#[derive(Debug, Clone, Deserialize)]
+pub struct TlsSection {
+    /// Path to PEM-encoded mTLS client certificate.
+    #[serde(default = "default_client_cert_path")]
+    pub client_cert: String,
+    /// Path to PEM-encoded mTLS client key.
+    #[serde(default = "default_client_key_path")]
+    pub client_key: String,
+}
+
+impl Default for TlsSection {
+    fn default() -> Self {
+        Self {
+            client_cert: default_client_cert_path(),
+            client_key: default_client_key_path(),
+        }
     }
 }
+
+fn default_client_cert_path() -> String {
+    "/app/data/certs/client.crt".into()
+}
+
+fn default_client_key_path() -> String {
+    "/app/data/certs/client.key".into()
+}
+
+// ── CertWarden Section ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CertWardenSection {
+    /// CertWarden API base URL (e.g., https://certwarden.kaziik.xyz:4051).
+    pub base_url: Option<String>,
+    /// Certificate name in CertWarden.
+    pub cert_name: Option<String>,
+    /// Days before expiry to trigger renewal.
+    #[serde(default = "default_30")]
+    pub renewal_threshold_days: u32,
+    /// Hours between cert expiry checks.
+    #[serde(default = "default_1")]
+    pub check_interval_hours: u32,
+}
+
+fn default_30() -> u32 {
+    30
+}
+
+fn default_1() -> u32 {
+    1
+}
+
+/// Resolved CertWarden config (base_url and cert_name present).
+pub struct ResolvedCertWarden {
+    pub base_url: String,
+    pub cert_name: String,
+    pub renewal_threshold_days: u32,
+    pub check_interval_hours: u32,
+}
+
+impl CertWardenSection {
+    pub fn resolve(&self) -> Option<ResolvedCertWarden> {
+        let base_url = self.base_url.as_ref()?;
+        let cert_name = self.cert_name.as_ref()?;
+        Some(ResolvedCertWarden {
+            base_url: base_url.clone(),
+            cert_name: cert_name.clone(),
+            renewal_threshold_days: self.renewal_threshold_days,
+            check_interval_hours: self.check_interval_hours,
+        })
+    }
+}
+
+// ── Other sections (unchanged) ──────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct DataSection {
@@ -116,6 +162,9 @@ pub struct OidcSection {
     pub client_secret: String,
     pub redirect_uri: String,
     pub ca_cert_path: Option<String>,
+    /// Nested bootstrap config for mTLS KEK retrieval.
+    #[serde(default)]
+    pub bootstrap: Option<OidcBootstrapSection>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -183,12 +232,45 @@ fn default_same_site() -> String {
     "lax".into()
 }
 
+// ── Resolve bootstrap ───────────────────────────────────────────
+
+impl ServerConfig {
+    /// Check if OIDC bootstrap (mTLS KEK) is configured.
+    /// Returns a ResolvedBootstrap if oidc.bootstrap has a client_id and
+    /// TLS cert/key paths are configured.
+    pub fn resolve_bootstrap(&self) -> anyhow::Result<Option<ResolvedBootstrap>> {
+        let bootstrap = match &self.oidc.bootstrap {
+            Some(b) => b,
+            None => return Ok(None),
+        };
+        let client_id = match &bootstrap.client_id {
+            Some(id) => id.clone(),
+            None => return Ok(None),
+        };
+        let token_url = bootstrap.token_url.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("oidc.bootstrap.token_url required when client_id is set"))?
+            .clone();
+        let admin_url = bootstrap.admin_url.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("oidc.bootstrap.admin_url required"))?
+            .clone();
+
+        Ok(Some(ResolvedBootstrap {
+            cert_path: self.tls.client_cert.clone(),
+            key_path: self.tls.client_key.clone(),
+            client_id,
+            token_url,
+            admin_url,
+            kek_attribute: bootstrap.kek_attribute.clone(),
+        }))
+    }
+}
+
 // ── Loading ───────────────────────────────────────────────────────
 
 impl ServerConfig {
     /// Load config from a TOML file, then overlay secrets from env vars.
-    /// If `bootstrap.cert_path` is set, env var secrets are optional (managed via SecretsManager).
-    /// If `bootstrap.cert_path` is not set, env var secrets are required (legacy mode).
+    /// If `oidc.bootstrap` is configured, env var secrets are optional (managed via SecretsManager).
+    /// If not configured, env var secrets are required (legacy mode).
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("failed to read config {}: {e}", path.display()))?;
@@ -196,7 +278,11 @@ impl ServerConfig {
         let mut config: ServerConfig = toml::from_str(&contents)
             .map_err(|e| anyhow::anyhow!("failed to parse config: {e}"))?;
 
-        if config.bootstrap.cert_path.is_some() {
+        let has_bootstrap = config.oidc.bootstrap.as_ref()
+            .and_then(|b| b.client_id.as_ref())
+            .is_some();
+
+        if has_bootstrap {
             // Secrets-at-rest mode: env vars are optional fallbacks
             config.router.password = std::env::var("HIVE_ROUTER_PASSWORD").unwrap_or_default();
             config.oidc.client_secret = std::env::var("HIVE_ROUTER_OIDC_SECRET").unwrap_or_default();

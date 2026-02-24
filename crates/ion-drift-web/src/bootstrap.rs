@@ -10,14 +10,8 @@ use std::time::Duration;
 use crate::config::ResolvedBootstrap;
 use crate::secrets::compute_fingerprint;
 
-/// The Keycloak user attribute name where the KEK is stored.
-const KEK_ATTRIBUTE: &str = "ion_drift_kek";
-
-/// Maximum number of retries when Keycloak is unreachable.
-const MAX_RETRIES: u32 = 3;
-
-/// Delay between retries.
-const RETRY_DELAY: Duration = Duration::from_secs(5);
+/// Exponential backoff schedule for Keycloak connection retries.
+const BACKOFF_DELAYS: &[u64] = &[5, 10, 30, 60, 120, 300];
 
 /// Result of the KEK bootstrap process.
 pub struct BootstrapResult {
@@ -28,7 +22,7 @@ pub struct BootstrapResult {
 
 /// Build an mTLS-capable reqwest client for Keycloak bootstrap.
 ///
-/// Reads the CertWarden cert+key, concatenates them for `Identity::from_pem()`,
+/// Reads the cert+key, concatenates them for `Identity::from_pem()`,
 /// and adds the Smallstep root CA for server verification.
 pub fn build_mtls_client(config: &ResolvedBootstrap, ca_cert_path: &str) -> anyhow::Result<reqwest::Client> {
     let cert_pem = std::fs::read(&config.cert_path)
@@ -57,33 +51,38 @@ pub fn build_mtls_client(config: &ResolvedBootstrap, ca_cert_path: &str) -> anyh
 
 /// Main bootstrap function: retrieve or generate KEK from Keycloak.
 ///
-/// Retries up to 3 times with 5s delay if Keycloak is unreachable.
+/// Retries with exponential backoff [5s, 10s, 30s, 60s, 120s, 300s] if Keycloak is unreachable.
 pub async fn fetch_or_generate_kek(
     client: &reqwest::Client,
     config: &ResolvedBootstrap,
 ) -> anyhow::Result<BootstrapResult> {
     tracing::info!("authenticating to Keycloak via mTLS for KEK bootstrap");
 
+    let max_attempts = BACKOFF_DELAYS.len() + 1;
     let mut last_err = None;
-    for attempt in 1..=MAX_RETRIES {
+
+    for attempt in 1..=max_attempts {
         match try_bootstrap(client, config).await {
             Ok(result) => return Ok(result),
             Err(e) => {
+                let delay_idx = attempt.saturating_sub(1).min(BACKOFF_DELAYS.len() - 1);
+                let delay = BACKOFF_DELAYS[delay_idx];
                 tracing::warn!(
                     attempt,
-                    max = MAX_RETRIES,
+                    max = max_attempts,
+                    next_retry_secs = delay,
                     "KEK bootstrap attempt failed: {e}"
                 );
                 last_err = Some(e);
-                if attempt < MAX_RETRIES {
-                    tokio::time::sleep(RETRY_DELAY).await;
+                if attempt < max_attempts {
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
                 }
             }
         }
     }
 
     Err(anyhow::anyhow!(
-        "Keycloak unreachable after {MAX_RETRIES} attempts — cannot retrieve encryption key. \
+        "Keycloak unreachable after {max_attempts} attempts — cannot retrieve encryption key. \
          Ion-drift is sealed. Last error: {}",
         last_err.unwrap()
     ))
@@ -134,10 +133,8 @@ async fn try_bootstrap(
 
 /// Authenticate to Keycloak via mTLS client_credentials grant.
 async fn get_token(client: &reqwest::Client, config: &ResolvedBootstrap) -> anyhow::Result<String> {
-    let token_url = format!("{}/protocol/openid-connect/token", config.keycloak_url);
-
     let resp = client
-        .post(&token_url)
+        .post(&config.token_url)
         .form(&[
             ("grant_type", "client_credentials"),
             ("client_id", &config.client_id),
@@ -177,8 +174,8 @@ async fn get_service_account_user_id(
 ) -> anyhow::Result<String> {
     // Find the client UUID
     let clients_url = format!(
-        "{}/admin/realms/{}/clients?clientId={}",
-        config.keycloak_base_url, config.realm, config.client_id
+        "{}/clients?clientId={}",
+        config.admin_url, config.client_id
     );
 
     let resp = client
@@ -206,14 +203,14 @@ async fn get_service_account_user_id(
 
     let client_uuid = clients
         .first()
-        .ok_or_else(|| anyhow::anyhow!("client {} not found in realm {}", config.client_id, config.realm))?
+        .ok_or_else(|| anyhow::anyhow!("client {} not found", config.client_id))?
         .id
         .clone();
 
     // Get service account user for this client
     let sa_url = format!(
-        "{}/admin/realms/{}/clients/{}/service-account-user",
-        config.keycloak_base_url, config.realm, client_uuid
+        "{}/clients/{}/service-account-user",
+        config.admin_url, client_uuid
     );
 
     let resp = client
@@ -254,8 +251,8 @@ async fn read_kek_attribute(
     user_id: &str,
 ) -> anyhow::Result<Option<Vec<u8>>> {
     let user_url = format!(
-        "{}/admin/realms/{}/users/{}",
-        config.keycloak_base_url, config.realm, user_id
+        "{}/users/{}",
+        config.admin_url, user_id
     );
 
     let resp = client
@@ -282,7 +279,7 @@ async fn read_kek_attribute(
         .map_err(|e| anyhow::anyhow!("failed to parse user: {e}"))?;
 
     if let Some(attrs) = user.attributes {
-        if let Some(values) = attrs.get(KEK_ATTRIBUTE) {
+        if let Some(values) = attrs.get(&config.kek_attribute) {
             if let Some(b64_value) = values.first() {
                 if b64_value.is_empty() {
                     return Ok(None);
@@ -307,15 +304,15 @@ async fn write_kek_attribute(
     kek_bytes: &[u8],
 ) -> anyhow::Result<()> {
     let user_url = format!(
-        "{}/admin/realms/{}/users/{}",
-        config.keycloak_base_url, config.realm, user_id
+        "{}/users/{}",
+        config.admin_url, user_id
     );
 
     let b64_value = BASE64.encode(kek_bytes);
 
     let body = serde_json::json!({
         "attributes": {
-            KEK_ATTRIBUTE: [b64_value]
+            &config.kek_attribute: [b64_value]
         }
     });
 

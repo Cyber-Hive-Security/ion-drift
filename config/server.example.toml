@@ -8,28 +8,39 @@ port = 443
 tls = true
 ca_cert_path = "/certs/root_ca.crt"
 username = "admin"
-# password from HIVE_ROUTER_PASSWORD env var
+# password from HIVE_ROUTER_PASSWORD env var (legacy mode only)
 
 [oidc]
 issuer_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet"
 client_id = "ion-drift"
-# client_secret from HIVE_ROUTER_OIDC_SECRET env var
+# client_secret from HIVE_ROUTER_OIDC_SECRET env var (legacy mode only)
 redirect_uri = "https://hiverouter.kaziik.xyz/auth/callback"
 # Smallstep root CA for verifying Keycloak's TLS cert
 ca_cert_path = "/certs/root_ca.crt"
 
 [session]
-# secret from HIVE_ROUTER_SESSION_SECRET env var (generate: openssl rand -base64 64)
+# secret from HIVE_ROUTER_SESSION_SECRET env var (legacy mode; auto-generated in bootstrap mode)
 cookie_name = "ion_drift_session"
 max_age_seconds = 86400
 secure = true
 same_site = "lax"
 
-# [bootstrap]
-# mTLS certificate and key for Keycloak KEK bootstrap (enables encrypted secrets at rest)
-# cert_path = "/app/certs/server.crt"
-# key_path = "/app/certs/server.key"
-# keycloak_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet"
-# keycloak_base_url = "https://holonetid.kaziik.xyz:8443"
-# realm = "TheHolonet"
+# ── Bootstrap mode (enables encrypted secrets at rest) ──────────
+# Uncomment the sections below to enable mTLS KEK bootstrap + CertWarden cert management.
+# With bootstrap enabled, secrets are encrypted in SQLite (no env vars needed after setup).
+
+# [oidc.bootstrap]
 # client_id = "ion-drift-bootstrap"
+# token_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet/protocol/openid-connect/token"
+# admin_url = "https://holonetid.kaziik.xyz:8443/admin/realms/TheHolonet"
+# kek_attribute = "ion_drift_kek"
+
+# [tls]
+# client_cert = "/app/data/certs/client.crt"
+# client_key = "/app/data/certs/client.key"
+
+# [certwarden]
+# base_url = "https://certwarden.kaziik.xyz:4051"
+# cert_name = "hiverouter"
+# renewal_threshold_days = 30
+# check_interval_hours = 1

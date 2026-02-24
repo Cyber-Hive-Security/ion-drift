@@ -1,6 +1,7 @@
 mod auth;
 mod behavior_engine;
 mod bootstrap;
+mod certwarden;
 mod config;
 mod geo;
 mod live_traffic;
@@ -49,81 +50,70 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Secrets management (Keycloak mTLS bootstrap) ────────────
     let secrets_manager: Option<Arc<tokio::sync::RwLock<SecretsManager>>> =
-        if let Some(resolved) = config.bootstrap.resolve()? {
-            tracing::info!("bootstrap config found, fetching KEK from Keycloak via mTLS");
+        if let Some(resolved) = config.resolve_bootstrap()? {
             let db_path = data_dir.join("secrets.db");
-
-            // Build mTLS client for Keycloak authentication
             let ca_cert_path = config.oidc.ca_cert_path.as_deref()
                 .ok_or_else(|| anyhow::anyhow!("oidc.ca_cert_path required for mTLS bootstrap"))?;
-            let mtls_client = bootstrap::build_mtls_client(&resolved, ca_cert_path)?;
 
-            // Fetch or generate KEK from Keycloak
-            let result = bootstrap::fetch_or_generate_kek(&mtls_client, &resolved).await?;
+            // Check if cert+key exist on disk
+            let cert_exists = std::path::Path::new(&config.tls.client_cert).exists();
+            let key_exists = std::path::Path::new(&config.tls.client_key).exists();
 
-            // Initialize SecretsManager with the KEK
-            let sm = SecretsManager::new(&db_path, result.kek)?;
+            if cert_exists && key_exists {
+                // Normal startup: cert on disk → build mTLS → fetch KEK → decrypt secrets
+                tracing::info!("mTLS cert found at {}, fetching KEK from Keycloak", config.tls.client_cert);
+                let mtls_client = bootstrap::build_mtls_client(&resolved, ca_cert_path)?;
+                let result = bootstrap::fetch_or_generate_kek(&mtls_client, &resolved).await?;
+                let sm = SecretsManager::new(&db_path, result.kek)?;
 
-            let has_secrets = sm.has_secrets().await?;
-            let has_env_vars = !config.router.password.is_empty()
-                && !config.oidc.client_secret.is_empty();
+                let has_secrets = sm.has_secrets().await?;
+                let has_env_vars = !config.router.password.is_empty()
+                    && !config.oidc.client_secret.is_empty();
 
-            if has_secrets {
-                // Decrypt from DB and inject into config
-                tracing::info!("loading encrypted secrets from database");
-                let decrypted = sm
-                    .load_all()
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("secrets DB exists but some secrets are missing"))?;
-                config.router.username = decrypted.router_username;
-                config.router.password = decrypted.router_password.expose_secret().to_string();
-                config.oidc.client_secret = decrypted.oidc_client_secret.expose_secret().to_string();
-                config.session.session_secret = decrypted.session_secret.expose_secret().to_string();
-            } else if has_env_vars {
-                // Migrate env vars into encrypted DB
-                tracing::info!("migrating env var secrets to encrypted storage");
-                let session_secret = if config.session.session_secret.is_empty() {
-                    let bytes: [u8; 32] = rand::random();
-                    hex::encode(bytes)
+                if has_secrets {
+                    // Decrypt from DB and inject into config
+                    tracing::info!("loading encrypted secrets from database");
+                    let decrypted = sm
+                        .load_all()
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("secrets DB exists but some secrets are missing"))?;
+                    config.router.username = decrypted.router_username;
+                    config.router.password = decrypted.router_password.expose_secret().to_string();
+                    config.oidc.client_secret = decrypted.oidc_client_secret.expose_secret().to_string();
+                    config.session.session_secret = decrypted.session_secret.expose_secret().to_string();
+                } else if has_env_vars {
+                    // Migrate env vars into encrypted DB
+                    tracing::info!("migrating env var secrets to encrypted storage");
+                    let session_secret = if config.session.session_secret.is_empty() {
+                        let bytes: [u8; 32] = rand::random();
+                        hex::encode(bytes)
+                    } else {
+                        config.session.session_secret.clone()
+                    };
+                    let decrypted = DecryptedSecrets {
+                        router_username: config.router.username.clone(),
+                        router_password: secrecy::SecretString::from(config.router.password.clone()),
+                        oidc_client_secret: secrecy::SecretString::from(config.oidc.client_secret.clone()),
+                        session_secret: secrecy::SecretString::from(session_secret.clone()),
+                        certwarden_cert_api_key: None,
+                        certwarden_key_api_key: None,
+                    };
+                    sm.store_all(&decrypted).await?;
+                    config.session.session_secret = session_secret;
+                    tracing::info!("secrets migrated to encrypted storage");
                 } else {
-                    config.session.session_secret.clone()
-                };
-                let decrypted = DecryptedSecrets {
-                    router_username: config.router.username.clone(),
-                    router_password: secrecy::SecretString::from(config.router.password.clone()),
-                    oidc_client_secret: secrecy::SecretString::from(config.oidc.client_secret.clone()),
-                    session_secret: secrecy::SecretString::from(session_secret.clone()),
-                };
-                sm.store_all(&decrypted).await?;
-                config.session.session_secret = session_secret;
-                tracing::info!("secrets migrated to encrypted storage");
+                    // Cert on disk but no secrets — shouldn't happen normally,
+                    // but fall through to setup mode
+                    tracing::warn!("cert on disk but no secrets found — starting in setup mode");
+                    return run_setup_mode(&config, &data_dir).await;
+                }
+
+                Some(Arc::new(tokio::sync::RwLock::new(sm)))
             } else {
-                // No secrets anywhere — enter setup mode
-                tracing::warn!("no secrets found — starting in setup mode");
-                let sm_arc = Arc::new(sm);
-                let setup_state = setup::SetupState {
-                    secrets_manager: sm_arc,
-                    router_username: config.router.username.clone(),
-                };
-
-                let app = axum::Router::new()
-                    .route("/setup", axum::routing::get(setup::setup_page).post(setup::setup_submit))
-                    .route("/health", axum::routing::get(|| async {
-                        axum::Json(serde_json::json!({ "status": "setup_required" }))
-                    }))
-                    .fallback(|| async { axum::response::Redirect::temporary("/setup") })
-                    .with_state(setup_state);
-
-                let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
-                let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-                tracing::info!("ion-drift setup server listening on {bind_addr}");
-                tracing::info!("navigate to http://{bind_addr}/setup to configure secrets");
-
-                axum::serve(listener, app).await?;
-                return Ok(());
+                // No cert on disk — enter setup mode
+                tracing::warn!("no mTLS cert found at {} — starting in setup mode", config.tls.client_cert);
+                return run_setup_mode(&config, &data_dir).await;
             }
-
-            Some(Arc::new(tokio::sync::RwLock::new(sm)))
         } else {
             None
         };
@@ -234,6 +224,20 @@ async fn main() -> anyhow::Result<()> {
     spawn_behavior_maintenance(behavior_store.clone());
     spawn_behavior_auto_classifier(behavior_store);
 
+    // Spawn cert rotation background task if CertWarden is configured
+    if let Some(ref sm) = secrets_manager {
+        if let Some(cw_config) = config.certwarden.resolve() {
+            if let Some(ca_path) = config.oidc.ca_cert_path.as_deref() {
+                spawn_cert_rotation(
+                    sm.clone(),
+                    cw_config,
+                    config.tls.clone(),
+                    ca_path.to_string(),
+                );
+            }
+        }
+    }
+
     // Resolve web/dist path relative to the config file's parent (project root)
     let web_dist = config_file
         .parent()
@@ -258,6 +262,40 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Run the setup-mode server when no cert/secrets are present.
+async fn run_setup_mode(
+    config: &ServerConfig,
+    data_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    let db_path = data_dir.join("secrets.db");
+
+    let setup_state = setup::SetupState {
+        db_path,
+        router_username: config.router.username.clone(),
+        tls_config: config.tls.clone(),
+        oidc_bootstrap: config.oidc.bootstrap.clone(),
+        ca_cert_path: config.oidc.ca_cert_path.clone().unwrap_or_default(),
+        certwarden_base_url: config.certwarden.base_url.clone(),
+        certwarden_cert_name: config.certwarden.cert_name.clone(),
+    };
+
+    let app = axum::Router::new()
+        .route("/setup", axum::routing::get(setup::setup_page).post(setup::setup_submit))
+        .route("/health", axum::routing::get(|| async {
+            axum::Json(serde_json::json!({ "status": "setup_required" }))
+        }))
+        .fallback(|| async { axum::response::Redirect::temporary("/setup") })
+        .with_state(setup_state);
+
+    let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    tracing::info!("ion-drift setup server listening on {bind_addr}");
+    tracing::info!("navigate to http://{bind_addr}/setup to configure secrets");
+
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
 /// Parse `--config <path>` from CLI args.
 fn parse_config_arg() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
@@ -267,6 +305,84 @@ fn parse_config_arg() -> Option<String> {
         }
     }
     None
+}
+
+/// Background task: check cert expiry and renew from CertWarden when within threshold.
+fn spawn_cert_rotation(
+    sm: Arc<tokio::sync::RwLock<SecretsManager>>,
+    cw_config: config::ResolvedCertWarden,
+    tls_config: config::TlsSection,
+    ca_cert_path: String,
+) {
+    let interval_hours = cw_config.check_interval_hours.max(1) as u64;
+    let threshold_secs = (cw_config.renewal_threshold_days as i64) * 86400;
+
+    tokio::spawn(async move {
+        // 5-minute initial delay before first check
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        tracing::info!(
+            "cert rotation task started: checking every {}h, renewing within {}d of expiry",
+            interval_hours,
+            cw_config.renewal_threshold_days
+        );
+
+        loop {
+            // Check cert expiry
+            match certwarden::check_cert_status(&tls_config.client_cert) {
+                Ok(status) => {
+                    tracing::debug!(
+                        cn = %status.subject_cn,
+                        days_until_expiry = status.seconds_until_expiry / 86400,
+                        "cert expiry check"
+                    );
+
+                    if status.seconds_until_expiry <= threshold_secs {
+                        tracing::info!(
+                            days_remaining = status.seconds_until_expiry / 86400,
+                            "cert within renewal threshold, attempting renewal"
+                        );
+
+                        // Decrypt CertWarden API keys
+                        let sm_read = sm.read().await;
+                        let cert_key = sm_read.decrypt_secret(secrets::SECRET_CW_CERT_API_KEY).await;
+                        let key_key = sm_read.decrypt_secret(secrets::SECRET_CW_KEY_API_KEY).await;
+                        drop(sm_read);
+
+                        match (cert_key, key_key) {
+                            (Ok(Some(cert_api_key)), Ok(Some(key_api_key))) => {
+                                match certwarden::CertWardenClient::new(&cw_config, &ca_cert_path) {
+                                    Ok(cw_client) => {
+                                        match cw_client.fetch_cert_and_key(
+                                            cert_api_key.expose_secret(),
+                                            key_api_key.expose_secret(),
+                                        ).await {
+                                            Ok((cert_pem, key_pem)) => {
+                                                match certwarden::write_cert_and_key(
+                                                    &tls_config.client_cert,
+                                                    &tls_config.client_key,
+                                                    &cert_pem,
+                                                    &key_pem,
+                                                ) {
+                                                    Ok(()) => tracing::info!("cert renewed successfully"),
+                                                    Err(e) => tracing::warn!("cert write failed: {e}"),
+                                                }
+                                            }
+                                            Err(e) => tracing::warn!("cert fetch from CertWarden failed: {e}"),
+                                        }
+                                    }
+                                    Err(e) => tracing::warn!("failed to create CertWarden client: {e}"),
+                                }
+                            }
+                            _ => tracing::warn!("CertWarden API keys not found in secrets DB, skipping renewal"),
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("cert status check failed: {e}"),
+            }
+
+            tokio::time::sleep(Duration::from_secs(interval_hours * 3600)).await;
+        }
+    });
 }
 
 /// Poll WAN traffic counters every 10 seconds for live rates,
