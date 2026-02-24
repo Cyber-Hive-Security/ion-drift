@@ -25,7 +25,7 @@ client_cert = "/app/data/certs/client.crt"
 client_key = "/app/data/certs/client.key"
 
 [certwarden]
-base_url = "https://certwarden.kaziik.xyz:4051"
+base_url = "https://certwarden.kaziik.xyz:4051/certwarden"
 cert_name = "hiverouter"
 renewal_threshold_days = 30
 check_interval_hours = 1
