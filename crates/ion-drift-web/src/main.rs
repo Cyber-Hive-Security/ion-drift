@@ -198,6 +198,43 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to init geo cache: {e}"))?,
     );
 
+    // Auto-download MaxMind databases if credentials are available but files are missing
+    if !geo_cache.has_maxmind() {
+        if let Some(ref sm) = secrets_manager {
+            let sm_read = sm.read().await;
+            let account_id = sm_read
+                .decrypt_secret(secrets::SECRET_MAXMIND_ACCOUNT_ID)
+                .await
+                .ok()
+                .flatten();
+            let license_key = sm_read
+                .decrypt_secret(secrets::SECRET_MAXMIND_LICENSE_KEY)
+                .await
+                .ok()
+                .flatten();
+            drop(sm_read);
+
+            if let (Some(account_id), Some(license_key)) = (account_id, license_key) {
+                tracing::info!("MaxMind databases not loaded — attempting auto-download");
+                match geo::download_maxmind_databases(
+                    &geoip_dir,
+                    account_id.expose_secret(),
+                    license_key.expose_secret(),
+                )
+                .await
+                {
+                    Ok(downloaded) => {
+                        if !downloaded.is_empty() {
+                            tracing::info!("MaxMind downloaded: {}", downloaded.join(", "));
+                            geo_cache.hot_swap_maxmind(&geoip_dir);
+                        }
+                    }
+                    Err(e) => tracing::warn!("MaxMind auto-download failed: {e}"),
+                }
+            }
+        }
+    }
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),

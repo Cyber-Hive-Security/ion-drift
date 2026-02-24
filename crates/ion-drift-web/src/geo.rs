@@ -397,6 +397,91 @@ fn now_unix() -> i64 {
         .as_secs() as i64
 }
 
+/// Download MaxMind GeoLite2 databases if credentials are provided and files are missing.
+///
+/// Uses the MaxMind download API: `https://download.maxmind.com/geoip/databases/{edition}/download`
+/// with HTTP Basic Auth (account_id:license_key). Downloads tar.gz, extracts the .mmdb file.
+pub async fn download_maxmind_databases(
+    geoip_dir: &Path,
+    account_id: &str,
+    license_key: &str,
+) -> anyhow::Result<Vec<String>> {
+    use std::io::Read;
+
+    let editions = [
+        ("GeoLite2-City", "GeoLite2-City.mmdb"),
+        ("GeoLite2-ASN", "GeoLite2-ASN.mmdb"),
+    ];
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?;
+
+    let mut downloaded = Vec::new();
+
+    for (edition, filename) in &editions {
+        let target = geoip_dir.join(filename);
+        if target.exists() {
+            tracing::debug!("MaxMind {edition}: already present at {}", target.display());
+            continue;
+        }
+
+        let url = format!(
+            "https://download.maxmind.com/geoip/databases/{edition}/download?suffix=tar.gz"
+        );
+        tracing::info!("downloading MaxMind {edition} database...");
+
+        let resp = client
+            .get(&url)
+            .basic_auth(account_id, Some(license_key))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("MaxMind download failed for {edition}: HTTP {status} — {body}");
+        }
+
+        let bytes = resp.bytes().await?;
+        tracing::info!("MaxMind {edition}: downloaded {} bytes, extracting...", bytes.len());
+
+        // Decompress gzip
+        let gz = flate2::read::GzDecoder::new(&bytes[..]);
+        let mut archive = tar::Archive::new(gz);
+
+        let mut found = false;
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let path = entry.path()?.to_path_buf();
+            if path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .map(|f| f == *filename)
+                .unwrap_or(false)
+            {
+                let mut content = Vec::new();
+                entry.read_to_end(&mut content)?;
+                std::fs::write(&target, &content)?;
+                tracing::info!(
+                    "MaxMind {edition}: extracted {} ({} bytes)",
+                    target.display(),
+                    content.len()
+                );
+                found = true;
+                downloaded.push(edition.to_string());
+                break;
+            }
+        }
+
+        if !found {
+            tracing::warn!("MaxMind {edition}: {filename} not found in tar.gz archive");
+        }
+    }
+
+    Ok(downloaded)
+}
+
 /// Check if an IP is RFC1918 private or other reserved range.
 pub fn is_private(ip: &IpAddr) -> bool {
     match ip {
