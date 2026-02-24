@@ -271,7 +271,7 @@ export function WorldMap({
         .on("zoom", (event) => {
           zoomGroup.attr("transform", event.transform);
         });
-      svg.call(zoom);
+      (svg as d3.Selection<SVGSVGElement, unknown, null, undefined>).call(zoom);
       zoomRef.current = zoom;
 
       // Background sphere
