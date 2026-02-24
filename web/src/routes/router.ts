@@ -1,3 +1,4 @@
+import React from "react";
 import {
   createRouter,
   createRoute,
@@ -12,9 +13,14 @@ import { ConnectionsPage } from "./connections";
 import { LogsPage } from "./logs";
 import { SpeedtestPage } from "./speedtest";
 import { BehaviorPage } from "./behavior";
-import { NetworkMapPage } from "@/features/network-map/network-map-page";
 import { SettingsPage } from "./settings";
 import { NotFoundPage } from "./__root";
+
+// Lazy-load the network map page — it pulls in D3 and heavy SVG rendering
+// that benefits from being in a separate chunk.
+const LazyNetworkMapPage = React.lazy(
+  () => import("@/features/network-map/network-map-page").then((m) => ({ default: m.NetworkMapPage })),
+);
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -69,10 +75,18 @@ const behaviorRoute = createRoute({
   component: BehaviorPage,
 });
 
+function NetworkMapWrapper() {
+  return React.createElement(
+    React.Suspense,
+    { fallback: React.createElement("div", { className: "flex h-full items-center justify-center text-muted-foreground" }, "Loading Network Map\u2026") },
+    React.createElement(LazyNetworkMapPage),
+  );
+}
+
 const networkMapRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/network-map",
-  component: NetworkMapPage,
+  component: NetworkMapWrapper,
 });
 
 const settingsRoute = createRoute({

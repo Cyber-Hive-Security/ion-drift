@@ -2,6 +2,8 @@
 //  Network Map — TypeScript Interfaces
 // ============================================================
 
+import type { DeviceStatus, InterfaceStatus } from "@/api/types";
+
 export interface VlanConfig {
   name: string;
   code: string;
@@ -39,7 +41,7 @@ export interface NetworkNode {
   x: number;
   y: number;
   // Live status data — populated by updateDeviceStatuses
-  liveStatus?: import("@/api/types").DeviceStatus;
+  liveStatus?: DeviceStatus;
 }
 
 /** Raw node data without x/y (as authored in data.ts) */
@@ -80,6 +82,6 @@ export interface MapInstance {
   highlightNode: (nodeId: string) => void;
   clearSelection: () => void;
   resetView: () => void;
-  updateDeviceStatuses: (devices: import("@/api/types").DeviceStatus[], anomalyMacs?: Set<string>) => void;
-  updateInterfaceStatuses: (interfaces: import("@/api/types").InterfaceStatus[]) => void;
+  updateDeviceStatuses: (devices: DeviceStatus[], anomalyMacs?: Set<string>) => void;
+  updateInterfaceStatuses: (interfaces: InterfaceStatus[]) => void;
 }
