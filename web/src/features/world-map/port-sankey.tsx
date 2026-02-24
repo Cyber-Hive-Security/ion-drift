@@ -7,6 +7,7 @@ import type {
   ClassifiedPortFlow,
   ClassifiedPortSummary,
   FlowClassification,
+  InvolvedDevice,
   PortDirection,
 } from "@/api/types";
 
@@ -189,6 +190,7 @@ interface SankeyLinkPayload {
     value: number;
     rawBytes: number;
     classification?: FlowClassification;
+    involvedDevices?: InvolvedDevice[];
   };
 }
 
