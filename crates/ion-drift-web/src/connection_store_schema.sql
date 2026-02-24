@@ -124,3 +124,47 @@ CREATE TABLE IF NOT EXISTS weekly_snapshots (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_snap_week_type
     ON weekly_snapshots(snapshot_week, snapshot_type);
+
+-- Anomaly cross-reference links (bridges behavior.db device anomalies with port flow anomalies)
+
+CREATE TABLE IF NOT EXISTS anomaly_links (
+    id INTEGER PRIMARY KEY,
+
+    -- Port flow side
+    port_anomaly_type TEXT NOT NULL,       -- 'new_port', 'volume_spike', 'source_anomaly'
+    flow_direction TEXT NOT NULL,           -- 'outbound', 'inbound', 'internal'
+    protocol TEXT NOT NULL,
+    dst_port INTEGER NOT NULL,
+
+    -- Device side
+    device_mac TEXT NOT NULL,
+    device_ip TEXT NOT NULL,
+    device_vlan TEXT,
+    device_hostname TEXT,
+    behavior_anomaly_id INTEGER,           -- ID from behavior.db anomalies table
+
+    -- Classification
+    correlated INTEGER NOT NULL DEFAULT 0, -- 1 if both engines flagged independently
+    source TEXT NOT NULL,                   -- 'port_flow', 'behavior', 'both'
+    severity TEXT NOT NULL,                 -- 'critical', 'warning', 'info'
+
+    -- Context
+    device_bytes INTEGER DEFAULT 0,
+    device_connections INTEGER DEFAULT 0,
+    port_is_baselined INTEGER NOT NULL,
+    port_days_in_baseline INTEGER DEFAULT 0,
+
+    -- Lifecycle
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolved_by TEXT                        -- 'user', 'auto'
+);
+
+CREATE INDEX IF NOT EXISTS idx_al_port
+    ON anomaly_links(protocol, dst_port, flow_direction);
+CREATE INDEX IF NOT EXISTS idx_al_device
+    ON anomaly_links(device_mac);
+CREATE INDEX IF NOT EXISTS idx_al_behavior
+    ON anomaly_links(behavior_anomaly_id) WHERE behavior_anomaly_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_al_unresolved
+    ON anomaly_links(resolved_at) WHERE resolved_at IS NULL;

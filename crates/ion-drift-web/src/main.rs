@@ -1,3 +1,4 @@
+mod anomaly_correlator;
 mod auth;
 mod behavior_engine;
 mod bootstrap;
@@ -284,7 +285,8 @@ async fn main() -> anyhow::Result<()> {
         app_state.firewall_rules_cache.clone(),
     );
     spawn_behavior_maintenance(behavior_store.clone(), connection_store.clone());
-    spawn_behavior_auto_classifier(behavior_store);
+    spawn_behavior_auto_classifier(behavior_store.clone());
+    anomaly_correlator::spawn_anomaly_correlator(connection_store.clone(), behavior_store);
 
     // Spawn connection history persistence + pruning
     spawn_connection_persister(

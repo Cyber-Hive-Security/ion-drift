@@ -99,6 +99,13 @@ function formatTimeAgo(ts: number): string {
   return `${Math.floor(secs / 86400)}d ago`;
 }
 
+function formatBytesCompact(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 // ── Stats Row ────────────────────────────────────────────────
 
 function StatsRow({ data }: { data: BehaviorOverview }) {
@@ -359,6 +366,24 @@ function AnomalyCard({
                 <span className="ml-1">&middot; {anomaly.firewall_rule_comment}</span>
               )}
             </p>
+          )}
+
+          {/* Network context from port flow correlator */}
+          {d.source === "port_flow" && (
+            <div className="mt-1 rounded border border-amber-500/20 bg-amber-500/5 px-2 py-1 text-xs">
+              <span className="font-medium text-amber-400">Network Context:</span>{" "}
+              Detected at network level
+              {d.total_devices_on_port != null && d.total_devices_on_port > 1 && (
+                <span className="ml-1 text-muted-foreground">
+                  &middot; {d.total_devices_on_port} devices on this port
+                </span>
+              )}
+              {d.network_total_bytes != null && (
+                <span className="ml-1 text-muted-foreground">
+                  &middot; {formatBytesCompact(d.network_total_bytes)} total
+                </span>
+              )}
+            </div>
           )}
 
           {/* Fallback: show description if no details available */}

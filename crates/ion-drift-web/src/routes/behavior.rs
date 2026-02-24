@@ -30,13 +30,6 @@ pub struct VlanBehaviorDetail {
     pub anomalies: Vec<mikrotik_core::behavior::DeviceAnomaly>,
 }
 
-#[derive(Serialize)]
-pub struct DeviceDetailResponse {
-    pub profile: mikrotik_core::behavior::DeviceProfile,
-    pub baselines: Vec<mikrotik_core::behavior::DeviceBaseline>,
-    pub anomalies: Vec<mikrotik_core::behavior::DeviceAnomaly>,
-}
-
 // ── Handlers ─────────────────────────────────────────────────
 
 /// GET /api/behavior/overview
@@ -82,7 +75,7 @@ pub async fn device_detail(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
     Path(mac): Path<String>,
-) -> Result<Json<DeviceDetailResponse>, Response> {
+) -> Result<Json<EnhancedDeviceDetailResponse>, Response> {
     let profile = state
         .behavior_store
         .get_profile(&mac)
@@ -108,10 +101,30 @@ pub async fn device_detail(
         .await
         .map_err(|e| internal_error("behavior device anomalies", e))?;
 
-    Ok(Json(DeviceDetailResponse {
+    // Build port flow contexts for relevant anomalies
+    let mut port_flow_contexts = Vec::new();
+    for anomaly in &anomalies {
+        if anomaly.anomaly_type != "new_port" && anomaly.anomaly_type != "volume_spike" {
+            continue;
+        }
+        if let Some(ref details) = anomaly.details {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(details) {
+                let protocol = json.get("protocol").and_then(|v| v.as_str());
+                let dst_port = json.get("dst_port").and_then(|v| v.as_i64());
+                if let (Some(proto), Some(port)) = (protocol, dst_port) {
+                    if let Ok(Some(ctx)) = state.connection_store.get_port_flow_context(proto, port) {
+                        port_flow_contexts.push(ctx);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(EnhancedDeviceDetailResponse {
         profile,
         baselines,
         anomalies,
+        port_flow_contexts,
     }))
 }
 
@@ -174,4 +187,83 @@ pub async fn alerts(
         .await
         .map_err(|e| internal_error("behavior alerts", e))?;
     Ok(Json(counts))
+}
+
+// ── Anomaly Link Endpoints ──────────────────────────────────
+
+/// GET /api/behavior/anomaly-links — all unresolved anomaly links.
+pub async fn anomaly_links(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::connection_store::AnomalyLink>>, Response> {
+    let links = state
+        .connection_store
+        .get_unresolved_links()
+        .map_err(|e| internal_error("anomaly links", e))?;
+    Ok(Json(links))
+}
+
+#[derive(Deserialize)]
+pub struct PortLinkPath {
+    pub protocol: String,
+    pub port: i64,
+}
+
+#[derive(Deserialize)]
+pub struct PortLinkQuery {
+    pub direction: Option<String>,
+}
+
+/// GET /api/behavior/anomaly-links/port/:protocol/:port — links for a specific port.
+pub async fn anomaly_links_by_port(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(path): Path<PortLinkPath>,
+    Query(query): Query<PortLinkQuery>,
+) -> Result<Json<Vec<crate::connection_store::AnomalyLink>>, Response> {
+    let direction = query.direction.as_deref().unwrap_or("outbound");
+    let links = state
+        .connection_store
+        .get_links_for_port(&path.protocol, path.port, direction)
+        .map_err(|e| internal_error("anomaly links by port", e))?;
+    Ok(Json(links))
+}
+
+/// GET /api/behavior/anomaly-links/device/:mac — links for a specific device.
+pub async fn anomaly_links_by_device(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(mac): Path<String>,
+) -> Result<Json<Vec<crate::connection_store::AnomalyLink>>, Response> {
+    let links = state
+        .connection_store
+        .get_links_for_device(&mac)
+        .map_err(|e| internal_error("anomaly links by device", e))?;
+    Ok(Json(links))
+}
+
+/// POST /api/behavior/anomaly-links/:id/resolve — resolve an anomaly link.
+pub async fn resolve_anomaly_link(
+    RequireAuth(session): RequireAuth,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let updated = state
+        .connection_store
+        .resolve_link(id, &session.username)
+        .map_err(|e| internal_error("resolve anomaly link", e))?;
+
+    Ok(Json(serde_json::json!({
+        "success": updated,
+        "id": id,
+    })))
+}
+
+/// Enhanced device detail with port flow context.
+#[derive(Serialize)]
+pub struct EnhancedDeviceDetailResponse {
+    pub profile: mikrotik_core::behavior::DeviceProfile,
+    pub baselines: Vec<mikrotik_core::behavior::DeviceBaseline>,
+    pub anomalies: Vec<mikrotik_core::behavior::DeviceAnomaly>,
+    pub port_flow_contexts: Vec<crate::connection_store::PortFlowContext>,
 }

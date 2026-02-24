@@ -474,6 +474,32 @@ export function useBehaviorAlerts() {
   });
 }
 
+// Anomaly Links
+
+export function useAnomalyLinks() {
+  return useQuery({
+    queryKey: ["behavior", "anomaly-links"],
+    queryFn: () =>
+      apiFetch<import("./types").AnomalyLink[]>("/api/behavior/anomaly-links"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useResolveAnomalyLink() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiFetch<{ success: boolean }>(
+        `/api/behavior/anomaly-links/${id}/resolve`,
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["behavior"] });
+      queryClient.invalidateQueries({ queryKey: ["connections", "port-summary-classified"] });
+    },
+  });
+}
+
 // Settings / Secrets
 
 export function useSecretsStatus() {

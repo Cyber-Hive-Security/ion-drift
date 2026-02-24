@@ -598,10 +598,45 @@ export interface VlanBehaviorDetail {
   anomalies: DeviceAnomaly[];
 }
 
+export interface PortFlowContext {
+  port: number;
+  protocol: string;
+  port_is_baselined: boolean;
+  port_days_in_baseline: number;
+  correlated: boolean;
+  other_devices_count: number;
+  network_level_classification: string;
+  total_network_bytes_on_port: number;
+}
+
+export interface AnomalyLink {
+  id: number;
+  port_anomaly_type: string;
+  flow_direction: string;
+  protocol: string;
+  dst_port: number;
+  device_mac: string;
+  device_ip: string;
+  device_vlan: string | null;
+  device_hostname: string | null;
+  behavior_anomaly_id: number | null;
+  correlated: boolean;
+  source: string;
+  severity: string;
+  device_bytes: number;
+  device_connections: number;
+  port_is_baselined: boolean;
+  port_days_in_baseline: number;
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+}
+
 export interface DeviceDetailResponse {
   profile: DeviceProfile;
   baselines: DeviceBaseline[];
   anomalies: DeviceAnomaly[];
+  port_flow_contexts: PortFlowContext[];
 }
 
 export interface AlertCount {
@@ -749,6 +784,18 @@ export type FlowClassification =
   | "source_anomaly"
   | "disappeared";
 
+export interface InvolvedDevice {
+  mac: string;
+  ip: string;
+  hostname: string | null;
+  vlan: string | null;
+  bytes: number;
+  connections: number;
+  has_behavior_anomaly: boolean;
+  behavior_anomaly_id: number | null;
+  correlated: boolean;
+}
+
 export interface ClassifiedPortFlow {
   dst_port: number;
   protocol: string;
@@ -762,6 +809,7 @@ export interface ClassifiedPortFlow {
   days_in_baseline: number;
   top_sources: string[];
   new_sources: string[];
+  involved_devices: InvolvedDevice[];
 }
 
 export interface ClassifiedPortSummary {

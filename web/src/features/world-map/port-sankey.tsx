@@ -272,6 +272,36 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
                     ? "MISSING"
                     : String(cls).toUpperCase();
           el.appendChild(badge);
+
+          // Show involved devices if available
+          const devices = payload.involvedDevices ?? [];
+          if (devices.length > 0) {
+            el.appendChild(document.createElement("br"));
+            const devHeader = document.createElement("span");
+            devHeader.style.color = "#94a3b8";
+            devHeader.style.fontSize = "11px";
+            devHeader.textContent = `Devices (${devices.length}):`;
+            el.appendChild(devHeader);
+            for (const dev of devices.slice(0, 5)) {
+              el.appendChild(document.createElement("br"));
+              const devLine = document.createElement("span");
+              devLine.style.fontSize = "11px";
+              devLine.style.paddingLeft = "6px";
+              const name = dev.hostname ?? dev.ip;
+              const devBytes = formatBytes(dev.bytes);
+              const corr = dev.correlated ? " \u26a1" : "";
+              devLine.textContent = `  ${name} \u2014 ${devBytes}${corr}`;
+              el.appendChild(devLine);
+            }
+            if (devices.length > 5) {
+              el.appendChild(document.createElement("br"));
+              const more = document.createElement("span");
+              more.style.fontSize = "10px";
+              more.style.color = "#64748b";
+              more.textContent = `  +${devices.length - 5} more`;
+              el.appendChild(more);
+            }
+          }
         }
       };
 
@@ -361,6 +391,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
       value: scaleBytes(entry.total_bytes),
       rawBytes: entry.total_bytes,
       classification: entry.classification,
+      involvedDevices: entry.involved_devices ?? [],
     }));
 
     return { nodes, links, portCount: sorted.length };
@@ -463,17 +494,23 @@ function AnomalyBanner({
 
   for (const p of newPorts) {
     const svc = portLabel(String(p.dst_port));
-    items.push(`NEW port ${svc} (${formatBytes(p.total_bytes)})`);
+    const devCount = p.involved_devices?.length ?? 0;
+    const devStr = devCount > 0 ? `, ${devCount} device${devCount === 1 ? "" : "s"}` : "";
+    items.push(`NEW port ${svc} (${formatBytes(p.total_bytes)}${devStr})`);
   }
   for (const p of volumeSpikes) {
     const svc = portLabel(String(p.dst_port));
     const ratio = p.volume_ratio ?? 0;
     const label = ratio >= 10 ? `${Math.round(ratio)}x` : `${ratio.toFixed(1)}x`;
-    items.push(`${svc} volume ${label} baseline`);
+    const devCount = p.involved_devices?.length ?? 0;
+    const devStr = devCount > 0 ? `, ${devCount} device${devCount === 1 ? "" : "s"}` : "";
+    items.push(`${svc} volume ${label} baseline${devStr}`);
   }
   for (const p of sourceAnomalies) {
     const svc = portLabel(String(p.dst_port));
-    items.push(`${svc} new source`);
+    const devCount = p.involved_devices?.length ?? 0;
+    const devStr = devCount > 0 ? `, ${devCount} device${devCount === 1 ? "" : "s"}` : "";
+    items.push(`${svc} new source${devStr}`);
   }
   for (const p of disappeared) {
     const svc = portLabel(String(p.dst_port));

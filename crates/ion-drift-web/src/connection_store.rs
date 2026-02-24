@@ -165,6 +165,7 @@ pub struct ClassifiedPortFlow {
     pub days_in_baseline: i64,
     pub top_sources: Vec<String>,
     pub new_sources: Vec<String>,
+    pub involved_devices: Vec<InvolvedDevice>,
 }
 
 /// Summary for a direction's classified flows.
@@ -183,6 +184,78 @@ pub struct PortBaselineStatus {
     pub outbound_count: i64,
     pub internal_count: i64,
     pub last_computed: Option<String>,
+}
+
+/// A row in the anomaly_links table.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnomalyLink {
+    pub id: i64,
+    pub port_anomaly_type: String,
+    pub flow_direction: String,
+    pub protocol: String,
+    pub dst_port: i64,
+    pub device_mac: String,
+    pub device_ip: String,
+    pub device_vlan: Option<String>,
+    pub device_hostname: Option<String>,
+    pub behavior_anomaly_id: Option<i64>,
+    pub correlated: bool,
+    pub source: String,
+    pub severity: String,
+    pub device_bytes: i64,
+    pub device_connections: i64,
+    pub port_is_baselined: bool,
+    pub port_days_in_baseline: i64,
+    pub created_at: String,
+    pub resolved_at: Option<String>,
+    pub resolved_by: Option<String>,
+}
+
+/// Data needed to insert a new anomaly link.
+pub struct NewAnomalyLink {
+    pub port_anomaly_type: String,
+    pub flow_direction: String,
+    pub protocol: String,
+    pub dst_port: i64,
+    pub device_mac: String,
+    pub device_ip: String,
+    pub device_vlan: Option<String>,
+    pub device_hostname: Option<String>,
+    pub behavior_anomaly_id: Option<i64>,
+    pub correlated: bool,
+    pub source: String,
+    pub severity: String,
+    pub device_bytes: i64,
+    pub device_connections: i64,
+    pub port_is_baselined: bool,
+    pub port_days_in_baseline: i64,
+}
+
+/// A device involved in a port flow anomaly (for API enrichment).
+#[derive(Debug, Clone, Serialize)]
+pub struct InvolvedDevice {
+    pub mac: String,
+    pub ip: String,
+    pub hostname: Option<String>,
+    pub vlan: Option<String>,
+    pub bytes: i64,
+    pub connections: i64,
+    pub has_behavior_anomaly: bool,
+    pub behavior_anomaly_id: Option<i64>,
+    pub correlated: bool,
+}
+
+/// Port flow context for a device anomaly.
+#[derive(Debug, Clone, Serialize)]
+pub struct PortFlowContext {
+    pub port: i64,
+    pub protocol: String,
+    pub port_is_baselined: bool,
+    pub port_days_in_baseline: i64,
+    pub correlated: bool,
+    pub other_devices_count: i64,
+    pub network_level_classification: String,
+    pub total_network_bytes_on_port: i64,
 }
 
 /// Well-known service ports that should never be treated as ephemeral.
@@ -1222,6 +1295,15 @@ impl ConnectionStore {
                 anomaly_count += 1;
             }
 
+            // For anomalous flows, look up involved devices from anomaly_links
+            let involved_devices = if !matches!(classification, FlowClassification::Normal) {
+                Self::query_involved_devices_inner(
+                    &db, &flow.protocol, flow.dst_port, direction, &cutoff,
+                )?
+            } else {
+                Vec::new()
+            };
+
             classified_flows.push(ClassifiedPortFlow {
                 dst_port: flow.dst_port,
                 protocol: flow.protocol.clone(),
@@ -1235,6 +1317,7 @@ impl ConnectionStore {
                 days_in_baseline,
                 top_sources,
                 new_sources,
+                involved_devices,
             });
         }
 
@@ -1258,6 +1341,7 @@ impl ConnectionStore {
                 days_in_baseline: b.days_present,
                 top_sources: Vec::new(),
                 new_sources: Vec::new(),
+                involved_devices: Vec::new(),
             })
             .collect();
 
@@ -1270,6 +1354,303 @@ impl ConnectionStore {
             has_baselines,
             flows: classified_flows,
             disappeared,
+        })
+    }
+
+    // ── Anomaly link methods ──────────────────────────────────────
+
+    /// Insert a new anomaly link and return its ID.
+    pub fn insert_anomaly_link(&self, link: &NewAnomalyLink) -> anyhow::Result<i64> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        db.execute(
+            "INSERT INTO anomaly_links
+                (port_anomaly_type, flow_direction, protocol, dst_port,
+                 device_mac, device_ip, device_vlan, device_hostname,
+                 behavior_anomaly_id, correlated, source, severity,
+                 device_bytes, device_connections, port_is_baselined,
+                 port_days_in_baseline, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                link.port_anomaly_type,
+                link.flow_direction,
+                link.protocol,
+                link.dst_port,
+                link.device_mac,
+                link.device_ip,
+                link.device_vlan,
+                link.device_hostname,
+                link.behavior_anomaly_id,
+                link.correlated as i64,
+                link.source,
+                link.severity,
+                link.device_bytes,
+                link.device_connections,
+                link.port_is_baselined as i64,
+                link.port_days_in_baseline,
+                now_iso(),
+            ],
+        )?;
+        Ok(db.last_insert_rowid())
+    }
+
+    /// Check if an unresolved link already exists for this port+device combo.
+    pub fn has_existing_link(
+        &self,
+        protocol: &str,
+        dst_port: i64,
+        direction: &str,
+        device_mac: &str,
+    ) -> anyhow::Result<bool> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM anomaly_links
+             WHERE protocol = ?1 AND dst_port = ?2 AND flow_direction = ?3
+               AND device_mac = ?4 AND resolved_at IS NULL",
+            params![protocol, dst_port, direction, device_mac],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Get all unresolved anomaly links for a specific port.
+    pub fn get_links_for_port(
+        &self,
+        protocol: &str,
+        dst_port: i64,
+        direction: &str,
+    ) -> anyhow::Result<Vec<AnomalyLink>> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let mut stmt = db.prepare(
+            "SELECT id, port_anomaly_type, flow_direction, protocol, dst_port,
+                    device_mac, device_ip, device_vlan, device_hostname,
+                    behavior_anomaly_id, correlated, source, severity,
+                    device_bytes, device_connections, port_is_baselined,
+                    port_days_in_baseline, created_at, resolved_at, resolved_by
+             FROM anomaly_links
+             WHERE protocol = ?1 AND dst_port = ?2 AND flow_direction = ?3
+               AND resolved_at IS NULL
+             ORDER BY device_bytes DESC",
+        )?;
+        let rows = stmt.query_map(params![protocol, dst_port, direction], Self::map_link_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Get all unresolved anomaly links for a specific device.
+    pub fn get_links_for_device(&self, mac: &str) -> anyhow::Result<Vec<AnomalyLink>> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let mut stmt = db.prepare(
+            "SELECT id, port_anomaly_type, flow_direction, protocol, dst_port,
+                    device_mac, device_ip, device_vlan, device_hostname,
+                    behavior_anomaly_id, correlated, source, severity,
+                    device_bytes, device_connections, port_is_baselined,
+                    port_days_in_baseline, created_at, resolved_at, resolved_by
+             FROM anomaly_links
+             WHERE device_mac = ?1 AND resolved_at IS NULL
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![mac], Self::map_link_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Get all unresolved anomaly links.
+    pub fn get_unresolved_links(&self) -> anyhow::Result<Vec<AnomalyLink>> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let mut stmt = db.prepare(
+            "SELECT id, port_anomaly_type, flow_direction, protocol, dst_port,
+                    device_mac, device_ip, device_vlan, device_hostname,
+                    behavior_anomaly_id, correlated, source, severity,
+                    device_bytes, device_connections, port_is_baselined,
+                    port_days_in_baseline, created_at, resolved_at, resolved_by
+             FROM anomaly_links
+             WHERE resolved_at IS NULL
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], Self::map_link_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Resolve an anomaly link.
+    pub fn resolve_link(&self, id: i64, resolved_by: &str) -> anyhow::Result<bool> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let changed = db.execute(
+            "UPDATE anomaly_links SET resolved_at = ?2, resolved_by = ?3
+             WHERE id = ?1 AND resolved_at IS NULL",
+            params![id, now_iso(), resolved_by],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Query devices involved in a port flow from connection_history,
+    /// enriched with anomaly_links data. This is used by classified_port_summary.
+    fn query_involved_devices_inner(
+        db: &rusqlite::Connection,
+        protocol: &str,
+        dst_port: i64,
+        direction: &str,
+        cutoff: &str,
+    ) -> anyhow::Result<Vec<InvolvedDevice>> {
+        let direction_filter = match direction {
+            "outbound" => "AND dst_is_external = 1",
+            "inbound" => "AND dst_is_external = 0 AND src_vlan IS NULL",
+            "internal" => "AND dst_is_external = 0 AND src_vlan IS NOT NULL",
+            _ => "",
+        };
+
+        let sql = format!(
+            "SELECT src_mac, src_ip, src_vlan, src_hostname,
+                    SUM(bytes_tx + bytes_rx) as total_bytes,
+                    COUNT(*) as conn_count
+             FROM connection_history
+             WHERE first_seen >= ?1 AND dst_port = ?2 AND protocol = ?3
+               AND src_mac IS NOT NULL
+               {direction_filter}
+             GROUP BY src_mac
+             ORDER BY total_bytes DESC
+             LIMIT 10"
+        );
+        let mut stmt = db.prepare(&sql)?;
+        let device_rows: Vec<(String, String, Option<String>, Option<String>, i64, i64)> = stmt
+            .query_map(params![cutoff, dst_port, protocol], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut result = Vec::new();
+        for (mac, ip, vlan, hostname, bytes, connections) in device_rows {
+            // Check if there's an unresolved anomaly link for this device+port
+            let link: Option<(i64, bool)> = db
+                .query_row(
+                    "SELECT behavior_anomaly_id, correlated FROM anomaly_links
+                     WHERE protocol = ?1 AND dst_port = ?2 AND flow_direction = ?3
+                       AND device_mac = ?4 AND resolved_at IS NULL
+                     LIMIT 1",
+                    params![protocol, dst_port, direction, mac],
+                    |row| Ok((row.get::<_, Option<i64>>(0)?.unwrap_or(0), row.get::<_, i64>(1)? != 0)),
+                )
+                .ok();
+
+            result.push(InvolvedDevice {
+                mac,
+                ip,
+                hostname,
+                vlan,
+                bytes,
+                connections,
+                has_behavior_anomaly: link.map(|(id, _)| id > 0).unwrap_or(false),
+                behavior_anomaly_id: link.and_then(|(id, _)| if id > 0 { Some(id) } else { None }),
+                correlated: link.map(|(_, c)| c).unwrap_or(false),
+            });
+        }
+        Ok(result)
+    }
+
+    /// Get port flow context for a specific port (used by behavior page).
+    pub fn get_port_flow_context(
+        &self,
+        protocol: &str,
+        dst_port: i64,
+    ) -> anyhow::Result<Option<PortFlowContext>> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+
+        // Check port_flow_baseline for this port (any direction)
+        let baseline: Option<(i64, String)> = db
+            .query_row(
+                "SELECT days_present, flow_direction FROM port_flow_baseline
+                 WHERE protocol = ?1 AND dst_port = ?2
+                 LIMIT 1",
+                params![protocol, dst_port],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+
+        let (port_is_baselined, port_days_in_baseline) = match &baseline {
+            Some((days, _)) => (true, *days),
+            None => (false, 0),
+        };
+
+        // Count other devices using this port (from anomaly_links)
+        let other_devices: i64 = db
+            .query_row(
+                "SELECT COUNT(DISTINCT device_mac) FROM anomaly_links
+                 WHERE protocol = ?1 AND dst_port = ?2 AND resolved_at IS NULL",
+                params![protocol, dst_port],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        // Check correlated status from links
+        let has_correlated: bool = db
+            .query_row(
+                "SELECT COUNT(*) FROM anomaly_links
+                 WHERE protocol = ?1 AND dst_port = ?2 AND correlated = 1 AND resolved_at IS NULL",
+                params![protocol, dst_port],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        // Get total network bytes on this port in last 24h
+        let cutoff = now_iso_minus_secs(86400);
+        let total_bytes: i64 = db
+            .query_row(
+                "SELECT COALESCE(SUM(bytes_tx + bytes_rx), 0) FROM connection_history
+                 WHERE protocol = ?1 AND dst_port = ?2 AND first_seen >= ?3",
+                params![protocol, dst_port, cutoff],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        // Determine network-level classification
+        let classification = if !port_is_baselined {
+            "new_port"
+        } else {
+            "normal"
+        };
+
+        Ok(Some(PortFlowContext {
+            port: dst_port,
+            protocol: protocol.to_string(),
+            port_is_baselined,
+            port_days_in_baseline,
+            correlated: has_correlated,
+            other_devices_count: other_devices,
+            network_level_classification: classification.to_string(),
+            total_network_bytes_on_port: total_bytes,
+        }))
+    }
+
+    fn map_link_row(row: &rusqlite::Row) -> rusqlite::Result<AnomalyLink> {
+        Ok(AnomalyLink {
+            id: row.get(0)?,
+            port_anomaly_type: row.get(1)?,
+            flow_direction: row.get(2)?,
+            protocol: row.get(3)?,
+            dst_port: row.get(4)?,
+            device_mac: row.get(5)?,
+            device_ip: row.get(6)?,
+            device_vlan: row.get(7)?,
+            device_hostname: row.get(8)?,
+            behavior_anomaly_id: row.get(9)?,
+            correlated: row.get::<_, i64>(10)? != 0,
+            source: row.get(11)?,
+            severity: row.get(12)?,
+            device_bytes: row.get(13)?,
+            device_connections: row.get(14)?,
+            port_is_baselined: row.get::<_, i64>(15)? != 0,
+            port_days_in_baseline: row.get(16)?,
+            created_at: row.get(17)?,
+            resolved_at: row.get(18)?,
+            resolved_by: row.get(19)?,
         })
     }
 

@@ -161,6 +161,52 @@ ion-drift is a Rust-based Mikrotik RouterOS management and monitoring dashboard 
 
 - Alert banner when anomalies detected (red for critical, amber for warnings)
 - Suppressed during initial baselining period (`has_baselines` flag)
+- Tooltip shows involved devices (hostname, IP, bytes, correlated indicator) for anomalous flows
+- Banner includes device count per anomaly (e.g. "NEW port 445/SMB (12.3 GB, 2 devices)")
+
+---
+
+## Anomaly Cross-Reference (Unified Pipeline)
+
+### Overview
+
+Bridges the two independent anomaly systems (port flow baselines + device behavior) into a single correlated view. The `anomaly_links` table in connections.db stores cross-references between port-level and device-level anomalies.
+
+### Correlation Engine
+
+- **Background task:** Runs every 60s (5-minute startup delay)
+- **Port → Device:** For each anomalous port flow, identifies the devices (by MAC) generating traffic, checks for matching device anomalies in behavior.db
+- **Device → Port:** For each device anomaly (new_port/volume_spike), looks up the port's baseline status at the network level
+- **Auto-creates:** Device anomalies from port flow detections when no behavior anomaly exists (source: "port_flow")
+- **Auto-resolves:** Links older than 7 days or when underlying anomalies are resolved
+
+### Severity Escalation
+
+| Scenario | Correlated | Severity |
+|----------|-----------|----------|
+| Device uses new port + port also new at network level | Yes | **critical** |
+| Device uses new port + port baselined (others use it) | No | **info** |
+| Port new at network level + single device | — | **warning** |
+| Port new at network level + multiple devices | — | **critical** |
+| Both engines flag volume spike independently | Yes | **critical** |
+
+### Data Model
+
+- `anomaly_links` table: port_anomaly_type, flow_direction, protocol, dst_port, device_mac/ip/vlan/hostname, behavior_anomaly_id, correlated flag, source (port_flow/behavior/both), severity, device traffic stats, port baseline status
+
+### APIs
+
+- `GET /api/behavior/anomaly-links` — All unresolved cross-reference links
+- `GET /api/behavior/anomaly-links/port/{protocol}/{port}?direction=` — Links for a specific port
+- `GET /api/behavior/anomaly-links/device/{mac}` — Links for a specific device
+- `POST /api/behavior/anomaly-links/{id}/resolve` — Resolve a link
+
+### Frontend Integration
+
+- **Sankey tooltip:** Anomalous flows show involved device list (name, IP, bytes, correlated bolt icon)
+- **Sankey banner:** Each anomaly item includes device count
+- **Behavior page:** Anomaly cards show "Network Context" section for correlator-created anomalies (source: port_flow), with device count and total network bytes
+- **Device detail API:** Returns `port_flow_contexts` with port baseline status, correlated flag, other device count, network-level classification
 
 ---
 
@@ -184,9 +230,10 @@ ion-drift is a Rust-based Mikrotik RouterOS management and monitoring dashboard 
 
 - `/api/behavior/overview` — Device count, anomaly breakdown
 - `/api/behavior/anomalies` — Paginated anomaly list
-- `/api/behavior/device/{mac}` — Device detail with observations
+- `/api/behavior/device/{mac}` — Device detail with observations + port flow contexts
 - `/api/behavior/alerts` — Critical + alert severity anomalies
 - `POST /api/behavior/anomalies/{id}/resolve` — Mark resolved
+- `/api/behavior/anomaly-links` — Cross-reference links (see Anomaly Cross-Reference section)
 
 ---
 
@@ -285,6 +332,7 @@ Output formats: `--format table|json|csv`
 | Behavior collector | 60s | Device observations, anomaly detection |
 | Behavior maintenance | Daily | Baseline recompute, observation pruning, port flow baselines |
 | Behavior auto-classifier | Hourly | Auto-resolve stale anomalies |
+| Anomaly correlator | 60s | Cross-reference port flow + device anomalies |
 | Snapshot generator | Weekly | Geo + port Sankey snapshots |
 | Session cleanup | 10 min | Expire old sessions |
 | Cert rotation | Hourly | CertWarden expiry check + renewal |
@@ -300,7 +348,7 @@ Output formats: `--format table|json|csv`
 | `speedtest.db` | `speedtest_results`, `speedtest_aggregates` | Speed test history |
 | `metrics.db` | `metrics`, `drop_metrics`, `connection_metrics`, `vlan_metrics`, `log_aggregates` | Time-series metrics |
 | `behavior.db` | `device_profiles`, `device_observations`, `baselines`, `anomalies` | Behavioral analysis |
-| `connections.db` | `connection_history`, `port_flow_baseline`, `snapshots` | Connection history + snapshots |
+| `connections.db` | `connection_history`, `port_flow_baseline`, `anomaly_links`, `snapshots` | Connection history, anomaly cross-references, snapshots |
 | `geo.db` | `geo_cache` | ip-api.com lookup cache (7-day TTL) |
 
 ---
