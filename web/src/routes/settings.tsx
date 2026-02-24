@@ -137,25 +137,48 @@ function SecretsSection() {
                 )}
               </div>
               <div className="flex items-center gap-2 mt-0.5">
-                {secret.key_current ? (
-                  <Check className="h-3 w-3 text-green-500" />
+                {!secret.stored ? (
+                  <>
+                    <X className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground">
+                      Not configured
+                    </span>
+                  </>
+                ) : secret.key_current ? (
+                  <>
+                    <Check className="h-3 w-3 text-green-500" />
+                    <span className="text-xs text-muted-foreground">
+                      Encrypted &middot; Updated{" "}
+                      {new Date(secret.updated_at * 1000).toLocaleDateString(
+                        undefined,
+                        {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        },
+                      )}
+                    </span>
+                  </>
                 ) : (
-                  <AlertTriangle className="h-3 w-3 text-amber-500" />
+                  <>
+                    <AlertTriangle className="h-3 w-3 text-amber-500" />
+                    <span className="text-xs text-muted-foreground">
+                      Key mismatch &middot; Updated{" "}
+                      {new Date(secret.updated_at * 1000).toLocaleDateString(
+                        undefined,
+                        {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        },
+                      )}
+                    </span>
+                  </>
                 )}
-                <span className="text-xs text-muted-foreground">
-                  {secret.key_current ? "Encrypted" : "Key mismatch"} &middot;
-                  Updated{" "}
-                  {new Date(secret.updated_at * 1000).toLocaleDateString(
-                    undefined,
-                    {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    },
-                  )}
-                </span>
               </div>
             </div>
 
@@ -233,7 +256,7 @@ function SecretsSection() {
                   }}
                   className="rounded bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
                 >
-                  Update
+                  {secret.stored ? "Update" : "Add"}
                 </button>
               )}
             </div>

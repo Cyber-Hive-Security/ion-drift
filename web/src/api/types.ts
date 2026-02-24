@@ -618,6 +618,7 @@ export interface SecretStatus {
   updated_at: number;
   key_current: boolean;
   auto_generated?: boolean;
+  stored: boolean;
 }
 
 export interface SecretsStatusResponse {

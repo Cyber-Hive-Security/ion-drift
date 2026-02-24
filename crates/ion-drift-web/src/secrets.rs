@@ -35,6 +35,18 @@ pub struct DecryptedSecrets {
     pub maxmind_license_key: Option<SecretString>,
 }
 
+/// All known secret names (used to populate the settings UI).
+pub const ALL_SECRET_NAMES: &[&str] = &[
+    SECRET_ROUTER_USERNAME,
+    SECRET_ROUTER_PASSWORD,
+    SECRET_OIDC_CLIENT_SECRET,
+    SECRET_SESSION_SECRET,
+    SECRET_CW_CERT_API_KEY,
+    SECRET_CW_KEY_API_KEY,
+    SECRET_MAXMIND_ACCOUNT_ID,
+    SECRET_MAXMIND_LICENSE_KEY,
+];
+
 /// Status of a single stored secret.
 #[derive(Debug, Clone, Serialize)]
 pub struct SecretStatus {
@@ -43,6 +55,8 @@ pub struct SecretStatus {
     pub key_current: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub auto_generated: bool,
+    /// Whether this secret has been stored (false = not yet configured).
+    pub stored: bool,
 }
 
 /// Manages encryption/decryption of secrets using a KEK retrieved from Keycloak.
@@ -155,7 +169,7 @@ impl SecretsManager {
         Ok(count > 0)
     }
 
-    /// Get status of all stored secrets.
+    /// Get status of all known secrets (stored and not-yet-stored).
     pub async fn secret_status(&self) -> anyhow::Result<Vec<SecretStatus>> {
         let db = self.db.lock().await;
         let mut stmt =
@@ -170,16 +184,33 @@ impl SecretsManager {
         })?;
 
         let fp = &self.key_fingerprint;
-        let mut statuses = Vec::new();
+        let mut stored: std::collections::HashMap<String, (i64, bool)> =
+            std::collections::HashMap::new();
         for row in rows {
             let (name, updated_at, stored_fp) = row?;
+            stored.insert(name, (updated_at, stored_fp == *fp));
+        }
+
+        let mut statuses = Vec::new();
+        for &name in ALL_SECRET_NAMES {
             let auto_generated = name == SECRET_SESSION_SECRET;
-            statuses.push(SecretStatus {
-                name,
-                updated_at,
-                key_current: stored_fp == *fp,
-                auto_generated,
-            });
+            if let Some(&(updated_at, key_current)) = stored.get(name) {
+                statuses.push(SecretStatus {
+                    name: name.to_string(),
+                    updated_at,
+                    key_current,
+                    auto_generated,
+                    stored: true,
+                });
+            } else {
+                statuses.push(SecretStatus {
+                    name: name.to_string(),
+                    updated_at: 0,
+                    key_current: false,
+                    auto_generated,
+                    stored: false,
+                });
+            }
         }
 
         Ok(statuses)
