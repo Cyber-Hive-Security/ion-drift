@@ -30,5 +30,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
+    modulePreload: false,
+    cssCodeSplit: false,
   },
 });
