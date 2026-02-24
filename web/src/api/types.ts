@@ -739,6 +739,8 @@ export interface PortSummaryEntry {
   unique_destinations: number;
 }
 
+export type PortDirection = "outbound" | "inbound" | "internal";
+
 export interface WeeklySnapshot {
   id: number;
   snapshot_week: string;

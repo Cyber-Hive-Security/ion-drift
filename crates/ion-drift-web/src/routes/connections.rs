@@ -274,6 +274,8 @@ pub async fn geo_summary(
 pub struct PortSummaryQuery {
     #[serde(default = "default_7")]
     pub days: i64,
+    #[serde(default)]
+    pub direction: Option<String>,
 }
 
 fn default_7() -> i64 {
@@ -286,9 +288,10 @@ pub async fn port_summary(
     State(state): State<AppState>,
     Query(query): Query<PortSummaryQuery>,
 ) -> Result<Json<Vec<PortSummaryEntry>>, Response> {
+    let direction = query.direction.as_deref().unwrap_or("");
     let result = state
         .connection_store
-        .port_summary(query.days)
+        .port_summary(query.days, direction)
         .map_err(|e| internal_error("port summary", e))?;
     Ok(Json(result))
 }

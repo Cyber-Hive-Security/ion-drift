@@ -122,6 +122,19 @@ pub struct PortSummaryEntry {
     pub unique_destinations: i64,
 }
 
+/// Well-known service ports that should never be treated as ephemeral.
+const KNOWN_SERVICE_PORTS: &[i64] = &[
+    20, 21, 22, 25, 53, 67, 68, 80, 110, 123, 143, 161,
+    443, 465, 554, 587, 993, 995,
+    1433, 1883, 3000, 3306, 3389, 5060, 5228, 5432, 5672, 6379,
+    8080, 8443, 8554, 8883, 9001, 9090, 9443,
+    27017, 32400,
+];
+
+fn is_ephemeral_port(port: i64) -> bool {
+    port >= 10_000 && !KNOWN_SERVICE_PORTS.contains(&port)
+}
+
 /// Weekly snapshot record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeeklySnapshot {
@@ -599,12 +612,20 @@ impl ConnectionStore {
         Ok(rows)
     }
 
-    /// Aggregated per-port data for the Sankey diagram.
-    pub fn port_summary(&self, days: i64) -> anyhow::Result<Vec<PortSummaryEntry>> {
+    /// Aggregated per-port data for the Sankey diagram, filtered by direction.
+    /// direction: "outbound" | "inbound" | "internal" | "" (all)
+    pub fn port_summary(&self, days: i64, direction: &str) -> anyhow::Result<Vec<PortSummaryEntry>> {
         let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
         let cutoff = now_iso_minus_secs(days * 86400);
 
-        let mut stmt = db.prepare(
+        let direction_filter = match direction {
+            "outbound" => "AND dst_is_external = 1",
+            "inbound" => "AND dst_is_external = 0 AND src_vlan IS NULL",
+            "internal" => "AND dst_is_external = 0 AND src_vlan IS NOT NULL",
+            _ => "",
+        };
+
+        let sql = format!(
             "SELECT dst_port, protocol,
                     SUM(bytes_tx + bytes_rx) as total_bytes,
                     COUNT(*) as flow_count,
@@ -613,12 +634,14 @@ impl ConnectionStore {
              FROM connection_history
              WHERE first_seen >= ?1
                AND dst_port IS NOT NULL
+               {direction_filter}
              GROUP BY dst_port, protocol
-             ORDER BY total_bytes DESC
-             LIMIT 50",
-        )?;
+             HAVING SUM(bytes_tx + bytes_rx) >= 100000
+             ORDER BY total_bytes DESC"
+        );
 
-        let rows = stmt
+        let mut stmt = db.prepare(&sql)?;
+        let rows: Vec<PortSummaryEntry> = stmt
             .query_map(params![cutoff], |row| {
                 Ok(PortSummaryEntry {
                     dst_port: row.get(0)?,
@@ -631,7 +654,13 @@ impl ConnectionStore {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(rows)
+        // Filter out ephemeral ports unless they have > 1GB traffic
+        let filtered: Vec<PortSummaryEntry> = rows
+            .into_iter()
+            .filter(|e| !is_ephemeral_port(e.dst_port) || e.total_bytes >= 1_073_741_824)
+            .collect();
+
+        Ok(filtered)
     }
 
     /// Prune closed connections older than retention_days.

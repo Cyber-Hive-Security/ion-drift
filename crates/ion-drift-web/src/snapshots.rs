@@ -32,7 +32,7 @@ pub fn generate_weekly_snapshots(store: &ConnectionStore) -> anyhow::Result<()> 
     }
 
     // Port Sankey snapshot
-    match store.port_summary(7) {
+    match store.port_summary(7, "") {
         Ok(port_data) => {
             let summary = format!(
                 "{} flows · {} ports",

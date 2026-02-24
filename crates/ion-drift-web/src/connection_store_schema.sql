@@ -74,6 +74,11 @@ CREATE INDEX IF NOT EXISTS idx_ch_src
 CREATE INDEX IF NOT EXISTS idx_ch_flagged
     ON connection_history(flagged) WHERE flagged = 1;
 
+-- Port summary by direction
+CREATE INDEX IF NOT EXISTS idx_ch_port_direction
+    ON connection_history(first_seen, dst_port, dst_is_external, src_vlan)
+    WHERE dst_port IS NOT NULL;
+
 -- Retention pruning
 CREATE INDEX IF NOT EXISTS idx_ch_prune
     ON connection_history(last_seen, closed) WHERE closed = 1;

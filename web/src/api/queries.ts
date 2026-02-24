@@ -47,6 +47,7 @@ import type {
   PaginatedHistory,
   GeoSummaryEntry,
   PortSummaryEntry,
+  PortDirection,
   CitySummaryEntry,
   SnapshotListEntry,
   WeeklySnapshot,
@@ -569,12 +570,13 @@ export function useGeoSummary(days = 30) {
   });
 }
 
-export function usePortSummary(days = 7) {
+export function usePortSummary(days = 7, direction?: PortDirection) {
+  const dirParam = direction ? `&direction=${direction}` : "";
   return useQuery({
-    queryKey: ["connections", "port-summary", days],
+    queryKey: ["connections", "port-summary", days, direction ?? "all"],
     queryFn: () =>
       apiFetch<PortSummaryEntry[]>(
-        `/api/connections/port-summary?days=${days}`,
+        `/api/connections/port-summary?days=${days}${dirParam}`,
       ),
     refetchInterval: 60_000,
   });

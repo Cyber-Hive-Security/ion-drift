@@ -7,7 +7,6 @@ import {
   useMetricsHistory,
   useConnectionSummary,
   useFirewallDrops,
-  usePortSummary,
 } from "@/api/queries";
 import { CpuCard } from "@/components/dashboard/cpu-card";
 import { MemoryCard } from "@/components/dashboard/memory-card";
@@ -19,7 +18,7 @@ import { ConnectionsCard } from "@/components/dashboard/connections-card";
 import { FirewallDropsCard } from "@/components/dashboard/firewall-drops-card";
 import { VlanActivitySection } from "@/components/dashboard/vlan-activity";
 import { VlanTrafficBreakdown } from "@/components/dashboard/vlan-sankey";
-import { PortSankey } from "@/features/world-map/port-sankey";
+import { DirectionalPortSankeys } from "@/features/world-map/port-sankey";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { PageShell } from "@/components/layout/page-shell";
@@ -202,8 +201,6 @@ export function DashboardPage() {
   const dhcp = useDhcpLeases({ polling: true });
   const connections = useConnectionSummary();
   const drops = useFirewallDrops();
-  const portSummary = usePortSummary(1);
-
   if (system.isLoading) return <LoadingSpinner />;
   if (system.error)
     return (
@@ -237,7 +234,7 @@ export function DashboardPage() {
       </div>
 
       <div className="mt-6">
-        <PortSankey data={portSummary.data ?? []} />
+        <DirectionalPortSankeys days={1} />
       </div>
     </PageShell>
   );

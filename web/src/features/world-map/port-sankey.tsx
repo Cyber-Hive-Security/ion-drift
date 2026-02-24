@@ -2,7 +2,8 @@ import { useMemo, useRef } from "react";
 import { Sankey, Rectangle, Layer } from "recharts";
 import { formatBytes } from "@/lib/format";
 import { portLabel } from "@/lib/services";
-import type { PortSummaryEntry } from "@/api/types";
+import { usePortSummary } from "@/api/queries";
+import type { PortSummaryEntry, PortDirection } from "@/api/types";
 
 // Distinct colors for source groupings
 const PORT_COLORS = [
@@ -95,9 +96,10 @@ interface SankeyLinkPayload {
 
 interface PortSankeyProps {
   data: PortSummaryEntry[];
+  title: string;
 }
 
-export function PortSankey({ data }: PortSankeyProps) {
+export function PortSankey({ data, title }: PortSankeyProps) {
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   const LinkWithTooltip = useMemo(() => {
@@ -167,15 +169,9 @@ export function PortSankey({ data }: PortSankeyProps) {
   const sankeyData = useMemo(() => {
     if (!data || data.length === 0) return null;
 
-    // Group ports by protocol, take top 20
-    const sorted = [...data].sort((a, b) => b.total_bytes - a.total_bytes).slice(0, 20);
+    const sorted = [...data].sort((a, b) => b.total_bytes - a.total_bytes).slice(0, 30);
 
-    // Left side: protocols
-    // Right side: destination ports
     const protocols = [...new Set(sorted.map((d) => d.protocol))].sort();
-    const ports = sorted.map((d) => portLabel(String(d.dst_port)));
-
-    const nodeCount = protocols.length + ports.length;
 
     // Per-protocol total for labels
     const protoTotals = new Map<string, number>();
@@ -206,29 +202,17 @@ export function PortSankey({ data }: PortSankeyProps) {
       rawBytes: entry.total_bytes,
     }));
 
-    return { nodes, links, nodeCount };
+    return { nodes, links, portCount: sorted.length };
   }, [data]);
 
-  if (!sankeyData) {
-    return (
-      <div className="rounded-lg border border-border bg-card p-4">
-        <h3 className="mb-3 text-sm font-medium text-muted-foreground">
-          Port Flows (24h)
-        </h3>
-        <p className="text-sm text-muted-foreground">
-          No port traffic data available yet.
-        </p>
-      </div>
-    );
-  }
+  if (!sankeyData) return null;
 
-  const rightNodes = sankeyData.nodeCount - (sankeyData.nodes.length - sankeyData.nodeCount);
-  const chartHeight = Math.max(400, rightNodes * 35);
+  const chartHeight = Math.max(300, sankeyData.portCount * 30);
 
   return (
     <div className="rounded-lg border border-border bg-card p-4 overflow-visible">
       <h3 className="mb-3 text-sm font-medium text-muted-foreground">
-        Port Flows — Top 20 by Bytes (24h)
+        {title}
       </h3>
       <div className="sankey-container" style={{ overflow: "visible" }}>
         <Sankey
@@ -267,4 +251,51 @@ export function PortSankey({ data }: PortSankeyProps) {
       />
     </div>
   );
+}
+
+// ── Directional wrapper ──────────────────────────────────────
+
+const DIRECTIONS: { key: PortDirection; title: string }[] = [
+  { key: "outbound", title: "Outbound Port Flows (24h)" },
+  { key: "inbound", title: "Inbound Port Flows (24h)" },
+  { key: "internal", title: "Internal Port Flows (24h)" },
+];
+
+interface DirectionalPortSankeysProps {
+  days: number;
+}
+
+export function DirectionalPortSankeys({ days }: DirectionalPortSankeysProps) {
+  return (
+    <div className="space-y-6">
+      {DIRECTIONS.map(({ key, title }) => (
+        <DirectionSection key={key} direction={key} title={title} days={days} />
+      ))}
+    </div>
+  );
+}
+
+function DirectionSection({
+  direction,
+  title,
+  days,
+}: {
+  direction: PortDirection;
+  title: string;
+  days: number;
+}) {
+  const { data, isLoading } = usePortSummary(days, direction);
+
+  if (!isLoading && (!data || data.length === 0)) return null;
+
+  if (isLoading) {
+    return (
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h3 className="mb-3 text-sm font-medium text-muted-foreground">{title}</h3>
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      </div>
+    );
+  }
+
+  return <PortSankey data={data ?? []} title={title} />;
 }
