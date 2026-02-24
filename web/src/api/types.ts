@@ -206,8 +206,8 @@ export interface ParsedFields {
   action?: string;
   mac?: string;
   length?: number;
-  src_country?: CountryInfo;
-  dst_country?: CountryInfo;
+  src_country?: GeoInfo;
+  dst_country?: GeoInfo;
   src_flagged: boolean;
   dst_flagged: boolean;
   manufacturer?: string;
@@ -228,7 +228,7 @@ export interface StructuredLogEntry {
 export interface IpCount {
   ip: string;
   count: number;
-  country?: CountryInfo;
+  country?: GeoInfo;
   flagged: boolean;
 }
 
@@ -328,9 +328,13 @@ export interface ConnectionSummary {
 
 // Full connections page types (snake_case — custom Rust structs)
 
-export interface CountryInfo {
-  code: string;
-  name: string;
+export interface GeoInfo {
+  country_code: string;
+  country: string;
+  city?: string;
+  isp?: string;
+  asn?: string;
+  org?: string;
 }
 
 export interface ConnectionEntry {
@@ -345,8 +349,8 @@ export interface ConnectionEntry {
   orig_bytes: number;
   repl_bytes: number;
   connection_mark: string | null;
-  src_country: CountryInfo | null;
-  dst_country: CountryInfo | null;
+  src_geo: GeoInfo | null;
+  dst_geo: GeoInfo | null;
   flagged: boolean;
 }
 
@@ -485,6 +489,8 @@ export interface DeviceStatus {
   dhcp_server: string | null;
   expires_after: string | null;
   last_seen: string | null;
+  hop_count: number | null;
+  internet_path: string | null;
 }
 
 export interface InterfaceStatus {
@@ -492,6 +498,8 @@ export interface InterfaceStatus {
   running: boolean;
   rx_byte: number;
   tx_byte: number;
+  rx_rate_bps: number;
+  tx_rate_bps: number;
   disabled: boolean;
 }
 

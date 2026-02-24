@@ -60,6 +60,12 @@ export function NetworkMapPage() {
       parts.push(
         `<span class="tt-dim">ARP</span> <span class="${ls.in_arp ? "tt-green" : "tt-red"}">${ls.in_arp ? "active" : "offline"}</span>`,
       );
+      // Hop count to internet
+      if (ls.hop_count != null) {
+        parts.push(`<span class="tt-dim">HOPS</span> ${ls.hop_count} ${ls.internet_path ?? ""}`);
+      } else if (ls.internet_path) {
+        parts.push(`<span class="tt-dim">HOPS</span> <span class="tt-red">\u221e ${ls.internet_path}</span>`);
+      }
       html += `<div class="tt-status">${parts.join("<br>")}</div>`;
     }
 

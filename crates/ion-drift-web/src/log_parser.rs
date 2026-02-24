@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::geo::{CountryInfo, GeoDb};
+use crate::geo::{GeoCache, GeoInfo};
 use crate::oui::OuiDb;
 
 /// Structured fields extracted from a log message.
@@ -48,9 +48,9 @@ pub struct ParsedFields {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub length: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub src_country: Option<CountryInfo>,
+    pub src_country: Option<GeoInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dst_country: Option<CountryInfo>,
+    pub dst_country: Option<GeoInfo>,
     pub src_flagged: bool,
     pub dst_flagged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,7 +93,7 @@ pub struct IpCount {
     pub ip: String,
     pub count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub country: Option<CountryInfo>,
+    pub country: Option<GeoInfo>,
     pub flagged: bool,
 }
 
@@ -171,7 +171,7 @@ fn extract_prefix(msg: &str) -> Option<&str> {
 }
 
 /// Parse a firewall log message into structured fields.
-fn parse_firewall_message(msg: &str, geo_db: &GeoDb, oui_db: &OuiDb) -> Option<ParsedFields> {
+fn parse_firewall_message(msg: &str, geo_cache: &GeoCache, oui_db: &OuiDb) -> Option<ParsedFields> {
     let prefix = extract_prefix(msg)?;
     let action = derive_action(prefix);
 
@@ -208,16 +208,16 @@ fn parse_firewall_message(msg: &str, geo_db: &GeoDb, oui_db: &OuiDb) -> Option<P
     let length = extract_field(after_prefix, "len ")
         .and_then(|s| s.parse::<u32>().ok());
 
-    // Geo enrichment
-    let src_country = src_ip.as_deref().and_then(|ip| geo_db.lookup(ip));
-    let dst_country = dst_ip.as_deref().and_then(|ip| geo_db.lookup(ip));
+    // Geo enrichment (cache-only — no HTTP calls in sync context)
+    let src_country = src_ip.as_deref().and_then(|ip| geo_cache.lookup_cached(ip));
+    let dst_country = dst_ip.as_deref().and_then(|ip| geo_cache.lookup_cached(ip));
     let src_flagged = src_country
         .as_ref()
-        .map(|c| GeoDb::is_flagged(&c.code))
+        .map(|c| GeoCache::is_flagged(&c.country_code))
         .unwrap_or(false);
     let dst_flagged = dst_country
         .as_ref()
-        .map(|c| GeoDb::is_flagged(&c.code))
+        .map(|c| GeoCache::is_flagged(&c.country_code))
         .unwrap_or(false);
 
     // OUI lookup
@@ -342,7 +342,7 @@ fn split_ip_port(s: &str) -> (Option<String>, Option<u16>) {
 /// Parse a raw RouterOS LogEntry into a StructuredLogEntry.
 pub fn parse_log_entry(
     entry: &mikrotik_core::resources::log::LogEntry,
-    geo_db: &GeoDb,
+    geo_cache: &GeoCache,
     oui_db: &OuiDb,
 ) -> StructuredLogEntry {
     let topics_str = entry.topics.as_deref().unwrap_or("");
@@ -374,7 +374,7 @@ pub fn parse_log_entry(
     };
 
     let parsed = if is_firewall {
-        parse_firewall_message(&entry.message, geo_db, oui_db)
+        parse_firewall_message(&entry.message, geo_cache, oui_db)
     } else {
         None
     };
@@ -513,7 +513,7 @@ pub fn compute_analytics(entries: &[StructuredLogEntry]) -> LogAnalytics {
     let mut by_severity: HashMap<String, usize> = HashMap::new();
     let mut by_action: HashMap<String, usize> = HashMap::new();
     let mut by_topic: HashMap<String, usize> = HashMap::new();
-    let mut dropped_sources: HashMap<String, (usize, Option<CountryInfo>, bool)> = HashMap::new();
+    let mut dropped_sources: HashMap<String, (usize, Option<GeoInfo>, bool)> = HashMap::new();
     let mut targeted_ports: HashMap<(u16, String), usize> = HashMap::new();
     let mut drops_by_iface: HashMap<String, usize> = HashMap::new();
     let mut volume_by_minute: HashMap<String, usize> = HashMap::new();

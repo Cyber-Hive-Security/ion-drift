@@ -683,7 +683,7 @@ function LogRow({
               )}
               {p.src_country && (
                 <span className="ml-1 text-[10px]">
-                  {countryFlag(p.src_country.code)}
+                  {countryFlag(p.src_country.country_code)}
                 </span>
               )}
             </span>
@@ -705,7 +705,7 @@ function LogRow({
               )}
               {p.dst_country && (
                 <span className="ml-1 text-[10px]">
-                  {countryFlag(p.dst_country.code)}
+                  {countryFlag(p.dst_country.country_code)}
                 </span>
               )}
             </span>
@@ -810,13 +810,13 @@ function ExpandedDetail({ entry }: { entry: StructuredLogEntry }) {
         {p?.src_country && (
           <Field
             label="Src Country"
-            value={`${countryFlag(p.src_country.code)} ${p.src_country.name} (${p.src_country.code})`}
+            value={`${countryFlag(p.src_country.country_code)} ${p.src_country.country} (${p.src_country.country_code})`}
           />
         )}
         {p?.dst_country && (
           <Field
             label="Dst Country"
-            value={`${countryFlag(p.dst_country.code)} ${p.dst_country.name} (${p.dst_country.code})`}
+            value={`${countryFlag(p.dst_country.country_code)} ${p.dst_country.country} (${p.dst_country.country_code})`}
           />
         )}
       </div>
@@ -1108,7 +1108,7 @@ function DroppedSourceRow({ item }: { item: IpCount }) {
         {item.ip}
         {item.country && (
           <span className="ml-1 text-[10px]">
-            {countryFlag(item.country.code)} {item.country.code}
+            {countryFlag(item.country.country_code)} {item.country.country_code}
           </span>
         )}
       </span>

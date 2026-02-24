@@ -124,10 +124,7 @@ impl CertWardenSection {
 // ── Other sections (unchanged) ──────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct DataSection {
-    /// Path to GeoLite2-Country.mmdb (optional — geo features disabled if absent).
-    pub geoip_db_path: Option<String>,
-}
+pub struct DataSection {}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerSection {

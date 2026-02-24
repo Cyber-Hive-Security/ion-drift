@@ -292,7 +292,7 @@ function AnomalyCard({
   // Destination context
   const dstContext = (() => {
     if (d.dst_vlan_name) return `${d.dst_vlan_name}`;
-    if (d.dst_country?.name) return d.dst_country.name;
+    if (d.dst_country?.country) return d.dst_country.country;
     if (dstIp === "external") return "External";
     return null;
   })();

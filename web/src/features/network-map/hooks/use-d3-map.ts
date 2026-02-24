@@ -35,6 +35,50 @@ import {
   CONNECTION_STYLES,
 } from "../data";
 
+// ─── Throughput animation helpers ────────────────────────
+
+/** Map node IP to its VLAN number using VLAN_CONFIG subnets. */
+function vlanForIp(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  const prefix3 = `${parts[0]}.${parts[1]}.${parts[2]}`;
+  for (const [vlan, cfg] of Object.entries(VLAN_CONFIG)) {
+    if (cfg.subnet.startsWith(prefix3 + ".")) return +vlan;
+  }
+  return null;
+}
+
+/** Find the best matching VLAN interface from the interface map. */
+function findVlanIface(
+  vlanId: number,
+  ifaceMap: Map<string, InterfaceStatus>,
+): InterfaceStatus | undefined {
+  // Try common RouterOS naming patterns
+  for (const pattern of [`vlan${vlanId}`, `vlan-${vlanId}`, `VLAN${vlanId}`]) {
+    const iface = ifaceMap.get(pattern);
+    if (iface) return iface;
+  }
+  // Fallback: case-insensitive scan
+  for (const [name, iface] of ifaceMap) {
+    if (name.toLowerCase() === `vlan${vlanId}`) return iface;
+  }
+  return undefined;
+}
+
+/** Compute particle animation duration from rate (higher rate → faster). */
+function rateToDuration(rateBps: number): number {
+  if (rateBps <= 0) return 6000; // slow idle animation
+  const logRate = Math.log10(rateBps);
+  // log10(1kbps)=3, log10(1Gbps)=9 → map to 4000ms..300ms
+  return Math.max(300, Math.min(6000, 6500 - logRate * 700));
+}
+
+/** Compute line width boost from rate. */
+function rateToWidth(rateBps: number, baseWidth: number): number {
+  if (rateBps <= 0) return baseWidth;
+  return Math.min(baseWidth + 4, baseWidth + Math.log10(rateBps + 1) / 3);
+}
+
 // ─── Helpers ────────────────────────────────────────────
 
 function hexPath(r: number): string {
@@ -495,10 +539,18 @@ export function createMapInstance(
     p: d3.Selection<SVGCircleElement, unknown, null, undefined>,
     conn: Connection,
   ) {
-    const dur = 3000 + Math.random() * 4000;
     const src = nodeById[conn.source];
     const tgt = nodeById[conn.target];
     if (!src || !tgt) return;
+
+    // Read live rate for dynamic speed
+    const key = `${conn.source}-${conn.target}`;
+    const rate = connectionRates.get(key) ?? 0;
+    const dur = rateToDuration(rate);
+
+    // Fade particles on zero-traffic connections
+    p.attr("opacity", rate > 0 ? 0.9 : 0.3);
+
     const fwd = Math.random() > 0.5;
     p.attr("cx", fwd ? src.x : tgt.x)
       .attr("cy", fwd ? src.y : tgt.y)
@@ -528,9 +580,20 @@ export function createMapInstance(
       const style = conn ? CONNECTION_STYLES[conn.type] : null;
       const label = style?.label || conn?.type || "link";
 
+      // Show throughput rate if available
+      const rateKey = `${srcId}-${tgtId}`;
+      const rate = connectionRates.get(rateKey) ?? 0;
+      let rateText = "";
+      if (rate > 0) {
+        if (rate >= 1_000_000_000) rateText = `${(rate / 1_000_000_000).toFixed(1)} Gbps`;
+        else if (rate >= 1_000_000) rateText = `${(rate / 1_000_000).toFixed(1)} Mbps`;
+        else if (rate >= 1_000) rateText = `${(rate / 1_000).toFixed(1)} Kbps`;
+        else rateText = `${rate} bps`;
+      }
+
       const tip = document.createElement("div");
       tip.className = "nm-tooltip nm-conn-tooltip";
-      tip.innerHTML = `<div class="tt-name">${label}</div><div class="tt-ip">${src?.hostname || srcId} &harr; ${tgt?.hostname || tgtId}</div>`;
+      tip.innerHTML = `<div class="tt-name">${label}</div><div class="tt-ip">${src?.hostname || srcId} &harr; ${tgt?.hostname || tgtId}</div>${rateText ? `<div class="tt-role">${rateText}</div>` : ""}`;
       document.body.appendChild(tip);
       tip.style.left = event.clientX + 14 + "px";
       tip.style.top = event.clientY + 14 + "px";
@@ -553,10 +616,9 @@ export function createMapInstance(
 
   // Live status data stores
   let deviceStatusMap: Map<string, DeviceStatus> = new Map();
-  // eslint-disable-next-line prefer-const
   let interfaceStatusMap: Map<string, InterfaceStatus> = new Map();
-  // Expose for connection tooltip access
-  void interfaceStatusMap;
+  // Per-connection rate (total bps) for animation speed
+  const connectionRates: Map<string, number> = new Map();
 
   // ── Render nodes (draggable) ──
   const nodeDrag = d3
@@ -924,6 +986,73 @@ export function createMapInstance(
 
     updateInterfaceStatuses(interfaces: InterfaceStatus[]) {
       interfaceStatusMap = new Map(interfaces.map((i) => [i.name, i]));
+
+      // Build VLAN → total rate lookup
+      const vlanRates: Map<number, number> = new Map();
+      let totalRate = 0;
+      for (const [vlan] of Object.entries(VLAN_CONFIG)) {
+        const iface = findVlanIface(+vlan, interfaceStatusMap);
+        if (iface) {
+          const rate = iface.rx_rate_bps + iface.tx_rate_bps;
+          vlanRates.set(+vlan, rate);
+          totalRate += rate;
+        }
+      }
+
+      // Compute per-connection rate
+      connections.forEach((conn) => {
+        const key = `${conn.source}-${conn.target}`;
+        const src = nodeById[conn.source];
+        const tgt = nodeById[conn.target];
+        if (!src || !tgt) return;
+
+        let rate = 0;
+        if (conn.type === "backbone" || conn.type === "5g") {
+          // Backbone/5G carry aggregate traffic — use total rate
+          rate = totalRate;
+        } else if (conn.type === "2.5g") {
+          // 2.5G links carry their connected VLAN's traffic
+          const vlan = vlanForIp(tgt.ip) ?? vlanForIp(src.ip);
+          rate = vlan != null ? (vlanRates.get(vlan) ?? 0) : totalRate;
+        } else if (conn.type === "hypervisor") {
+          // Hypervisor — VM on VLAN 25
+          rate = vlanRates.get(25) ?? 0;
+        } else {
+          // Other logical connections — use endpoint VLAN rate
+          const srcVlan = vlanForIp(src.ip);
+          const tgtVlan = vlanForIp(tgt.ip);
+          const srcRate = srcVlan != null ? (vlanRates.get(srcVlan) ?? 0) : 0;
+          const tgtRate = tgtVlan != null ? (vlanRates.get(tgtVlan) ?? 0) : 0;
+          rate = Math.max(srcRate, tgtRate);
+        }
+
+        connectionRates.set(key, rate);
+      });
+
+      // Update connection line width and opacity based on rate
+      layerConnections
+        .selectAll<SVGLineElement, unknown>(".connection-line")
+        .each(function () {
+          const el = d3.select(this);
+          const srcId = el.attr("data-source")!;
+          const tgtId = el.attr("data-target")!;
+          const key = `${srcId}-${tgtId}`;
+          const rate = connectionRates.get(key) ?? 0;
+
+          // Find base style
+          const conn = connections.find(
+            (c) =>
+              (c.source === srcId && c.target === tgtId) ||
+              (c.source === tgtId && c.target === srcId),
+          );
+          const style = conn ? CONNECTION_STYLES[conn.type] : null;
+          const baseWidth = style?.width ?? 1.2;
+
+          el.transition()
+            .duration(1000)
+            .attr("stroke-width", rateToWidth(rate, baseWidth))
+            .attr("stroke-opacity", rate > 0 ? 1 : 0.4);
+        });
     },
   };
 }

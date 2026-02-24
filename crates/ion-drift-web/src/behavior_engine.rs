@@ -13,7 +13,7 @@ use mikrotik_core::resources::firewall::FilterRule;
 use mikrotik_core::MikrotikClient;
 use tokio::sync::RwLock;
 
-use crate::geo::GeoDb;
+use crate::geo::GeoCache;
 use crate::log_parser;
 use crate::oui::OuiDb;
 
@@ -336,7 +336,7 @@ pub async fn detect_blocked_attempts(
     client: &MikrotikClient,
     store: &BehaviorStore,
     oui_db: &OuiDb,
-    geo_db: &GeoDb,
+    geo_cache: &GeoCache,
 ) -> Result<usize, String> {
     let log_entries = client
         .log_entries()
@@ -375,7 +375,7 @@ pub async fn detect_blocked_attempts(
             continue;
         }
 
-        let parsed = log_parser::parse_log_entry(entry, geo_db, oui_db);
+        let parsed = log_parser::parse_log_entry(entry, geo_cache, oui_db);
         let fields = match parsed.parsed {
             Some(ref f) => f,
             None => continue,
@@ -423,7 +423,7 @@ pub async fn detect_blocked_attempts(
 
         // GeoIP enrichment for description
         let dst_country = if let Some(ref country) = fields.dst_country {
-            format!(" ({})", country.name)
+            format!(" ({})", country.country)
         } else {
             String::new()
         };

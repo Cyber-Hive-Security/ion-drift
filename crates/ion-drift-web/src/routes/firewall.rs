@@ -3,7 +3,7 @@ use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::geo::GeoDb;
+use crate::geo::GeoCache;
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 use super::{api_error, internal_error};
@@ -42,8 +42,8 @@ pub async fn drops(
         });
 
     // Try to resolve top drop source countries from recent log entries
-    let top_drop_countries = if state.geo_db.is_available() {
-        // Use the log endpoint to find recent drop entries with IPs
+    // Resolve top drop source countries from recent log entries (cache-only geo)
+    let top_drop_countries = {
         let logs = state.mikrotik.log_entries().await.unwrap_or_default();
         let mut country_counts: HashMap<String, (String, usize)> = HashMap::new();
 
@@ -51,14 +51,13 @@ pub async fn drops(
             if !entry.message.contains("drop") && !entry.message.contains("input") {
                 continue;
             }
-            // Try to extract src IP from log messages (common format: "src=1.2.3.4")
             for word in entry.message.split_whitespace() {
                 if let Some(ip_str) = word.strip_prefix("src=").or_else(|| word.strip_prefix("src-address=")) {
                     let ip = ip_str.split(':').next().unwrap_or(ip_str);
-                    if let Some(country) = state.geo_db.lookup(ip) {
+                    if let Some(geo) = state.geo_cache.lookup_cached(ip) {
                         let entry = country_counts
-                            .entry(country.code.clone())
-                            .or_insert_with(|| (country.name.clone(), 0));
+                            .entry(geo.country_code.clone())
+                            .or_insert_with(|| (geo.country.clone(), 0));
                         entry.1 += 1;
                     }
                 }
@@ -68,7 +67,7 @@ pub async fn drops(
         let mut entries: Vec<DropCountryEntry> = country_counts
             .into_iter()
             .map(|(code, (name, count))| DropCountryEntry {
-                flagged: GeoDb::is_flagged(&code),
+                flagged: GeoCache::is_flagged(&code),
                 code,
                 name,
                 count,
@@ -77,8 +76,6 @@ pub async fn drops(
         entries.sort_by(|a, b| b.count.cmp(&a.count));
         entries.truncate(5);
         entries
-    } else {
-        Vec::new()
     };
 
     Ok(Json(FirewallDropsSummary {

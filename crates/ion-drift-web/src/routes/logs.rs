@@ -30,7 +30,7 @@ pub async fn list(
     // Parse all entries into structured form
     let entries: Vec<StructuredLogEntry> = raw_entries
         .iter()
-        .map(|e| log_parser::parse_log_entry(e, &state.geo_db, &state.oui_db))
+        .map(|e| log_parser::parse_log_entry(e, &state.geo_cache, &state.oui_db))
         .collect();
 
     // Deduplicate log+drop/accept pairs (same packet, non-terminating log rule

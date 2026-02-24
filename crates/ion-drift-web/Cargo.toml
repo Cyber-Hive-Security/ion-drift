@@ -31,7 +31,6 @@ dashmap = "6"
 dirs = "6"
 anyhow = "1"
 futures = "0.3"
-maxminddb = "0.24"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 aes-gcm = "0.10"

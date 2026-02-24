@@ -172,8 +172,11 @@ async fn main() -> anyhow::Result<()> {
     // Load MAC OUI database (bundled)
     let oui_db = oui::OuiDb::load();
 
-    // Load GeoIP database (optional)
-    let geo_db = geo::GeoDb::load(config.data.geoip_db_path.as_deref());
+    // Initialize IP geolocation cache (ip-api.com backed, SQLite cached)
+    let geo_cache = std::sync::Arc::new(
+        geo::GeoCache::new(&data_dir.join("geo.db"))
+            .map_err(|e| anyhow::anyhow!("failed to init geo cache: {e}"))?,
+    );
 
     // Build AppState
     let app_state = AppState {
@@ -189,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
         speedtest_running: speedtest_running.clone(),
         speedtest_last_completed: speedtest_last_completed.clone(),
         oui_db,
-        geo_db,
+        geo_cache: geo_cache.clone(),
         network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
         behavior_store: behavior_store.clone(),
         firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))),
@@ -205,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
     spawn_log_aggregation(
         metrics_store.clone(),
         mikrotik.clone(),
-        app_state.geo_db.clone(),
+        app_state.geo_cache.clone(),
         app_state.oui_db.clone(),
     );
     spawn_speedtest_runner(
@@ -218,7 +221,7 @@ async fn main() -> anyhow::Result<()> {
         behavior_store.clone(),
         mikrotik.clone(),
         app_state.oui_db.clone(),
-        app_state.geo_db.clone(),
+        app_state.geo_cache.clone(),
         app_state.firewall_rules_cache.clone(),
     );
     spawn_behavior_maintenance(behavior_store.clone());
@@ -630,7 +633,7 @@ fn spawn_vlan_metrics_poller(
 fn spawn_log_aggregation(
     store: Arc<mikrotik_core::MetricsStore>,
     client: mikrotik_core::MikrotikClient,
-    geo_db: Arc<geo::GeoDb>,
+    geo_cache: Arc<geo::GeoCache>,
     oui_db: Arc<oui::OuiDb>,
 ) {
     tokio::spawn(async move {
@@ -648,7 +651,7 @@ fn spawn_log_aggregation(
                 Ok(raw_entries) => {
                     let entries: Vec<_> = raw_entries
                         .iter()
-                        .map(|e| log_parser::parse_log_entry(e, &geo_db, &oui_db))
+                        .map(|e| log_parser::parse_log_entry(e, &geo_cache, &oui_db))
                         .collect();
 
                     let total_entries = entries.len() as u32;
@@ -787,7 +790,7 @@ fn spawn_behavior_collector(
     store: Arc<mikrotik_core::BehaviorStore>,
     client: mikrotik_core::MikrotikClient,
     oui_db: Arc<oui::OuiDb>,
-    geo_db: Arc<geo::GeoDb>,
+    geo_cache: Arc<geo::GeoCache>,
     firewall_cache: Arc<tokio::sync::RwLock<(Vec<mikrotik_core::resources::firewall::FilterRule>, std::time::Instant)>>,
 ) {
     tokio::spawn(async move {
@@ -824,7 +827,7 @@ fn spawn_behavior_collector(
             }
 
             // Detect blocked attempts
-            match behavior_engine::detect_blocked_attempts(&client, &store, &oui_db, &geo_db).await
+            match behavior_engine::detect_blocked_attempts(&client, &store, &oui_db, &geo_cache).await
             {
                 Ok(count) => {
                     if count > 0 {

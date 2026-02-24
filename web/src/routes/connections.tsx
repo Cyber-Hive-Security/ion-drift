@@ -1,12 +1,14 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useConnectionsPage, useConnectionsHistory } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
 import { formatBytes, formatNumber } from "@/lib/format";
-import { countryFlag, isPrivateIp } from "@/lib/country";
+import { countryFlag, isPrivateIp, vlanLabel } from "@/lib/country";
 import { cn } from "@/lib/utils";
+import { portLabel } from "@/lib/services";
+import { ChevronDown, ChevronRight, Filter, X } from "lucide-react";
 import {
   PieChart,
   Pie,
@@ -31,6 +33,51 @@ const PROTOCOL_COLORS: Record<string, string> = {
 };
 
 type FilterMode = "all" | "flagged" | "tcp" | "udp" | "external";
+type GroupMode = "flat" | "src" | "dst" | "vlan" | "protocol";
+
+function groupKey(conn: ConnectionEntry, mode: GroupMode): string {
+  switch (mode) {
+    case "src":
+      return conn.src_address;
+    case "dst":
+      return conn.dst_address;
+    case "vlan": {
+      const parts = conn.src_address.split(".");
+      return parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}` : "other";
+    }
+    case "protocol":
+      return conn.protocol.toUpperCase();
+    default:
+      return "";
+  }
+}
+
+function groupLabel(key: string, conns: ConnectionEntry[], mode: GroupMode): string {
+  switch (mode) {
+    case "src": {
+      const label = isPrivateIp(key) ? vlanLabel(key) : null;
+      const geo = conns[0]?.src_geo;
+      const parts = [key];
+      if (label) parts.push(label);
+      else if (geo) parts.push(`${countryFlag(geo.country_code)} ${geo.country}`);
+      return parts.join(" \u00b7 ");
+    }
+    case "dst": {
+      const label = isPrivateIp(key) ? vlanLabel(key) : null;
+      const geo = conns[0]?.dst_geo;
+      const parts = [key];
+      if (label) parts.push(label);
+      else if (geo) parts.push(`${countryFlag(geo.country_code)} ${geo.country}`);
+      return parts.join(" \u00b7 ");
+    }
+    case "vlan":
+      return vlanLabel(key + ".0") ?? `Subnet ${key}.0/24`;
+    case "protocol":
+      return key;
+    default:
+      return key;
+  }
+}
 
 // ── Summary Bar ──────────────────────────────────────────────────
 
@@ -234,14 +281,14 @@ function GeoDistribution({ connections }: { connections: ConnectionEntry[] }) {
   const countryData = useMemo(() => {
     const counts = new Map<string, { name: string; count: number; flagged: boolean }>();
     for (const c of connections) {
-      for (const country of [c.src_country, c.dst_country]) {
-        if (country) {
-          const existing = counts.get(country.code);
+      for (const geo of [c.src_geo, c.dst_geo]) {
+        if (geo) {
+          const existing = counts.get(geo.country_code);
           if (existing) {
             existing.count++;
           } else {
-            counts.set(country.code, {
-              name: country.name,
+            counts.set(geo.country_code, {
+              name: geo.country,
               count: 1,
               flagged: false, // will check below
             });
@@ -250,12 +297,12 @@ function GeoDistribution({ connections }: { connections: ConnectionEntry[] }) {
       }
       // Mark flagged
       if (c.flagged) {
-        if (c.src_country) {
-          const e = counts.get(c.src_country.code);
+        if (c.src_geo) {
+          const e = counts.get(c.src_geo.country_code);
           if (e) e.flagged = true;
         }
-        if (c.dst_country) {
-          const e = counts.get(c.dst_country.code);
+        if (c.dst_geo) {
+          const e = counts.get(c.dst_geo.country_code);
           if (e) e.flagged = true;
         }
       }
@@ -371,18 +418,28 @@ const connectionColumns: Column<ConnectionEntry>[] = [
     render: (r) => <span className="text-xs">{r.timeout ?? "—"}</span>,
   },
   {
-    key: "country",
-    header: "Country",
+    key: "geo",
+    header: "Location",
     render: (r) => {
-      const dst = r.dst_country;
-      if (!dst) return <span className="text-xs text-muted-foreground">—</span>;
-      return (
-        <span className="text-xs">
-          {countryFlag(dst.code)} {dst.code}
-        </span>
-      );
+      const geo = r.dst_geo;
+      if (geo) {
+        const parts = [countryFlag(geo.country_code), geo.country];
+        if (geo.city) parts.push(`\u00b7 ${geo.city}`);
+        if (geo.isp) parts.push(`\u00b7 ${geo.isp}`);
+        return (
+          <span className="text-xs" title={[geo.country, geo.city, geo.org, geo.asn].filter(Boolean).join(" \u00b7 ")}>
+            {parts.join(" ")}
+          </span>
+        );
+      }
+      // Private IP — show VLAN label
+      const label = vlanLabel(r.dst_address);
+      if (label) {
+        return <span className="text-xs text-muted-foreground">{label}</span>;
+      }
+      return <span className="text-xs text-muted-foreground">—</span>;
     },
-    sortValue: (r) => r.dst_country?.code ?? "ZZZ",
+    sortValue: (r) => r.dst_geo?.country_code ?? "ZZZ",
   },
   {
     key: "flagged",
@@ -396,6 +453,358 @@ const connectionColumns: Column<ConnectionEntry>[] = [
     sortValue: (r) => (r.flagged ? 0 : 1),
   },
 ];
+
+// ── Grouped Connections View ─────────────────────────────────────
+
+interface GroupEntry {
+  key: string;
+  label: string;
+  connections: ConnectionEntry[];
+  totalOrig: number;
+  totalRepl: number;
+  flaggedCount: number;
+}
+
+function GroupedConnectionsView({
+  connections,
+  groupMode,
+  columns,
+  rowStyle,
+}: {
+  connections: ConnectionEntry[];
+  groupMode: Exclude<GroupMode, "flat">;
+  columns: Column<ConnectionEntry>[];
+  rowStyle?: (row: ConnectionEntry) => React.CSSProperties | undefined;
+}) {
+  const groups = useMemo(() => {
+    const map = new Map<string, ConnectionEntry[]>();
+    for (const conn of connections) {
+      const k = groupKey(conn, groupMode);
+      const arr = map.get(k);
+      if (arr) arr.push(conn);
+      else map.set(k, [conn]);
+    }
+    const entries: GroupEntry[] = [];
+    for (const [k, conns] of map) {
+      let totalOrig = 0;
+      let totalRepl = 0;
+      let flaggedCount = 0;
+      for (const c of conns) {
+        totalOrig += c.orig_bytes;
+        totalRepl += c.repl_bytes;
+        if (c.flagged) flaggedCount++;
+      }
+      entries.push({
+        key: k,
+        label: groupLabel(k, conns, groupMode),
+        connections: conns,
+        totalOrig,
+        totalRepl,
+        flaggedCount,
+      });
+    }
+    // Sort by total bytes descending (heaviest talkers first)
+    entries.sort((a, b) => b.totalOrig + b.totalRepl - (a.totalOrig + a.totalRepl));
+    return entries;
+  }, [connections, groupMode]);
+
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggleGroup = useCallback((key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const allExpanded = expanded.size === groups.length;
+  const toggleAll = useCallback(() => {
+    if (allExpanded) {
+      setExpanded(new Set());
+    } else {
+      setExpanded(new Set(groups.map((g) => g.key)));
+    }
+  }, [allExpanded, groups]);
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">
+          {groups.length} groups \u00b7 {connections.length} connections
+        </span>
+        <button
+          onClick={toggleAll}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          {allExpanded ? "Collapse All" : "Expand All"}
+        </button>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-muted/50">
+              <th className="w-8 px-2 py-2" />
+              {columns.map((col) => (
+                <th
+                  key={col.key}
+                  className="px-3 py-2 text-left font-medium text-muted-foreground"
+                >
+                  {col.header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((group) => {
+              const isOpen = expanded.has(group.key);
+              return (
+                <GroupRows
+                  key={group.key}
+                  group={group}
+                  isOpen={isOpen}
+                  onToggle={() => toggleGroup(group.key)}
+                  columns={columns}
+                  rowStyle={rowStyle}
+                />
+              );
+            })}
+            {groups.length === 0 && (
+              <tr>
+                <td
+                  colSpan={columns.length + 1}
+                  className="px-3 py-8 text-center text-muted-foreground"
+                >
+                  No connections
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function GroupRows({
+  group,
+  isOpen,
+  onToggle,
+  columns,
+  rowStyle,
+}: {
+  group: GroupEntry;
+  isOpen: boolean;
+  onToggle: () => void;
+  columns: Column<ConnectionEntry>[];
+  rowStyle?: (row: ConnectionEntry) => React.CSSProperties | undefined;
+}) {
+  return (
+    <>
+      <tr
+        className="cursor-pointer border-b border-border bg-muted/30 hover:bg-muted/50"
+        onClick={onToggle}
+      >
+        <td className="px-2 py-2 text-muted-foreground">
+          {isOpen ? (
+            <ChevronDown className="h-4 w-4" />
+          ) : (
+            <ChevronRight className="h-4 w-4" />
+          )}
+        </td>
+        <td colSpan={columns.length} className="px-3 py-2">
+          <div className="flex items-center gap-3">
+            <span className="font-medium">{group.label}</span>
+            <span className="text-xs text-muted-foreground">
+              {group.connections.length} conn{group.connections.length !== 1 ? "s" : ""}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {formatBytes(group.totalOrig, 1)} \u2191
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {formatBytes(group.totalRepl, 1)} \u2193
+            </span>
+            {group.flaggedCount > 0 && (
+              <span className="inline-flex rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-red-500">
+                {group.flaggedCount} flagged
+              </span>
+            )}
+          </div>
+        </td>
+      </tr>
+      {isOpen &&
+        group.connections.map((conn) => (
+          <tr
+            key={conn.id}
+            className="border-b border-border/50 hover:bg-muted/20"
+            style={rowStyle?.(conn)}
+          >
+            <td />
+            {columns.map((col) => (
+              <td key={col.key} className="px-3 py-2">
+                {col.render(conn)}
+              </td>
+            ))}
+          </tr>
+        ))}
+    </>
+  );
+}
+
+// ── Column Filter Dropdown ───────────────────────────────────────
+
+interface FilterOption {
+  value: string;
+  label: string;
+  count: number;
+}
+
+function ColumnFilterDropdown({
+  options,
+  selected,
+  onSelectionChange,
+  onClose,
+}: {
+  options: FilterOption[];
+  selected: Set<string>;
+  onSelectionChange: (selected: Set<string>) => void;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const filtered = search
+    ? options.filter((o) => o.label.toLowerCase().includes(search.toLowerCase()))
+    : options;
+
+  const allSelected = filtered.every((o) => selected.has(o.value));
+
+  const toggleAll = () => {
+    const next = new Set(selected);
+    if (allSelected) {
+      for (const o of filtered) next.delete(o.value);
+    } else {
+      for (const o of filtered) next.add(o.value);
+    }
+    onSelectionChange(next);
+  };
+
+  const toggleOne = (value: string) => {
+    const next = new Set(selected);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    onSelectionChange(next);
+  };
+
+  return (
+    <div
+      className="absolute top-full left-0 z-50 mt-1 w-56 rounded-lg border border-border bg-card shadow-lg"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="border-b border-border p-2">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search..."
+          className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+          autoFocus
+        />
+      </div>
+      <div className="max-h-48 overflow-y-auto p-1">
+        <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs hover:bg-muted/50">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={toggleAll}
+            className="rounded"
+          />
+          <span className="font-medium">Select All</span>
+        </label>
+        {filtered.map((opt) => (
+          <label
+            key={opt.value}
+            className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs hover:bg-muted/50"
+          >
+            <input
+              type="checkbox"
+              checked={selected.has(opt.value)}
+              onChange={() => toggleOne(opt.value)}
+              className="rounded"
+            />
+            <span className="flex-1 truncate">{opt.label}</span>
+            <span className="text-muted-foreground">{opt.count}</span>
+          </label>
+        ))}
+        {filtered.length === 0 && (
+          <p className="px-2 py-2 text-xs text-muted-foreground">No matches</p>
+        )}
+      </div>
+      <div className="flex justify-between border-t border-border p-2">
+        <button
+          onClick={() => onSelectionChange(new Set())}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          Clear
+        </button>
+        <button
+          onClick={onClose}
+          className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground"
+        >
+          Apply
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Compute top-N filter options for a connection field. */
+function computeFilterOptions(
+  connections: ConnectionEntry[],
+  field: string,
+): FilterOption[] {
+  const counts = new Map<string, number>();
+  for (const c of connections) {
+    let value: string;
+    switch (field) {
+      case "src":
+        value = c.src_address;
+        break;
+      case "dst":
+        value = c.dst_address;
+        break;
+      case "dst_port":
+        value = c.dst_port || "";
+        break;
+      case "protocol":
+        value = c.protocol.toUpperCase();
+        break;
+      case "state":
+        value = c.tcp_state ?? "none";
+        break;
+      case "country":
+        value = c.dst_geo?.country_code ?? "";
+        break;
+      default:
+        value = "";
+    }
+    if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  const entries = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 15);
+
+  return entries.map(([value, count]) => {
+    let label = value;
+    if (field === "dst_port") label = portLabel(value);
+    else if (field === "country") {
+      const geo = connections.find((c) => c.dst_geo?.country_code === value)?.dst_geo;
+      label = geo ? `${countryFlag(geo.country_code)} ${geo.country}` : value;
+    }
+    return { value, label, count };
+  });
+}
 
 // ── Connection History Chart ─────────────────────────────────────
 
@@ -522,11 +931,37 @@ function ConnectionHistoryChart() {
 
 // ── Main Page ────────────────────────────────────────────────────
 
+type ColumnFilterField = "src" | "dst" | "dst_port" | "protocol" | "state" | "country";
+
+const COLUMN_FILTER_DEFS: { field: ColumnFilterField; label: string }[] = [
+  { field: "src", label: "Source" },
+  { field: "dst", label: "Destination" },
+  { field: "dst_port", label: "Dst Port" },
+  { field: "protocol", label: "Protocol" },
+  { field: "state", label: "State" },
+  { field: "country", label: "Country" },
+];
+
+function getFilterValue(c: ConnectionEntry, field: ColumnFilterField): string {
+  switch (field) {
+    case "src": return c.src_address;
+    case "dst": return c.dst_address;
+    case "dst_port": return c.dst_port || "";
+    case "protocol": return c.protocol.toUpperCase();
+    case "state": return c.tcp_state ?? "none";
+    case "country": return c.dst_geo?.country_code ?? "";
+  }
+}
+
 export function ConnectionsPage() {
   const { data, isLoading, error, refetch, isFetching } = useConnectionsPage();
   const [filter, setFilter] = useState<FilterMode>("all");
+  const [groupMode, setGroupMode] = useState<GroupMode>("flat");
+  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({});
+  const [openFilter, setOpenFilter] = useState<ColumnFilterField | null>(null);
 
-  const filteredConnections = useMemo(() => {
+  // Pre-filter by mode buttons
+  const modeFiltered = useMemo(() => {
     if (!data) return [];
     let conns = data.connections;
     switch (filter) {
@@ -545,13 +980,62 @@ export function ConnectionsPage() {
         );
         break;
     }
+    return conns;
+  }, [data, filter]);
+
+  // Apply column filters on top
+  const filteredConnections = useMemo(() => {
+    let conns = modeFiltered;
+    for (const [field, selected] of Object.entries(columnFilters)) {
+      if (selected.size === 0) continue;
+      conns = conns.filter((c) => selected.has(getFilterValue(c, field as ColumnFilterField)));
+    }
     // Sort flagged to top by default
     return [...conns].sort((a, b) => {
       if (a.flagged && !b.flagged) return -1;
       if (!a.flagged && b.flagged) return 1;
       return 0;
     });
-  }, [data, filter]);
+  }, [modeFiltered, columnFilters]);
+
+  // Compute filter options from mode-filtered data (before column filters)
+  const filterOptions = useMemo(() => {
+    const opts: Record<string, FilterOption[]> = {};
+    for (const def of COLUMN_FILTER_DEFS) {
+      opts[def.field] = computeFilterOptions(modeFiltered, def.field);
+    }
+    return opts;
+  }, [modeFiltered]);
+
+  const activeFilterCount = Object.values(columnFilters).filter((s) => s.size > 0).length;
+
+  const clearAllColumnFilters = useCallback(() => {
+    setColumnFilters({});
+  }, []);
+
+  const updateColumnFilter = useCallback((field: string, selected: Set<string>) => {
+    setColumnFilters((prev) => ({ ...prev, [field]: selected }));
+  }, []);
+
+  const removeColumnFilter = useCallback((field: string) => {
+    setColumnFilters((prev) => {
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }, []);
+
+  // Close filter dropdown on outside click
+  useEffect(() => {
+    if (!openFilter) return;
+    const handler = () => setOpenFilter(null);
+    // Delay to avoid closing on the same click that opened it
+    const id = setTimeout(() => document.addEventListener("click", handler), 0);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("click", handler);
+    };
+  }, [openFilter]);
 
   if (isLoading) return <LoadingSpinner />;
   if (error)
@@ -581,7 +1065,7 @@ export function ConnectionsPage() {
       <ConnectionHistoryChart />
 
       {/* Filter buttons */}
-      <div className="mb-3 flex gap-2">
+      <div className="mb-3 flex flex-wrap gap-2">
         {filters.map((f) => (
           <button
             key={f.mode}
@@ -605,21 +1089,132 @@ export function ConnectionsPage() {
             )}
           </button>
         ))}
+
+        <span className="mx-1 self-center text-border">|</span>
+
+        {/* Group mode selector */}
+        {(
+          [
+            { mode: "flat", label: "Flat" },
+            { mode: "src", label: "By Source" },
+            { mode: "dst", label: "By Dest" },
+            { mode: "vlan", label: "By VLAN" },
+            { mode: "protocol", label: "By Protocol" },
+          ] as { mode: GroupMode; label: string }[]
+        ).map((g) => (
+          <button
+            key={g.mode}
+            onClick={() => setGroupMode(g.mode)}
+            className={cn(
+              "rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+              groupMode === g.mode
+                ? "bg-primary/80 text-primary-foreground"
+                : "bg-muted/60 text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {g.label}
+          </button>
+        ))}
       </div>
 
-      <DataTable
-        columns={connectionColumns}
-        data={filteredConnections}
-        rowKey={(r) => r.id}
-        searchable
-        searchPlaceholder="Search connections..."
-        defaultSort={{ key: "flagged" }}
-        rowStyle={(r) =>
-          r.flagged
-            ? { borderLeft: "3px solid oklch(0.6 0.2 25)" }
-            : undefined
-        }
-      />
+      {/* Column filters */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted-foreground">Filter by:</span>
+        {COLUMN_FILTER_DEFS.map((def) => {
+          const active = (columnFilters[def.field]?.size ?? 0) > 0;
+          return (
+            <div key={def.field} className="relative">
+              <button
+                onClick={() => setOpenFilter(openFilter === def.field ? null : def.field)}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                  active
+                    ? "bg-primary/20 text-primary border border-primary/40"
+                    : "bg-muted/40 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Filter className="h-3 w-3" />
+                {def.label}
+                {active && (
+                  <span className="ml-0.5 rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
+                    {columnFilters[def.field].size}
+                  </span>
+                )}
+              </button>
+              {openFilter === def.field && (
+                <ColumnFilterDropdown
+                  options={filterOptions[def.field]}
+                  selected={columnFilters[def.field] ?? new Set()}
+                  onSelectionChange={(s) => updateColumnFilter(def.field, s)}
+                  onClose={() => setOpenFilter(null)}
+                />
+              )}
+            </div>
+          );
+        })}
+        {activeFilterCount > 0 && (
+          <button
+            onClick={clearAllColumnFilters}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            Clear All
+          </button>
+        )}
+      </div>
+
+      {/* Active filter pills */}
+      {activeFilterCount > 0 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {COLUMN_FILTER_DEFS.map((def) => {
+            const selected = columnFilters[def.field];
+            if (!selected || selected.size === 0) return null;
+            return (
+              <span
+                key={def.field}
+                className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs text-primary"
+              >
+                {def.label}: {selected.size} selected
+                <button
+                  onClick={() => removeColumnFilter(def.field)}
+                  className="hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            );
+          })}
+          <span className="self-center text-xs text-muted-foreground">
+            {filteredConnections.length} of {modeFiltered.length} shown
+          </span>
+        </div>
+      )}
+
+      {groupMode === "flat" ? (
+        <DataTable
+          columns={connectionColumns}
+          data={filteredConnections}
+          rowKey={(r) => r.id}
+          searchable
+          searchPlaceholder="Search connections..."
+          defaultSort={{ key: "flagged" }}
+          rowStyle={(r) =>
+            r.flagged
+              ? { borderLeft: "3px solid oklch(0.6 0.2 25)" }
+              : undefined
+          }
+        />
+      ) : (
+        <GroupedConnectionsView
+          connections={filteredConnections}
+          groupMode={groupMode}
+          columns={connectionColumns}
+          rowStyle={(r) =>
+            r.flagged
+              ? { borderLeft: "3px solid oklch(0.6 0.2 25)" }
+              : undefined
+          }
+        />
+      )}
 
       <TopTalkers connections={data.connections} />
       <GeoDistribution connections={data.connections} />

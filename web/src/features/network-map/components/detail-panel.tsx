@@ -42,6 +42,15 @@ export function DetailPanel({ node, onClose }: DetailPanelProps) {
     idFields.push(["Host", p ? p.hostname : node.parent]);
   }
 
+  if (node?.liveStatus) {
+    const ls = node.liveStatus;
+    if (ls.hop_count != null) {
+      idFields.push(["Internet Hops", `${ls.hop_count} ${ls.internet_path ?? ""}`]);
+    } else if (ls.internet_path) {
+      idFields.push(["Internet Hops", `\u221e ${ls.internet_path}`]);
+    }
+  }
+
   const hasSpecs = node?.specs && Object.keys(node.specs).length > 0;
   const hasContainers = node?.containers && node.containers.length > 0;
   const hasDetails = node?.details && node.details.length > 0;

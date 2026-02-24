@@ -3,7 +3,7 @@ use axum::response::{Json, Response};
 use serde::Serialize;
 use std::collections::HashMap;
 
-use crate::geo::{CountryInfo, GeoDb};
+use crate::geo::{GeoCache, GeoInfo};
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 use super::api_error;
@@ -52,28 +52,25 @@ pub async fn summary(
         *counts.entry(key).or_default() += 1;
     }
 
-    // For flagged count, we need geo data — if available, do a quick scan
-    // (expensive, so only count if geo is available)
-    let flagged_count = if state.geo_db.is_available() {
-        // Fetch full connections for geo
+    // Count flagged using cached geo data only (no HTTP calls in summary).
+    // The cache is warmed by the /api/connections/page endpoint.
+    let flagged_count = {
         let full = state.mikrotik.firewall_connections_full().await.map_err(api_error)?;
         full.iter()
             .filter(|c| {
                 let src_ip = c.src_address.as_deref().and_then(|a| a.split(':').next());
                 let dst_ip = c.dst_address.as_deref().and_then(|a| a.split(':').next());
                 let src_flagged = src_ip
-                    .and_then(|ip| state.geo_db.lookup(ip))
-                    .map(|c| GeoDb::is_flagged(&c.code))
+                    .and_then(|ip| state.geo_cache.lookup_cached(ip))
+                    .map(|g| GeoCache::is_flagged(&g.country_code))
                     .unwrap_or(false);
                 let dst_flagged = dst_ip
-                    .and_then(|ip| state.geo_db.lookup(ip))
-                    .map(|c| GeoDb::is_flagged(&c.code))
+                    .and_then(|ip| state.geo_cache.lookup_cached(ip))
+                    .map(|g| GeoCache::is_flagged(&g.country_code))
                     .unwrap_or(false);
                 src_flagged || dst_flagged
             })
             .count()
-    } else {
-        0
     };
 
     Ok(Json(ConnectionSummary {
@@ -103,8 +100,8 @@ pub struct ConnectionResponse {
     pub orig_bytes: u64,
     pub repl_bytes: u64,
     pub connection_mark: Option<String>,
-    pub src_country: Option<CountryInfo>,
-    pub dst_country: Option<CountryInfo>,
+    pub src_geo: Option<GeoInfo>,
+    pub dst_geo: Option<GeoInfo>,
     pub flagged: bool,
 }
 
@@ -155,6 +152,24 @@ pub async fn page(
         async { state.mikrotik.connection_tracking().await.map_err(api_error) },
     )?;
 
+    // Collect unique IPs for batch geo resolution
+    let mut all_ips: Vec<String> = Vec::new();
+    for c in &full_conns {
+        if let Some(ref src) = c.src_address {
+            let (ip, _) = split_addr_port(src);
+            all_ips.push(ip.to_string());
+        }
+        if let Some(ref dst) = c.dst_address {
+            let (ip, _) = split_addr_port(dst);
+            all_ips.push(ip.to_string());
+        }
+    }
+
+    // Warm the geo cache for all external IPs (non-fatal on failure)
+    if let Err(e) = state.geo_cache.resolve_batch(&all_ips).await {
+        tracing::warn!("geo batch resolve failed: {e}");
+    }
+
     let mut by_protocol: HashMap<String, usize> = HashMap::new();
     let mut by_state: HashMap<String, usize> = HashMap::new();
     let mut flagged_count = 0usize;
@@ -191,16 +206,16 @@ pub async fn page(
                 .map(split_addr_port)
                 .unwrap_or(("", ""));
 
-            let src_country = state.geo_db.lookup(src_ip);
-            let dst_country = state.geo_db.lookup(dst_ip);
+            let src_geo = state.geo_cache.lookup_cached(src_ip);
+            let dst_geo = state.geo_cache.lookup_cached(dst_ip);
 
-            let flagged = src_country
+            let flagged = src_geo
                 .as_ref()
-                .map(|c| GeoDb::is_flagged(&c.code))
+                .map(|g| GeoCache::is_flagged(&g.country_code))
                 .unwrap_or(false)
-                || dst_country
+                || dst_geo
                     .as_ref()
-                    .map(|c| GeoDb::is_flagged(&c.code))
+                    .map(|g| GeoCache::is_flagged(&g.country_code))
                     .unwrap_or(false);
 
             if flagged {
@@ -219,8 +234,8 @@ pub async fn page(
                 orig_bytes: c.orig_bytes.unwrap_or(0),
                 repl_bytes: c.repl_bytes.unwrap_or(0),
                 connection_mark: c.connection_mark,
-                src_country,
-                dst_country,
+                src_geo,
+                dst_geo,
                 flagged,
             }
         })
