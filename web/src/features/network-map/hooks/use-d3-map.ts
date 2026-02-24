@@ -35,50 +35,6 @@ import {
   CONNECTION_STYLES,
 } from "../data";
 
-// ─── Throughput animation helpers ────────────────────────
-
-/** Map node IP to its VLAN number using VLAN_CONFIG subnets. */
-function vlanForIp(ip: string): number | null {
-  const parts = ip.split(".");
-  if (parts.length !== 4) return null;
-  const prefix3 = `${parts[0]}.${parts[1]}.${parts[2]}`;
-  for (const [vlan, cfg] of Object.entries(VLAN_CONFIG)) {
-    if (cfg.subnet.startsWith(prefix3 + ".")) return +vlan;
-  }
-  return null;
-}
-
-/** Find the best matching VLAN interface from the interface map. */
-function findVlanIface(
-  vlanId: number,
-  ifaceMap: Map<string, InterfaceStatus>,
-): InterfaceStatus | undefined {
-  // Try common RouterOS naming patterns
-  for (const pattern of [`vlan${vlanId}`, `vlan-${vlanId}`, `VLAN${vlanId}`]) {
-    const iface = ifaceMap.get(pattern);
-    if (iface) return iface;
-  }
-  // Fallback: case-insensitive scan
-  for (const [name, iface] of ifaceMap) {
-    if (name.toLowerCase() === `vlan${vlanId}`) return iface;
-  }
-  return undefined;
-}
-
-/** Compute particle animation duration from rate (higher rate → faster). */
-function rateToDuration(rateBps: number): number {
-  if (rateBps <= 0) return 6000; // slow idle animation
-  const logRate = Math.log10(rateBps);
-  // log10(1kbps)=3, log10(1Gbps)=9 → map to 4000ms..300ms
-  return Math.max(300, Math.min(6000, 6500 - logRate * 700));
-}
-
-/** Compute line width boost from rate. */
-function rateToWidth(rateBps: number, baseWidth: number): number {
-  if (rateBps <= 0) return baseWidth;
-  return Math.min(baseWidth + 4, baseWidth + Math.log10(rateBps + 1) / 3);
-}
-
 // ─── Helpers ────────────────────────────────────────────
 
 function hexPath(r: number): string {
@@ -125,6 +81,45 @@ export function createMapInstance(
   svgElement: SVGSVGElement,
   callbacks: MapCallbacks,
 ): MapInstance {
+  // ── Throughput animation helpers (scoped inside factory to avoid TDZ issues) ──
+
+  function vlanForIp(ip: string): number | null {
+    const parts = ip.split(".");
+    if (parts.length !== 4) return null;
+    const prefix3 = `${parts[0]}.${parts[1]}.${parts[2]}`;
+    const vlanKeys = Object.keys(VLAN_CONFIG);
+    for (const vlan of vlanKeys) {
+      const cfg = VLAN_CONFIG[+vlan];
+      if (cfg && cfg.subnet.startsWith(prefix3 + ".")) return +vlan;
+    }
+    return null;
+  }
+
+  function findVlanIface(
+    vlanId: number,
+    ifaceMap: Map<string, InterfaceStatus>,
+  ): InterfaceStatus | undefined {
+    for (const pattern of [`vlan${vlanId}`, `vlan-${vlanId}`, `VLAN${vlanId}`]) {
+      const iface = ifaceMap.get(pattern);
+      if (iface) return iface;
+    }
+    for (const [name, iface] of ifaceMap) {
+      if (name.toLowerCase() === `vlan${vlanId}`) return iface;
+    }
+    return undefined;
+  }
+
+  function rateToDuration(rateBps: number): number {
+    if (rateBps <= 0) return 6000;
+    const logRate = Math.log10(rateBps);
+    return Math.max(300, Math.min(6000, 6500 - logRate * 700));
+  }
+
+  function rateToWidth(rateBps: number, baseWidth: number): number {
+    if (rateBps <= 0) return baseWidth;
+    return Math.min(baseWidth + 4, baseWidth + Math.log10(rateBps + 1) / 3);
+  }
+
   // ── Deep-copy mutable state ──
   const nodes: NetworkNode[] = NODES_RAW.map((n) => ({
     ...n,
