@@ -27,6 +27,10 @@ pub struct FullConnectionEntry {
     #[serde(default)]
     pub dst_address: Option<String>,
     #[serde(default)]
+    pub src_port: Option<String>,
+    #[serde(default)]
+    pub dst_port: Option<String>,
+    #[serde(default)]
     pub tcp_state: Option<String>,
     #[serde(default)]
     pub timeout: Option<String>,

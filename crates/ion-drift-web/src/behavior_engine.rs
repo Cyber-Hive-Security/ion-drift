@@ -27,16 +27,6 @@ fn normalize_protocol(proto: &str) -> &'static str {
     }
 }
 
-/// Split "IP:port" into (IP, port). Uses rfind to handle IPv4 correctly.
-fn split_addr_port(addr: &str) -> (&str, Option<u16>) {
-    if let Some(colon) = addr.rfind(':') {
-        let port_str = &addr[colon + 1..];
-        if let Ok(port) = port_str.parse::<u16>() {
-            return (&addr[..colon], Some(port));
-        }
-    }
-    (addr, None)
-}
 
 /// Classify IP to VLAN: known VLAN → that VLAN, external → -1, unknown internal → 0.
 fn classify_vlan(ip: &str) -> i64 {
@@ -114,8 +104,12 @@ pub async fn collect_observations(
             None => continue,
         };
 
-        let (src_ip, _src_port) = split_addr_port(src_addr);
-        let (dst_ip, dst_port) = split_addr_port(dst_addr);
+        let src_ip = src_addr;
+        let dst_ip = dst_addr;
+        let dst_port: Option<u16> = conn
+            .dst_port
+            .as_deref()
+            .and_then(|p| p.parse().ok());
 
         // Look up source MAC
         let mac = match ip_to_mac.get(src_ip) {

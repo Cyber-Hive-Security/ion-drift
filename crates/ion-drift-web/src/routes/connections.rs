@@ -62,8 +62,8 @@ pub async fn summary(
         let full = state.mikrotik.firewall_connections_full().await.map_err(api_error)?;
         full.iter()
             .filter(|c| {
-                let src_ip = c.src_address.as_deref().and_then(|a| a.split(':').next());
-                let dst_ip = c.dst_address.as_deref().and_then(|a| a.split(':').next());
+                let src_ip = c.src_address.as_deref();
+                let dst_ip = c.dst_address.as_deref();
                 let src_flagged = src_ip
                     .and_then(|ip| state.geo_cache.lookup_cached(ip))
                     .map(|g| GeoCache::is_flagged(&g.country_code))
@@ -124,27 +124,6 @@ pub struct ConnectionsPageSummary {
     pub max_entries: Option<u64>,
 }
 
-/// Split "IP:port" into (IP, port). RouterOS uses this format for src/dst-address.
-fn split_addr_port(addr: &str) -> (&str, &str) {
-    // Handle IPv6 [addr]:port
-    if addr.starts_with('[') {
-        if let Some(bracket_end) = addr.find(']') {
-            let ip = &addr[1..bracket_end];
-            let port = if addr.len() > bracket_end + 2 {
-                &addr[bracket_end + 2..]
-            } else {
-                ""
-            };
-            return (ip, port);
-        }
-    }
-    // IPv4 IP:port
-    if let Some(colon) = addr.rfind(':') {
-        (&addr[..colon], &addr[colon + 1..])
-    } else {
-        (addr, "")
-    }
-}
 
 /// GET /api/connections/page
 pub async fn page(
@@ -160,12 +139,10 @@ pub async fn page(
     let mut all_ips: Vec<String> = Vec::new();
     for c in &full_conns {
         if let Some(ref src) = c.src_address {
-            let (ip, _) = split_addr_port(src);
-            all_ips.push(ip.to_string());
+            all_ips.push(src.clone());
         }
         if let Some(ref dst) = c.dst_address {
-            let (ip, _) = split_addr_port(dst);
-            all_ips.push(ip.to_string());
+            all_ips.push(dst.clone());
         }
     }
 
@@ -199,16 +176,10 @@ pub async fn page(
                 .to_string();
             *by_state.entry(state_key).or_default() += 1;
 
-            let (src_ip, src_port) = c
-                .src_address
-                .as_deref()
-                .map(split_addr_port)
-                .unwrap_or(("", ""));
-            let (dst_ip, dst_port) = c
-                .dst_address
-                .as_deref()
-                .map(split_addr_port)
-                .unwrap_or(("", ""));
+            let src_ip = c.src_address.as_deref().unwrap_or("");
+            let dst_ip = c.dst_address.as_deref().unwrap_or("");
+            let src_port = c.src_port.as_deref().unwrap_or("");
+            let dst_port = c.dst_port.as_deref().unwrap_or("");
 
             let src_geo = state.geo_cache.lookup_cached(src_ip);
             let dst_geo = state.geo_cache.lookup_cached(dst_ip);

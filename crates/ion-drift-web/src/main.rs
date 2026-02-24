@@ -950,17 +950,12 @@ fn spawn_connection_persister(
                     .unwrap_or("other")
                     .to_string();
 
-                let (src_ip, _src_port) = c
-                    .src_address
+                let src_ip = c.src_address.as_deref().unwrap_or("");
+                let dst_ip = c.dst_address.as_deref().unwrap_or("");
+                let dst_port = c
+                    .dst_port
                     .as_deref()
-                    .map(split_addr_port)
-                    .unwrap_or(("", ""));
-                let (dst_ip, dst_port_str) = c
-                    .dst_address
-                    .as_deref()
-                    .map(split_addr_port)
-                    .unwrap_or(("", ""));
-                let dst_port = dst_port_str.parse::<i64>().ok();
+                    .and_then(|p| p.parse::<i64>().ok());
 
                 let poll_conn = connection_store::PollConnection {
                     conntrack_id,
@@ -996,25 +991,6 @@ fn spawn_connection_persister(
     });
 }
 
-/// Split "IP:port" into (IP, port) — copied from connections route for use in main.
-fn split_addr_port(addr: &str) -> (&str, &str) {
-    if addr.starts_with('[') {
-        if let Some(bracket_end) = addr.find(']') {
-            let ip = &addr[1..bracket_end];
-            let port = if addr.len() > bracket_end + 2 {
-                &addr[bracket_end + 2..]
-            } else {
-                ""
-            };
-            return (ip, port);
-        }
-    }
-    if let Some(colon) = addr.rfind(':') {
-        (&addr[..colon], &addr[colon + 1..])
-    } else {
-        (addr, "")
-    }
-}
 
 /// Prune old connection history nightly.
 fn spawn_connection_pruner(store: Arc<connection_store::ConnectionStore>) {
