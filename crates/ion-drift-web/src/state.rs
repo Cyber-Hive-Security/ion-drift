@@ -7,6 +7,7 @@ use mikrotik_core::{BehaviorStore, MikrotikClient, MetricsStore, SpeedTestStore,
 use mikrotik_core::resources::firewall::FilterRule;
 use crate::auth::{OidcClient, SessionStore};
 use crate::config::ServerConfig;
+use crate::connection_store::ConnectionStore;
 use crate::geo::GeoCache;
 use crate::live_traffic::LiveTrafficBuffer;
 use crate::oui::OuiDb;
@@ -40,8 +41,10 @@ pub struct AppState {
     pub speedtest_last_completed: Arc<AtomicI64>,
     /// MAC OUI manufacturer lookup database.
     pub oui_db: Arc<OuiDb>,
-    /// IP geolocation cache (ip-api.com backed, SQLite cached).
+    /// IP geolocation cache (MaxMind primary, ip-api.com fallback).
     pub geo_cache: Arc<GeoCache>,
+    /// Persistent connection history store (SQLite).
+    pub connection_store: Arc<ConnectionStore>,
     /// Cached network map status (DHCP + ARP + interfaces), refreshed every 5s.
     pub network_map_cache: Arc<RwLock<Option<NetworkMapStatusCache>>>,
     /// Device behavioral fingerprinting store (SQLite).

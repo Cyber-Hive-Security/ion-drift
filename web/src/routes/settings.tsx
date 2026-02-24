@@ -8,6 +8,9 @@ import {
   useUpdateSecrets,
   useRegenerateSession,
   useCertStatus,
+  useSyslogStatus,
+  useGeoIpStatus,
+  useConnectionHistoryStats,
 } from "@/api/queries";
 import {
   Shield,
@@ -17,7 +20,11 @@ import {
   AlertTriangle,
   X,
   FileKey,
+  Radio,
+  Globe,
+  Database,
 } from "lucide-react";
+import { formatBytes, formatNumber } from "@/lib/format";
 
 export function SettingsPage() {
   return (
@@ -26,6 +33,9 @@ export function SettingsPage() {
         <SecretsSection />
         <CertWardenSection />
         <EncryptionSection />
+        <SyslogSection />
+        <GeoIpSection />
+        <ConnectionHistorySection />
       </div>
     </PageShell>
   );
@@ -395,6 +405,161 @@ function EncryptionSection() {
               </>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Syslog Section ──────────────────────────────────────────────
+
+function SyslogSection() {
+  const { data, isLoading } = useSyslogStatus();
+
+  if (isLoading) return <LoadingSpinner />;
+  if (!data) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-3 border-b border-border p-4">
+        <Radio className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">Syslog Listener</h2>
+      </div>
+
+      <div className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Status</span>
+          <div className="flex items-center gap-1.5">
+            {data.listening ? (
+              <>
+                <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-sm text-green-500">Listening</span>
+              </>
+            ) : (
+              <>
+                <span className="h-2 w-2 rounded-full bg-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Stopped</span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Port</span>
+          <code className="text-sm font-mono">{data.port}</code>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Events Today</span>
+          <span className="text-sm">{formatNumber(data.events_today)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Events This Week</span>
+          <span className="text-sm">{formatNumber(data.events_week)}</span>
+        </div>
+
+        <div className="mt-4 rounded-md bg-muted/50 p-3">
+          <p className="text-xs font-medium text-muted-foreground mb-2">
+            RouterOS Configuration
+          </p>
+          <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap select-all">
+{`/system logging action
+add name=ion-drift target=remote remote=<ion-drift-ip> remote-port=${data.port} bsd-syslog=yes
+
+/system logging
+add action=ion-drift topics=firewall`}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── GeoIP Section ───────────────────────────────────────────────
+
+function GeoIpSection() {
+  const { data, isLoading } = useGeoIpStatus();
+
+  if (isLoading) return <LoadingSpinner />;
+  if (!data) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-3 border-b border-border p-4">
+        <Globe className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">GeoIP Database</h2>
+      </div>
+
+      <div className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">MaxMind Database</span>
+          <div className="flex items-center gap-1.5">
+            {data.has_maxmind ? (
+              <>
+                <Check className="h-3.5 w-3.5 text-green-500" />
+                <span className="text-sm text-green-500">Loaded</span>
+              </>
+            ) : (
+              <>
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                <span className="text-sm text-amber-500">Not loaded</span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Fallback</span>
+          <span className="text-sm">ip-api.com (rate-limited)</span>
+        </div>
+        {!data.has_maxmind && (
+          <p className="text-xs text-muted-foreground mt-2">
+            Place GeoLite2-City.mmdb and GeoLite2-ASN.mmdb in the{" "}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">data/geoip/</code>{" "}
+            directory to enable offline GeoIP lookups with lat/lon coordinates.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Connection History Section ──────────────────────────────────
+
+function ConnectionHistorySection() {
+  const { data, isLoading } = useConnectionHistoryStats();
+
+  if (isLoading) return <LoadingSpinner />;
+  if (!data) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-3 border-b border-border p-4">
+        <Database className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">Connection History</h2>
+      </div>
+
+      <div className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Retention</span>
+          <span className="text-sm">{data.retention_days} days</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Records</span>
+          <span className="text-sm">{formatNumber(data.row_count)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Database Size</span>
+          <span className="text-sm">{formatBytes(data.db_size_bytes)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Oldest Record</span>
+          <span className="text-sm">
+            {data.oldest_record
+              ? new Date(data.oldest_record).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })
+              : "No records yet"}
+          </span>
         </div>
       </div>
     </div>

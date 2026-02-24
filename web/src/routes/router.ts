@@ -13,6 +13,7 @@ import { ConnectionsPage } from "./connections";
 import { LogsPage } from "./logs";
 import { SpeedtestPage } from "./speedtest";
 import { BehaviorPage } from "./behavior";
+import { HistoryPage } from "./history";
 import { SettingsPage } from "./settings";
 import { NotFoundPage } from "./__root";
 
@@ -75,6 +76,12 @@ const behaviorRoute = createRoute({
   component: BehaviorPage,
 });
 
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/history",
+  component: HistoryPage,
+});
+
 class NetworkMapErrorBoundary extends React.Component<
   { children: React.ReactNode },
   { error: Error | null }
@@ -132,6 +139,7 @@ const routeTree = rootRoute.addChildren([
   logsRoute,
   speedtestRoute,
   behaviorRoute,
+  historyRoute,
   networkMapRoute,
   settingsRoute,
 ]);

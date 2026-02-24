@@ -335,6 +335,8 @@ export interface GeoInfo {
   isp?: string;
   asn?: string;
   org?: string;
+  lat?: number;
+  lon?: number;
 }
 
 export interface ConnectionEntry {
@@ -655,4 +657,105 @@ export interface CertStatusResponse {
   auto_renewal_enabled: boolean;
   renewal_threshold_days: number;
   check_interval_hours: number;
+}
+
+// Connection history types (snake_case — custom Rust structs)
+
+export interface ConnectionHistoryEntry {
+  id: number;
+  conntrack_id: string | null;
+  protocol: string;
+  src_ip: string;
+  dst_ip: string;
+  dst_port: number | null;
+  src_mac: string | null;
+  src_vlan: string | null;
+  src_hostname: string | null;
+  dst_vlan: string | null;
+  dst_hostname: string | null;
+  first_seen: string;
+  last_seen: string;
+  closed: boolean;
+  last_state: string | null;
+  duration_seconds: number | null;
+  bytes_tx: number;
+  bytes_rx: number;
+  data_source: string;
+  poll_count: number;
+  dst_is_external: boolean;
+  geo_country_code: string | null;
+  geo_country: string | null;
+  geo_city: string | null;
+  geo_asn: number | null;
+  geo_org: string | null;
+  geo_lat: number | null;
+  geo_lon: number | null;
+  flagged: boolean;
+  anomaly_id: number | null;
+}
+
+export interface PaginatedHistory {
+  items: ConnectionHistoryEntry[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface GeoSummaryEntry {
+  country_code: string;
+  country: string;
+  lat: number;
+  lon: number;
+  connection_count: number;
+  unique_sources: number;
+  unique_destinations: number;
+  total_tx: number;
+  total_rx: number;
+  top_orgs: string[];
+}
+
+export interface PortSummaryEntry {
+  dst_port: number;
+  protocol: string;
+  total_bytes: number;
+  flow_count: number;
+  unique_sources: number;
+  unique_destinations: number;
+}
+
+export interface WeeklySnapshot {
+  id: number;
+  snapshot_week: string;
+  snapshot_type: string;
+  period_start: string;
+  period_end: string;
+  data: string;
+  summary: string;
+  created_at: string;
+}
+
+export interface SnapshotListEntry {
+  week: string;
+  types: string[];
+  summary: string;
+}
+
+export interface SyslogStatus {
+  port: number;
+  enabled: boolean;
+  events_today: number;
+  events_week: number;
+  listening: boolean;
+}
+
+export interface GeoIpStatus {
+  has_maxmind: boolean;
+  has_credentials: boolean;
+}
+
+export interface ConnectionHistoryStats {
+  retention_days: number;
+  row_count: number;
+  db_size_bytes: number;
+  oldest_record: string | null;
 }

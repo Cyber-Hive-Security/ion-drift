@@ -3,6 +3,7 @@ mod behavior_engine;
 mod bootstrap;
 mod certwarden;
 mod config;
+mod connection_store;
 mod geo;
 mod live_traffic;
 mod log_parser;
@@ -11,7 +12,9 @@ mod oui;
 mod routes;
 mod secrets;
 mod setup;
+mod snapshots;
 mod state;
+mod syslog;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -172,9 +175,17 @@ async fn main() -> anyhow::Result<()> {
     // Load MAC OUI database (bundled)
     let oui_db = oui::OuiDb::load();
 
-    // Initialize IP geolocation cache (ip-api.com backed, SQLite cached)
+    // Initialize connection history store (SQLite)
+    let connection_store = std::sync::Arc::new(
+        connection_store::ConnectionStore::new(&data_dir.join("connections.db"))
+            .map_err(|e| anyhow::anyhow!("failed to init connection store: {e}"))?,
+    );
+
+    // Initialize IP geolocation cache (MaxMind primary, ip-api.com fallback)
+    let geoip_dir = data_dir.join("geoip");
+    std::fs::create_dir_all(&geoip_dir)?;
     let geo_cache = std::sync::Arc::new(
-        geo::GeoCache::new(&data_dir.join("geo.db"))
+        geo::GeoCache::new(&data_dir.join("geo.db"), Some(&geoip_dir))
             .map_err(|e| anyhow::anyhow!("failed to init geo cache: {e}"))?,
     );
 
@@ -193,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         speedtest_last_completed: speedtest_last_completed.clone(),
         oui_db,
         geo_cache: geo_cache.clone(),
+        connection_store: connection_store.clone(),
         network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
         behavior_store: behavior_store.clone(),
         firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))),
@@ -226,6 +238,20 @@ async fn main() -> anyhow::Result<()> {
     );
     spawn_behavior_maintenance(behavior_store.clone());
     spawn_behavior_auto_classifier(behavior_store);
+
+    // Spawn connection history persistence + pruning
+    spawn_connection_persister(
+        connection_store.clone(),
+        mikrotik.clone(),
+        geo_cache.clone(),
+    );
+    spawn_connection_pruner(connection_store.clone());
+
+    // Spawn weekly snapshot generator
+    snapshots::spawn_snapshot_generator(connection_store.clone());
+
+    // Spawn syslog listener (UDP 5514 by default)
+    syslog::spawn_syslog_listener(5514, connection_store, geo_cache);
 
     // Spawn cert rotation background task if CertWarden is configured
     if let Some(ref sm) = secrets_manager {
@@ -875,6 +901,137 @@ fn spawn_behavior_auto_classifier(store: Arc<mikrotik_core::BehaviorStore>) {
                 }
                 Err(e) => tracing::warn!("behavior: auto-resolve failed: {e}"),
             }
+        }
+    });
+}
+
+/// Persist active connections to history every 30 seconds (same cadence as the connections page poll).
+fn spawn_connection_persister(
+    store: Arc<connection_store::ConnectionStore>,
+    client: mikrotik_core::MikrotikClient,
+    geo_cache: Arc<geo::GeoCache>,
+) {
+    tokio::spawn(async move {
+        // Wait 1 minute before starting (let server stabilize)
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        tracing::info!("connection history persister starting");
+
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+
+            let connections = match client.firewall_connections_full().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("connection persister: failed to fetch connections: {e}");
+                    continue;
+                }
+            };
+
+            let mut inserted = 0usize;
+            let mut updated = 0usize;
+            let mut active_ids: Vec<String> = Vec::with_capacity(connections.len());
+
+            for c in &connections {
+                let conntrack_id = c.id.clone();
+                active_ids.push(conntrack_id.clone());
+
+                let protocol = c
+                    .protocol
+                    .as_deref()
+                    .map(|p| match p {
+                        "6" | "tcp" => "tcp",
+                        "17" | "udp" => "udp",
+                        "1" | "icmp" => "icmp",
+                        _ => "other",
+                    })
+                    .unwrap_or("other")
+                    .to_string();
+
+                let (src_ip, _src_port) = c
+                    .src_address
+                    .as_deref()
+                    .map(split_addr_port)
+                    .unwrap_or(("", ""));
+                let (dst_ip, dst_port_str) = c
+                    .dst_address
+                    .as_deref()
+                    .map(split_addr_port)
+                    .unwrap_or(("", ""));
+                let dst_port = dst_port_str.parse::<i64>().ok();
+
+                let poll_conn = connection_store::PollConnection {
+                    conntrack_id,
+                    protocol,
+                    src_ip: src_ip.to_string(),
+                    dst_ip: dst_ip.to_string(),
+                    dst_port,
+                    src_mac: None,
+                    tcp_state: c.tcp_state.clone(),
+                    bytes_tx: c.orig_bytes.unwrap_or(0) as i64,
+                    bytes_rx: c.repl_bytes.unwrap_or(0) as i64,
+                };
+
+                match store.upsert_from_poll(&poll_conn, &geo_cache) {
+                    Ok(true) => inserted += 1,
+                    Ok(false) => updated += 1,
+                    Err(e) => tracing::debug!("connection persist error: {e}"),
+                }
+            }
+
+            // Close connections that disappeared from the poll
+            match store.close_stale(&active_ids, 60) {
+                Ok(closed) => {
+                    if closed > 0 || inserted > 0 {
+                        tracing::debug!(
+                            "connections: +{inserted} new, ~{updated} updated, -{closed} closed"
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!("connection close_stale error: {e}"),
+            }
+        }
+    });
+}
+
+/// Split "IP:port" into (IP, port) — copied from connections route for use in main.
+fn split_addr_port(addr: &str) -> (&str, &str) {
+    if addr.starts_with('[') {
+        if let Some(bracket_end) = addr.find(']') {
+            let ip = &addr[1..bracket_end];
+            let port = if addr.len() > bracket_end + 2 {
+                &addr[bracket_end + 2..]
+            } else {
+                ""
+            };
+            return (ip, port);
+        }
+    }
+    if let Some(colon) = addr.rfind(':') {
+        (&addr[..colon], &addr[colon + 1..])
+    } else {
+        (addr, "")
+    }
+}
+
+/// Prune old connection history nightly.
+fn spawn_connection_pruner(store: Arc<connection_store::ConnectionStore>) {
+    tokio::spawn(async move {
+        // Wait 3 hours before first prune (avoid startup load)
+        tokio::time::sleep(Duration::from_secs(3 * 3600)).await;
+
+        loop {
+            match store.prune(30) {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("connection history: pruned {count} old rows");
+                    }
+                }
+                Err(e) => tracing::warn!("connection history prune failed: {e}"),
+            }
+
+            // Sleep 24 hours
+            tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
         }
     });
 }

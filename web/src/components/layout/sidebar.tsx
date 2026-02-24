@@ -12,6 +12,7 @@ import {
   Activity,
   Map,
   Settings,
+  History,
 } from "lucide-react";
 
 const navItems = [
@@ -21,6 +22,7 @@ const navItems = [
   { to: "/firewall", label: "Firewall", icon: Shield },
   { to: "/connections", label: "Connections", icon: Plug2 },
   { to: "/behavior", label: "Behavior", icon: Activity },
+  { to: "/history", label: "History", icon: History },
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/speedtest", label: "Speedtest", icon: Gauge },
   { to: "/network-map", label: "Network Map", icon: Map },

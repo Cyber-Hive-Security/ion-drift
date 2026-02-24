@@ -44,6 +44,14 @@ import type {
   RegenerateSessionResponse,
   EncryptionStatusResponse,
   CertStatusResponse,
+  PaginatedHistory,
+  GeoSummaryEntry,
+  PortSummaryEntry,
+  SnapshotListEntry,
+  WeeklySnapshot,
+  SyslogStatus,
+  GeoIpStatus,
+  ConnectionHistoryStats,
 } from "./types";
 
 // Auth
@@ -515,5 +523,107 @@ export function useRegenerateSession() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings", "secrets"] });
     },
+  });
+}
+
+// Connection History
+
+export function useConnectionHistory(params?: {
+  page?: number;
+  per_page?: number;
+  protocol?: string;
+  country?: string;
+  flagged_only?: boolean;
+  external_only?: boolean;
+  search?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.page != null) qs.set("page", String(params.page));
+  if (params?.per_page != null) qs.set("per_page", String(params.per_page));
+  if (params?.protocol) qs.set("protocol", params.protocol);
+  if (params?.country) qs.set("country", params.country);
+  if (params?.flagged_only) qs.set("flagged_only", "true");
+  if (params?.external_only) qs.set("external_only", "true");
+  if (params?.search) qs.set("search", params.search);
+  const qsStr = qs.toString();
+  return useQuery({
+    queryKey: ["connections", "history", params],
+    queryFn: () =>
+      apiFetch<PaginatedHistory>(
+        `/api/connections/history${qsStr ? `?${qsStr}` : ""}`,
+      ),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useGeoSummary(days = 30) {
+  return useQuery({
+    queryKey: ["connections", "geo-summary", days],
+    queryFn: () =>
+      apiFetch<GeoSummaryEntry[]>(
+        `/api/connections/geo-summary?days=${days}`,
+      ),
+    refetchInterval: 60_000,
+  });
+}
+
+export function usePortSummary(days = 7) {
+  return useQuery({
+    queryKey: ["connections", "port-summary", days],
+    queryFn: () =>
+      apiFetch<PortSummaryEntry[]>(
+        `/api/connections/port-summary?days=${days}`,
+      ),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useConnectionHistoryStats() {
+  return useQuery({
+    queryKey: ["connections", "stats"],
+    queryFn: () =>
+      apiFetch<ConnectionHistoryStats>("/api/connections/stats"),
+    staleTime: 300_000,
+  });
+}
+
+// History (Snapshots)
+
+export function useSnapshots() {
+  return useQuery({
+    queryKey: ["history", "snapshots"],
+    queryFn: () =>
+      apiFetch<SnapshotListEntry[]>("/api/history/snapshots"),
+    staleTime: 300_000,
+  });
+}
+
+export function useSnapshot(week: string | null, type: string) {
+  return useQuery({
+    queryKey: ["history", "snapshot", week, type],
+    queryFn: () =>
+      apiFetch<WeeklySnapshot | null>(
+        `/api/history/snapshot/${encodeURIComponent(week!)}/${encodeURIComponent(type)}`,
+      ),
+    enabled: !!week,
+    staleTime: Infinity,
+  });
+}
+
+// Settings — Syslog & GeoIP
+
+export function useSyslogStatus() {
+  return useQuery({
+    queryKey: ["settings", "syslog"],
+    queryFn: () => apiFetch<SyslogStatus>("/api/settings/syslog"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useGeoIpStatus() {
+  return useQuery({
+    queryKey: ["settings", "geoip"],
+    queryFn: () => apiFetch<GeoIpStatus>("/api/settings/geoip"),
+    staleTime: 300_000,
   });
 }

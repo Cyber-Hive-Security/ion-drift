@@ -2,6 +2,7 @@ pub mod arp;
 pub mod behavior;
 pub mod connections;
 pub mod firewall;
+pub mod history;
 pub mod interfaces;
 pub mod ip;
 pub mod logs;
@@ -143,6 +144,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         // Connections
         .route("/connections/summary", get(connections::summary))
         .route("/connections/page", get(connections::page))
+        .route("/connections/history", get(connections::history))
+        .route("/connections/geo-summary", get(connections::geo_summary))
+        .route("/connections/port-summary", get(connections::port_summary))
+        .route("/connections/stats", get(connections::history_stats))
         // ARP + enhanced endpoints
         .route("/ip/arp", get(arp::list))
         .route("/ip/dhcp-leases-status", get(arp::dhcp_leases_status))
@@ -174,11 +179,16 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/behavior/anomalies", get(behavior::anomalies))
         .route("/behavior/anomalies/{id}/resolve", post(behavior::resolve_anomaly))
         .route("/behavior/alerts", get(behavior::alerts))
+        // History (snapshots)
+        .route("/history/snapshots", get(history::list_snapshots))
+        .route("/history/snapshot/{week}/{snapshot_type}", get(history::get_snapshot))
         // Settings
         .route("/settings/secrets", get(settings::secrets_status).put(settings::update_secrets))
         .route("/settings/secrets/session/regenerate", post(settings::regenerate_session))
         .route("/settings/encryption", get(settings::encryption_status))
         .route("/settings/cert", get(settings::cert_status))
+        .route("/settings/syslog", get(connections::syslog_status))
+        .route("/settings/geoip", get(connections::geoip_status))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 

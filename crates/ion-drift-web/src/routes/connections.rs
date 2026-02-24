@@ -1,12 +1,15 @@
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::{Json, Response};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::connection_store::{
+    ConnectionHistoryStats, GeoSummaryEntry, HistoryFilters, PaginatedHistory, PortSummaryEntry,
+};
 use crate::geo::{GeoCache, GeoInfo};
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
-use super::api_error;
+use super::{api_error, internal_error};
 
 #[derive(Serialize)]
 pub struct ConnectionSummary {
@@ -252,5 +255,131 @@ pub async fn page(
             flagged_count,
             max_entries: tracking.max_entries,
         },
+    }))
+}
+
+// ── Connection history endpoints ─────────────────────────────
+
+/// GET /api/connections/history — paginated connection history with filters.
+pub async fn history(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(filters): Query<HistoryFilters>,
+) -> Result<Json<PaginatedHistory>, Response> {
+    let result = state
+        .connection_store
+        .query_history(&filters)
+        .map_err(|e| internal_error("connection history query", e))?;
+    Ok(Json(result))
+}
+
+/// Query params for geo-summary.
+#[derive(Deserialize)]
+pub struct GeoSummaryQuery {
+    #[serde(default = "default_30")]
+    pub days: i64,
+}
+
+fn default_30() -> i64 {
+    30
+}
+
+/// GET /api/connections/geo-summary — aggregated per-country data for the world map.
+pub async fn geo_summary(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(query): Query<GeoSummaryQuery>,
+) -> Result<Json<Vec<GeoSummaryEntry>>, Response> {
+    let result = state
+        .connection_store
+        .geo_summary(query.days)
+        .map_err(|e| internal_error("geo summary", e))?;
+    Ok(Json(result))
+}
+
+/// Query params for port-summary.
+#[derive(Deserialize)]
+pub struct PortSummaryQuery {
+    #[serde(default = "default_7")]
+    pub days: i64,
+}
+
+fn default_7() -> i64 {
+    7
+}
+
+/// GET /api/connections/port-summary — aggregated per-port data for Sankey diagram.
+pub async fn port_summary(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(query): Query<PortSummaryQuery>,
+) -> Result<Json<Vec<PortSummaryEntry>>, Response> {
+    let result = state
+        .connection_store
+        .port_summary(query.days)
+        .map_err(|e| internal_error("port summary", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/connections/stats — connection history stats for settings page.
+pub async fn history_stats(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<ConnectionHistoryStats>, Response> {
+    let result = state
+        .connection_store
+        .stats()
+        .map_err(|e| internal_error("connection stats", e))?;
+    Ok(Json(result))
+}
+
+// ── Syslog status endpoint ───────────────────────────────────
+
+/// Syslog listener status.
+#[derive(Serialize)]
+pub struct SyslogStatus {
+    pub port: u16,
+    pub enabled: bool,
+    pub events_today: i64,
+    pub events_week: i64,
+    pub listening: bool,
+}
+
+/// GET /api/settings/syslog — syslog listener status.
+pub async fn syslog_status(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<SyslogStatus>, Response> {
+    let (today, week) = state
+        .connection_store
+        .syslog_event_counts()
+        .map_err(|e| internal_error("syslog counts", e))?;
+
+    Ok(Json(SyslogStatus {
+        port: 5514,
+        enabled: true,
+        events_today: today,
+        events_week: week,
+        listening: true,
+    }))
+}
+
+// ── GeoIP status endpoint ────────────────────────────────────
+
+/// GeoIP database status.
+#[derive(Serialize)]
+pub struct GeoIpStatus {
+    pub has_maxmind: bool,
+    pub has_credentials: bool,
+}
+
+/// GET /api/settings/geoip — GeoIP database status.
+pub async fn geoip_status(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<GeoIpStatus>, Response> {
+    Ok(Json(GeoIpStatus {
+        has_maxmind: state.geo_cache.has_maxmind(),
+        has_credentials: false, // TODO: check secrets manager for MaxMind credentials
     }))
 }
