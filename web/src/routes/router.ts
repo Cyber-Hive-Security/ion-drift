@@ -75,11 +75,34 @@ const behaviorRoute = createRoute({
   component: BehaviorPage,
 });
 
+class NetworkMapErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return React.createElement("div", { className: "flex h-full flex-col items-center justify-center gap-4 text-muted-foreground" },
+        React.createElement("p", null, "Failed to load Network Map."),
+        React.createElement("button", {
+          className: "rounded border border-border px-4 py-2 text-sm hover:bg-accent",
+          onClick: () => this.setState({ error: null }),
+        }, "Retry"),
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function NetworkMapWrapper() {
   return React.createElement(
-    React.Suspense,
-    { fallback: React.createElement("div", { className: "flex h-full items-center justify-center text-muted-foreground" }, "Loading Network Map\u2026") },
-    React.createElement(LazyNetworkMapPage),
+    NetworkMapErrorBoundary, null,
+    React.createElement(
+      React.Suspense,
+      { fallback: React.createElement("div", { className: "flex h-full items-center justify-center text-muted-foreground" }, "Loading Network Map\u2026") },
+      React.createElement(LazyNetworkMapPage),
+    ),
   );
 }
 
