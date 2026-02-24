@@ -201,17 +201,22 @@ interface PortSankeyProps {
 
 export function PortSankey({ summary, title }: PortSankeyProps) {
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const baselined = summary.has_baselines;
 
-  // Combine active flows + disappeared ghost flows
+  // Combine active flows + disappeared ghost flows.
+  // During the baselining period (no baselines yet), treat everything as normal.
   const allFlows = useMemo(() => {
-    const active = summary.flows;
-    const ghosts = summary.disappeared.map((f) => ({
-      ...f,
-      // Use baseline volume for Sankey width so ghost flows have visible width
-      total_bytes: f.baseline_avg_bytes ?? 0,
-    }));
+    const normalize = (f: ClassifiedPortFlow): ClassifiedPortFlow =>
+      baselined ? f : { ...f, classification: "normal" };
+    const active = summary.flows.map(normalize);
+    const ghosts = baselined
+      ? summary.disappeared.map((f) => ({
+          ...f,
+          total_bytes: f.baseline_avg_bytes ?? 0,
+        }))
+      : [];
     return [...active, ...ghosts];
-  }, [summary]);
+  }, [summary, baselined]);
 
   const LinkWithTooltip = useMemo(() => {
     return function SankeyLink(props: SankeyLinkPayload) {
@@ -377,7 +382,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
     (f) => f.classification === "source_anomaly",
   );
   const disappeared = summary.disappeared;
-  const hasAnomalies = anomalies.length > 0 || disappeared.length > 0;
+  const hasAnomalies = baselined && (anomalies.length > 0 || disappeared.length > 0);
   const hasCritical = newPorts.length > 0;
 
   return (

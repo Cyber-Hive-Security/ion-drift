@@ -765,6 +765,7 @@ export interface ClassifiedPortFlow {
 
 export interface ClassifiedPortSummary {
   anomaly_count: number;
+  has_baselines: boolean;
   flows: ClassifiedPortFlow[];
   disappeared: ClassifiedPortFlow[];
 }

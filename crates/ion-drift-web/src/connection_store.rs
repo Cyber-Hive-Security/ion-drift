@@ -171,6 +171,7 @@ pub struct ClassifiedPortFlow {
 #[derive(Debug, Clone, Serialize)]
 pub struct ClassifiedPortSummary {
     pub anomaly_count: usize,
+    pub has_baselines: bool,
     pub flows: Vec<ClassifiedPortFlow>,
     pub disappeared: Vec<ClassifiedPortFlow>,
 }
@@ -1262,8 +1263,11 @@ impl ConnectionStore {
 
         drop(db);
 
+        let has_baselines = !baselines.is_empty();
+
         Ok(ClassifiedPortSummary {
             anomaly_count,
+            has_baselines,
             flows: classified_flows,
             disappeared,
         })
