@@ -35,53 +35,51 @@ import {
   CONNECTION_STYLES,
 } from "../data";
 
-// ─── Helpers ────────────────────────────────────────────
-
-function hexPath(r: number): string {
-  const pts: [number, number][] = [];
-  for (let i = 0; i < 6; i++) {
-    const angle = (Math.PI / 3) * i - Math.PI / 6;
-    pts.push([r * Math.cos(angle), r * Math.sin(angle)]);
-  }
-  return "M" + pts.map((p) => p.join(",")).join("L") + "Z";
-}
-
-function getIconPath(type: string): string {
-  const t = NODE_TYPES[type];
-  if (!t) return ICON_PATHS.vm;
-  return ICON_PATHS[t.icon] || ICON_PATHS.vm;
-}
-
-function getNodeColor(node: NetworkNode): string {
-  return NODE_TYPES[node.type]?.color || "#888";
-}
-
-function matchesSearch(node: NetworkNode, term: string): boolean {
-  const fields = [
-    node.hostname,
-    node.ip,
-    node.role,
-    node.id,
-    String(node.vlan),
-    VLAN_CONFIG[node.vlan]?.name || "",
-    NODE_TYPES[node.type]?.label || "",
-  ];
-  if (node.containers) {
-    node.containers.forEach((c) => {
-      fields.push(c.name, c.role || "", c.ports || "");
-    });
-  }
-  if (node.details) node.details.forEach((d) => fields.push(d));
-  return fields.some((f) => f && f.toLowerCase().includes(term));
-}
-
 // ─── Factory ────────────────────────────────────────────
 
 export function createMapInstance(
   svgElement: SVGSVGElement,
   callbacks: MapCallbacks,
 ): MapInstance {
-  // ── Throughput animation helpers (scoped inside factory to avoid TDZ issues) ──
+  // ── All helpers scoped inside factory to avoid minifier TDZ issues ──
+
+  function hexPath(r: number): string {
+    const pts: [number, number][] = [];
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i - Math.PI / 6;
+      pts.push([r * Math.cos(angle), r * Math.sin(angle)]);
+    }
+    return "M" + pts.map((p) => p.join(",")).join("L") + "Z";
+  }
+
+  function getIconPath(type: string): string {
+    const t = NODE_TYPES[type];
+    if (!t) return ICON_PATHS.vm;
+    return ICON_PATHS[t.icon] || ICON_PATHS.vm;
+  }
+
+  function getNodeColor(node: NetworkNode): string {
+    return NODE_TYPES[node.type]?.color || "#888";
+  }
+
+  function matchesSearch(node: NetworkNode, term: string): boolean {
+    const fields = [
+      node.hostname,
+      node.ip,
+      node.role,
+      node.id,
+      String(node.vlan),
+      VLAN_CONFIG[node.vlan]?.name || "",
+      NODE_TYPES[node.type]?.label || "",
+    ];
+    if (node.containers) {
+      node.containers.forEach((c) => {
+        fields.push(c.name, c.role || "", c.ports || "");
+      });
+    }
+    if (node.details) node.details.forEach((d) => fields.push(d));
+    return fields.some((f) => f && f.toLowerCase().includes(term));
+  }
 
   function vlanForIp(ip: string): number | null {
     const parts = ip.split(".");
