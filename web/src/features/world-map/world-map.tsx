@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState } from "react";
+import { useEffect, useRef, useMemo, useState, useCallback } from "react";
 import * as d3 from "d3";
 import * as topojson from "topojson-client";
 import type { Topology, GeometryCollection } from "topojson-specification";
@@ -125,6 +125,7 @@ export function WorldMap({
 }: WorldMapProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const [dimensions, setDimensions] = useState({ width: 960, height: 500 });
 
   // Observe container size
@@ -165,15 +166,18 @@ export function WorldMap({
   }, [data]);
 
   // City dot scaling ranges
-  const { minCityCount, maxCityCount } = useMemo(() => {
+  const { minCityCount, maxCityCount, minCityBytes, maxCityBytes } = useMemo(() => {
     const counts = cityData.map((d) => d.connection_count).filter((c) => c > 0);
+    const bytes = cityData.map((d) => d.bytes_tx + d.bytes_rx).filter((b) => b > 0);
     return {
       minCityCount: counts.length > 0 ? Math.min(...counts) : 1,
       maxCityCount: counts.length > 0 ? Math.max(...counts) : 1,
+      minCityBytes: bytes.length > 0 ? Math.min(...bytes) : 1,
+      maxCityBytes: bytes.length > 0 ? Math.max(...bytes) : 1,
     };
   }, [cityData]);
 
-  // Country fill color (unchanged from previous fix)
+  // Country fill color
   function countryColor(code: string, entry: GeoSummaryEntry | undefined): string {
     if (!entry || entry.connection_count === 0) return "oklch(0.2 0.01 285)";
     if (code === HOME_COUNTRY) return "oklch(0.35 0.15 145)";
@@ -189,11 +193,40 @@ export function WorldMap({
   // Cache the TopoJSON so we don't re-fetch on every effect run
   const worldTopoRef = useRef<Topology | null>(null);
 
+  // Zoom controls
+  const handleZoomIn = useCallback(() => {
+    const svg = svgRef.current;
+    const zoom = zoomRef.current;
+    if (svg && zoom) {
+      d3.select(svg).transition().duration(300).call(zoom.scaleBy, 1.5);
+    }
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    const svg = svgRef.current;
+    const zoom = zoomRef.current;
+    if (svg && zoom) {
+      d3.select(svg).transition().duration(300).call(zoom.scaleBy, 1 / 1.5);
+    }
+  }, []);
+
+  const handleZoomReset = useCallback(() => {
+    const svg = svgRef.current;
+    const zoom = zoomRef.current;
+    if (svg && zoom) {
+      d3.select(svg)
+        .transition()
+        .duration(500)
+        .call(zoom.transform, d3.zoomIdentity);
+    }
+  }, []);
+
   // D3 rendering effect — only runs when data is ready
   useEffect(() => {
-    const svg = d3.select(svgRef.current);
+    const svgEl = svgRef.current;
+    const svg = d3.select(svgEl);
     const tooltip = tooltipRef.current;
-    if (!svg.node() || !tooltip) return;
+    if (!svgEl || !tooltip) return;
 
     // Don't render until we have data (but still render base map)
     const hasData = data.length > 0;
@@ -228,8 +261,21 @@ export function WorldMap({
       // Clear previous render
       svg.selectAll("*").remove();
 
+      // Create a group that will be transformed by zoom
+      const zoomGroup = svg.append("g").attr("class", "zoom-group");
+
+      // Set up zoom behavior
+      const zoom = d3
+        .zoom<SVGSVGElement, unknown>()
+        .scaleExtent([1, 12])
+        .on("zoom", (event) => {
+          zoomGroup.attr("transform", event.transform);
+        });
+      svg.call(zoom);
+      zoomRef.current = zoom;
+
       // Background sphere
-      svg
+      zoomGroup
         .append("path")
         .datum({ type: "Sphere" } as any)
         .attr("d", path as any)
@@ -287,7 +333,7 @@ export function WorldMap({
       };
 
       // ── Country polygons ──────────────────────────────────────
-      svg
+      zoomGroup
         .selectAll(".country")
         .data((countries as any).features)
         .join("path")
@@ -331,8 +377,8 @@ export function WorldMap({
       // ── Arc lines, dots, cities — only when data is loaded ──
       if (!hasData) return;
 
-      const arcsGroup = svg.append("g").attr("class", "arcs");
-      const countryDotsGroup = svg.append("g").attr("class", "country-dots");
+      const arcsGroup = zoomGroup.append("g").attr("class", "arcs");
+      const countryDotsGroup = zoomGroup.append("g").attr("class", "country-dots");
 
       for (const entry of data) {
         if (entry.country_code === HOME_COUNTRY) continue;
@@ -416,9 +462,10 @@ export function WorldMap({
         }
       }
 
-      // ── City-level dots (smaller, with halo ring) ─────────────
+      // ── City-level arcs and dots ───────────────────────────────
       const homeProj = projection(HOME);
-      const cityDotsGroup = svg.append("g").attr("class", "city-dots");
+      const cityArcsGroup = zoomGroup.append("g").attr("class", "city-arcs");
+      const cityDotsGroup = zoomGroup.append("g").attr("class", "city-dots");
 
       for (const city of cityData) {
         const cityCoords: [number, number] = [city.lon, city.lat];
@@ -435,6 +482,27 @@ export function WorldMap({
         const color = arcColor(city);
         // City dots: 2px to 10px (always smaller than country dots' 4-16px range)
         const radius = logScale(city.connection_count, minCityCount, maxCityCount, 2, 10);
+
+        // Arc line from home to city
+        const cityBytes = city.bytes_tx + city.bytes_rx;
+        const arcWidth = logScale(cityBytes, minCityBytes, maxCityBytes, 0.5, 3);
+        const arcOpacity = Math.min(0.7, 0.15 + arcWidth * 0.06);
+
+        const lineGeo: GeoJSON.Feature<GeoJSON.LineString> = {
+          type: "Feature",
+          properties: {},
+          geometry: { type: "LineString", coordinates: [HOME, cityCoords] },
+        };
+
+        cityArcsGroup
+          .append("path")
+          .datum(lineGeo)
+          .attr("d", path as any)
+          .attr("fill", "none")
+          .attr("stroke", color)
+          .attr("stroke-width", arcWidth)
+          .attr("stroke-opacity", arcOpacity)
+          .attr("pointer-events", "none");
 
         // Outer halo ring
         cityDotsGroup
@@ -483,7 +551,7 @@ export function WorldMap({
 
       // ── Home marker (on top of everything, fixed size) ────────
       if (homeProj) {
-        svg
+        zoomGroup
           .append("circle")
           .attr("cx", homeProj[0])
           .attr("cy", homeProj[1])
@@ -508,7 +576,7 @@ export function WorldMap({
     return () => {
       cancelled = true;
     };
-  }, [data, cityData, dimensions, countryIndex, minBytes, maxBytes, minCount, maxCount, minCityCount, maxCityCount, onCountryClick, onCityClick, timeRange]);
+  }, [data, cityData, dimensions, countryIndex, minBytes, maxBytes, minCount, maxCount, minCityCount, maxCityCount, minCityBytes, maxCityBytes, onCountryClick, onCityClick, timeRange]);
 
   // Summary: per-country breakdown sorted by connection count
   const sortedCountries = useMemo(
@@ -581,13 +649,42 @@ export function WorldMap({
             Loading map data...
           </div>
         ) : (
-          <svg
-            ref={svgRef}
-            width={dimensions.width}
-            height={dimensions.height}
-            viewBox={`0 0 ${dimensions.width} ${dimensions.height}`}
-            className="w-full"
-          />
+          <>
+            <svg
+              ref={svgRef}
+              width={dimensions.width}
+              height={dimensions.height}
+              viewBox={`0 0 ${dimensions.width} ${dimensions.height}`}
+              className="w-full"
+            />
+            {/* Zoom controls */}
+            <div className="absolute top-3 right-3 flex flex-col gap-1">
+              <button
+                type="button"
+                onClick={handleZoomIn}
+                className="flex h-7 w-7 items-center justify-center rounded bg-card/80 text-sm font-bold text-foreground backdrop-blur hover:bg-card border border-border"
+                title="Zoom in"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={handleZoomOut}
+                className="flex h-7 w-7 items-center justify-center rounded bg-card/80 text-sm font-bold text-foreground backdrop-blur hover:bg-card border border-border"
+                title="Zoom out"
+              >
+                &minus;
+              </button>
+              <button
+                type="button"
+                onClick={handleZoomReset}
+                className="flex h-7 w-7 items-center justify-center rounded bg-card/80 text-[10px] font-medium text-muted-foreground backdrop-blur hover:bg-card hover:text-foreground border border-border"
+                title="Reset zoom"
+              >
+                1:1
+              </button>
+            </div>
+          </>
         )}
       </div>
 
@@ -642,6 +739,7 @@ export function WorldMap({
             City
           </div>
         )}
+        <div className="ml-auto text-[9px]">Scroll to zoom &middot; Drag to pan</div>
       </div>
     </div>
   );
