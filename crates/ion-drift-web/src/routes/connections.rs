@@ -378,8 +378,19 @@ pub async fn geoip_status(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<GeoIpStatus>, Response> {
+    let has_credentials = if let Some(ref sm) = state.secrets_manager {
+        let sm = sm.read().await;
+        sm.decrypt_secret(crate::secrets::SECRET_MAXMIND_ACCOUNT_ID)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+    } else {
+        false
+    };
+
     Ok(Json(GeoIpStatus {
         has_maxmind: state.geo_cache.has_maxmind(),
-        has_credentials: false, // TODO: check secrets manager for MaxMind credentials
+        has_credentials,
     }))
 }

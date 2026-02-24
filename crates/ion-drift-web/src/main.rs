@@ -100,6 +100,8 @@ async fn main() -> anyhow::Result<()> {
                         session_secret: secrecy::SecretString::from(session_secret.clone()),
                         certwarden_cert_api_key: None,
                         certwarden_key_api_key: None,
+                        maxmind_account_id: None,
+                        maxmind_license_key: None,
                     };
                     sm.store_all(&decrypted).await?;
                     config.session.session_secret = session_secret;

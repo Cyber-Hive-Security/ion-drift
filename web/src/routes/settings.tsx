@@ -98,13 +98,16 @@ function SecretsSection() {
     session_secret: "Session Secret",
     certwarden_cert_api_key: "CertWarden Certificate API Key",
     certwarden_key_api_key: "CertWarden Private Key API Key",
+    maxmind_account_id: "MaxMind Account ID",
+    maxmind_license_key: "MaxMind License Key",
   };
 
   const isPasswordField = (name: string) =>
     name === "router_password" ||
     name === "oidc_client_secret" ||
     name === "certwarden_cert_api_key" ||
-    name === "certwarden_key_api_key";
+    name === "certwarden_key_api_key" ||
+    name === "maxmind_license_key";
 
   return (
     <div className="rounded-lg border border-border bg-card">
@@ -506,14 +509,41 @@ function GeoIpSection() {
           </div>
         </div>
         <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">MaxMind Credentials</span>
+          <div className="flex items-center gap-1.5">
+            {data.has_credentials ? (
+              <>
+                <Check className="h-3.5 w-3.5 text-green-500" />
+                <span className="text-sm text-green-500">Configured</span>
+              </>
+            ) : (
+              <span className="text-sm text-muted-foreground">Not configured</span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
           <span className="text-sm text-muted-foreground">Fallback</span>
           <span className="text-sm">ip-api.com (rate-limited)</span>
         </div>
-        {!data.has_maxmind && (
+        {!data.has_credentials && (
           <p className="text-xs text-muted-foreground mt-2">
-            Place GeoLite2-City.mmdb and GeoLite2-ASN.mmdb in the{" "}
+            Add MaxMind Account ID and License Key in the Encrypted Secrets section above to enable auto-download.
+            Free account required &mdash;{" "}
+            <a
+              href="https://www.maxmind.com/en/geolite2/signup"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              sign up at maxmind.com
+            </a>
+          </p>
+        )}
+        {!data.has_maxmind && data.has_credentials && (
+          <p className="text-xs text-muted-foreground mt-2">
+            Credentials configured. Place GeoLite2-City.mmdb and GeoLite2-ASN.mmdb in the{" "}
             <code className="rounded bg-muted px-1 py-0.5 text-xs">data/geoip/</code>{" "}
-            directory to enable offline GeoIP lookups with lat/lon coordinates.
+            directory, or restart to trigger auto-download.
           </p>
         )}
       </div>

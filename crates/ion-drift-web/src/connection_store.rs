@@ -93,6 +93,7 @@ pub struct GeoSummaryEntry {
     pub total_tx: i64,
     pub total_rx: i64,
     pub top_orgs: Vec<String>,
+    pub flagged_count: i64,
 }
 
 /// Aggregated per-port data for Sankey diagram.
@@ -488,7 +489,8 @@ impl ConnectionStore {
                     COUNT(DISTINCT dst_ip) as unique_destinations,
                     SUM(bytes_tx) as total_tx,
                     SUM(bytes_rx) as total_rx,
-                    GROUP_CONCAT(DISTINCT geo_org) as orgs
+                    GROUP_CONCAT(DISTINCT geo_org) as orgs,
+                    SUM(CASE WHEN flagged = 1 THEN 1 ELSE 0 END) as flagged_count
              FROM connection_history
              WHERE dst_is_external = 1
                AND geo_country_code IS NOT NULL
@@ -519,6 +521,7 @@ impl ConnectionStore {
                     total_tx: row.get::<_, i64>(7).unwrap_or(0),
                     total_rx: row.get::<_, i64>(8).unwrap_or(0),
                     top_orgs,
+                    flagged_count: row.get::<_, i64>(10).unwrap_or(0),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

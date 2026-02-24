@@ -631,6 +631,8 @@ export interface UpdateSecretsRequest {
   oidc_client_secret?: string;
   certwarden_cert_api_key?: string;
   certwarden_key_api_key?: string;
+  maxmind_account_id?: string;
+  maxmind_license_key?: string;
 }
 
 export interface UpdateSecretsResponse {
@@ -712,6 +714,7 @@ export interface GeoSummaryEntry {
   total_tx: number;
   total_rx: number;
   top_orgs: string[];
+  flagged_count: number;
 }
 
 export interface PortSummaryEntry {

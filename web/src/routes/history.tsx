@@ -1,7 +1,6 @@
 import { useState, useMemo } from "react";
 import {
   useGeoSummary,
-  usePortSummary,
   useSnapshots,
   useSnapshot,
   useConnectionHistory,
@@ -11,23 +10,20 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
 import { WorldMap } from "@/features/world-map/world-map";
-import { PortSankey } from "@/features/world-map/port-sankey";
 import { formatBytes, formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
   ConnectionHistoryEntry,
   GeoSummaryEntry,
-  PortSummaryEntry,
 } from "@/api/types";
-import { Globe, BarChart3, Table2 } from "lucide-react";
+import { Globe, Table2 } from "lucide-react";
 
 // ── Tab definitions ─────────────────────────────────────────
 
-type TabId = "world-map" | "port-flows" | "history-table";
+type TabId = "world-map" | "history-table";
 
 const TABS: { id: TabId; label: string; icon: typeof Globe }[] = [
   { id: "world-map", label: "World Map", icon: Globe },
-  { id: "port-flows", label: "Port Flows", icon: BarChart3 },
   { id: "history-table", label: "History", icon: Table2 },
 ];
 
@@ -196,7 +192,6 @@ export function HistoryPage() {
 
   // Live data queries
   const geoSummary = useGeoSummary(Number(timeRange));
-  const portSummary = usePortSummary(Number(timeRange));
   const snapshots = useSnapshots();
   const connectionHistory = useConnectionHistory({
     page: historyPage,
@@ -207,7 +202,6 @@ export function HistoryPage() {
 
   // Snapshot data (when a week is selected)
   const worldMapSnapshot = useSnapshot(selectedWeek, "world_map");
-  const portSnapshot = useSnapshot(selectedWeek, "sankey_port");
 
   // Available weeks
   const availableWeeks = useMemo(
@@ -227,25 +221,12 @@ export function HistoryPage() {
     return geoSummary.data ?? [];
   }, [selectedWeek, worldMapSnapshot.data, geoSummary.data]);
 
-  const portData: PortSummaryEntry[] = useMemo(() => {
-    if (selectedWeek && portSnapshot.data?.data) {
-      try {
-        return JSON.parse(portSnapshot.data.data) as PortSummaryEntry[];
-      } catch {
-        return [];
-      }
-    }
-    return portSummary.data ?? [];
-  }, [selectedWeek, portSnapshot.data, portSummary.data]);
-
   const isLoading =
     (activeTab === "world-map" && (selectedWeek ? worldMapSnapshot.isLoading : geoSummary.isLoading)) ||
-    (activeTab === "port-flows" && (selectedWeek ? portSnapshot.isLoading : portSummary.isLoading)) ||
     (activeTab === "history-table" && connectionHistory.isLoading);
 
   const error =
     (activeTab === "world-map" && geoSummary.error) ||
-    (activeTab === "port-flows" && portSummary.error) ||
     (activeTab === "history-table" && connectionHistory.error);
 
   function handleCountryClick(code: string) {
@@ -344,8 +325,6 @@ export function HistoryPage() {
               timeRange={selectedWeek ?? timeRange}
             />
           )}
-
-          {activeTab === "port-flows" && <PortSankey data={portData} />}
 
           {activeTab === "history-table" && connectionHistory.data && (
             <div className="space-y-3">

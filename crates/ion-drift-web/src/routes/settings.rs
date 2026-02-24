@@ -47,6 +47,8 @@ pub struct UpdateSecretsRequest {
     pub oidc_client_secret: Option<String>,
     pub certwarden_cert_api_key: Option<String>,
     pub certwarden_key_api_key: Option<String>,
+    pub maxmind_account_id: Option<String>,
+    pub maxmind_license_key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -111,6 +113,24 @@ pub async fn update_secrets(
                 .await
                 .map_err(|e| internal_error("encrypt certwarden_key_api_key", e))?;
             updated.push(secrets::SECRET_CW_KEY_API_KEY.to_string());
+        }
+    }
+
+    if let Some(ref id) = req.maxmind_account_id {
+        if !id.trim().is_empty() {
+            sm.encrypt_secret(secrets::SECRET_MAXMIND_ACCOUNT_ID, id.trim())
+                .await
+                .map_err(|e| internal_error("encrypt maxmind_account_id", e))?;
+            updated.push(secrets::SECRET_MAXMIND_ACCOUNT_ID.to_string());
+        }
+    }
+
+    if let Some(ref key) = req.maxmind_license_key {
+        if !key.is_empty() {
+            sm.encrypt_secret(secrets::SECRET_MAXMIND_LICENSE_KEY, key)
+                .await
+                .map_err(|e| internal_error("encrypt maxmind_license_key", e))?;
+            updated.push(secrets::SECRET_MAXMIND_LICENSE_KEY.to_string());
         }
     }
 

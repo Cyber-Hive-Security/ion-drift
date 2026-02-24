@@ -16,6 +16,8 @@ pub const SECRET_OIDC_CLIENT_SECRET: &str = "oidc_client_secret";
 pub const SECRET_SESSION_SECRET: &str = "session_secret";
 pub const SECRET_CW_CERT_API_KEY: &str = "certwarden_cert_api_key";
 pub const SECRET_CW_KEY_API_KEY: &str = "certwarden_key_api_key";
+pub const SECRET_MAXMIND_ACCOUNT_ID: &str = "maxmind_account_id";
+pub const SECRET_MAXMIND_LICENSE_KEY: &str = "maxmind_license_key";
 
 /// All decrypted secrets needed by the application.
 pub struct DecryptedSecrets {
@@ -27,6 +29,10 @@ pub struct DecryptedSecrets {
     pub certwarden_cert_api_key: Option<SecretString>,
     /// CertWarden private key API key (optional — not present in legacy setups).
     pub certwarden_key_api_key: Option<SecretString>,
+    /// MaxMind GeoLite2 account ID (optional — for auto-download).
+    pub maxmind_account_id: Option<SecretString>,
+    /// MaxMind GeoLite2 license key (optional — for auto-download).
+    pub maxmind_license_key: Option<SecretString>,
 }
 
 /// Status of a single stored secret.
@@ -196,6 +202,13 @@ impl SecretsManager {
         if let Some(ref key) = secrets.certwarden_key_api_key {
             pairs.push((SECRET_CW_KEY_API_KEY, key.expose_secret()));
         }
+        // MaxMind secrets are optional
+        if let Some(ref key) = secrets.maxmind_account_id {
+            pairs.push((SECRET_MAXMIND_ACCOUNT_ID, key.expose_secret()));
+        }
+        if let Some(ref key) = secrets.maxmind_license_key {
+            pairs.push((SECRET_MAXMIND_LICENSE_KEY, key.expose_secret()));
+        }
 
         let cipher = Aes256Gcm::new(&self.kek);
         let now = SystemTime::now()
@@ -262,6 +275,10 @@ impl SecretsManager {
         let cw_cert_key = self.decrypt_secret(SECRET_CW_CERT_API_KEY).await?;
         let cw_key_key = self.decrypt_secret(SECRET_CW_KEY_API_KEY).await?;
 
+        // MaxMind secrets are optional
+        let maxmind_account = self.decrypt_secret(SECRET_MAXMIND_ACCOUNT_ID).await?;
+        let maxmind_license = self.decrypt_secret(SECRET_MAXMIND_LICENSE_KEY).await?;
+
         Ok(Some(DecryptedSecrets {
             router_username: username,
             router_password: password,
@@ -269,6 +286,8 @@ impl SecretsManager {
             session_secret,
             certwarden_cert_api_key: cw_cert_key,
             certwarden_key_api_key: cw_key_key,
+            maxmind_account_id: maxmind_account,
+            maxmind_license_key: maxmind_license,
         }))
     }
 

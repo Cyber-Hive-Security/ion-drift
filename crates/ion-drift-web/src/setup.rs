@@ -266,6 +266,8 @@ pub async fn setup_submit(
         session_secret: SecretString::from(session_secret),
         certwarden_cert_api_key: Some(SecretString::from(form.certwarden_cert_api_key)),
         certwarden_key_api_key: Some(SecretString::from(form.certwarden_key_api_key)),
+        maxmind_account_id: None,
+        maxmind_license_key: None,
     };
 
     if let Err(e) = sm.store_all(&secrets).await {
