@@ -19,7 +19,7 @@ certs/
 
 # Node modules (frontend)
 web/node_modules/
-web/dist/
+# web/dist/ — tracked so git pull deploys built assets
 
 # IDE
 .idea/
