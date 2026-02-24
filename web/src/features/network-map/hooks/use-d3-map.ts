@@ -143,6 +143,11 @@ export function createMapInstance(
 
   let showContainers = false;
 
+  // Live status data stores (declared early — animateParticle reads connectionRates)
+  let deviceStatusMap: Map<string, DeviceStatus> = new Map();
+  let interfaceStatusMap: Map<string, InterfaceStatus> = new Map();
+  const connectionRates: Map<string, number> = new Map();
+
   // ── Layout nodes ──
   const cx25 = vlanLayout[25].cx;
   const cy25 = vlanLayout[25].cy;
@@ -606,12 +611,6 @@ export function createMapInstance(
         (this as SVGLineElement).__connTooltip = undefined;
       }
     });
-
-  // Live status data stores
-  let deviceStatusMap: Map<string, DeviceStatus> = new Map();
-  let interfaceStatusMap: Map<string, InterfaceStatus> = new Map();
-  // Per-connection rate (total bps) for animation speed
-  const connectionRates: Map<string, number> = new Map();
 
   // ── Render nodes (draggable) ──
   const nodeDrag = d3
