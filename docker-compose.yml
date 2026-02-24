@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     ports:
       - "3100:3000"
+      - "5514:5514/udp"
     environment:
       - RUST_LOG=info
       - XDG_DATA_HOME=/app/data
