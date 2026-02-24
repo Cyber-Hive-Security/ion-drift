@@ -186,32 +186,28 @@ export function WorldMap({
     return "oklch(0.6 0.15 200)";
   }
 
+  // Cache the TopoJSON so we don't re-fetch on every effect run
+  const worldTopoRef = useRef<Topology | null>(null);
+
   // D3 rendering effect — only runs when data is ready
   useEffect(() => {
     const svg = d3.select(svgRef.current);
     const tooltip = tooltipRef.current;
     if (!svg.node() || !tooltip) return;
 
-    // Don't render arcs/dots until data is loaded
-    if (data.length === 0) return;
+    // Don't render until we have data (but still render base map)
+    const hasData = data.length > 0;
 
     const { width, height } = dimensions;
 
-    svg.selectAll("*").remove();
+    // Track whether this effect invocation has been superseded
+    let cancelled = false;
 
     const projection = d3
       .geoNaturalEarth1()
       .fitSize([width, height], { type: "Sphere" });
 
     const path = d3.geoPath(projection);
-
-    // Background sphere
-    svg
-      .append("path")
-      .datum({ type: "Sphere" } as any)
-      .attr("d", path as any)
-      .attr("fill", "oklch(0.15 0.01 285)")
-      .attr("stroke", "oklch(0.25 0.01 285)");
 
     // Tooltip helpers
     function showTooltip(html: string) {
@@ -226,9 +222,19 @@ export function WorldMap({
       tooltip!.style.display = "none";
     }
 
-    // Load and render world map
-    d3.json<Topology>("/world-110m.json").then((world) => {
-      if (!world) return;
+    function renderMap(world: Topology) {
+      if (cancelled) return;
+
+      // Clear previous render
+      svg.selectAll("*").remove();
+
+      // Background sphere
+      svg
+        .append("path")
+        .datum({ type: "Sphere" } as any)
+        .attr("d", path as any)
+        .attr("fill", "oklch(0.15 0.01 285)")
+        .attr("stroke", "oklch(0.25 0.01 285)");
 
       const countries = topojson.feature(
         world,
@@ -322,7 +328,9 @@ export function WorldMap({
           onCountryClick?.(alpha2);
         });
 
-      // ── Arc lines from home to countries (scaled by bytes) ────
+      // ── Arc lines, dots, cities — only when data is loaded ──
+      if (!hasData) return;
+
       const arcsGroup = svg.append("g").attr("class", "arcs");
       const countryDotsGroup = svg.append("g").attr("class", "country-dots");
 
@@ -484,7 +492,22 @@ export function WorldMap({
           .attr("stroke", "oklch(0.9 0.1 145)")
           .attr("stroke-width", 1.5);
       }
-    });
+    }
+
+    // Load TopoJSON once, then render synchronously on subsequent updates
+    if (worldTopoRef.current) {
+      renderMap(worldTopoRef.current);
+    } else {
+      d3.json<Topology>("/world-110m.json").then((world) => {
+        if (!world || cancelled) return;
+        worldTopoRef.current = world;
+        renderMap(world);
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, [data, cityData, dimensions, countryIndex, minBytes, maxBytes, minCount, maxCount, minCityCount, maxCityCount, onCountryClick, onCityClick, timeRange]);
 
   // Summary: per-country breakdown sorted by connection count

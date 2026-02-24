@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
   AuthStatus,
@@ -565,6 +565,7 @@ export function useGeoSummary(days = 30) {
         `/api/connections/geo-summary?days=${days}`,
       ),
     refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -587,6 +588,7 @@ export function useCitySummary(days = 7, minConnections = 50) {
         `/api/connections/city-summary?days=${days}&min_connections=${minConnections}`,
       ),
     refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 
