@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::connection_store::{
-    ConnectionHistoryStats, GeoSummaryEntry, HistoryFilters, PaginatedHistory, PortSummaryEntry,
+    CitySummaryEntry, ConnectionHistoryStats, GeoSummaryEntry, HistoryFilters, PaginatedHistory,
+    PortSummaryEntry,
 };
 use crate::geo::{GeoCache, GeoInfo};
 use crate::middleware::RequireAuth;
@@ -318,6 +319,32 @@ pub async fn port_summary(
         .connection_store
         .port_summary(query.days)
         .map_err(|e| internal_error("port summary", e))?;
+    Ok(Json(result))
+}
+
+/// Query params for city-summary.
+#[derive(Deserialize)]
+pub struct CitySummaryQuery {
+    #[serde(default = "default_7")]
+    pub days: i64,
+    #[serde(default = "default_50")]
+    pub min_connections: i64,
+}
+
+fn default_50() -> i64 {
+    50
+}
+
+/// GET /api/connections/city-summary — aggregated per-city data for city dots on world map.
+pub async fn city_summary(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(query): Query<CitySummaryQuery>,
+) -> Result<Json<Vec<CitySummaryEntry>>, Response> {
+    let result = state
+        .connection_store
+        .city_summary(query.days, query.min_connections)
+        .map_err(|e| internal_error("city summary", e))?;
     Ok(Json(result))
 }
 

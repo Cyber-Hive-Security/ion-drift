@@ -147,6 +147,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/connections/history", get(connections::history))
         .route("/connections/geo-summary", get(connections::geo_summary))
         .route("/connections/port-summary", get(connections::port_summary))
+        .route("/connections/city-summary", get(connections::city_summary))
         .route("/connections/stats", get(connections::history_stats))
         // ARP + enhanced endpoints
         .route("/ip/arp", get(arp::list))

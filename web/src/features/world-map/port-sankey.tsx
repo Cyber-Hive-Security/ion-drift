@@ -213,7 +213,7 @@ export function PortSankey({ data }: PortSankeyProps) {
     return (
       <div className="rounded-lg border border-border bg-card p-4">
         <h3 className="mb-3 text-sm font-medium text-muted-foreground">
-          Port Traffic Flows
+          Port Flows (24h)
         </h3>
         <p className="text-sm text-muted-foreground">
           No port traffic data available yet.
@@ -228,7 +228,7 @@ export function PortSankey({ data }: PortSankeyProps) {
   return (
     <div className="rounded-lg border border-border bg-card p-4 overflow-visible">
       <h3 className="mb-3 text-sm font-medium text-muted-foreground">
-        Port Traffic Flows (Top 20 by Bytes)
+        Port Flows — Top 20 by Bytes (24h)
       </h3>
       <div className="sankey-container" style={{ overflow: "visible" }}>
         <Sankey

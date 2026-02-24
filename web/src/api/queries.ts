@@ -47,6 +47,7 @@ import type {
   PaginatedHistory,
   GeoSummaryEntry,
   PortSummaryEntry,
+  CitySummaryEntry,
   SnapshotListEntry,
   WeeklySnapshot,
   SyslogStatus,
@@ -573,6 +574,17 @@ export function usePortSummary(days = 7) {
     queryFn: () =>
       apiFetch<PortSummaryEntry[]>(
         `/api/connections/port-summary?days=${days}`,
+      ),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useCitySummary(days = 7, minConnections = 50) {
+  return useQuery({
+    queryKey: ["connections", "city-summary", days, minConnections],
+    queryFn: () =>
+      apiFetch<CitySummaryEntry[]>(
+        `/api/connections/city-summary?days=${days}&min_connections=${minConnections}`,
       ),
     refetchInterval: 60_000,
   });

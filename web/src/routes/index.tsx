@@ -202,7 +202,7 @@ export function DashboardPage() {
   const dhcp = useDhcpLeases({ polling: true });
   const connections = useConnectionSummary();
   const drops = useFirewallDrops();
-  const portSummary = usePortSummary(7);
+  const portSummary = usePortSummary(1);
 
   if (system.isLoading) return <LoadingSpinner />;
   if (system.error)
@@ -236,12 +236,9 @@ export function DashboardPage() {
         <VlanTrafficBreakdown />
       </div>
 
-      {portSummary.data && portSummary.data.length > 0 && (
-        <div className="mt-6">
-          <h2 className="mb-3 text-lg font-semibold">Port Traffic (7d)</h2>
-          <PortSankey data={portSummary.data} />
-        </div>
-      )}
+      <div className="mt-6">
+        <PortSankey data={portSummary.data ?? []} />
+      </div>
     </PageShell>
   );
 }

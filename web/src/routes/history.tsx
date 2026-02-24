@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import {
   useGeoSummary,
+  useCitySummary,
   useSnapshots,
   useSnapshot,
   useConnectionHistory,
@@ -192,6 +193,7 @@ export function HistoryPage() {
 
   // Live data queries
   const geoSummary = useGeoSummary(Number(timeRange));
+  const citySummary = useCitySummary(Number(timeRange), 50);
   const snapshots = useSnapshots();
   const connectionHistory = useConnectionHistory({
     page: historyPage,
@@ -221,9 +223,8 @@ export function HistoryPage() {
     return geoSummary.data ?? [];
   }, [selectedWeek, worldMapSnapshot.data, geoSummary.data]);
 
-  const isLoading =
-    (activeTab === "world-map" && (selectedWeek ? worldMapSnapshot.isLoading : geoSummary.isLoading)) ||
-    (activeTab === "history-table" && connectionHistory.isLoading);
+  const mapLoading =
+    selectedWeek ? worldMapSnapshot.isLoading : geoSummary.isLoading;
 
   const error =
     (activeTab === "world-map" && geoSummary.error) ||
@@ -231,6 +232,13 @@ export function HistoryPage() {
 
   function handleCountryClick(code: string) {
     setCountryFilter(code === countryFilter ? undefined : code);
+    setActiveTab("history-table");
+    setHistoryPage(1);
+  }
+
+  function handleCityClick(_city: string, countryCode: string) {
+    // Filter by country when a city is clicked
+    setCountryFilter(countryCode);
     setActiveTab("history-table");
     setHistoryPage(1);
   }
@@ -290,6 +298,13 @@ export function HistoryPage() {
         </div>
       )}
 
+      {/* Subtitle for world map */}
+      {activeTab === "world-map" && (
+        <p className="mb-3 text-xs text-muted-foreground">
+          Outbound connections from the network to external destinations.
+        </p>
+      )}
+
       {/* Country filter badge */}
       {countryFilter && (
         <div className="mb-3 flex items-center gap-2">
@@ -310,65 +325,70 @@ export function HistoryPage() {
       )}
 
       {/* Content */}
-      {isLoading ? (
-        <div className="flex h-96 items-center justify-center">
-          <LoadingSpinner />
-        </div>
-      ) : error ? (
+      {error ? (
         <ErrorDisplay message={String(error)} />
       ) : (
         <>
           {activeTab === "world-map" && (
             <WorldMap
               data={mapData}
+              cityData={citySummary.data ?? []}
+              isLoading={mapLoading}
               onCountryClick={handleCountryClick}
+              onCityClick={handleCityClick}
               timeRange={selectedWeek ?? timeRange}
             />
           )}
 
-          {activeTab === "history-table" && connectionHistory.data && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>
-                  {formatNumber(connectionHistory.data.total)} connections
-                  {countryFilter && ` from ${countryFilter}`}
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    disabled={historyPage <= 1}
-                    onClick={() => setHistoryPage((p) => p - 1)}
-                    className="rounded border border-border px-2 py-0.5 disabled:opacity-30"
-                  >
-                    Prev
-                  </button>
+          {activeTab === "history-table" && (
+            connectionHistory.isLoading ? (
+              <div className="flex h-96 items-center justify-center">
+                <LoadingSpinner />
+              </div>
+            ) : connectionHistory.data ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span>
-                    Page {connectionHistory.data.page} of{" "}
-                    {Math.ceil(
-                      connectionHistory.data.total /
-                        connectionHistory.data.per_page,
-                    ) || 1}
+                    {formatNumber(connectionHistory.data.total)} connections
+                    {countryFilter && ` from ${countryFilter}`}
                   </span>
-                  <button
-                    disabled={
-                      historyPage >=
-                      Math.ceil(
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={historyPage <= 1}
+                      onClick={() => setHistoryPage((p) => p - 1)}
+                      className="rounded border border-border px-2 py-0.5 disabled:opacity-30"
+                    >
+                      Prev
+                    </button>
+                    <span>
+                      Page {connectionHistory.data.page} of{" "}
+                      {Math.ceil(
                         connectionHistory.data.total /
                           connectionHistory.data.per_page,
-                      )
-                    }
-                    onClick={() => setHistoryPage((p) => p + 1)}
-                    className="rounded border border-border px-2 py-0.5 disabled:opacity-30"
-                  >
-                    Next
-                  </button>
+                      ) || 1}
+                    </span>
+                    <button
+                      disabled={
+                        historyPage >=
+                        Math.ceil(
+                          connectionHistory.data.total /
+                            connectionHistory.data.per_page,
+                        )
+                      }
+                      onClick={() => setHistoryPage((p) => p + 1)}
+                      className="rounded border border-border px-2 py-0.5 disabled:opacity-30"
+                    >
+                      Next
+                    </button>
+                  </div>
                 </div>
+                <DataTable
+                  columns={historyColumns}
+                  data={connectionHistory.data.items}
+                  rowKey={(r) => String(r.id)}
+                />
               </div>
-              <DataTable
-                columns={historyColumns}
-                data={connectionHistory.data.items}
-                rowKey={(r) => String(r.id)}
-              />
-            </div>
+            ) : null
           )}
         </>
       )}

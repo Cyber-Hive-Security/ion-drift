@@ -96,6 +96,21 @@ pub struct GeoSummaryEntry {
     pub flagged_count: i64,
 }
 
+/// Aggregated per-city data for city-level dots on the world map.
+#[derive(Debug, Clone, Serialize)]
+pub struct CitySummaryEntry {
+    pub city: String,
+    pub country_code: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub connection_count: i64,
+    pub unique_ips: i64,
+    pub bytes_tx: i64,
+    pub bytes_rx: i64,
+    pub top_orgs: Vec<String>,
+    pub flagged_count: i64,
+}
+
 /// Aggregated per-port data for Sankey diagram.
 #[derive(Debug, Clone, Serialize)]
 pub struct PortSummaryEntry {
@@ -522,6 +537,61 @@ impl ConnectionStore {
                     total_rx: row.get::<_, i64>(8).unwrap_or(0),
                     top_orgs,
                     flagged_count: row.get::<_, i64>(10).unwrap_or(0),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rows)
+    }
+
+    /// Aggregated per-city GeoIP data for city-level dots on the world map.
+    pub fn city_summary(&self, days: i64, min_connections: i64) -> anyhow::Result<Vec<CitySummaryEntry>> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let cutoff = now_iso_minus_secs(days * 86400);
+
+        let mut stmt = db.prepare(
+            "SELECT geo_city, geo_country_code,
+                    AVG(geo_lat) as lat, AVG(geo_lon) as lon,
+                    COUNT(*) as connection_count,
+                    COUNT(DISTINCT dst_ip) as unique_ips,
+                    SUM(bytes_tx) as total_tx,
+                    SUM(bytes_rx) as total_rx,
+                    GROUP_CONCAT(DISTINCT geo_org) as orgs,
+                    SUM(CASE WHEN flagged = 1 THEN 1 ELSE 0 END) as flagged_count
+             FROM connection_history
+             WHERE dst_is_external = 1
+               AND geo_city IS NOT NULL
+               AND geo_city != ''
+               AND geo_lat IS NOT NULL
+               AND geo_lon IS NOT NULL
+               AND first_seen >= ?1
+             GROUP BY geo_city, geo_country_code
+             HAVING COUNT(*) >= ?2
+             ORDER BY connection_count DESC",
+        )?;
+
+        let rows = stmt
+            .query_map(params![cutoff, min_connections], |row| {
+                let orgs_str: Option<String> = row.get(8)?;
+                let top_orgs: Vec<String> = orgs_str
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .take(5)
+                    .map(String::from)
+                    .collect();
+
+                Ok(CitySummaryEntry {
+                    city: row.get(0)?,
+                    country_code: row.get(1)?,
+                    lat: row.get::<_, f64>(2).unwrap_or(0.0),
+                    lon: row.get::<_, f64>(3).unwrap_or(0.0),
+                    connection_count: row.get(4)?,
+                    unique_ips: row.get(5)?,
+                    bytes_tx: row.get::<_, i64>(6).unwrap_or(0),
+                    bytes_rx: row.get::<_, i64>(7).unwrap_or(0),
+                    top_orgs,
+                    flagged_count: row.get::<_, i64>(9).unwrap_or(0),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

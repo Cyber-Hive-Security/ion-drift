@@ -717,6 +717,19 @@ export interface GeoSummaryEntry {
   flagged_count: number;
 }
 
+export interface CitySummaryEntry {
+  city: string;
+  country_code: string;
+  lat: number;
+  lon: number;
+  connection_count: number;
+  unique_ips: number;
+  bytes_tx: number;
+  bytes_rx: number;
+  top_orgs: string[];
+  flagged_count: number;
+}
+
 export interface PortSummaryEntry {
   dst_port: number;
   protocol: string;
