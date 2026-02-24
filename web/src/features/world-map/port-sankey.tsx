@@ -265,7 +265,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
                   ? "NEW SOURCE"
                   : cls === "disappeared"
                     ? "MISSING"
-                    : cls.toUpperCase();
+                    : String(cls).toUpperCase();
           el.appendChild(badge);
         }
       };
