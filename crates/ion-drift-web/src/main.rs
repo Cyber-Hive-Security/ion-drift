@@ -138,6 +138,13 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!("VLAN flow counter setup failed (dashboard flows unavailable): {e}"),
     }
 
+    // Set up syslog forwarding from router to ion-drift (non-fatal on failure)
+    tracing::info!("configuring router syslog forwarding...");
+    match setup_router_syslog(&mikrotik).await {
+        Ok(msg) => tracing::info!("syslog setup: {msg}"),
+        Err(e) => tracing::warn!("syslog setup failed (syslog capture unavailable): {e}"),
+    }
+
     // Build HTTP client with Smallstep CA cert (shared for OIDC + router)
     let http_client = auth::build_oidc_http_client(config.oidc.ca_cert_path.as_deref())?;
 
@@ -1023,4 +1030,118 @@ fn spawn_connection_pruner(store: Arc<connection_store::ConnectionStore>) {
             tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
         }
     });
+}
+
+/// Configure the router to send firewall syslog to ion-drift.
+///
+/// Creates (idempotently):
+/// 1. A remote logging action "ion-drift" → 10.20.25.17:5514
+/// 2. A logging rule routing topic "firewall" to that action
+/// 3. Firewall log rules for new connections on input + forward chains
+async fn setup_router_syslog(
+    client: &mikrotik_core::MikrotikClient,
+) -> anyhow::Result<String> {
+    const SYSLOG_TARGET: &str = "10.20.25.17";
+    const SYSLOG_PORT: u16 = 5514;
+    const ACTION_NAME: &str = "ion-drift";
+    const LOG_PREFIX: &str = "ION";
+    const COMMENT: &str = "ion-drift syslog capture";
+
+    let mut actions_taken: Vec<&str> = Vec::new();
+
+    // ── Step 1: Ensure remote logging action exists ──────────────
+    let actions = client.system_logging_actions().await?;
+    let has_action = actions.iter().any(|a| a.name == ACTION_NAME);
+
+    if !has_action {
+        tracing::info!("creating remote logging action '{ACTION_NAME}' → {SYSLOG_TARGET}:{SYSLOG_PORT}");
+        client
+            .create_logging_action(&mikrotik_core::CreateLoggingAction {
+                name: ACTION_NAME.to_string(),
+                target: "remote".to_string(),
+                remote: SYSLOG_TARGET.to_string(),
+                remote_port: SYSLOG_PORT,
+                src_address: Some("10.20.25.1".to_string()),
+                bsd_syslog: Some("yes".to_string()),
+            })
+            .await?;
+        actions_taken.push("created logging action");
+    }
+
+    // ── Step 2: Ensure logging rule routes firewall topic ────────
+    let rules = client.system_logging_rules().await?;
+    let has_rule = rules
+        .iter()
+        .any(|r| r.action == ACTION_NAME && r.topics.contains("firewall"));
+
+    if !has_rule {
+        tracing::info!("creating logging rule: topic 'firewall' → action '{ACTION_NAME}'");
+        client
+            .create_logging_rule(&mikrotik_core::CreateLoggingRule {
+                topics: "firewall".to_string(),
+                action: ACTION_NAME.to_string(),
+                prefix: None,
+            })
+            .await?;
+        actions_taken.push("created firewall logging rule");
+    }
+
+    // ── Step 3: Ensure firewall rules log new connections ────────
+    let filter_rules = client.firewall_filter_rules().await?;
+
+    // Check if log rules with our prefix already exist
+    let has_ion_log = filter_rules.iter().any(|r| {
+        r.action == "log"
+            && r.log_prefix.as_deref() == Some(LOG_PREFIX)
+    });
+
+    if !has_ion_log {
+        // Find the first rule in each chain to use as place-before target
+        let first_forward = filter_rules
+            .iter()
+            .find(|r| r.chain == "forward")
+            .map(|r| r.id.clone());
+        let first_input = filter_rules
+            .iter()
+            .find(|r| r.chain == "input")
+            .map(|r| r.id.clone());
+
+        // Log new forward connections (internal↔external and inter-VLAN)
+        tracing::info!("creating firewall log rule for 'forward' chain (new connections)");
+        client
+            .create_filter_rule(&mikrotik_core::CreateFilterRule {
+                chain: "forward".to_string(),
+                action: "log".to_string(),
+                connection_state: Some("new".to_string()),
+                in_interface_list: None,
+                log: Some("true".to_string()),
+                log_prefix: Some(LOG_PREFIX.to_string()),
+                comment: Some(COMMENT.to_string()),
+                place_before: first_forward,
+            })
+            .await?;
+
+        // Log new input connections (traffic directed at the router itself)
+        tracing::info!("creating firewall log rule for 'input' chain (new connections)");
+        client
+            .create_filter_rule(&mikrotik_core::CreateFilterRule {
+                chain: "input".to_string(),
+                action: "log".to_string(),
+                connection_state: Some("new".to_string()),
+                in_interface_list: None,
+                log: Some("true".to_string()),
+                log_prefix: Some(LOG_PREFIX.to_string()),
+                comment: Some(COMMENT.to_string()),
+                place_before: first_input,
+            })
+            .await?;
+
+        actions_taken.push("created firewall log rules (forward + input)");
+    }
+
+    if actions_taken.is_empty() {
+        Ok("all syslog config already present".to_string())
+    } else {
+        Ok(actions_taken.join(", "))
+    }
 }

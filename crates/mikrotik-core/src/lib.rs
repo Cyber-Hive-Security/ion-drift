@@ -18,3 +18,7 @@ pub use metrics::{
 pub use speedtest::{ProviderResult, SpeedTestResult, SpeedTestStore};
 pub use tracker::{LifetimeTraffic, TrafficTracker};
 pub use vlan_flows::{VlanFlow, VlanFlowManager};
+pub use resources::logging::{
+    CreateFilterRule, CreateLoggingAction, CreateLoggingRule, LoggingAction, LoggingRule,
+    UpdateFilterRule,
+};

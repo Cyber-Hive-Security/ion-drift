@@ -127,6 +127,10 @@ pub fn spawn_syslog_listener(
         let mut buf = [0u8; 4096];
         let mut batch: Vec<SyslogEvent> = Vec::with_capacity(100);
         let mut last_flush = tokio::time::Instant::now();
+        let mut total_received: u64 = 0;
+        let mut total_parsed: u64 = 0;
+        let mut total_unparsed: u64 = 0;
+        let mut last_stats = tokio::time::Instant::now();
 
         loop {
             let result = tokio::time::timeout(
@@ -137,9 +141,14 @@ pub fn spawn_syslog_listener(
 
             match result {
                 Ok(Ok((len, _addr))) => {
+                    total_received += 1;
                     if let Ok(line) = std::str::from_utf8(&buf[..len]) {
                         if let Some(event) = parse_routeros_syslog(line) {
+                            total_parsed += 1;
                             batch.push(event);
+                        } else {
+                            total_unparsed += 1;
+                            tracing::trace!("syslog: unparsable line: {}", line.trim());
                         }
                     }
                 }
@@ -161,6 +170,14 @@ pub fn spawn_syslog_listener(
                 }
                 tracing::debug!("syslog: flushed {count} events");
                 last_flush = tokio::time::Instant::now();
+            }
+
+            // Log stats every 5 minutes at INFO level
+            if last_stats.elapsed().as_secs() >= 300 && total_received > 0 {
+                tracing::info!(
+                    "syslog stats: received={total_received}, parsed={total_parsed}, unparsed={total_unparsed}"
+                );
+                last_stats = tokio::time::Instant::now();
             }
         }
     });
