@@ -194,7 +194,15 @@ function SummaryBar({ data }: { data: ConnectionsPageResponse }) {
 
 // ── Top Talkers ──────────────────────────────────────────────────
 
-function TopTalkers({ connections }: { connections: ConnectionEntry[] }) {
+function TopTalkers({
+  connections,
+  onDstClick,
+  onSrcClick,
+}: {
+  connections: ConnectionEntry[];
+  onDstClick?: (ip: string) => void;
+  onSrcClick?: (ip: string) => void;
+}) {
   const topDstByCount = useMemo(() => {
     const counts = new Map<string, number>();
     for (const c of connections) {
@@ -231,10 +239,10 @@ function TopTalkers({ connections }: { connections: ConnectionEntry[] }) {
   }, [connections]);
 
   return (
-    <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-      <TalkerPanel title="Top Dst IPs (by count)" entries={topDstByCount} format={(v) => `${v}`} />
-      <TalkerPanel title="Top Dst IPs (by bytes)" entries={topDstByBytes} format={formatBytes} />
-      <TalkerPanel title="Top Src IPs (by count)" entries={topSrcByCount} format={(v) => `${v}`} />
+    <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <TalkerPanel title="Top Dst IPs (by count)" entries={topDstByCount} format={(v) => `${v}`} onEntryClick={onDstClick} />
+      <TalkerPanel title="Top Dst IPs (by bytes)" entries={topDstByBytes} format={formatBytes} onEntryClick={onDstClick} />
+      <TalkerPanel title="Top Src IPs (by count)" entries={topSrcByCount} format={(v) => `${v}`} onEntryClick={onSrcClick} />
     </div>
   );
 }
@@ -243,10 +251,12 @@ function TalkerPanel({
   title,
   entries,
   format,
+  onEntryClick,
 }: {
   title: string;
   entries: [string, number][];
   format: (v: number) => string;
+  onEntryClick?: (value: string) => void;
 }) {
   const max = entries[0]?.[1] ?? 1;
   return (
@@ -254,7 +264,14 @@ function TalkerPanel({
       <p className="mb-3 text-xs font-medium text-muted-foreground">{title}</p>
       <div className="flex flex-col gap-1.5">
         {entries.map(([ip, value]) => (
-          <div key={ip} className="flex items-center gap-2 text-xs">
+          <div
+            key={ip}
+            className={cn(
+              "flex items-center gap-2 text-xs",
+              onEntryClick && "cursor-pointer rounded px-1 -mx-1 hover:bg-muted/50 transition-colors",
+            )}
+            onClick={onEntryClick ? () => onEntryClick(ip) : undefined}
+          >
             <span className="w-28 shrink-0 truncate font-mono">{ip}</span>
             <div className="relative h-3 flex-1 rounded bg-muted">
               <div
@@ -277,7 +294,13 @@ function TalkerPanel({
 
 // ── Geo Distribution ─────────────────────────────────────────────
 
-function GeoDistribution({ connections }: { connections: ConnectionEntry[] }) {
+function GeoDistribution({
+  connections,
+  onCountryClick,
+}: {
+  connections: ConnectionEntry[];
+  onCountryClick?: (countryCode: string) => void;
+}) {
   const countryData = useMemo(() => {
     const counts = new Map<string, { name: string; count: number; flagged: boolean }>();
     for (const c of connections) {
@@ -343,7 +366,15 @@ function GeoDistribution({ connections }: { connections: ConnectionEntry[] }) {
               props.payload?.name ?? "",
             ]}
           />
-          <Bar dataKey="count" isAnimationActive={false}>
+          <Bar
+            dataKey="count"
+            isAnimationActive={false}
+            cursor={onCountryClick ? "pointer" : undefined}
+            onClick={onCountryClick ? (_: unknown, index: number) => {
+              const entry = countryData[index];
+              if (entry) onCountryClick(entry.code);
+            } : undefined}
+          >
             {countryData.map((entry) => (
               <Cell
                 key={entry.code}
@@ -1025,6 +1056,25 @@ export function ConnectionsPage() {
     });
   }, []);
 
+  // Click handlers for data cards → set column filter for that IP/country
+  const handleDstIpClick = useCallback((ip: string) => {
+    setColumnFilters((prev) => ({ ...prev, dst: new Set([ip]) }));
+  }, []);
+
+  const handleSrcIpClick = useCallback((ip: string) => {
+    setColumnFilters((prev) => ({ ...prev, src: new Set([ip]) }));
+  }, []);
+
+  const handleCountryClick = useCallback((code: string) => {
+    setColumnFilters((prev) => ({ ...prev, country: new Set([code]) }));
+  }, []);
+
+  // Master reset: clear mode filter + all column filters
+  const resetAllFilters = useCallback(() => {
+    setFilter("all");
+    setColumnFilters({});
+  }, []);
+
   // Close filter dropdown on outside click
   useEffect(() => {
     if (!openFilter) return;
@@ -1063,6 +1113,16 @@ export function ConnectionsPage() {
       <SummaryBar data={data} />
 
       <ConnectionHistoryChart />
+
+      <TopTalkers
+        connections={data.connections}
+        onDstClick={handleDstIpClick}
+        onSrcClick={handleSrcIpClick}
+      />
+      <GeoDistribution
+        connections={data.connections}
+        onCountryClick={handleCountryClick}
+      />
 
       {/* Filter buttons */}
       <div className="mb-3 flex flex-wrap gap-2">
@@ -1163,8 +1223,19 @@ export function ConnectionsPage() {
       </div>
 
       {/* Active filter pills */}
-      {activeFilterCount > 0 && (
-        <div className="mb-3 flex flex-wrap gap-1.5">
+      {(activeFilterCount > 0 || filter !== "all") && (
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          {filter !== "all" && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs text-primary">
+              Mode: {filter}
+              <button
+                onClick={() => setFilter("all")}
+                className="hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
           {COLUMN_FILTER_DEFS.map((def) => {
             const selected = columnFilters[def.field];
             if (!selected || selected.size === 0) return null;
@@ -1184,8 +1255,14 @@ export function ConnectionsPage() {
             );
           })}
           <span className="self-center text-xs text-muted-foreground">
-            {filteredConnections.length} of {modeFiltered.length} shown
+            {filteredConnections.length} of {data.connections.length} shown
           </span>
+          <button
+            onClick={resetAllFilters}
+            className="ml-2 rounded-md border border-border bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-colors"
+          >
+            Reset Filters
+          </button>
         </div>
       )}
 
@@ -1215,9 +1292,6 @@ export function ConnectionsPage() {
           }
         />
       )}
-
-      <TopTalkers connections={data.connections} />
-      <GeoDistribution connections={data.connections} />
     </PageShell>
   );
 }
