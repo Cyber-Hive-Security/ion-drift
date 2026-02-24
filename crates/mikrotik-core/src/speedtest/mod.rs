@@ -330,7 +330,7 @@ pub(crate) async fn measure_latency(
         times.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
-    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     Ok(times[times.len() / 2])
 }
 
@@ -340,6 +340,6 @@ fn median_of(items: &[ProviderResult], f: impl Fn(&ProviderResult) -> Option<f64
     if vals.is_empty() {
         return 0.0;
     }
-    vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     vals[vals.len() / 2]
 }

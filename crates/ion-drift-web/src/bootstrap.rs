@@ -1,10 +1,13 @@
 //! Keycloak mTLS bootstrap: retrieve or generate the KEK (Key Encryption Key)
 //! from a Keycloak service account attribute via mutual TLS authentication.
 
-use aes_gcm::{Aes256Gcm, Key};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use reqwest::Identity;
+use sha2::Digest;
+use std::path::Path;
 use std::time::Duration;
 
 use crate::config::ResolvedBootstrap;
@@ -52,9 +55,13 @@ pub fn build_mtls_client(config: &ResolvedBootstrap, ca_cert_path: &str) -> anyh
 /// Main bootstrap function: retrieve or generate KEK from Keycloak.
 ///
 /// Retries with exponential backoff [5s, 10s, 30s, 60s, 120s, 300s] if Keycloak is unreachable.
+/// On success, caches the KEK locally (encrypted with a cert-derived key).
+/// If all retries fail, attempts to load from the local cache before giving up.
 pub async fn fetch_or_generate_kek(
     client: &reqwest::Client,
     config: &ResolvedBootstrap,
+    data_dir: &Path,
+    cert_path: &str,
 ) -> anyhow::Result<BootstrapResult> {
     tracing::info!("authenticating to Keycloak via mTLS for KEK bootstrap");
 
@@ -63,7 +70,15 @@ pub async fn fetch_or_generate_kek(
 
     for attempt in 1..=max_attempts {
         match try_bootstrap(client, config).await {
-            Ok(result) => return Ok(result),
+            Ok(result) => {
+                // Cache KEK locally for resilience against future Keycloak outages
+                if let Err(e) = cache_kek(data_dir, cert_path, &result.kek) {
+                    tracing::warn!("failed to cache KEK locally: {e}");
+                } else {
+                    tracing::debug!("KEK cached locally for offline resilience");
+                }
+                return Ok(result);
+            }
             Err(e) => {
                 let delay_idx = attempt.saturating_sub(1).min(BACKOFF_DELAYS.len() - 1);
                 let delay = BACKOFF_DELAYS[delay_idx];
@@ -81,8 +96,18 @@ pub async fn fetch_or_generate_kek(
         }
     }
 
+    // All Keycloak attempts failed — try local cache
+    tracing::warn!("Keycloak unreachable after {max_attempts} attempts, trying local KEK cache");
+    if let Some(result) = load_cached_kek(data_dir, cert_path) {
+        tracing::warn!(
+            fingerprint = %result.fingerprint,
+            "using CACHED KEK — Keycloak is unreachable. KEK may be stale if rotated remotely."
+        );
+        return Ok(result);
+    }
+
     Err(anyhow::anyhow!(
-        "Keycloak unreachable after {max_attempts} attempts — cannot retrieve encryption key. \
+        "Keycloak unreachable after {max_attempts} attempts and no local KEK cache available. \
          Ion-drift is sealed. Last error: {}",
         last_err.unwrap()
     ))
@@ -293,6 +318,77 @@ async fn read_kek_attribute(
     }
 
     Ok(None)
+}
+
+// ── Local KEK cache ─────────────────────────────────────────────
+
+const KEK_CACHE_AAD: &[u8] = b"ion-drift-kek-cache";
+const KEK_CACHE_FILE: &str = "kek.cache";
+
+/// Derive an AES-256 key from the mTLS certificate PEM bytes.
+fn derive_cache_key(cert_path: &str) -> anyhow::Result<Key<Aes256Gcm>> {
+    let cert_pem = std::fs::read(cert_path)
+        .map_err(|e| anyhow::anyhow!("failed to read cert for cache key derivation: {e}"))?;
+    let hash = sha2::Sha256::digest(&cert_pem);
+    Ok(*Key::<Aes256Gcm>::from_slice(&hash))
+}
+
+/// Cache the KEK to a local file, encrypted with a cert-derived key.
+/// Non-fatal: logs warnings on failure.
+fn cache_kek(data_dir: &Path, cert_path: &str, kek: &Key<Aes256Gcm>) -> anyhow::Result<()> {
+    let cache_key = derive_cache_key(cert_path)?;
+    let cipher = Aes256Gcm::new(&cache_key);
+
+    let nonce_bytes: [u8; 12] = rand::random();
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, Payload { msg: kek.as_slice(), aad: KEK_CACHE_AAD })
+        .map_err(|e| anyhow::anyhow!("failed to encrypt KEK for cache: {e}"))?;
+
+    let mut blob = Vec::with_capacity(12 + ciphertext.len());
+    blob.extend_from_slice(&nonce_bytes);
+    blob.extend_from_slice(&ciphertext);
+
+    let cache_path = data_dir.join(KEK_CACHE_FILE);
+    std::fs::write(&cache_path, &blob)
+        .map_err(|e| anyhow::anyhow!("failed to write KEK cache to {}: {e}", cache_path.display()))?;
+
+    Ok(())
+}
+
+/// Try to load the KEK from the local cache file.
+/// Returns None if cache is missing, corrupt, or encrypted with a different key.
+fn load_cached_kek(data_dir: &Path, cert_path: &str) -> Option<BootstrapResult> {
+    let cache_path = data_dir.join(KEK_CACHE_FILE);
+    let blob = std::fs::read(&cache_path).ok()?;
+
+    if blob.len() < 13 {
+        tracing::debug!("KEK cache file too small, ignoring");
+        return None;
+    }
+
+    let cache_key = derive_cache_key(cert_path).ok()?;
+    let cipher = Aes256Gcm::new(&cache_key);
+
+    let nonce = Nonce::from_slice(&blob[..12]);
+    let plaintext = cipher
+        .decrypt(nonce, Payload { msg: &blob[12..], aad: KEK_CACHE_AAD })
+        .ok()?;
+
+    if plaintext.len() != 32 {
+        tracing::debug!("cached KEK has wrong length ({}), ignoring", plaintext.len());
+        return None;
+    }
+
+    let kek = *Key::<Aes256Gcm>::from_slice(&plaintext);
+    let fingerprint = compute_fingerprint(&kek);
+
+    Some(BootstrapResult {
+        kek,
+        fingerprint,
+        was_generated: false,
+    })
 }
 
 /// Write the KEK attribute to the service account user.

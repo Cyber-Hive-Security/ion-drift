@@ -2,6 +2,7 @@ import { Outlet, Link } from "@tanstack/react-router";
 import { useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { LoginPage } from "./login";
 import { LoadingSpinner } from "@/components/loading-spinner";
 
@@ -25,7 +26,9 @@ export function RootLayout() {
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
-        <Outlet />
+        <ErrorBoundary>
+          <Outlet />
+        </ErrorBoundary>
       </div>
     </div>
   );

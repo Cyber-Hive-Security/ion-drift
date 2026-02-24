@@ -9,6 +9,12 @@ services:
     environment:
       - RUST_LOG=info
       - XDG_DATA_HOME=/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - ion-drift-data:/app/data
 

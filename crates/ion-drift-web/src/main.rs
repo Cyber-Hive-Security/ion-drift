@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
                 // Normal startup: cert on disk → build mTLS → fetch KEK → decrypt secrets
                 tracing::info!("mTLS cert found at {}, fetching KEK from Keycloak", config.tls.client_cert);
                 let mtls_client = bootstrap::build_mtls_client(&resolved, ca_cert_path)?;
-                let result = bootstrap::fetch_or_generate_kek(&mtls_client, &resolved).await?;
+                let result = bootstrap::fetch_or_generate_kek(&mtls_client, &resolved, &data_dir, &config.tls.client_cert).await?;
                 let sm = SecretsManager::new(&db_path, result.kek)?;
 
                 let has_secrets = sm.has_secrets().await?;
