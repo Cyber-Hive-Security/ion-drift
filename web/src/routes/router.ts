@@ -81,10 +81,15 @@ class NetworkMapErrorBoundary extends React.Component<
 > {
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error("[NetworkMap] Load failed:", error.message, error.stack);
+    console.error("[NetworkMap] Component stack:", info.componentStack);
+  }
   render() {
     if (this.state.error) {
       return React.createElement("div", { className: "flex h-full flex-col items-center justify-center gap-4 text-muted-foreground" },
         React.createElement("p", null, "Failed to load Network Map."),
+        React.createElement("p", { className: "text-xs text-destructive max-w-md text-center" }, this.state.error.message),
         React.createElement("button", {
           className: "rounded border border-border px-4 py-2 text-sm hover:bg-accent",
           onClick: () => this.setState({ error: null }),
