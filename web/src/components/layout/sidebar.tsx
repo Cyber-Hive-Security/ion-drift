@@ -38,8 +38,9 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-56 flex-col border-r border-border bg-card">
-      <div className="flex h-14 items-center border-b border-border px-4">
-        <span className="text-lg font-bold text-primary">ion-drift</span>
+      <div className="flex h-14 flex-col justify-center border-b border-border px-4">
+        <span className="text-lg font-bold leading-tight text-primary">Ion Drift</span>
+        <span className="text-[10px] leading-tight text-muted-foreground">by Cyber Hive Security</span>
       </div>
       <nav className="flex-1 space-y-1 p-3">
         {navItems.map(({ to, label, icon: Icon }) => {

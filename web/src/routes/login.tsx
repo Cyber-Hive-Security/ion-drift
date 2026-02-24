@@ -6,7 +6,10 @@ export function LoginPage() {
       <div className="flex flex-col items-center gap-6 rounded-lg border border-border bg-card p-10 shadow-lg">
         <Router className="h-12 w-12 text-primary" />
         <div className="text-center">
-          <h1 className="text-2xl font-bold">ion-drift</h1>
+          <h1 className="text-2xl font-bold">Ion Drift</h1>
+          <p className="text-xs text-muted-foreground">
+            by Cyber Hive Security
+          </p>
           <p className="mt-1 text-sm text-muted-foreground">
             Mikrotik Router Management
           </p>
