@@ -242,6 +242,9 @@ export function WorldMap({
 
     const path = d3.geoPath(projection);
 
+    // Escape HTML to prevent XSS via GeoIP org names or MitM'd ip-api.com data
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
     // Tooltip helpers
     function showTooltip(html: string) {
       tooltip!.style.display = "block";
@@ -355,12 +358,12 @@ export function WorldMap({
               ? `<div style="color:oklch(0.7 0.2 25);margin-top:2px">Flagged: ${formatNumber(entry.flagged_count)}</div>`
               : "";
             showTooltip(`
-              <div style="font-weight:600;margin-bottom:4px">${countryFlag(entry.country_code)} ${entry.country} (${entry.country_code})</div>
+              <div style="font-weight:600;margin-bottom:4px">${countryFlag(entry.country_code)} ${esc(entry.country)} (${esc(entry.country_code)})</div>
               <div>Connections: ${formatNumber(entry.connection_count)}</div>
               <div>Sources: ${formatNumber(entry.unique_sources)} / Destinations: ${formatNumber(entry.unique_destinations)}</div>
               <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
               ${flagged}
-              ${entry.top_orgs.length > 0 ? `<div style="margin-top:4px;font-size:10px;color:oklch(0.6 0.01 285)">Top: ${entry.top_orgs.slice(0, 3).join(", ")}</div>` : ""}
+              ${entry.top_orgs.length > 0 ? `<div style="margin-top:4px;font-size:10px;color:oklch(0.6 0.01 285)">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
             `);
           }
         })
@@ -411,11 +414,11 @@ export function WorldMap({
               .attr("stroke-width", strokeWidth + 2)
               .attr("stroke-opacity", 1);
             showTooltip(`
-              <div style="font-weight:600;margin-bottom:4px">Ogden, UT &rarr; ${countryFlag(entry.country_code)} ${entry.country}</div>
+              <div style="font-weight:600;margin-bottom:4px">Ogden, UT &rarr; ${countryFlag(entry.country_code)} ${esc(entry.country)}</div>
               <div>Connections: ${formatNumber(entry.connection_count)}</div>
               <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
               ${entry.flagged_count > 0 ? `<div style="color:oklch(0.7 0.2 25)">Flagged: ${formatNumber(entry.flagged_count)}</div>` : ""}
-              ${entry.top_orgs.length > 0 ? `<div style="font-size:10px;color:oklch(0.6 0.01 285)">Top: ${entry.top_orgs.slice(0, 3).join(", ")}</div>` : ""}
+              ${entry.top_orgs.length > 0 ? `<div style="font-size:10px;color:oklch(0.6 0.01 285)">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
             `);
             moveTooltip(event);
           })
@@ -445,7 +448,7 @@ export function WorldMap({
             .on("mouseenter", function (event: MouseEvent) {
               d3.select(this).attr("r", radius + 2).attr("fill-opacity", 1);
               showTooltip(`
-                <div style="font-weight:600;margin-bottom:4px">${countryFlag(entry.country_code)} ${entry.country} (${entry.country_code})</div>
+                <div style="font-weight:600;margin-bottom:4px">${countryFlag(entry.country_code)} ${esc(entry.country)} (${esc(entry.country_code)})</div>
                 <div>Connections: ${formatNumber(entry.connection_count)}</div>
                 <div>Sources: ${formatNumber(entry.unique_sources)} / Destinations: ${formatNumber(entry.unique_destinations)}</div>
                 <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
@@ -530,10 +533,10 @@ export function WorldMap({
           .on("mouseenter", function (event: MouseEvent) {
             d3.select(this).attr("r", radius + 1.5).attr("fill-opacity", 0.9);
             const orgsLine = city.top_orgs.length > 0
-              ? `<div style="font-size:10px;color:oklch(0.6 0.01 285)">Top: ${city.top_orgs.slice(0, 3).join(" &middot; ")}</div>`
+              ? `<div style="font-size:10px;color:oklch(0.6 0.01 285)">Top: ${city.top_orgs.slice(0, 3).map(esc).join(" &middot; ")}</div>`
               : "";
             showTooltip(`
-              <div style="font-weight:600;margin-bottom:4px">${city.city}, ${city.country_code}</div>
+              <div style="font-weight:600;margin-bottom:4px">${esc(city.city)}, ${esc(city.country_code)}</div>
               <div>${formatNumber(city.connection_count)} connections &middot; ${formatNumber(city.unique_ips)} unique IPs</div>
               <div>${formatBytes(city.bytes_tx)} tx &middot; ${formatBytes(city.bytes_rx)} rx</div>
               ${city.flagged_count > 0 ? `<div style="color:oklch(0.7 0.2 25)">Flagged: ${formatNumber(city.flagged_count)}</div>` : ""}

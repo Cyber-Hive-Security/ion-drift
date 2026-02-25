@@ -46,25 +46,28 @@ export function NetworkMapPage() {
     const el = document.createElement("div");
     el.className = "nm-tooltip";
 
-    let html = `<div class="tt-name">${node.hostname}</div><div class="tt-ip">${node.ip}</div><div class="tt-role">${node.role}</div>`;
+    // Escape HTML to prevent XSS via DHCP hostnames or other device-controlled fields
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+    let html = `<div class="tt-name">${esc(node.hostname)}</div><div class="tt-ip">${esc(node.ip)}</div><div class="tt-role">${esc(node.role)}</div>`;
 
     // Append live status details if available
     const ls = node.liveStatus;
     if (ls) {
       const parts: string[] = [];
-      if (ls.mac) parts.push(`<span class="tt-dim">MAC</span> ${ls.mac}`);
-      if (ls.manufacturer) parts.push(`<span class="tt-dim">MFG</span> ${ls.manufacturer}`);
-      if (ls.dhcp_status) parts.push(`<span class="tt-dim">DHCP</span> ${ls.dhcp_status}`);
-      if (ls.expires_after) parts.push(`<span class="tt-dim">EXP</span> ${ls.expires_after}`);
-      if (ls.last_seen) parts.push(`<span class="tt-dim">SEEN</span> ${ls.last_seen}`);
+      if (ls.mac) parts.push(`<span class="tt-dim">MAC</span> ${esc(ls.mac)}`);
+      if (ls.manufacturer) parts.push(`<span class="tt-dim">MFG</span> ${esc(ls.manufacturer)}`);
+      if (ls.dhcp_status) parts.push(`<span class="tt-dim">DHCP</span> ${esc(ls.dhcp_status)}`);
+      if (ls.expires_after) parts.push(`<span class="tt-dim">EXP</span> ${esc(ls.expires_after)}`);
+      if (ls.last_seen) parts.push(`<span class="tt-dim">SEEN</span> ${esc(ls.last_seen)}`);
       parts.push(
         `<span class="tt-dim">ARP</span> <span class="${ls.in_arp ? "tt-green" : "tt-red"}">${ls.in_arp ? "active" : "offline"}</span>`,
       );
       // Hop count to internet
       if (ls.hop_count != null) {
-        parts.push(`<span class="tt-dim">HOPS</span> ${ls.hop_count} ${ls.internet_path ?? ""}`);
+        parts.push(`<span class="tt-dim">HOPS</span> ${ls.hop_count} ${esc(ls.internet_path ?? "")}`);
       } else if (ls.internet_path) {
-        parts.push(`<span class="tt-dim">HOPS</span> <span class="tt-red">\u221e ${ls.internet_path}</span>`);
+        parts.push(`<span class="tt-dim">HOPS</span> <span class="tt-red">\u221e ${esc(ls.internet_path)}</span>`);
       }
       html += `<div class="tt-status">${parts.join("<br>")}</div>`;
     }

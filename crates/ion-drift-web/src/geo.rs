@@ -22,6 +22,11 @@ const FLAGGED_COUNTRIES: &[&str] = &["RU", "CN", "IR", "KP", "VE", "BY", "SY", "
 const CACHE_TTL_SECS: i64 = 7 * 86400; // 7 days
 
 /// ip-api.com batch endpoint (free tier, HTTP only).
+///
+/// SECURITY NOTE: This is plaintext HTTP. IP addresses being resolved are visible
+/// to network observers, and responses can be tampered with (MitM). This is a
+/// fallback only — when MaxMind databases are loaded, ip-api.com is never called.
+/// The free tier does not support HTTPS; upgrading to Pro would allow HTTPS.
 const BATCH_URL: &str = "http://ip-api.com/batch";
 
 /// ip-api.com allows up to 100 IPs per batch request.

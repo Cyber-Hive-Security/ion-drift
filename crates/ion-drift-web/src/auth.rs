@@ -317,8 +317,16 @@ pub async fn logout(
         state.sessions.remove_session(cookie.value());
     }
 
+    let same_site = match state.config.session.same_site.to_lowercase().as_str() {
+        "strict" => SameSite::Strict,
+        "none" => SameSite::None,
+        _ => SameSite::Lax,
+    };
     let removal = Cookie::build(state.config.session.cookie_name.clone())
         .path("/")
+        .http_only(true)
+        .secure(state.config.session.secure)
+        .same_site(same_site)
         .max_age(cookie::time::Duration::ZERO)
         .build();
 

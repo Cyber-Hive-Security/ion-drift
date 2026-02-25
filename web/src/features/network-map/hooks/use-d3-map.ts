@@ -591,7 +591,8 @@ export function createMapInstance(
 
       const tip = document.createElement("div");
       tip.className = "nm-tooltip nm-conn-tooltip";
-      tip.innerHTML = `<div class="tt-name">${label}</div><div class="tt-ip">${src?.hostname || srcId} &harr; ${tgt?.hostname || tgtId}</div>${rateText ? `<div class="tt-role">${rateText}</div>` : ""}`;
+      const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      tip.innerHTML = `<div class="tt-name">${esc(label)}</div><div class="tt-ip">${esc(src?.hostname || srcId)} &harr; ${esc(tgt?.hostname || tgtId)}</div>${rateText ? `<div class="tt-role">${rateText}</div>` : ""}`;
       document.body.appendChild(tip);
       tip.style.left = event.clientX + 14 + "px";
       tip.style.top = event.clientY + 14 + "px";

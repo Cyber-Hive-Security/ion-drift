@@ -365,9 +365,10 @@ async fn run_setup_mode(
         .fallback(|| async { axum::response::Redirect::temporary("/setup") })
         .with_state(setup_state);
 
-    let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
+    // Setup mode binds to localhost only — prevents unauthenticated network access
+    let bind_addr = format!("127.0.0.1:{}", config.server.listen_port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    tracing::info!("ion-drift setup server listening on {bind_addr}");
+    tracing::info!("ion-drift setup server listening on {bind_addr} (localhost only)");
     tracing::info!("navigate to http://{bind_addr}/setup to configure secrets");
 
     axum::serve(listener, app).await?;
