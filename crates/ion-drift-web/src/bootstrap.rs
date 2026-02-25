@@ -55,13 +55,13 @@ pub fn build_mtls_client(config: &ResolvedBootstrap, ca_cert_path: &str) -> anyh
 /// Main bootstrap function: retrieve or generate KEK from Keycloak.
 ///
 /// Retries with exponential backoff [5s, 10s, 30s, 60s, 120s, 300s] if Keycloak is unreachable.
-/// On success, caches the KEK locally (encrypted with a cert-derived key).
+/// On success, caches the KEK locally (encrypted with a key-derived key).
 /// If all retries fail, attempts to load from the local cache before giving up.
 pub async fn fetch_or_generate_kek(
     client: &reqwest::Client,
     config: &ResolvedBootstrap,
     data_dir: &Path,
-    cert_path: &str,
+    key_path: &str,
 ) -> anyhow::Result<BootstrapResult> {
     tracing::info!("authenticating to Keycloak via mTLS for KEK bootstrap");
 
@@ -72,7 +72,7 @@ pub async fn fetch_or_generate_kek(
         match try_bootstrap(client, config).await {
             Ok(result) => {
                 // Cache KEK locally for resilience against future Keycloak outages
-                if let Err(e) = cache_kek(data_dir, cert_path, &result.kek) {
+                if let Err(e) = cache_kek(data_dir, key_path, &result.kek) {
                     tracing::warn!("failed to cache KEK locally: {e}");
                 } else {
                     tracing::debug!("KEK cached locally for offline resilience");
@@ -98,7 +98,7 @@ pub async fn fetch_or_generate_kek(
 
     // All Keycloak attempts failed — try local cache
     tracing::warn!("Keycloak unreachable after {max_attempts} attempts, trying local KEK cache");
-    if let Some(result) = load_cached_kek(data_dir, cert_path) {
+    if let Some(result) = load_cached_kek(data_dir, key_path) {
         tracing::warn!(
             fingerprint = %result.fingerprint,
             "using CACHED KEK — Keycloak is unreachable. KEK may be stale if rotated remotely."
@@ -325,18 +325,21 @@ async fn read_kek_attribute(
 const KEK_CACHE_AAD: &[u8] = b"ion-drift-kek-cache";
 const KEK_CACHE_FILE: &str = "kek.cache";
 
-/// Derive an AES-256 key from the mTLS certificate PEM bytes.
-fn derive_cache_key(cert_path: &str) -> anyhow::Result<Key<Aes256Gcm>> {
-    let cert_pem = std::fs::read(cert_path)
-        .map_err(|e| anyhow::anyhow!("failed to read cert for cache key derivation: {e}"))?;
-    let hash = sha2::Sha256::digest(&cert_pem);
+/// Derive an AES-256 key from the mTLS private key PEM bytes.
+///
+/// Uses the private key (not the certificate) so that an attacker with only
+/// the public cert (obtainable from any TLS handshake) cannot derive the cache key.
+fn derive_cache_key(key_path: &str) -> anyhow::Result<Key<Aes256Gcm>> {
+    let key_pem = std::fs::read(key_path)
+        .map_err(|e| anyhow::anyhow!("failed to read key for cache key derivation: {e}"))?;
+    let hash = sha2::Sha256::digest(&key_pem);
     Ok(*Key::<Aes256Gcm>::from_slice(&hash))
 }
 
-/// Cache the KEK to a local file, encrypted with a cert-derived key.
+/// Cache the KEK to a local file, encrypted with a private-key-derived key.
 /// Non-fatal: logs warnings on failure.
-fn cache_kek(data_dir: &Path, cert_path: &str, kek: &Key<Aes256Gcm>) -> anyhow::Result<()> {
-    let cache_key = derive_cache_key(cert_path)?;
+fn cache_kek(data_dir: &Path, key_path: &str, kek: &Key<Aes256Gcm>) -> anyhow::Result<()> {
+    let cache_key = derive_cache_key(key_path)?;
     let cipher = Aes256Gcm::new(&cache_key);
 
     let nonce_bytes: [u8; 12] = rand::random();
@@ -359,7 +362,7 @@ fn cache_kek(data_dir: &Path, cert_path: &str, kek: &Key<Aes256Gcm>) -> anyhow::
 
 /// Try to load the KEK from the local cache file.
 /// Returns None if cache is missing, corrupt, or encrypted with a different key.
-fn load_cached_kek(data_dir: &Path, cert_path: &str) -> Option<BootstrapResult> {
+fn load_cached_kek(data_dir: &Path, key_path: &str) -> Option<BootstrapResult> {
     let cache_path = data_dir.join(KEK_CACHE_FILE);
     let blob = std::fs::read(&cache_path).ok()?;
 
@@ -368,7 +371,7 @@ fn load_cached_kek(data_dir: &Path, cert_path: &str) -> Option<BootstrapResult> 
         return None;
     }
 
-    let cache_key = derive_cache_key(cert_path).ok()?;
+    let cache_key = derive_cache_key(key_path).ok()?;
     let cipher = Aes256Gcm::new(&cache_key);
 
     let nonce = Nonce::from_slice(&blob[..12]);

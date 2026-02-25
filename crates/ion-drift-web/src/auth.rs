@@ -86,7 +86,13 @@ impl SessionStore {
         self.sessions.remove(session_id);
     }
 
-    fn insert_pending(&self, csrf_token: String, nonce: Nonce, pkce_verifier: PkceCodeVerifier) {
+    /// Insert a pending auth entry. Returns false if the map is at capacity
+    /// (prevents memory exhaustion from login endpoint flooding).
+    fn insert_pending(&self, csrf_token: String, nonce: Nonce, pkce_verifier: PkceCodeVerifier) -> bool {
+        const MAX_PENDING: usize = 1000;
+        if self.pending_auth.len() >= MAX_PENDING {
+            return false;
+        }
         self.pending_auth.insert(
             csrf_token,
             PendingAuth {
@@ -95,6 +101,7 @@ impl SessionStore {
                 created_at: now_secs(),
             },
         );
+        true
     }
 
     fn take_pending(&self, csrf_token: &str) -> Option<(Nonce, PkceCodeVerifier)> {
@@ -210,11 +217,16 @@ pub async fn login(State(state): State<AppState>) -> Response {
         .set_pkce_challenge(pkce_challenge)
         .url();
 
-    state.sessions.insert_pending(
+    if !state.sessions.insert_pending(
         csrf_token.secret().clone(),
         nonce,
         pkce_verifier,
-    );
+    ) {
+        return json_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many pending login attempts, try again later",
+        );
+    }
 
     Redirect::temporary(auth_url.as_str()).into_response()
 }
@@ -277,8 +289,9 @@ pub async fn callback(
 
     tracing::info!(user_id, username, "user authenticated via OIDC");
 
-    // Create session
-    let session_id = uuid::Uuid::new_v4().to_string();
+    // Create session with 256-bit cryptographic token
+    let session_bytes: [u8; 32] = rand::random();
+    let session_id = hex::encode(session_bytes);
     let session_data = SessionData {
         user_id,
         username,

@@ -43,7 +43,43 @@ pub async fn run(client: &reqwest::Client) -> Result<ProviderResult, Box<dyn std
         return Err("Fast.com returned no test targets".into());
     }
 
-    let target = &resp.targets[0];
+    // Validate target URLs: must be HTTPS and not point to internal hosts
+    // (prevents SSRF if Fast.com API response is tampered with)
+    let valid_targets: Vec<&FastTarget> = resp.targets.iter()
+        .filter(|t| {
+            if !t.url.starts_with("https://") {
+                tracing::warn!("Netflix speedtest: rejecting non-HTTPS target: {}", t.url);
+                return false;
+            }
+            // Extract host from https://HOST/... and reject private/internal targets
+            let after_scheme = &t.url["https://".len()..];
+            let host = after_scheme.split('/').next().unwrap_or("")
+                .split(':').next().unwrap_or(""); // strip port
+            if host.is_empty()
+                || host == "localhost"
+                || host.starts_with("10.")
+                || host.starts_with("192.168.")
+                || host.starts_with("172.16.") || host.starts_with("172.17.") || host.starts_with("172.18.")
+                || host.starts_with("172.19.") || host.starts_with("172.20.") || host.starts_with("172.21.")
+                || host.starts_with("172.22.") || host.starts_with("172.23.") || host.starts_with("172.24.")
+                || host.starts_with("172.25.") || host.starts_with("172.26.") || host.starts_with("172.27.")
+                || host.starts_with("172.28.") || host.starts_with("172.29.") || host.starts_with("172.30.")
+                || host.starts_with("172.31.")
+                || host.starts_with("127.")
+                || host == "[::1]"
+            {
+                tracing::warn!("Netflix speedtest: rejecting internal target: {host}");
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    if valid_targets.is_empty() {
+        return Err("Fast.com returned no valid test targets".into());
+    }
+
+    let target = valid_targets[0];
     let location = target.location.as_ref().and_then(|l| l.city.clone());
 
     // The target URL includes a byte range like /range/0-26214400
@@ -53,11 +89,11 @@ pub async fn run(client: &reqwest::Client) -> Result<ProviderResult, Box<dyn std
     // Latency
     let latency_ms = measure_latency(client, download_url, 5).await?;
 
-    // Concurrent download — use all targets round-robin across workers
-    let download_mbps = concurrent_download_multi(client, &resp.targets).await?;
+    // Concurrent download — use validated targets round-robin across workers
+    let download_mbps = concurrent_download_multi(client, &valid_targets).await?;
 
-    // Concurrent upload — POST to target URLs
-    let upload_mbps = concurrent_upload_multi(client, &resp.targets).await?;
+    // Concurrent upload — POST to validated target URLs
+    let upload_mbps = concurrent_upload_multi(client, &valid_targets).await?;
 
     Ok(ProviderResult {
         provider: "Netflix".into(),
@@ -71,7 +107,7 @@ pub async fn run(client: &reqwest::Client) -> Result<ProviderResult, Box<dyn std
 /// Concurrent download using multiple Netflix CDN targets.
 async fn concurrent_download_multi(
     client: &reqwest::Client,
-    targets: &[FastTarget],
+    targets: &[&FastTarget],
 ) -> Result<f64, reqwest::Error> {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -124,7 +160,7 @@ async fn concurrent_download_multi(
 /// Concurrent upload using multiple Netflix CDN targets.
 async fn concurrent_upload_multi(
     client: &reqwest::Client,
-    targets: &[FastTarget],
+    targets: &[&FastTarget],
 ) -> Result<f64, reqwest::Error> {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

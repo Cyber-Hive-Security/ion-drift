@@ -227,7 +227,7 @@ pub async fn setup_submit(
     };
 
     let data_dir = state.db_path.parent().unwrap_or(std::path::Path::new("."));
-    let kek_result = match bootstrap::fetch_or_generate_kek(&mtls_client, &bootstrap_config, data_dir, &state.tls_config.client_cert).await {
+    let kek_result = match bootstrap::fetch_or_generate_kek(&mtls_client, &bootstrap_config, data_dir, &state.tls_config.client_key).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("KEK bootstrap failed: {e}");
