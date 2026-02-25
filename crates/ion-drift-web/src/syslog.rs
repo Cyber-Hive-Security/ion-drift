@@ -106,12 +106,24 @@ fn split_addr(s: &str) -> (&str, Option<&str>) {
 
 /// Spawn the syslog listener as a tokio task.
 /// Listens on UDP and inserts parsed events into the connection store.
+/// Only accepts packets from `router_host` — all other sources are dropped.
 pub fn spawn_syslog_listener(
     port: u16,
     store: Arc<ConnectionStore>,
     geo_cache: Arc<GeoCache>,
+    router_host: String,
 ) {
     tokio::spawn(async move {
+        // Resolve the router host to an IP for source validation
+        let allowed_ip: std::net::IpAddr = match router_host.parse() {
+            Ok(ip) => ip,
+            Err(_) => {
+                tracing::error!("syslog: cannot parse router host '{router_host}' as IP — listener disabled");
+                return;
+            }
+        };
+        tracing::info!("syslog: will only accept packets from {allowed_ip}");
+
         let addr = format!("0.0.0.0:{port}");
         let socket = match tokio::net::UdpSocket::bind(&addr).await {
             Ok(s) => {
@@ -130,6 +142,7 @@ pub fn spawn_syslog_listener(
         let mut total_received: u64 = 0;
         let mut total_parsed: u64 = 0;
         let mut total_unparsed: u64 = 0;
+        let mut total_rejected: u64 = 0;
         let mut last_stats = tokio::time::Instant::now();
 
         loop {
@@ -140,15 +153,27 @@ pub fn spawn_syslog_listener(
             .await;
 
             match result {
-                Ok(Ok((len, _addr))) => {
+                Ok(Ok((len, addr))) => {
                     total_received += 1;
+                    // Only accept packets from the configured router
+                    if addr.ip() != allowed_ip {
+                        total_rejected += 1;
+                        if total_rejected <= 10 {
+                            tracing::warn!("syslog: rejected packet from unauthorized source {}", addr.ip());
+                        }
+                        continue;
+                    }
                     if let Ok(line) = std::str::from_utf8(&buf[..len]) {
                         if let Some(event) = parse_routeros_syslog(line) {
                             total_parsed += 1;
                             batch.push(event);
                         } else {
                             total_unparsed += 1;
-                            tracing::trace!("syslog: unparsable line: {}", line.trim());
+                            // Sanitize logged content: strip control chars to prevent log injection
+                            let sanitized: String = line.trim().chars()
+                                .map(|c| if c.is_control() { '?' } else { c })
+                                .collect();
+                            tracing::trace!("syslog: unparsable line: {sanitized}");
                         }
                     }
                 }
@@ -175,7 +200,7 @@ pub fn spawn_syslog_listener(
             // Log stats every 5 minutes at INFO level
             if last_stats.elapsed().as_secs() >= 300 && total_received > 0 {
                 tracing::info!(
-                    "syslog stats: received={total_received}, parsed={total_parsed}, unparsed={total_unparsed}"
+                    "syslog stats: received={total_received}, parsed={total_parsed}, unparsed={total_unparsed}, rejected={total_rejected}"
                 );
                 last_stats = tokio::time::Instant::now();
             }

@@ -113,9 +113,12 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .allow_origin(
             origin
                 .parse::<HeaderValue>()
-                .unwrap_or_else(|_| {
-                    tracing::warn!("failed to parse CORS origin from redirect_uri, using permissive default");
-                    HeaderValue::from_static("*")
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "FATAL: failed to parse CORS origin '{}' from redirect_uri: {} \
+                         — fix oidc.redirect_uri in config",
+                        origin, e
+                    );
                 }),
         )
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])

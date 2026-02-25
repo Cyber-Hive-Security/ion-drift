@@ -299,8 +299,8 @@ async fn main() -> anyhow::Result<()> {
     // Spawn weekly snapshot generator
     snapshots::spawn_snapshot_generator(connection_store.clone());
 
-    // Spawn syslog listener (UDP 5514 by default)
-    syslog::spawn_syslog_listener(5514, connection_store, geo_cache);
+    // Spawn syslog listener (UDP 5514 by default) — only accepts packets from configured router
+    syslog::spawn_syslog_listener(5514, connection_store, geo_cache, config.router.host.clone());
 
     // Spawn cert rotation background task if CertWarden is configured
     if let Some(ref sm) = secrets_manager {

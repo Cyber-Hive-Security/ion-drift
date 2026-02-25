@@ -262,9 +262,10 @@ pub async fn geo_summary(
     State(state): State<AppState>,
     Query(query): Query<GeoSummaryQuery>,
 ) -> Result<Json<Vec<GeoSummaryEntry>>, Response> {
+    let days = query.days.clamp(1, 365);
     let result = state
         .connection_store
-        .geo_summary(query.days)
+        .geo_summary(days)
         .map_err(|e| internal_error("geo summary", e))?;
     Ok(Json(result))
 }
@@ -288,10 +289,11 @@ pub async fn port_summary(
     State(state): State<AppState>,
     Query(query): Query<PortSummaryQuery>,
 ) -> Result<Json<Vec<PortSummaryEntry>>, Response> {
+    let days = query.days.clamp(1, 365);
     let direction = query.direction.as_deref().unwrap_or("");
     let result = state
         .connection_store
-        .port_summary(query.days, direction)
+        .port_summary(days, direction)
         .map_err(|e| internal_error("port summary", e))?;
     Ok(Json(result))
 }
@@ -302,10 +304,11 @@ pub async fn port_summary_classified(
     State(state): State<AppState>,
     Query(query): Query<PortSummaryQuery>,
 ) -> Result<Json<ClassifiedPortSummary>, Response> {
+    let days = query.days.clamp(1, 365);
     let direction = query.direction.as_deref().unwrap_or("");
     let result = state
         .connection_store
-        .classified_port_summary(query.days, direction)
+        .classified_port_summary(days, direction)
         .map_err(|e| internal_error("classified port summary", e))?;
     Ok(Json(result))
 }
@@ -353,9 +356,10 @@ pub async fn city_summary(
     State(state): State<AppState>,
     Query(query): Query<CitySummaryQuery>,
 ) -> Result<Json<Vec<CitySummaryEntry>>, Response> {
+    let days = query.days.clamp(1, 365);
     let result = state
         .connection_store
-        .city_summary(query.days, query.min_connections)
+        .city_summary(days, query.min_connections)
         .map_err(|e| internal_error("city summary", e))?;
     Ok(Json(result))
 }

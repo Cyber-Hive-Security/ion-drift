@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde::{Deserialize, Serialize};
 
+use crate::middleware::RequireAuth;
 use crate::secrets;
 use crate::state::AppState;
 
@@ -16,7 +17,10 @@ pub struct SecretsStatusResponse {
     key_fingerprint: String,
 }
 
-pub async fn secrets_status(State(state): State<AppState>) -> Result<Json<SecretsStatusResponse>, Response> {
+pub async fn secrets_status(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<SecretsStatusResponse>, Response> {
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
@@ -57,6 +61,7 @@ pub struct UpdateSecretsResponse {
 }
 
 pub async fn update_secrets(
+    RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
     Json(req): Json<UpdateSecretsRequest>,
 ) -> Result<Json<UpdateSecretsResponse>, Response> {
@@ -149,6 +154,7 @@ pub struct RegenerateSessionResponse {
 }
 
 pub async fn regenerate_session(
+    RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<RegenerateSessionResponse>, Response> {
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
@@ -187,7 +193,10 @@ pub struct EncryptionStatusResponse {
     all_secrets_current: bool,
 }
 
-pub async fn encryption_status(State(state): State<AppState>) -> Result<Json<EncryptionStatusResponse>, Response> {
+pub async fn encryption_status(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<EncryptionStatusResponse>, Response> {
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
@@ -227,7 +236,10 @@ pub struct CertStatusResponse {
     check_interval_hours: u32,
 }
 
-pub async fn cert_status(State(state): State<AppState>) -> Result<Json<CertStatusResponse>, Response> {
+pub async fn cert_status(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<CertStatusResponse>, Response> {
     let cert_path = &state.config.tls.client_cert;
 
     let status = crate::certwarden::check_cert_status(cert_path)
