@@ -15,7 +15,7 @@ export function PageShell({
   isRefreshing,
 }: PageShellProps) {
   return (
-    <div className="flex-1 overflow-auto p-6">
+    <div className="flex-1 overflow-auto p-4 md:p-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">{title}</h1>
         {onRefresh && (

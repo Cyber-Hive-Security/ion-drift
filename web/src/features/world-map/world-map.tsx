@@ -665,7 +665,7 @@ export function WorldMap({
               <button
                 type="button"
                 onClick={handleZoomIn}
-                className="flex h-7 w-7 items-center justify-center rounded bg-card/80 text-sm font-bold text-foreground backdrop-blur hover:bg-card border border-border"
+                className="flex h-11 w-11 items-center justify-center rounded bg-card/80 text-base font-bold text-foreground backdrop-blur hover:bg-card border border-border md:h-7 md:w-7 md:text-sm"
                 title="Zoom in"
               >
                 +
@@ -673,7 +673,7 @@ export function WorldMap({
               <button
                 type="button"
                 onClick={handleZoomOut}
-                className="flex h-7 w-7 items-center justify-center rounded bg-card/80 text-sm font-bold text-foreground backdrop-blur hover:bg-card border border-border"
+                className="flex h-11 w-11 items-center justify-center rounded bg-card/80 text-base font-bold text-foreground backdrop-blur hover:bg-card border border-border md:h-7 md:w-7 md:text-sm"
                 title="Zoom out"
               >
                 &minus;
@@ -681,7 +681,7 @@ export function WorldMap({
               <button
                 type="button"
                 onClick={handleZoomReset}
-                className="flex h-7 w-7 items-center justify-center rounded bg-card/80 text-[10px] font-medium text-muted-foreground backdrop-blur hover:bg-card hover:text-foreground border border-border"
+                className="flex h-11 w-11 items-center justify-center rounded bg-card/80 text-xs font-medium text-muted-foreground backdrop-blur hover:bg-card hover:text-foreground border border-border md:h-7 md:w-7 md:text-[10px]"
                 title="Reset zoom"
               >
                 1:1
@@ -711,7 +711,7 @@ export function WorldMap({
       />
 
       {/* Legend */}
-      <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
         <div className="flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-2.5 rounded-full"

@@ -43,6 +43,11 @@ body {
   overflow: visible !important;
 }
 
+/* Prevent text size inflation on mobile Safari */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 /* Sankey anomaly animations */
 @keyframes anomaly-pulse-critical {
   0%, 100% { filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.3)); opacity: 1; }

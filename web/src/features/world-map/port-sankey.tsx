@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { Sankey, Rectangle, Layer } from "recharts";
 import { formatBytes } from "@/lib/format";
 import { portLabel } from "@/lib/services";
@@ -203,7 +203,20 @@ interface PortSankeyProps {
 
 export function PortSankey({ summary, title }: PortSankeyProps) {
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(800);
   const baselined = summary.has_baselines;
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0].contentRect.width;
+      if (w > 0) setContainerWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Combine active flows + disappeared ghost flows.
   // During the baselining period (no baselines yet), treat everything as normal.
@@ -402,6 +415,10 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
   if (!sankeyData) return null;
 
   const chartHeight = Math.max(300, sankeyData.portCount * 30);
+  const isMobile = containerWidth < 600;
+  const sankeyMargin = isMobile
+    ? { top: 10, right: 90, bottom: 30, left: 50 }
+    : { top: 10, right: 140, bottom: 30, left: 80 };
 
   // Build alert banner
   const anomalies = summary.flows.filter(
@@ -419,7 +436,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
   const hasCritical = newPorts.length > 0;
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4 overflow-visible">
+    <div ref={containerRef} className="rounded-lg border border-border bg-card p-4 overflow-visible">
       {hasAnomalies && (
         <AnomalyBanner
           newPorts={newPorts}
@@ -434,7 +451,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
       </h3>
       <div className="sankey-container" style={{ overflow: "visible" }}>
         <Sankey
-          width={800}
+          width={containerWidth}
           height={chartHeight}
           data={sankeyData}
           nodeWidth={10}
@@ -442,10 +459,10 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
           linkCurvature={0.5}
           iterations={64}
           sort={true}
-          margin={{ top: 10, right: 140, bottom: 30, left: 80 }}
+          margin={sankeyMargin}
           node={
             ((props: SankeyNodePayload) => (
-              <CustomNode {...props} containerWidth={800} />
+              <CustomNode {...props} containerWidth={containerWidth} />
             )) as any
           }
           link={LinkWithTooltip as any}

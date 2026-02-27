@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Outlet, Link } from "@tanstack/react-router";
 import { useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -8,6 +9,7 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 
 export function RootLayout() {
   const { isAuthenticated, isLoading } = useAuth();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -23,9 +25,9 @@ export function RootLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <Sidebar />
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header />
+        <Header onMenuToggle={() => setSidebarOpen((v) => !v)} />
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>
