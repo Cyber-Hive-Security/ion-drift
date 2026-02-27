@@ -28,7 +28,12 @@ const navItems = [
   { to: "/network-map", label: "Network Map", icon: Map },
 ] as const;
 
-export function Sidebar() {
+interface SidebarProps {
+  open?: boolean;
+  onClose?: () => void;
+}
+
+export function Sidebar({ open, onClose }: SidebarProps) {
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
   const connectionSummary = useConnectionSummary();
@@ -36,8 +41,8 @@ export function Sidebar() {
   const behaviorAlerts = useBehaviorAlerts();
   const pendingAnomalies = behaviorAlerts.data?.pending_count ?? 0;
 
-  return (
-    <aside className="flex h-full w-56 flex-col border-r border-border bg-card">
+  const navContent = (
+    <>
       <div className="flex h-14 flex-col justify-center border-b border-border px-4">
         <span className="text-lg font-bold leading-tight text-primary">Ion Drift</span>
         <span className="text-[10px] leading-tight text-muted-foreground">by Cyber Hive Security</span>
@@ -51,6 +56,7 @@ export function Sidebar() {
             <Link
               key={to}
               to={to}
+              onClick={onClose}
               className={cn(
                 "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 active
@@ -75,6 +81,7 @@ export function Sidebar() {
       <div className="border-t border-border p-3">
         <Link
           to="/settings"
+          onClick={onClose}
           className={cn(
             "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
             currentPath.startsWith("/settings")
@@ -86,6 +93,31 @@ export function Sidebar() {
           Settings
         </Link>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Desktop sidebar — always visible */}
+      <aside className="hidden md:flex h-full w-56 flex-col border-r border-border bg-card">
+        {navContent}
+      </aside>
+
+      {/* Mobile overlay sidebar */}
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          onClick={onClose}
+        />
+      )}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex w-[280px] flex-col border-r border-border bg-card transition-transform duration-300 ease-in-out md:hidden",
+          open ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
+        {navContent}
+      </aside>
+    </>
   );
 }

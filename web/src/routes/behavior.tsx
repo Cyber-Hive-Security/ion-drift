@@ -394,31 +394,31 @@ function AnomalyCard({
         {isPending && (
           <div className="flex shrink-0 items-center gap-1">
             <button
-              className="rounded p-1 text-emerald-500 hover:bg-emerald-500/15"
+              className="flex h-9 w-9 items-center justify-center rounded text-emerald-500 hover:bg-emerald-500/15 md:h-auto md:w-auto md:p-1"
               title="Accept"
               onClick={() =>
                 resolveMutation.mutate({ id: anomaly.id, action: "accepted" })
               }
             >
-              <Check className="h-3.5 w-3.5" />
+              <Check className="h-4 w-4 md:h-3.5 md:w-3.5" />
             </button>
             <button
-              className="rounded p-1 text-amber-500 hover:bg-amber-500/15"
+              className="flex h-9 w-9 items-center justify-center rounded text-amber-500 hover:bg-amber-500/15 md:h-auto md:w-auto md:p-1"
               title="Flag for review"
               onClick={() =>
                 resolveMutation.mutate({ id: anomaly.id, action: "flagged" })
               }
             >
-              <Flag className="h-3.5 w-3.5" />
+              <Flag className="h-4 w-4 md:h-3.5 md:w-3.5" />
             </button>
             <button
-              className="rounded p-1 text-muted-foreground hover:bg-muted"
+              className="flex h-9 w-9 items-center justify-center rounded text-muted-foreground hover:bg-muted md:h-auto md:w-auto md:p-1"
               title="Dismiss"
               onClick={() =>
                 resolveMutation.mutate({ id: anomaly.id, action: "dismissed" })
               }
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="h-4 w-4 md:h-3.5 md:w-3.5" />
             </button>
           </div>
         )}
@@ -595,7 +595,7 @@ export function BehaviorPage() {
       <StatsRow data={data} />
 
       {/* Tabs */}
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex flex-wrap gap-2">
         {tabs.map((t) => (
           <button
             key={t.mode}
@@ -645,7 +645,7 @@ export function BehaviorPage() {
       {tab === "anomalies" && (
         <div>
           {/* Status filter */}
-          <div className="mb-3 flex gap-2">
+          <div className="mb-3 flex flex-wrap gap-2">
             {statusFilters.map((f) => (
               <button
                 key={f.mode}
