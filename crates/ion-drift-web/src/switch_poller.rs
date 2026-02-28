@@ -46,11 +46,10 @@ pub fn spawn_switch_pollers(
             tokio::spawn(async move {
                 let mut interval =
                     tokio::time::interval(Duration::from_secs(poll_interval.max(10)));
-                interval.tick().await; // skip immediate tick
 
                 loop {
-                    interval.tick().await;
                     poll_switch(&device_id, &client, &store, &dm_ref).await;
+                    interval.tick().await;
                 }
             });
         }
@@ -289,15 +288,13 @@ pub fn spawn_neighbor_poller(
 /// Spawn a device health check that pings all devices every 60s.
 pub fn spawn_device_health_check(device_manager: Arc<RwLock<DeviceManager>>) {
     tokio::spawn(async move {
-        // 20-second startup delay
-        tokio::time::sleep(Duration::from_secs(20)).await;
+        // Brief startup delay to let device clients initialize
+        tokio::time::sleep(Duration::from_secs(5)).await;
         tracing::info!("device health check starting (60s interval)");
 
         let mut interval = tokio::time::interval(Duration::from_secs(60));
-        interval.tick().await;
 
         loop {
-            interval.tick().await;
 
             let dm_read = device_manager.read().await;
             let devices: Vec<(String, MikrotikClient)> = dm_read
