@@ -182,6 +182,83 @@ const historyColumns: Column<ConnectionHistoryEntry>[] = [
   },
 ];
 
+// ── Country stats table columns ──────────────────────────────
+
+const countryColumns: Column<GeoSummaryEntry>[] = [
+  {
+    key: "country",
+    header: "Country",
+    render: (r) => (
+      <span className="text-xs">
+        {countryFlag(r.country_code)}{" "}
+        <span className="font-medium">{r.country}</span>
+      </span>
+    ),
+    sortValue: (r) => r.country,
+  },
+  {
+    key: "code",
+    header: "Code",
+    render: (r) => (
+      <span className="font-mono text-xs text-muted-foreground">
+        {r.country_code}
+      </span>
+    ),
+    sortValue: (r) => r.country_code,
+  },
+  {
+    key: "connections",
+    header: "Connections",
+    render: (r) => (
+      <span className="font-mono text-xs">{formatNumber(r.connection_count)}</span>
+    ),
+    sortValue: (r) => r.connection_count,
+  },
+  {
+    key: "sources",
+    header: "Sources",
+    render: (r) => (
+      <span className="font-mono text-xs">{formatNumber(r.unique_sources)}</span>
+    ),
+    sortValue: (r) => r.unique_sources,
+  },
+  {
+    key: "destinations",
+    header: "Destinations",
+    render: (r) => (
+      <span className="font-mono text-xs">{formatNumber(r.unique_destinations)}</span>
+    ),
+    sortValue: (r) => r.unique_destinations,
+  },
+  {
+    key: "tx",
+    header: "TX",
+    render: (r) => (
+      <span className="font-mono text-xs">{formatBytes(r.total_tx)}</span>
+    ),
+    sortValue: (r) => r.total_tx,
+  },
+  {
+    key: "rx",
+    header: "RX",
+    render: (r) => (
+      <span className="font-mono text-xs">{formatBytes(r.total_rx)}</span>
+    ),
+    sortValue: (r) => r.total_rx,
+  },
+  {
+    key: "flagged",
+    header: "Flagged",
+    render: (r) =>
+      r.flagged_count > 0 ? (
+        <span className="font-mono text-xs text-red-500">{formatNumber(r.flagged_count)}</span>
+      ) : (
+        <span className="font-mono text-xs text-muted-foreground">0</span>
+      ),
+    sortValue: (r) => r.flagged_count,
+  },
+];
+
 // ── Main History Page ───────────────────────────────────────
 
 export function HistoryPage() {
@@ -330,14 +407,34 @@ export function HistoryPage() {
       ) : (
         <>
           {activeTab === "world-map" && (
-            <WorldMap
-              data={mapData}
-              cityData={citySummary.data ?? []}
-              isLoading={mapLoading}
-              onCountryClick={handleCountryClick}
-              onCityClick={handleCityClick}
-              timeRange={selectedWeek ?? timeRange}
-            />
+            <>
+              <WorldMap
+                data={mapData}
+                cityData={citySummary.data ?? []}
+                isLoading={mapLoading}
+                onCountryClick={handleCountryClick}
+                onCityClick={handleCityClick}
+                timeRange={selectedWeek ?? timeRange}
+              />
+              {mapData.length > 0 && (
+                <div className="mt-6">
+                  <h2 className="mb-3 text-lg font-semibold">Country Breakdown</h2>
+                  <DataTable
+                    columns={countryColumns}
+                    data={mapData}
+                    rowKey={(r) => r.country_code}
+                    defaultSort={{ key: "connections", asc: false }}
+                    searchable
+                    searchPlaceholder="Search countries..."
+                    rowStyle={(r) =>
+                      r.flagged_count > 0
+                        ? { borderLeft: "3px solid oklch(0.6 0.2 25)" }
+                        : undefined
+                    }
+                  />
+                </div>
+              )}
+            </>
           )}
 
           {activeTab === "history-table" && (

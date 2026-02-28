@@ -138,7 +138,7 @@ export function WorldMap({
     const ro = new ResizeObserver((entries) => {
       const { width } = entries[0].contentRect;
       if (width > 0) {
-        setDimensions({ width, height: Math.max(400, width * 0.5) });
+        setDimensions({ width, height: Math.max(500, width * 0.6) });
       }
     });
     ro.observe(container);
@@ -246,16 +246,31 @@ export function WorldMap({
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
     // Tooltip helpers
+    const isMobile = width < 768;
     function showTooltip(html: string) {
       tooltip!.style.display = "block";
       tooltip!.innerHTML = html;
     }
     function moveTooltip(event: MouseEvent) {
-      tooltip!.style.left = `${event.clientX + 14}px`;
-      tooltip!.style.top = `${event.clientY - 12}px`;
+      if (isMobile) {
+        // On mobile, anchor tooltip to bottom-center of the map container
+        // to avoid finger occlusion
+        const container = svgEl!.parentElement;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          tooltip!.style.left = `${rect.left + rect.width / 2}px`;
+          tooltip!.style.top = `${rect.bottom - 8}px`;
+          tooltip!.style.transform = "translate(-50%, -100%)";
+        }
+      } else {
+        tooltip!.style.left = `${event.clientX + 14}px`;
+        tooltip!.style.top = `${event.clientY - 12}px`;
+        tooltip!.style.transform = "";
+      }
     }
     function hideTooltip() {
       tooltip!.style.display = "none";
+      tooltip!.style.transform = "";
     }
 
     function renderMap(world: Topology) {
@@ -711,7 +726,7 @@ export function WorldMap({
       />
 
       {/* Legend */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground md:text-[10px]">
         <div className="flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-2.5 rounded-full"
@@ -742,7 +757,7 @@ export function WorldMap({
             City
           </div>
         )}
-        <div className="ml-auto text-[9px]">Scroll to zoom &middot; Drag to pan</div>
+        <div className="ml-auto text-[11px] md:text-[9px]">Scroll to zoom &middot; Drag to pan</div>
       </div>
     </div>
   );

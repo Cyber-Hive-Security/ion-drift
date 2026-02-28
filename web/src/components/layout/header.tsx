@@ -4,9 +4,10 @@ import { LogOut, Menu, Router } from "lucide-react";
 
 interface HeaderProps {
   onMenuToggle?: () => void;
+  pendingAnomalies?: number;
 }
 
-export function Header({ onMenuToggle }: HeaderProps) {
+export function Header({ onMenuToggle, pendingAnomalies = 0 }: HeaderProps) {
   const { user, logout } = useAuth();
   const { data: identity } = useSystemIdentity();
 
@@ -16,10 +17,15 @@ export function Header({ onMenuToggle }: HeaderProps) {
         <button
           type="button"
           onClick={onMenuToggle}
-          className="mr-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:hidden"
+          className="relative mr-1 flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:hidden"
           aria-label="Toggle menu"
         >
-          <Menu className="h-5 w-5" />
+          <Menu className="h-6 w-6" />
+          {pendingAnomalies > 0 && (
+            <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-0.5 text-[9px] font-bold text-white">
+              {pendingAnomalies > 99 ? "99+" : pendingAnomalies}
+            </span>
+          )}
         </button>
         <Router className="h-4 w-4" />
         {identity ? (

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Outlet, Link } from "@tanstack/react-router";
 import { useAuth } from "@/hooks/use-auth";
+import { useBehaviorAlerts } from "@/api/queries";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -10,6 +11,7 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 export function RootLayout() {
   const { isAuthenticated, isLoading } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const behaviorAlerts = useBehaviorAlerts();
 
   if (isLoading) {
     return (
@@ -27,7 +29,7 @@ export function RootLayout() {
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header onMenuToggle={() => setSidebarOpen((v) => !v)} />
+        <Header onMenuToggle={() => setSidebarOpen((v) => !v)} pendingAnomalies={behaviorAlerts.data?.pending_count ?? 0} />
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>

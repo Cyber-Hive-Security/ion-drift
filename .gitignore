@@ -35,3 +35,6 @@ Thumbs.db
 # Claude
 CLAUDE.md
 .claude/
+
+# Codeforge
+.codeforge/
