@@ -4,6 +4,9 @@ services:
     container_name: ion-drift
     hostname: hiverouter
     restart: unless-stopped
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
     ports:
       - "3100:3000"
       - "5514:5514/udp"
