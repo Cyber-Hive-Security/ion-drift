@@ -12,8 +12,9 @@ mod live_traffic;
 mod log_parser;
 mod middleware;
 mod oui;
+mod passive_discovery;
 mod routes;
-pub mod scanner;
+// pub mod scanner; // Disabled — replaced by passive_discovery (connection tracking)
 mod secrets;
 pub mod topology;
 mod setup;
@@ -338,16 +339,8 @@ async fn main() -> anyhow::Result<()> {
         secrets_manager: secrets_manager.clone(),
         device_manager: device_manager.clone(),
         switch_store: switch_store.clone(),
-        scanner: Arc::new(scanner::NmapScanner::new(switch_store.clone())),
         topology_cache: Arc::new(tokio::sync::RwLock::new(None)),
     };
-
-    // Log nmap scanner availability
-    if scanner::nmap_available() {
-        tracing::info!("nmap scanner available at /usr/bin/nmap");
-    } else {
-        tracing::warn!("nmap not found at /usr/bin/nmap — network scanning disabled");
-    }
 
     // Spawn background tasks
     spawn_traffic_poller(traffic_tracker.clone(), live_traffic.clone(), mikrotik.clone());
@@ -405,6 +398,10 @@ async fn main() -> anyhow::Result<()> {
         switch_store.clone(),
         device_manager.clone(),
         app_state.topology_cache.clone(),
+    );
+    passive_discovery::spawn_passive_discovery(
+        switch_store.clone(),
+        app_state.mikrotik.clone(),
     );
 
     // Spawn cert rotation background task if CertWarden is configured

@@ -73,6 +73,7 @@ import type {
   ScanStatus,
   UpdateIdentityRequest,
   StartScanRequest,
+  ObservedService,
   NetworkTopologyResponse,
   TopologyPosition,
 } from "./types";
@@ -892,6 +893,17 @@ export function useBulkConfirmIdentities() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["network", "identities"] });
     },
+  });
+}
+
+// ── Observed services (passive discovery) ───────────────────────
+
+export function useObservedServices(ip?: string) {
+  const params = ip ? `?ip=${encodeURIComponent(ip)}` : "";
+  return useQuery({
+    queryKey: ["network", "services", ip ?? "all"],
+    queryFn: () => apiFetch<ObservedService[]>(`/api/network/services${params}`),
+    refetchInterval: 60_000,
   });
 }
 

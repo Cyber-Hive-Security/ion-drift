@@ -52,8 +52,6 @@ pub struct AppState {
     pub device_manager: Arc<RwLock<DeviceManager>>,
     /// Switch-specific data store (port metrics, MAC table, neighbors, etc.).
     pub switch_store: Arc<SwitchStore>,
-    /// Nmap network scanner.
-    pub scanner: Arc<crate::scanner::NmapScanner>,
     /// Cached auto-generated network topology, recomputed every 120s.
     pub topology_cache: Arc<RwLock<Option<NetworkTopology>>>,
 }

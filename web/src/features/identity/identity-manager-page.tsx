@@ -17,8 +17,9 @@ import {
   useIdentityStats,
   useUpdateIdentity,
   useBulkConfirmIdentities,
+  useObservedServices,
 } from "@/api/queries";
-import type { NetworkIdentity } from "@/api/types";
+import type { NetworkIdentity, ObservedService } from "@/api/types";
 import { VLAN_CONFIG } from "@/features/network-map/data";
 
 // ── Device type options ─────────────────────────────────────────
@@ -65,6 +66,7 @@ const SOURCE_COLORS: Record<string, string> = {
   human: "bg-green-500/20 text-green-400 border-green-500/30",
   lldp: "bg-blue-500/20 text-blue-400 border-blue-500/30",
   nmap: "bg-purple-500/20 text-purple-400 border-purple-500/30",
+  conntrack: "bg-teal-500/20 text-teal-400 border-teal-500/30",
   traffic_pattern: "bg-amber-500/20 text-amber-400 border-amber-500/30",
   oui: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
   none: "bg-muted text-muted-foreground border-border",
@@ -188,8 +190,20 @@ function LabelCell({
 export default function IdentityManagerPage() {
   const { data: identities = [], isLoading, refetch } = useNetworkIdentities();
   const { data: stats } = useIdentityStats();
+  const { data: allServices = [] } = useObservedServices();
   const updateIdentity = useUpdateIdentity();
   const bulkConfirm = useBulkConfirmIdentities();
+
+  // Build IP → services lookup for showing ports per identity
+  const servicesByIp = useMemo(() => {
+    const map = new Map<string, ObservedService[]>();
+    for (const svc of allServices) {
+      const list = map.get(svc.ip_address) || [];
+      list.push(svc);
+      map.set(svc.ip_address, list);
+    }
+    return map;
+  }, [allServices]);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filterType, setFilterType] = useState<string>("");
@@ -408,6 +422,38 @@ export default function IdentityManagerPage() {
         <span className="text-xs">{row.switch_port || "—"}</span>
       ),
       sortValue: (row) => row.switch_port || "",
+    },
+    {
+      key: "services",
+      header: "Services",
+      render: (row) => {
+        const services = row.best_ip ? servicesByIp.get(row.best_ip) : undefined;
+        if (!services || services.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
+        // Show up to 4 service badges, then "+N"
+        const shown = services.slice(0, 4);
+        const remaining = services.length - shown.length;
+        return (
+          <div className="flex flex-wrap gap-0.5" title={services.map(s => `${s.port}/${s.protocol}${s.service_name ? ` (${s.service_name})` : ""}`).join(", ")}>
+            {shown.map((s) => (
+              <span
+                key={`${s.port}-${s.protocol}`}
+                className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono text-muted-foreground"
+              >
+                {s.service_name || s.port}
+              </span>
+            ))}
+            {remaining > 0 && (
+              <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
+                +{remaining}
+              </span>
+            )}
+          </div>
+        );
+      },
+      sortValue: (row) => {
+        const services = row.best_ip ? servicesByIp.get(row.best_ip) : undefined;
+        return services?.length ?? 0;
+      },
     },
     {
       key: "last_seen",

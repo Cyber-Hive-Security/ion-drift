@@ -142,6 +142,18 @@ pub struct VlanMembershipEntry {
     pub tagged: bool,
 }
 
+/// An observed service detected via passive connection tracking analysis.
+#[derive(Debug, Clone, Serialize)]
+pub struct ObservedService {
+    pub ip_address: String,
+    pub port: u32,
+    pub protocol: String,
+    pub service_name: Option<String>,
+    pub first_seen: i64,
+    pub last_seen: i64,
+    pub connection_count: i64,
+}
+
 /// A topology node position (auto-computed or human override).
 #[derive(Debug, Clone, Serialize)]
 pub struct TopologyPosition {
@@ -325,6 +337,17 @@ impl SwitchStore {
                 y REAL NOT NULL,
                 source TEXT NOT NULL DEFAULT 'auto',
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS observed_services (
+                ip_address TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                protocol TEXT NOT NULL DEFAULT 'tcp',
+                service_name TEXT,
+                first_seen INTEGER NOT NULL,
+                last_seen INTEGER NOT NULL,
+                connection_count INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (ip_address, port, protocol)
             );
 
             PRAGMA journal_mode=WAL;",
@@ -1090,6 +1113,86 @@ impl SwitchStore {
         Ok(())
     }
 
+    // ── Observed services (passive discovery) ────────────────────
+
+    /// Upsert an observed service from connection tracking analysis.
+    pub async fn upsert_observed_service(
+        &self,
+        ip: &str,
+        port: u32,
+        protocol: &str,
+        service_name: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        let now = now_unix();
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO observed_services
+             (ip_address, port, protocol, service_name, first_seen, last_seen, connection_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1)
+             ON CONFLICT(ip_address, port, protocol) DO UPDATE SET
+                 service_name = COALESCE(excluded.service_name, observed_services.service_name),
+                 last_seen = excluded.last_seen,
+                 connection_count = observed_services.connection_count + 1",
+            params![ip, port as i64, protocol, service_name, now],
+        )?;
+        Ok(())
+    }
+
+    /// Get observed services for an IP (or all if None).
+    pub async fn get_observed_services(
+        &self,
+        ip: Option<&str>,
+    ) -> Result<Vec<ObservedService>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let (sql, filter) = match ip {
+            Some(addr) => (
+                "SELECT ip_address, port, protocol, service_name, first_seen, last_seen, connection_count
+                 FROM observed_services WHERE ip_address = ?1 ORDER BY port",
+                Some(addr.to_string()),
+            ),
+            None => (
+                "SELECT ip_address, port, protocol, service_name, first_seen, last_seen, connection_count
+                 FROM observed_services ORDER BY ip_address, port",
+                None,
+            ),
+        };
+        let mut stmt = db.prepare(sql)?;
+        let rows = if let Some(ref addr) = filter {
+            stmt.query_map(params![addr], map_observed_service_row)?
+        } else {
+            stmt.query_map([], map_observed_service_row)?
+        };
+        rows.collect()
+    }
+
+    /// Get observed services as a JSON-serializable port list for a given IP,
+    /// suitable for display alongside network identities.
+    pub async fn get_services_for_ip(
+        &self,
+        ip: &str,
+    ) -> Result<Vec<ObservedService>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT ip_address, port, protocol, service_name, first_seen, last_seen, connection_count
+             FROM observed_services
+             WHERE ip_address = ?1
+             ORDER BY port",
+        )?;
+        let rows = stmt.query_map(params![ip], map_observed_service_row)?;
+        rows.collect()
+    }
+
+    /// Prune observed services not seen in the given number of seconds.
+    pub async fn prune_observed_services(&self, max_age_secs: i64) -> Result<usize, rusqlite::Error> {
+        let cutoff = now_unix() - max_age_secs;
+        let db = self.db.lock().await;
+        let rows = db.execute(
+            "DELETE FROM observed_services WHERE last_seen < ?1",
+            params![cutoff],
+        )?;
+        Ok(rows)
+    }
+
     // ── Topology positions ─────────────────────────────────────────
 
     /// Get all topology position overrides.
@@ -1178,6 +1281,18 @@ fn map_port_role_row(row: &rusqlite::Row<'_>) -> Result<PortRoleEntry, rusqlite:
         mac_count: row.get::<_, i64>(4)? as u32,
         has_lldp_neighbor: row.get::<_, i32>(5)? != 0,
         updated_at: row.get(6)?,
+    })
+}
+
+fn map_observed_service_row(row: &rusqlite::Row<'_>) -> Result<ObservedService, rusqlite::Error> {
+    Ok(ObservedService {
+        ip_address: row.get(0)?,
+        port: row.get::<_, i64>(1)? as u32,
+        protocol: row.get(2)?,
+        service_name: row.get(3)?,
+        first_seen: row.get(4)?,
+        last_seen: row.get(5)?,
+        connection_count: row.get(6)?,
     })
 }
 

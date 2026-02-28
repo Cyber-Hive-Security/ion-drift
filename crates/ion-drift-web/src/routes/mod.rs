@@ -221,13 +221,9 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/network/identities/review-queue", get(identity::review_queue))
         .route("/network/identities/{mac}", put(identity::update_identity))
         .route("/network/identities/bulk-confirm", post(identity::bulk_confirm))
-        // Nmap scans
-        .route("/scans", get(identity::list_scans).post(identity::start_scan))
-        .route("/scans/status", get(identity::scan_status))
-        .route("/scans/exclusions", get(identity::list_exclusions).post(identity::add_exclusion))
-        .route("/scans/exclusions/{ip}", delete(identity::remove_exclusion))
-        .route("/scans/{id}", get(identity::get_scan))
-        .route("/scans/{id}/results", get(identity::scan_results))
+        // Observed services (passive discovery)
+        .route("/network/services", get(identity::observed_services))
+        // Nmap scan routes removed — replaced by passive_discovery (connection tracking)
         // Network topology
         .route("/network/topology", get(topology::get_topology))
         .route("/network/topology/refresh", post(topology::refresh_topology))

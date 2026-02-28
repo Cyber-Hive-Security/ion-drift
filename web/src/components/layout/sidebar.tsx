@@ -13,7 +13,6 @@ import {
   Settings,
   History,
   Fingerprint,
-  Radar,
   GitBranch,
 } from "lucide-react";
 
@@ -88,7 +87,6 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <div className="mt-1 space-y-0.5">
           {[
             { to: "/network/identities", label: "Identities", icon: Fingerprint },
-            { to: "/network/scans", label: "Network Scans", icon: Radar },
             { to: "/topology", label: "Topology", icon: GitBranch },
           ].map(({ to, label, icon: Icon }) => {
             const active = currentPath.startsWith(to);

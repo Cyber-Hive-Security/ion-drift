@@ -17,7 +17,6 @@ import { SettingsPage } from "./settings";
 import { NotFoundPage } from "./__root";
 import { SwitchDetailPageWrapper } from "@/features/switch-detail/switch-detail-page";
 import IdentityManagerPage from "@/features/identity/identity-manager-page";
-import NetworkScansPage from "@/features/scans/network-scans-page";
 
 // Lazy-load the network map page — it pulls in D3 and heavy SVG rendering
 // that benefits from being in a separate chunk.
@@ -179,12 +178,6 @@ const identitiesRoute = createRoute({
   component: IdentityManagerPage,
 });
 
-const scansRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/network/scans",
-  component: NetworkScansPage,
-});
-
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -204,7 +197,6 @@ const routeTree = rootRoute.addChildren([
   topologyRoute,
   switchDetailRoute,
   identitiesRoute,
-  scansRoute,
   settingsRoute,
 ]);
 

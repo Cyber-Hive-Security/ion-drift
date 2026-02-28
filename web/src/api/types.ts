@@ -1035,6 +1035,18 @@ export interface StartScanRequest {
   profile: "quick" | "standard" | "deep";
 }
 
+// ── Observed Services (Passive Discovery) ─────────────────────
+
+export interface ObservedService {
+  ip_address: string;
+  port: number;
+  protocol: string;
+  service_name: string | null;
+  first_seen: number;
+  last_seen: number;
+  connection_count: number;
+}
+
 // ── Network Topology ───────────────────────────────────────────
 
 export type TopologyNodeKind =
