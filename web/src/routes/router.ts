@@ -11,7 +11,6 @@ import { IpPage } from "./ip";
 import { FirewallPage } from "./firewall";
 import { ConnectionsPage } from "./connections";
 import { LogsPage } from "./logs";
-import { SpeedtestPage } from "./speedtest";
 import { BehaviorPage } from "./behavior";
 import { HistoryPage } from "./history";
 import { SettingsPage } from "./settings";
@@ -63,12 +62,6 @@ const logsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/logs",
   component: LogsPage,
-});
-
-const speedtestRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/speedtest",
-  component: SpeedtestPage,
 });
 
 const behaviorRoute = createRoute({
@@ -144,7 +137,6 @@ const routeTree = rootRoute.addChildren([
   firewallRoute,
   connectionsRoute,
   logsRoute,
-  speedtestRoute,
   behaviorRoute,
   historyRoute,
   networkMapRoute,

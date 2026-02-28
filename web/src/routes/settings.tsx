@@ -13,10 +13,11 @@ import {
   useConnectionHistoryStats,
   useDevices,
   useCreateDevice,
+  useUpdateDevice,
   useDeleteDevice,
   useTestDeviceConnection,
 } from "@/api/queries";
-import type { CreateDeviceRequest } from "@/api/types";
+import type { CreateDeviceRequest, UpdateDeviceRequest } from "@/api/types";
 import {
   Shield,
   Key,
@@ -32,6 +33,7 @@ import {
   Plus,
   Trash2,
   Plug,
+  Pencil,
   Network,
 } from "lucide-react";
 import { formatBytes, formatNumber } from "@/lib/format";
@@ -57,9 +59,11 @@ export function SettingsPage() {
 function NetworkDevicesSection() {
   const { data: devices, isLoading, error } = useDevices();
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ status: string; identity?: string; error?: string } | null>(null);
 
   const createDevice = useCreateDevice();
+  const updateDevice = useUpdateDevice();
   const deleteDevice = useDeleteDevice();
   const testConnection = useTestDeviceConnection();
 
@@ -70,6 +74,17 @@ function NetworkDevicesSection() {
     port: "443",
     tls: true,
     device_type: "switch" as "router" | "switch",
+    model: "",
+    poll_interval_secs: "60",
+    username: "",
+    password: "",
+  });
+
+  const [editForm, setEditForm] = useState({
+    name: "",
+    host: "",
+    port: "443",
+    tls: true,
     model: "",
     poll_interval_secs: "60",
     username: "",
@@ -133,6 +148,36 @@ function NetworkDevicesSection() {
     await deleteDevice.mutateAsync(id);
   };
 
+  const handleStartEdit = (device: typeof devices extends (infer T)[] | undefined ? T : never) => {
+    setEditingDeviceId(device.id);
+    setEditForm({
+      name: device.name,
+      host: device.host,
+      port: String(device.port),
+      tls: device.tls,
+      model: device.model ?? "",
+      poll_interval_secs: String(device.poll_interval_secs),
+      username: "",
+      password: "",
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingDeviceId) return;
+    const data: UpdateDeviceRequest = {
+      name: editForm.name || undefined,
+      host: editForm.host || undefined,
+      port: parseInt(editForm.port) || 443,
+      tls: editForm.tls,
+      model: editForm.model || undefined,
+      poll_interval_secs: parseInt(editForm.poll_interval_secs) || 60,
+    };
+    if (editForm.username) data.username = editForm.username;
+    if (editForm.password) data.password = editForm.password;
+    await updateDevice.mutateAsync({ id: editingDeviceId, data });
+    setEditingDeviceId(null);
+  };
+
   return (
     <div className="rounded-lg border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border p-4">
@@ -156,54 +201,170 @@ function NetworkDevicesSection() {
 
       <div className="divide-y divide-border">
         {devices?.map((device) => (
-          <div
-            key={device.id}
-            className="flex items-center gap-4 px-4 py-3"
-          >
-            <Server className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">{device.name}</span>
-                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground uppercase">
-                  {device.device_type}
-                </span>
-                {device.is_primary && (
-                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                    primary
+          <div key={device.id}>
+            <div className="flex items-center gap-4 px-4 py-3">
+              <Server className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{device.name}</span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground uppercase">
+                    {device.device_type}
                   </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span
-                  className={`inline-block h-2 w-2 rounded-full ${
-                    device.status === "Online"
-                      ? "bg-green-500"
-                      : device.status === "Offline"
-                        ? "bg-red-500"
-                        : "bg-gray-400"
-                  }`}
-                />
-                <span className="text-xs text-muted-foreground">
-                  {device.host}:{device.port}
-                  {device.identity ? ` — ${device.identity}` : ""}
-                  {device.error ? ` — ${device.error}` : ""}
-                </span>
-                {device.model && (
+                  {device.is_primary && (
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                      primary
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      device.status === "Online"
+                        ? "bg-green-500"
+                        : device.status === "Offline"
+                          ? "bg-red-500"
+                          : "bg-gray-400"
+                    }`}
+                  />
                   <span className="text-xs text-muted-foreground">
-                    &middot; {device.model}
+                    {device.host}:{device.port}
+                    {device.identity ? ` — ${device.identity}` : ""}
+                    {device.error ? ` — ${device.error}` : ""}
                   </span>
-                )}
+                  {device.model && (
+                    <span className="text-xs text-muted-foreground">
+                      &middot; {device.model}
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
-            {!device.is_primary && (
               <button
-                onClick={() => handleDelete(device.id)}
-                disabled={deleteDevice.isPending}
-                className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                title="Remove device"
+                onClick={() => editingDeviceId === device.id ? setEditingDeviceId(null) : handleStartEdit(device)}
+                className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                title="Edit device"
               >
-                <Trash2 className="h-4 w-4" />
+                <Pencil className="h-4 w-4" />
               </button>
+              {!device.is_primary && (
+                <button
+                  onClick={() => handleDelete(device.id)}
+                  disabled={deleteDevice.isPending}
+                  className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                  title="Remove device"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+            {editingDeviceId === device.id && (
+              <div className="border-t border-border/50 px-4 py-3 space-y-3 bg-muted/20">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Pencil className="h-3.5 w-3.5" /> Edit {device.name}
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">Display Name</label>
+                    <input
+                      type="text"
+                      value={editForm.name}
+                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                      className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">Host</label>
+                    <input
+                      type="text"
+                      value={editForm.host}
+                      onChange={(e) => setEditForm({ ...editForm, host: e.target.value })}
+                      className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs text-muted-foreground mb-1">Port</label>
+                      <input
+                        type="number"
+                        value={editForm.port}
+                        onChange={(e) => setEditForm({ ...editForm, port: e.target.value })}
+                        className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                      />
+                    </div>
+                    <div className="flex items-end pb-1">
+                      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={editForm.tls}
+                          onChange={(e) => setEditForm({ ...editForm, tls: e.target.checked })}
+                        />
+                        TLS
+                      </label>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">Model</label>
+                    <input
+                      type="text"
+                      value={editForm.model}
+                      onChange={(e) => setEditForm({ ...editForm, model: e.target.value })}
+                      className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">Username</label>
+                    <input
+                      type="text"
+                      value={editForm.username}
+                      onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
+                      className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">
+                      Password <span className="text-muted-foreground/60">(leave blank to keep current)</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={editForm.password}
+                      placeholder="unchanged"
+                      onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+                      className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">Poll Interval (seconds)</label>
+                    <input
+                      type="number"
+                      value={editForm.poll_interval_secs}
+                      onChange={(e) => setEditForm({ ...editForm, poll_interval_secs: e.target.value })}
+                      className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                    />
+                  </div>
+                </div>
+
+                {updateDevice.error && (
+                  <div className="rounded bg-red-500/10 px-3 py-2 text-xs text-red-400">
+                    {updateDevice.error instanceof Error ? updateDevice.error.message : "Failed to update device"}
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={handleSaveEdit}
+                    disabled={!editForm.name || !editForm.host || !editForm.username || updateDevice.isPending}
+                    className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {updateDevice.isPending ? "Saving..." : "Save Changes"}
+                  </button>
+                  <button
+                    onClick={() => setEditingDeviceId(null)}
+                    className="rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         ))}

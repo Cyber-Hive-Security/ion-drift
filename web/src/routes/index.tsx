@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   useSystemResources,
   useTraffic,
-  useSpeedtestLatest,
   useDhcpLeases,
   useMetricsHistory,
   useConnectionSummary,
@@ -12,7 +11,6 @@ import { CpuCard } from "@/components/dashboard/cpu-card";
 import { MemoryCard } from "@/components/dashboard/memory-card";
 import { UptimeCard } from "@/components/dashboard/uptime-card";
 import { TrafficCard } from "@/components/dashboard/traffic-card";
-import { SpeedtestCard } from "@/components/dashboard/speedtest-card";
 import { DhcpCard } from "@/components/dashboard/dhcp-card";
 import { ConnectionsCard } from "@/components/dashboard/connections-card";
 import { FirewallDropsCard } from "@/components/dashboard/firewall-drops-card";
@@ -198,7 +196,6 @@ function SystemHistorySection() {
 export function DashboardPage() {
   const system = useSystemResources();
   const traffic = useTraffic();
-  const speedtest = useSpeedtestLatest();
   const dhcp = useDhcpLeases({ polling: true });
   const connections = useConnectionSummary();
   const drops = useFirewallDrops();
@@ -221,7 +218,6 @@ export function DashboardPage() {
         {system.data && <UptimeCard data={system.data} />}
         {drops.data ? <FirewallDropsCard data={drops.data} /> : <CardSkeleton title="Firewall Drops" />}
         {traffic.data ? <TrafficCard data={traffic.data} /> : <CardSkeleton title="WAN Traffic" />}
-        <SpeedtestCard data={speedtest.data && "median_download_mbps" in speedtest.data ? speedtest.data : null} />
         {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
         {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
         <NetworkDevicesCard />

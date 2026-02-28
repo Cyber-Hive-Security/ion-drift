@@ -10,7 +10,6 @@ pub mod logs;
 pub mod metrics;
 pub mod network_map_status;
 pub mod settings;
-pub mod speedtest;
 pub mod switch_data;
 pub mod system;
 pub mod traffic;
@@ -174,11 +173,6 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/metrics/log-trends", get(metrics::log_trends))
         // Network map
         .route("/network-map/status", get(network_map_status::status))
-        // Speedtest
-        .route("/speedtest/latest", get(speedtest::latest))
-        .route("/speedtest/history", get(speedtest::history))
-        .route("/speedtest/run", post(speedtest::run))
-        .route("/speedtest/status", get(speedtest::status))
         // Behavior
         .route("/behavior/overview", get(behavior::overview))
         .route("/behavior/vlan/{vlan_id}", get(behavior::vlan_detail))

@@ -511,24 +511,6 @@ export interface NetworkMapStatus {
   timestamp: number;
 }
 
-// Speedtest types (snake_case — custom Rust structs)
-
-export interface ProviderResult {
-  provider: string;
-  download_mbps: number;
-  upload_mbps: number;
-  latency_ms: number;
-  server_location: string | null;
-}
-
-export interface SpeedTestResult {
-  providers: ProviderResult[];
-  median_download_mbps: number;
-  median_upload_mbps: number;
-  median_latency_ms: number;
-  timestamp: number;
-}
-
 // Behavior / Device Fingerprinting types (snake_case — custom Rust structs)
 
 export interface DeviceProfile {

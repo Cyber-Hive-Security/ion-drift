@@ -19,7 +19,6 @@ import type {
   LifetimeTraffic,
   TrafficSample,
   MetricsPoint,
-  SpeedTestResult,
   VlanFlow,
   ConnectionSummary,
   ConnectionsPageResponse,
@@ -320,44 +319,6 @@ export function useMetricsHistory(range: "24h" | "7d") {
     queryKey: ["metrics", "history", range],
     queryFn: () => apiFetch<MetricsPoint[]>(`/api/metrics/history?range=${range}`),
     refetchInterval: 60_000,
-  });
-}
-
-// Speedtest
-
-export function useSpeedtestLatest() {
-  return useQuery({
-    queryKey: ["speedtest", "latest"],
-    queryFn: () => apiFetch<SpeedTestResult>("/api/speedtest/latest"),
-    refetchInterval: 300_000,
-    retry: false,
-  });
-}
-
-export function useSpeedtestHistory(limit = 10) {
-  return useQuery({
-    queryKey: ["speedtest", "history", limit],
-    queryFn: () =>
-      apiFetch<SpeedTestResult[]>(`/api/speedtest/history?limit=${limit}`),
-  });
-}
-
-export function useSpeedtestStatus() {
-  return useQuery({
-    queryKey: ["speedtest", "status"],
-    queryFn: () => apiFetch<{ running: boolean }>("/api/speedtest/status"),
-    refetchInterval: 3_000,
-  });
-}
-
-export function useRunSpeedtest() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () =>
-      apiFetch<{ status: string }>("/api/speedtest/run", { method: "POST" }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["speedtest", "status"] });
-    },
   });
 }
 

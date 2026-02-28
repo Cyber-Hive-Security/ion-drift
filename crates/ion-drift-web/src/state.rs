@@ -1,9 +1,8 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64};
 
 use tokio::sync::RwLock;
 
-use mikrotik_core::{BehaviorStore, MikrotikClient, MetricsStore, SpeedTestStore, SwitchStore, TrafficTracker};
+use mikrotik_core::{BehaviorStore, MikrotikClient, MetricsStore, SwitchStore, TrafficTracker};
 use mikrotik_core::resources::firewall::FilterRule;
 use crate::auth::{OidcClient, SessionStore};
 use crate::config::ServerConfig;
@@ -28,18 +27,12 @@ pub struct AppState {
     pub sessions: SessionStore,
     /// Background traffic tracker (WAN interface counters).
     pub traffic_tracker: Arc<TrafficTracker>,
-    /// Persistent speed test result store (SQLite).
-    pub speedtest_store: Arc<SpeedTestStore>,
     /// CPU/memory metrics history store (SQLite).
     pub metrics_store: Arc<MetricsStore>,
     /// In-memory ring buffer for real-time traffic rates.
     pub live_traffic: Arc<LiveTrafficBuffer>,
     /// Immutable server configuration.
     pub config: Arc<ServerConfig>,
-    /// Whether a speed test is currently running.
-    pub speedtest_running: Arc<AtomicBool>,
-    /// Unix timestamp of the last completed speed test (for cooldown).
-    pub speedtest_last_completed: Arc<AtomicI64>,
     /// MAC OUI manufacturer lookup database.
     pub oui_db: Arc<OuiDb>,
     /// IP geolocation cache (MaxMind primary, ip-api.com fallback).

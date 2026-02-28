@@ -22,7 +22,7 @@ mod syslog;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+
 use std::time::Duration;
 
 use secrecy::ExposeSecret;
@@ -243,14 +243,10 @@ async fn main() -> anyhow::Result<()> {
     let oidc_client = auth::discover_oidc(&config, &http_client).await?;
     tracing::info!("OIDC provider discovered successfully");
 
-    // Initialize traffic tracker and speedtest store
+    // Initialize traffic tracker
     let traffic_tracker = Arc::new(
         mikrotik_core::TrafficTracker::new(&data_dir.join("traffic.db"), "1-WAN")
             .map_err(|e| anyhow::anyhow!("failed to init traffic tracker: {e}"))?,
-    );
-    let speedtest_store = Arc::new(
-        mikrotik_core::SpeedTestStore::new(&data_dir.join("speedtest.db"))
-            .map_err(|e| anyhow::anyhow!("failed to init speedtest store: {e}"))?,
     );
     let metrics_store = Arc::new(
         mikrotik_core::MetricsStore::new(&data_dir.join("metrics.db"))
@@ -266,10 +262,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Session store
     let sessions = auth::SessionStore::new(config.session.max_age_seconds);
-
-    // Shared speedtest coordination
-    let speedtest_running = Arc::new(AtomicBool::new(false));
-    let speedtest_last_completed = Arc::new(AtomicI64::new(0));
 
     // Load MAC OUI database (bundled)
     let oui_db = oui::OuiDb::load();
@@ -332,12 +324,9 @@ async fn main() -> anyhow::Result<()> {
         http_client: http_client.clone(),
         sessions: sessions.clone(),
         traffic_tracker: traffic_tracker.clone(),
-        speedtest_store: speedtest_store.clone(),
         metrics_store: metrics_store.clone(),
         live_traffic: live_traffic.clone(),
         config: config.clone(),
-        speedtest_running: speedtest_running.clone(),
-        speedtest_last_completed: speedtest_last_completed.clone(),
         oui_db,
         geo_cache: geo_cache.clone(),
         connection_store: connection_store.clone(),
@@ -361,12 +350,6 @@ async fn main() -> anyhow::Result<()> {
         app_state.geo_cache.clone(),
         app_state.oui_db.clone(),
     );
-    // Automatic speedtest disabled — use on-demand /api/speedtest/run instead
-    // spawn_speedtest_runner(
-    //     speedtest_store.clone(),
-    //     speedtest_running.clone(),
-    //     speedtest_last_completed.clone(),
-    // );
     spawn_session_cleanup(sessions);
     spawn_behavior_collector(
         behavior_store.clone(),
@@ -901,50 +884,6 @@ fn spawn_log_aggregation(
 
             // Sleep for 1 hour
             tokio::time::sleep(Duration::from_secs(3600)).await;
-        }
-    });
-}
-
-/// Run speed tests once per week, coordinating with on-demand tests.
-fn spawn_speedtest_runner(
-    store: Arc<mikrotik_core::SpeedTestStore>,
-    running: Arc<AtomicBool>,
-    last_completed: Arc<AtomicI64>,
-) {
-    tokio::spawn(async move {
-        // Build a separate HTTP client for speedtests (public CAs only)
-        let http_client = reqwest::Client::new();
-
-        // Wait 5 minutes before first speedtest (let server stabilize)
-        tokio::time::sleep(Duration::from_secs(300)).await;
-
-        loop {
-            // Try to claim the running flag; skip if an on-demand test is in progress
-            if running
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                tracing::info!("starting scheduled speed test");
-                let result = mikrotik_core::speedtest::run_speedtest(&http_client).await;
-                tracing::info!(
-                    "speedtest complete: {:.1}/{:.1} Mbps (down/up)",
-                    result.median_download_mbps,
-                    result.median_upload_mbps,
-                );
-                if let Err(e) = store.save(&result).await {
-                    tracing::error!("failed to save speedtest result: {e}");
-                }
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64;
-                last_completed.store(now, Ordering::Release);
-                running.store(false, Ordering::Release);
-            } else {
-                tracing::info!("scheduled speedtest skipped: on-demand test in progress");
-            }
-
-            tokio::time::sleep(Duration::from_secs(7 * 24 * 3600)).await;
         }
     });
 }

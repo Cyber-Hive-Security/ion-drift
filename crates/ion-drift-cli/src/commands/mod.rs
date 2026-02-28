@@ -3,7 +3,6 @@ pub mod interfaces;
 pub mod ip;
 pub mod firewall;
 pub mod logs;
-pub mod speedtest;
 pub mod traffic;
 
 use serde::Serialize;

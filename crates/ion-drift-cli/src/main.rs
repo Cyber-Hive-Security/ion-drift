@@ -64,9 +64,6 @@ enum Commands {
     /// View system logs
     Log(commands::logs::LogCommand),
 
-    /// Run or view Cloudflare speed test results
-    Speedtest(commands::speedtest::SpeedTestCommand),
-
     /// Show lifetime WAN traffic counters
     Traffic(commands::traffic::TrafficCommand),
 }
@@ -86,7 +83,7 @@ async fn main() {
     }
 }
 
-/// Data directory for SQLite databases (traffic, speedtest).
+/// Data directory for SQLite databases (traffic).
 fn data_dir() -> std::path::PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -97,12 +94,7 @@ async fn run(cli: Cli, no_color: bool) -> anyhow::Result<()> {
     let data_dir = data_dir();
     std::fs::create_dir_all(&data_dir)?;
 
-    // Speedtest doesn't need router credentials
-    if let Commands::Speedtest(cmd) = cli.command {
-        return commands::speedtest::run(cmd, cli.format, &data_dir).await;
-    }
-
-    // All other commands need a router connection
+    // All commands need a router connection
     let config_path = cli.config
         .map(std::path::PathBuf::from)
         .unwrap_or_else(config::CliConfig::default_path);
@@ -127,7 +119,6 @@ async fn run(cli: Cli, no_color: bool) -> anyhow::Result<()> {
         Commands::Firewall(cmd) => commands::firewall::run(cmd, &client, cli.format, no_color).await?,
         Commands::Log(cmd) => commands::logs::run(cmd, &client, cli.format).await?,
         Commands::Traffic(cmd) => commands::traffic::run(cmd, &client, cli.format, &data_dir).await?,
-        Commands::Speedtest(_) => unreachable!(),
     }
 
     Ok(())

@@ -8,7 +8,6 @@ import {
   Shield,
   Plug2,
   ScrollText,
-  Gauge,
   Activity,
   Map,
   Settings,
@@ -24,7 +23,6 @@ const navItems = [
   { to: "/behavior", label: "Behavior", icon: Activity },
   { to: "/history", label: "History", icon: History },
   { to: "/logs", label: "Logs", icon: ScrollText },
-  { to: "/speedtest", label: "Speedtest", icon: Gauge },
   { to: "/network-map", label: "Network Map", icon: Map },
 ] as const;
 
