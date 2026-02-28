@@ -66,6 +66,13 @@ import type {
   NetworkIdentity,
   VlanMembershipEntry,
   PortRoleEntry,
+  IdentityStats,
+  NmapScan,
+  NmapResult,
+  ScanExclusion,
+  ScanStatus,
+  UpdateIdentityRequest,
+  StartScanRequest,
 } from "./types";
 
 // Auth
@@ -834,5 +841,140 @@ export function useNetworkPortRoles() {
     queryKey: ["network", "port-roles"],
     queryFn: () => apiFetch<PortRoleEntry[]>("/api/network/port-roles"),
     refetchInterval: 60_000,
+  });
+}
+
+// ── Identity management ─────────────────────────────────────────
+
+export function useIdentityStats() {
+  return useQuery({
+    queryKey: ["network", "identities", "stats"],
+    queryFn: () => apiFetch<IdentityStats>("/api/network/identities/stats"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useReviewQueue(limit = 50, offset = 0) {
+  return useQuery({
+    queryKey: ["network", "identities", "review-queue", limit, offset],
+    queryFn: () =>
+      apiFetch<NetworkIdentity[]>(
+        `/api/network/identities/review-queue?limit=${limit}&offset=${offset}`
+      ),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useUpdateIdentity() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ mac, data }: { mac: string; data: UpdateIdentityRequest }) =>
+      apiFetch<{ updated: boolean }>(
+        `/api/network/identities/${encodeURIComponent(mac)}`,
+        { method: "PUT", body: JSON.stringify(data) }
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "identities"] });
+    },
+  });
+}
+
+export function useBulkConfirmIdentities() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (macs: string[]) =>
+      apiFetch<{ confirmed: number }>("/api/network/identities/bulk-confirm", {
+        method: "POST",
+        body: JSON.stringify({ macs }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "identities"] });
+    },
+  });
+}
+
+// ── Nmap scans ──────────────────────────────────────────────────
+
+export function useScanStatus() {
+  return useQuery({
+    queryKey: ["scans", "status"],
+    queryFn: () => apiFetch<ScanStatus>("/api/scans/status"),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useScans(limit = 20) {
+  return useQuery({
+    queryKey: ["scans", "list", limit],
+    queryFn: () => apiFetch<NmapScan[]>(`/api/scans?limit=${limit}`),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useScanDetail(scanId?: string) {
+  return useQuery({
+    queryKey: ["scans", "detail", scanId],
+    queryFn: () => apiFetch<NmapScan | null>(`/api/scans/${encodeURIComponent(scanId!)}`),
+    enabled: !!scanId,
+    refetchInterval: 5_000,
+  });
+}
+
+export function useScanResults(scanId?: string) {
+  return useQuery({
+    queryKey: ["scans", "results", scanId],
+    queryFn: () =>
+      apiFetch<NmapResult[]>(`/api/scans/${encodeURIComponent(scanId!)}/results`),
+    enabled: !!scanId,
+  });
+}
+
+export function useStartScan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: StartScanRequest) =>
+      apiFetch<{ scan_id: string; status: string }>("/api/scans", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scans"] });
+    },
+  });
+}
+
+export function useScanExclusions() {
+  return useQuery({
+    queryKey: ["scans", "exclusions"],
+    queryFn: () => apiFetch<ScanExclusion[]>("/api/scans/exclusions"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useAddExclusion() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { ip: string; reason: string }) =>
+      apiFetch<{ ok: boolean }>("/api/scans/exclusions", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scans", "exclusions"] });
+    },
+  });
+}
+
+export function useRemoveExclusion() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (ip: string) =>
+      apiFetch<{ removed: boolean }>(
+        `/api/scans/exclusions/${encodeURIComponent(ip)}`,
+        { method: "DELETE" }
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scans", "exclusions"] });
+    },
   });
 }

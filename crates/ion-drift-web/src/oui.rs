@@ -54,6 +54,92 @@ impl OuiDb {
         Arc::new(Self { map })
     }
 
+    /// Infer a device type and confidence from a manufacturer name.
+    ///
+    /// Returns `(device_type, confidence)` if a pattern matches.
+    /// OUI-based inference uses confidence 0.6 since manufacturer alone is
+    /// suggestive but not definitive (e.g. "Samsung" could be phone, TV, or fridge).
+    pub fn device_type_from_manufacturer(manufacturer: &str) -> Option<(&'static str, f64)> {
+        let lower = manufacturer.to_lowercase();
+
+        // Camera / surveillance
+        if matches_any(&lower, &[
+            "hikvision", "dahua", "axis communications", "amcrest", "reolink",
+            "foscam", "vivotek", "hanwha", "wisenet", "lorex",
+        ]) {
+            return Some(("camera", 0.6));
+        }
+
+        // Network equipment (routers, switches, APs)
+        if matches_any(&lower, &[
+            "cisco", "juniper", "arista", "mikrotik", "routerboard", "ubiquiti",
+            "netgear", "tp-link", "aruba", "ruckus", "fortinet", "meraki",
+            "palo alto", "sonicwall", "zyxel", "draytek", "peplink",
+        ]) {
+            return Some(("network_equipment", 0.6));
+        }
+
+        // Printers
+        if matches_any(&lower, &[
+            "hewlett packard", "hp inc", "canon", "epson", "brother",
+            "xerox", "lexmark", "ricoh", "konica minolta", "kyocera",
+        ]) {
+            return Some(("printer", 0.6));
+        }
+
+        // Smart home / IoT hubs
+        if matches_any(&lower, &[
+            "nest", "ecobee", "rachio", "ring", "wyze", "tuya",
+            "shelly", "sonoff", "espressif", "smart home",
+            "philips lighting", "signify", "lutron", "aeotec",
+        ]) {
+            return Some(("smart_home", 0.6));
+        }
+
+        // Media / streaming devices
+        if matches_any(&lower, &[
+            "roku", "amazon technologies", "apple, inc", "google",
+            "sonos", "bose", "chromecast", "fire tv",
+        ]) {
+            return Some(("media_player", 0.5)); // Lower confidence — Apple/Google/Amazon make many things
+        }
+
+        // Mobile phones
+        if matches_any(&lower, &[
+            "samsung electro", "oneplus", "xiaomi", "oppo", "vivo mobile",
+            "huawei", "motorola", "nokia", "zte",
+        ]) {
+            return Some(("phone", 0.5)); // Samsung makes TVs too, so lower confidence
+        }
+
+        // Computers / workstations
+        if matches_any(&lower, &[
+            "dell", "lenovo", "asustek", "asus", "acer", "msi",
+            "intel corporate", "gigabyte", "supermicro", "hewlett-packard",
+        ]) {
+            return Some(("computer", 0.5));
+        }
+
+        // Gaming
+        if matches_any(&lower, &[
+            "nintendo", "sony interactive", "valve", "steam",
+        ]) {
+            return Some(("gaming", 0.6));
+        }
+
+        // NAS / storage
+        if matches_any(&lower, &["synology", "qnap", "western digital", "buffalo"]) {
+            return Some(("storage", 0.6));
+        }
+
+        // Servers / hypervisors
+        if matches_any(&lower, &["vmware", "proxmox"]) {
+            return Some(("server", 0.6));
+        }
+
+        None
+    }
+
     /// Look up the manufacturer for a MAC address.
     /// Accepts formats like "BC:24:11:9C:99:D5" or "bc:24:11:9c:99:d5".
     pub fn lookup(&self, mac: &str) -> Option<&str> {
@@ -71,6 +157,11 @@ impl OuiDb {
 
         self.map.get(&prefix).map(|s| s.as_str())
     }
+}
+
+/// Check if a lowercased string contains any of the given patterns.
+fn matches_any(haystack: &str, patterns: &[&str]) -> bool {
+    patterns.iter().any(|p| haystack.contains(p))
 }
 
 /// Simple CSV field iterator that handles quoted fields.

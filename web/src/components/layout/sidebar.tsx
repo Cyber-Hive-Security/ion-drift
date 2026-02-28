@@ -12,6 +12,8 @@ import {
   Map,
   Settings,
   History,
+  Fingerprint,
+  Radar,
 } from "lucide-react";
 
 const navItems = [
@@ -78,6 +80,35 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           );
         })}
       </nav>
+      <div className="border-t border-border px-3 py-2">
+        <span className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Discovery
+        </span>
+        <div className="mt-1 space-y-0.5">
+          {[
+            { to: "/network/identities", label: "Identities", icon: Fingerprint },
+            { to: "/network/scans", label: "Network Scans", icon: Radar },
+          ].map(({ to, label, icon: Icon }) => {
+            const active = currentPath.startsWith(to);
+            return (
+              <Link
+                key={to}
+                to={to as "/"}
+                onClick={onClose}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  active
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </Link>
+            );
+          })}
+        </div>
+      </div>
       {switchDevices.length > 0 && (
         <div className="border-t border-border px-3 py-2">
           <span className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">

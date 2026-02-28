@@ -13,6 +13,7 @@ mod log_parser;
 mod middleware;
 mod oui;
 mod routes;
+pub mod scanner;
 mod secrets;
 mod setup;
 mod snapshots;
@@ -336,6 +337,7 @@ async fn main() -> anyhow::Result<()> {
         secrets_manager: secrets_manager.clone(),
         device_manager: device_manager.clone(),
         switch_store: switch_store.clone(),
+        scanner: Arc::new(scanner::NmapScanner::new(switch_store.clone())),
     };
 
     // Spawn background tasks
@@ -358,7 +360,11 @@ async fn main() -> anyhow::Result<()> {
         app_state.geo_cache.clone(),
         app_state.firewall_rules_cache.clone(),
     );
-    spawn_behavior_maintenance(behavior_store.clone(), connection_store.clone());
+    spawn_behavior_maintenance(
+        behavior_store.clone(),
+        connection_store.clone(),
+        app_state.switch_store.clone(),
+    );
     spawn_behavior_auto_classifier(behavior_store.clone());
     anomaly_correlator::spawn_anomaly_correlator(connection_store.clone(), behavior_store);
 
@@ -960,6 +966,7 @@ fn spawn_behavior_collector(
 fn spawn_behavior_maintenance(
     store: Arc<mikrotik_core::BehaviorStore>,
     connection_store: Arc<connection_store::ConnectionStore>,
+    switch_store: Arc<mikrotik_core::SwitchStore>,
 ) {
     tokio::spawn(async move {
         loop {
@@ -983,8 +990,130 @@ fn spawn_behavior_maintenance(
                 Ok(count) => tracing::info!("port flow baselines: computed {count} baselines"),
                 Err(e) => tracing::warn!("port flow baseline computation failed: {e}"),
             }
+
+            // Classify devices by traffic patterns
+            classify_traffic_patterns(&store, &switch_store).await;
         }
     });
+}
+
+/// Classify devices by their observed traffic patterns.
+///
+/// Uses heuristic rules on behavioral observations (dominant ports, bandwidth patterns)
+/// to infer device types. Only updates identities where the new confidence exceeds
+/// the existing device_type_confidence and the identity is not human-confirmed.
+async fn classify_traffic_patterns(
+    behavior_store: &mikrotik_core::BehaviorStore,
+    switch_store: &mikrotik_core::SwitchStore,
+) {
+    let profiles = match behavior_store.get_all_profiles().await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("traffic classifier: failed to get profiles: {e}");
+            return;
+        }
+    };
+
+    let mut classified = 0u32;
+
+    for profile in &profiles {
+        let mac = &profile.mac;
+
+        // Get observations for this device (last 7 days)
+        let observations = match behavior_store.get_observations(mac, 7 * 86400).await {
+            Ok(obs) => obs,
+            Err(_) => continue,
+        };
+
+        if observations.is_empty() {
+            continue;
+        }
+
+        // Aggregate port usage across observations
+        let mut port_counts: std::collections::HashMap<i64, u32> = std::collections::HashMap::new();
+        let mut total_upload: u64 = 0;
+        let mut total_download: u64 = 0;
+        let mut total_connections: u64 = 0;
+
+        for obs in &observations {
+            if let Some(port) = obs.dst_port {
+                *port_counts.entry(port).or_default() += 1;
+            }
+            total_upload += obs.bytes_sent as u64;
+            total_download += obs.bytes_recv as u64;
+            total_connections += obs.connection_count as u64;
+        }
+
+        // Apply classification rules
+        let has_port = |p: i64| port_counts.contains_key(&p);
+        let port_dominant = |p: i64| {
+            let total: u32 = port_counts.values().sum();
+            if total == 0 { return false; }
+            port_counts.get(&p).copied().unwrap_or(0) as f64 / total as f64 > 0.3
+        };
+
+        let (device_type, confidence, rules): (Option<&str>, f64, Vec<&str>) = if
+            (has_port(554) || port_dominant(554)) && total_upload > total_download
+        {
+            (Some("camera"), 0.8, vec!["port_554_rtsp", "high_upload_ratio"])
+        } else if has_port(9100) || has_port(631) {
+            let low_traffic = total_connections < 100;
+            if low_traffic {
+                (Some("printer"), 0.8, vec!["printer_ports", "low_traffic"])
+            } else {
+                (Some("printer"), 0.75, vec!["printer_ports"])
+            }
+        } else if has_port(32400) {
+            (Some("media_server"), 0.8, vec!["port_32400_plex"])
+        } else if has_port(8883) || has_port(1883) {
+            (Some("smart_home"), 0.75, vec!["mqtt_ports"])
+        } else if port_counts.len() <= 3
+            && (has_port(53) || has_port(443) || has_port(80))
+            && total_connections < 500
+        {
+            (Some("phone"), 0.7, vec!["limited_port_diversity", "low_connections"])
+        } else if port_counts.len() > 15 && total_connections > 5000 {
+            (Some("computer"), 0.7, vec!["high_port_diversity", "high_connections"])
+        } else if has_port(22) && has_port(443) && total_connections > 1000 {
+            (Some("server"), 0.75, vec!["ssh_https_ports", "high_connections"])
+        } else {
+            (None, 0.0, vec![])
+        };
+
+        if let Some(dt) = device_type {
+            let evidence = serde_json::json!({
+                "rules_matched": rules,
+                "observation_count": observations.len(),
+                "window_days": 7,
+                "unique_ports": port_counts.len(),
+                "total_connections": total_connections,
+            });
+
+            // Store classification
+            let _ = switch_store.upsert_traffic_classification(
+                mac,
+                dt,
+                confidence,
+                &evidence.to_string(),
+            ).await;
+
+            // Update identity (confidence hierarchy enforced by upsert)
+            let _ = switch_store.upsert_network_identity(
+                mac,
+                None, None, None, None, None, None, None, None, None,
+                0.0, // don't update base confidence
+                Some(dt),
+                Some("traffic_pattern"),
+                confidence,
+            ).await;
+
+            classified += 1;
+        }
+    }
+
+    if classified > 0 {
+        tracing::info!("traffic classifier: classified {classified} devices");
+    }
 }
 
 /// Auto-resolve stale anomalies every hour based on per-VLAN timeout rules.

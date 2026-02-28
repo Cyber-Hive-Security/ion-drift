@@ -69,6 +69,69 @@ pub struct NetworkIdentity {
     pub first_seen: i64,
     pub last_seen: i64,
     pub confidence: f64,
+    pub device_type: Option<String>,
+    pub device_type_source: Option<String>,
+    pub device_type_confidence: f64,
+    pub human_confirmed: bool,
+    pub human_label: Option<String>,
+}
+
+/// An nmap scan record.
+#[derive(Debug, Clone, Serialize)]
+pub struct NmapScan {
+    pub id: String,
+    pub vlan_id: u32,
+    pub profile: String,
+    pub status: String,
+    pub target_count: i32,
+    pub discovered_count: i32,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+}
+
+/// An nmap scan result (per-host).
+#[derive(Debug, Clone, Serialize)]
+pub struct NmapResult {
+    pub id: i64,
+    pub scan_id: String,
+    pub ip_address: String,
+    pub mac_address: Option<String>,
+    pub hostname: Option<String>,
+    pub os_guess: Option<String>,
+    pub os_accuracy: Option<i32>,
+    pub open_ports: Option<String>,
+    pub device_type: Option<String>,
+    pub created_at: String,
+}
+
+/// A scan exclusion entry.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanExclusion {
+    pub ip_address: String,
+    pub reason: Option<String>,
+    pub created_at: String,
+}
+
+/// A traffic pattern classification result.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrafficClassification {
+    pub mac_address: String,
+    pub device_type: String,
+    pub confidence: f64,
+    pub evidence: String,
+    pub classified_at: String,
+}
+
+/// Identity statistics summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct IdentityStats {
+    pub total: i64,
+    pub confirmed: i64,
+    pub unconfirmed: i64,
+    pub by_device_type: std::collections::HashMap<String, i64>,
+    pub by_source: std::collections::HashMap<String, i64>,
 }
 
 /// A VLAN membership entry for a switch port.
@@ -203,8 +266,62 @@ impl SwitchStore {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_spr_unique
                 ON switch_port_roles (device_id, port_name);
 
+            CREATE TABLE IF NOT EXISTS nmap_scans (
+                id TEXT PRIMARY KEY,
+                vlan_id INTEGER NOT NULL,
+                profile TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                target_count INTEGER DEFAULT 0,
+                discovered_count INTEGER DEFAULT 0,
+                started_at TEXT,
+                completed_at TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS nmap_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id TEXT NOT NULL REFERENCES nmap_scans(id),
+                ip_address TEXT NOT NULL,
+                mac_address TEXT,
+                hostname TEXT,
+                os_guess TEXT,
+                os_accuracy INTEGER,
+                open_ports TEXT,
+                device_type TEXT,
+                raw_xml TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_nr_scan
+                ON nmap_results (scan_id);
+
+            CREATE TABLE IF NOT EXISTS scan_exclusions (
+                ip_address TEXT PRIMARY KEY,
+                reason TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS traffic_classifications (
+                mac_address TEXT PRIMARY KEY,
+                device_type TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                evidence TEXT NOT NULL,
+                classified_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             PRAGMA journal_mode=WAL;",
         )?;
+
+        // Idempotent schema migrations — add columns to network_identities
+        for alter in &[
+            "ALTER TABLE network_identities ADD COLUMN device_type TEXT",
+            "ALTER TABLE network_identities ADD COLUMN device_type_source TEXT",
+            "ALTER TABLE network_identities ADD COLUMN device_type_confidence REAL DEFAULT 0.0",
+            "ALTER TABLE network_identities ADD COLUMN human_confirmed INTEGER DEFAULT 0",
+            "ALTER TABLE network_identities ADD COLUMN human_label TEXT",
+        ] {
+            let _ = conn.execute(alter, []);
+        }
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -396,6 +513,10 @@ impl SwitchStore {
     // ── Network identities ──────────────────────────────────────
 
     /// Upsert a network identity record.
+    ///
+    /// Device type fields use a confidence hierarchy: a new device_type only overwrites
+    /// an existing one if the new confidence is >= the existing, AND the record is not
+    /// human-confirmed (human_confirmed = 1 locks the device_type).
     pub async fn upsert_network_identity(
         &self,
         mac_address: &str,
@@ -409,14 +530,18 @@ impl SwitchStore {
         remote_identity: Option<&str>,
         remote_platform: Option<&str>,
         confidence: f64,
+        device_type: Option<&str>,
+        device_type_source: Option<&str>,
+        device_type_confidence: f64,
     ) -> Result<(), rusqlite::Error> {
         let now = now_unix();
         let db = self.db.lock().await;
         db.execute(
             "INSERT INTO network_identities
              (mac_address, best_ip, hostname, manufacturer, switch_device_id, switch_port,
-              vlan_id, discovery_protocol, remote_identity, remote_platform, first_seen, last_seen, confidence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)
+              vlan_id, discovery_protocol, remote_identity, remote_platform, first_seen, last_seen, confidence,
+              device_type, device_type_source, device_type_confidence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(mac_address) DO UPDATE SET
                  best_ip = COALESCE(excluded.best_ip, network_identities.best_ip),
                  hostname = COALESCE(excluded.hostname, network_identities.hostname),
@@ -428,7 +553,28 @@ impl SwitchStore {
                  remote_identity = COALESCE(excluded.remote_identity, network_identities.remote_identity),
                  remote_platform = COALESCE(excluded.remote_platform, network_identities.remote_platform),
                  last_seen = excluded.last_seen,
-                 confidence = MAX(excluded.confidence, network_identities.confidence)",
+                 confidence = MAX(excluded.confidence, network_identities.confidence),
+                 device_type = CASE
+                     WHEN network_identities.human_confirmed = 1 THEN network_identities.device_type
+                     WHEN excluded.device_type IS NULL THEN network_identities.device_type
+                     WHEN excluded.device_type_confidence >= COALESCE(network_identities.device_type_confidence, 0.0)
+                         THEN excluded.device_type
+                     ELSE network_identities.device_type
+                 END,
+                 device_type_source = CASE
+                     WHEN network_identities.human_confirmed = 1 THEN network_identities.device_type_source
+                     WHEN excluded.device_type IS NULL THEN network_identities.device_type_source
+                     WHEN excluded.device_type_confidence >= COALESCE(network_identities.device_type_confidence, 0.0)
+                         THEN excluded.device_type_source
+                     ELSE network_identities.device_type_source
+                 END,
+                 device_type_confidence = CASE
+                     WHEN network_identities.human_confirmed = 1 THEN network_identities.device_type_confidence
+                     WHEN excluded.device_type IS NULL THEN network_identities.device_type_confidence
+                     WHEN excluded.device_type_confidence >= COALESCE(network_identities.device_type_confidence, 0.0)
+                         THEN excluded.device_type_confidence
+                     ELSE network_identities.device_type_confidence
+                 END",
             params![
                 mac_address,
                 best_ip,
@@ -442,6 +588,9 @@ impl SwitchStore {
                 remote_platform,
                 now,
                 confidence,
+                device_type,
+                device_type_source,
+                device_type_confidence,
             ],
         )?;
         Ok(())
@@ -453,27 +602,329 @@ impl SwitchStore {
         let mut stmt = db.prepare(
             "SELECT mac_address, best_ip, hostname, manufacturer, switch_device_id, switch_port,
                     vlan_id, discovery_protocol, remote_identity, remote_platform,
-                    first_seen, last_seen, confidence
+                    first_seen, last_seen, confidence,
+                    device_type, device_type_source, device_type_confidence,
+                    human_confirmed, human_label
              FROM network_identities ORDER BY last_seen DESC",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(NetworkIdentity {
-                mac_address: row.get(0)?,
-                best_ip: row.get(1)?,
-                hostname: row.get(2)?,
-                manufacturer: row.get(3)?,
-                switch_device_id: row.get(4)?,
-                switch_port: row.get(5)?,
-                vlan_id: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-                discovery_protocol: row.get(7)?,
-                remote_identity: row.get(8)?,
-                remote_platform: row.get(9)?,
-                first_seen: row.get(10)?,
-                last_seen: row.get(11)?,
-                confidence: row.get(12)?,
+        let rows = stmt.query_map([], map_identity_row)?;
+        rows.collect()
+    }
+
+    /// Get unconfirmed identities ordered by confidence ASC (review queue).
+    pub async fn get_review_queue(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<NetworkIdentity>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT mac_address, best_ip, hostname, manufacturer, switch_device_id, switch_port,
+                    vlan_id, discovery_protocol, remote_identity, remote_platform,
+                    first_seen, last_seen, confidence,
+                    device_type, device_type_source, device_type_confidence,
+                    human_confirmed, human_label
+             FROM network_identities
+             WHERE human_confirmed = 0
+             ORDER BY device_type_confidence ASC, last_seen DESC
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = stmt.query_map(params![limit as i64, offset as i64], map_identity_row)?;
+        rows.collect()
+    }
+
+    /// Get identity statistics (total, confirmed, unconfirmed, by device_type, by source).
+    pub async fn get_identity_stats(&self) -> Result<IdentityStats, rusqlite::Error> {
+        let db = self.db.lock().await;
+
+        let total: i64 = db.query_row(
+            "SELECT COUNT(*) FROM network_identities",
+            [],
+            |row| row.get(0),
+        )?;
+        let confirmed: i64 = db.query_row(
+            "SELECT COUNT(*) FROM network_identities WHERE human_confirmed = 1",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let mut by_device_type = std::collections::HashMap::new();
+        {
+            let mut stmt = db.prepare(
+                "SELECT COALESCE(device_type, 'unknown'), COUNT(*)
+                 FROM network_identities GROUP BY COALESCE(device_type, 'unknown')",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for r in rows {
+                let (k, v) = r?;
+                by_device_type.insert(k, v);
+            }
+        }
+
+        let mut by_source = std::collections::HashMap::new();
+        {
+            let mut stmt = db.prepare(
+                "SELECT COALESCE(device_type_source, 'none'), COUNT(*)
+                 FROM network_identities GROUP BY COALESCE(device_type_source, 'none')",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for r in rows {
+                let (k, v) = r?;
+                by_source.insert(k, v);
+            }
+        }
+
+        Ok(IdentityStats {
+            total,
+            confirmed,
+            unconfirmed: total - confirmed,
+            by_device_type,
+            by_source,
+        })
+    }
+
+    /// Set a human override on an identity's device type and/or label.
+    pub async fn update_identity_human_override(
+        &self,
+        mac: &str,
+        device_type: Option<&str>,
+        label: Option<&str>,
+    ) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let rows = db.execute(
+            "UPDATE network_identities SET
+                 human_confirmed = 1,
+                 device_type = COALESCE(?2, device_type),
+                 device_type_source = CASE WHEN ?2 IS NOT NULL THEN 'human' ELSE device_type_source END,
+                 device_type_confidence = CASE WHEN ?2 IS NOT NULL THEN 1.0 ELSE device_type_confidence END,
+                 human_label = COALESCE(?3, human_label)
+             WHERE mac_address = ?1",
+            params![mac, device_type, label],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Bulk-confirm identities (set human_confirmed = 1 without changing device_type).
+    pub async fn bulk_confirm_identities(&self, macs: &[&str]) -> Result<usize, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut count = 0usize;
+        for mac in macs {
+            let rows = db.execute(
+                "UPDATE network_identities SET human_confirmed = 1 WHERE mac_address = ?1",
+                params![mac],
+            )?;
+            count += rows;
+        }
+        Ok(count)
+    }
+
+    // ── Nmap scans ──────────────────────────────────────────────
+
+    /// Insert a new nmap scan record.
+    pub async fn insert_nmap_scan(&self, scan: &NmapScan) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO nmap_scans (id, vlan_id, profile, status, target_count, started_at, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+            params![
+                scan.id,
+                scan.vlan_id as i64,
+                scan.profile,
+                scan.status,
+                scan.target_count,
+                scan.started_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Update a scan's status, discovered count, and optional error.
+    pub async fn update_nmap_scan(
+        &self,
+        id: &str,
+        status: &str,
+        discovered: i32,
+        error: Option<&str>,
+        completed_at: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "UPDATE nmap_scans SET status = ?2, discovered_count = ?3, error = ?4, completed_at = ?5
+             WHERE id = ?1",
+            params![id, status, discovered, error, completed_at],
+        )?;
+        Ok(())
+    }
+
+    /// Insert an nmap result for a scan.
+    pub async fn insert_nmap_result(&self, result: &NmapResult) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO nmap_results
+             (scan_id, ip_address, mac_address, hostname, os_guess, os_accuracy,
+              open_ports, device_type, raw_xml, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
+            params![
+                result.scan_id,
+                result.ip_address,
+                result.mac_address,
+                result.hostname,
+                result.os_guess,
+                result.os_accuracy,
+                result.open_ports,
+                result.device_type,
+                Option::<String>::None, // raw_xml omitted for storage efficiency
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get recent scans.
+    pub async fn get_nmap_scans(&self, limit: usize) -> Result<Vec<NmapScan>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT id, vlan_id, profile, status, target_count, discovered_count,
+                    started_at, completed_at, error, created_at
+             FROM nmap_scans ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(NmapScan {
+                id: row.get(0)?,
+                vlan_id: row.get::<_, i64>(1)? as u32,
+                profile: row.get(2)?,
+                status: row.get(3)?,
+                target_count: row.get(4)?,
+                discovered_count: row.get(5)?,
+                started_at: row.get(6)?,
+                completed_at: row.get(7)?,
+                error: row.get(8)?,
+                created_at: row.get(9)?,
             })
         })?;
         rows.collect()
+    }
+
+    /// Get a single scan by ID.
+    pub async fn get_nmap_scan(&self, id: &str) -> Result<Option<NmapScan>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT id, vlan_id, profile, status, target_count, discovered_count,
+                    started_at, completed_at, error, created_at
+             FROM nmap_scans WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(NmapScan {
+                id: row.get(0)?,
+                vlan_id: row.get::<_, i64>(1)? as u32,
+                profile: row.get(2)?,
+                status: row.get(3)?,
+                target_count: row.get(4)?,
+                discovered_count: row.get(5)?,
+                started_at: row.get(6)?,
+                completed_at: row.get(7)?,
+                error: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?;
+        match rows.next() {
+            Some(r) => Ok(Some(r?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Get results for a scan.
+    pub async fn get_nmap_results(
+        &self,
+        scan_id: &str,
+    ) -> Result<Vec<NmapResult>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT id, scan_id, ip_address, mac_address, hostname, os_guess,
+                    os_accuracy, open_ports, device_type, created_at
+             FROM nmap_results WHERE scan_id = ?1 ORDER BY ip_address",
+        )?;
+        let rows = stmt.query_map(params![scan_id], |row| {
+            Ok(NmapResult {
+                id: row.get(0)?,
+                scan_id: row.get(1)?,
+                ip_address: row.get(2)?,
+                mac_address: row.get(3)?,
+                hostname: row.get(4)?,
+                os_guess: row.get(5)?,
+                os_accuracy: row.get(6)?,
+                open_ports: row.get(7)?,
+                device_type: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    // ── Scan exclusions ─────────────────────────────────────────
+
+    /// Get all scan exclusions.
+    pub async fn get_scan_exclusions(&self) -> Result<Vec<ScanExclusion>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT ip_address, reason, created_at FROM scan_exclusions ORDER BY ip_address",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ScanExclusion {
+                ip_address: row.get(0)?,
+                reason: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Add a scan exclusion.
+    pub async fn add_scan_exclusion(
+        &self,
+        ip: &str,
+        reason: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT OR REPLACE INTO scan_exclusions (ip_address, reason, created_at)
+             VALUES (?1, ?2, datetime('now'))",
+            params![ip, reason],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a scan exclusion.
+    pub async fn remove_scan_exclusion(&self, ip: &str) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let rows = db.execute(
+            "DELETE FROM scan_exclusions WHERE ip_address = ?1",
+            params![ip],
+        )?;
+        Ok(rows > 0)
+    }
+
+    // ── Traffic classifications ──────────────────────────────────
+
+    /// Upsert a traffic pattern classification.
+    pub async fn upsert_traffic_classification(
+        &self,
+        mac: &str,
+        device_type: &str,
+        confidence: f64,
+        evidence: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT OR REPLACE INTO traffic_classifications
+             (mac_address, device_type, confidence, evidence, classified_at)
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+            params![mac, device_type, confidence, evidence],
+        )?;
+        Ok(())
     }
 
     // ── VLAN membership ─────────────────────────────────────────
@@ -661,5 +1112,28 @@ fn map_port_role_row(row: &rusqlite::Row<'_>) -> Result<PortRoleEntry, rusqlite:
         mac_count: row.get::<_, i64>(4)? as u32,
         has_lldp_neighbor: row.get::<_, i32>(5)? != 0,
         updated_at: row.get(6)?,
+    })
+}
+
+fn map_identity_row(row: &rusqlite::Row<'_>) -> Result<NetworkIdentity, rusqlite::Error> {
+    Ok(NetworkIdentity {
+        mac_address: row.get(0)?,
+        best_ip: row.get(1)?,
+        hostname: row.get(2)?,
+        manufacturer: row.get(3)?,
+        switch_device_id: row.get(4)?,
+        switch_port: row.get(5)?,
+        vlan_id: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+        discovery_protocol: row.get(7)?,
+        remote_identity: row.get(8)?,
+        remote_platform: row.get(9)?,
+        first_seen: row.get(10)?,
+        last_seen: row.get(11)?,
+        confidence: row.get(12)?,
+        device_type: row.get(13)?,
+        device_type_source: row.get(14)?,
+        device_type_confidence: row.get::<_, Option<f64>>(15)?.unwrap_or(0.0),
+        human_confirmed: row.get::<_, Option<i32>>(16)?.unwrap_or(0) != 0,
+        human_label: row.get(17)?,
     })
 }

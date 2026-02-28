@@ -957,6 +957,11 @@ export interface NetworkIdentity {
   first_seen: number;
   last_seen: number;
   confidence: number;
+  device_type: string | null;
+  device_type_source: string | null;
+  device_type_confidence: number;
+  human_confirmed: boolean;
+  human_label: string | null;
 }
 
 export interface VlanMembershipEntry {
@@ -973,4 +978,59 @@ export interface PortRoleEntry {
   mac_count: number;
   has_lldp_neighbor: boolean;
   updated_at: number;
+}
+
+export interface IdentityStats {
+  total: number;
+  confirmed: number;
+  unconfirmed: number;
+  by_device_type: Record<string, number>;
+  by_source: Record<string, number>;
+}
+
+export interface NmapScan {
+  id: string;
+  vlan_id: number;
+  profile: string;
+  status: string;
+  target_count: number;
+  discovered_count: number;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface NmapResult {
+  id: number;
+  scan_id: string;
+  ip_address: string;
+  mac_address: string | null;
+  hostname: string | null;
+  os_guess: string | null;
+  os_accuracy: number | null;
+  open_ports: string | null;
+  device_type: string | null;
+  created_at: string;
+}
+
+export interface ScanExclusion {
+  ip_address: string;
+  reason: string | null;
+  created_at: string;
+}
+
+export interface ScanStatus {
+  scanning: boolean;
+  nmap_available: boolean;
+}
+
+export interface UpdateIdentityRequest {
+  device_type?: string;
+  human_label?: string;
+}
+
+export interface StartScanRequest {
+  vlan_id: number;
+  profile: "quick" | "standard" | "deep";
 }

@@ -17,7 +17,7 @@ RUN npm run build
 # Stage 3: Runtime
 FROM debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates gosu curl \
+    && apt-get install -y --no-install-recommends ca-certificates gosu curl nmap \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app
 

@@ -4,6 +4,7 @@ pub mod connections;
 pub mod devices;
 pub mod firewall;
 pub mod history;
+pub mod identity;
 pub mod interfaces;
 pub mod ip;
 pub mod logs;
@@ -214,6 +215,18 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/network/mac-table", get(switch_data::network_mac_table))
         .route("/network/neighbors", get(switch_data::network_neighbors))
         .route("/network/port-roles", get(switch_data::network_port_roles))
+        // Identity management
+        .route("/network/identities/stats", get(identity::identity_stats))
+        .route("/network/identities/review-queue", get(identity::review_queue))
+        .route("/network/identities/{mac}", put(identity::update_identity))
+        .route("/network/identities/bulk-confirm", post(identity::bulk_confirm))
+        // Nmap scans
+        .route("/scans", get(identity::list_scans).post(identity::start_scan))
+        .route("/scans/status", get(identity::scan_status))
+        .route("/scans/exclusions", get(identity::list_exclusions).post(identity::add_exclusion))
+        .route("/scans/exclusions/{ip}", delete(identity::remove_exclusion))
+        .route("/scans/{id}", get(identity::get_scan))
+        .route("/scans/{id}/results", get(identity::scan_results))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 

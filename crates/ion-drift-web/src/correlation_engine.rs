@@ -131,14 +131,31 @@ async fn run_correlation(
         }
         if let Some(ref platform) = nb.platform {
             builder.remote_platform = Some(platform.clone());
+            // LLDP platform often reveals device type at high confidence
+            let plat_lower = platform.to_lowercase();
+            if plat_lower.contains("routeros") || plat_lower.contains("mikrotik") {
+                if builder.device_type_confidence < 0.95 {
+                    builder.device_type = Some("network_equipment".to_string());
+                    builder.device_type_source = Some("lldp".to_string());
+                    builder.device_type_confidence = 0.95;
+                }
+            }
         }
         builder.discovery_protocol = Some("LLDP/MNDP".to_string());
     }
 
-    // Enrich with OUI manufacturer
+    // Enrich with OUI manufacturer + device type inference
     for (mac, builder) in &mut identity_map {
         if let Some(manufacturer) = oui_db.lookup(mac) {
             builder.manufacturer = Some(manufacturer.to_string());
+            // Infer device type from manufacturer name
+            if let Some((device_type, confidence)) =
+                OuiDb::device_type_from_manufacturer(manufacturer)
+            {
+                builder.device_type = Some(device_type.to_string());
+                builder.device_type_source = Some("oui".to_string());
+                builder.device_type_confidence = confidence;
+            }
         }
     }
 
@@ -161,6 +178,9 @@ async fn run_correlation(
                 builder.remote_identity.as_deref(),
                 builder.remote_platform.as_deref(),
                 confidence,
+                builder.device_type.as_deref(),
+                builder.device_type_source.as_deref(),
+                builder.device_type_confidence,
             )
             .await
         {
@@ -208,6 +228,9 @@ struct IdentityBuilder {
     discovery_protocol: Option<String>,
     remote_identity: Option<String>,
     remote_platform: Option<String>,
+    device_type: Option<String>,
+    device_type_source: Option<String>,
+    device_type_confidence: f64,
 }
 
 impl IdentityBuilder {
