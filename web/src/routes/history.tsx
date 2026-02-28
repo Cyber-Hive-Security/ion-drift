@@ -12,6 +12,7 @@ import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
 import { WorldMap } from "@/features/world-map/world-map";
 import { formatBytes, formatNumber } from "@/lib/format";
+import { countryFlag } from "@/lib/country";
 import { cn } from "@/lib/utils";
 import type {
   ConnectionHistoryEntry,
