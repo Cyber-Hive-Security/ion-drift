@@ -5,6 +5,8 @@ mod bootstrap;
 mod certwarden;
 mod config;
 mod connection_store;
+mod correlation_engine;
+mod device_manager;
 mod geo;
 mod live_traffic;
 mod log_parser;
@@ -15,6 +17,7 @@ mod secrets;
 mod setup;
 mod snapshots;
 mod state;
+mod switch_poller;
 mod syslog;
 
 use std::collections::HashMap;
@@ -126,11 +129,97 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Arc::new(config);
 
-    // Build MikrotikClient and test connectivity
+    // ── Device Manager + SwitchStore ─────────────────────────────
+    let switch_store = Arc::new(
+        mikrotik_core::SwitchStore::new(&data_dir.join("switch.db"))
+            .map_err(|e| anyhow::anyhow!("failed to init switch store: {e}"))?,
+    );
+
+    let device_manager = if let Some(ref sm) = secrets_manager {
+        let sm_read = sm.read().await;
+        let has_devices = sm_read.has_devices().await.unwrap_or(false);
+
+        if has_devices {
+            // Load devices from registry
+            tracing::info!("loading devices from registry");
+            let dm = device_manager::DeviceManager::load(
+                &sm_read,
+                config.router.ca_cert_path.as_deref(),
+            )
+            .await?;
+            drop(sm_read);
+            dm
+        } else {
+            // No devices in registry — migrate from config/env vars
+            drop(sm_read);
+            tracing::info!("no devices in registry, creating primary router entry from config");
+            let dm = device_manager::DeviceManager::from_config(&config)?;
+
+            // Persist the primary router to the devices table
+            let sm_read = sm.read().await;
+            let new_device = secrets::NewDevice {
+                id: "rb4011".to_string(),
+                name: "RB4011".to_string(),
+                host: config.router.host.clone(),
+                port: config.router.port,
+                tls: config.router.tls,
+                ca_cert_path: config.router.ca_cert_path.clone(),
+                device_type: "router".to_string(),
+                model: Some("RB4011iGS+".to_string()),
+                is_primary: true,
+                enabled: true,
+                poll_interval_secs: 60,
+            };
+            // Get credentials from existing encrypted secrets
+            let username = sm_read
+                .decrypt_secret(secrets::SECRET_ROUTER_USERNAME)
+                .await?
+                .map(|s| s.expose_secret().to_string())
+                .unwrap_or_else(|| config.router.username.clone());
+            let password = sm_read
+                .decrypt_secret(secrets::SECRET_ROUTER_PASSWORD)
+                .await?
+                .map(|s| s.expose_secret().to_string())
+                .unwrap_or_default();
+
+            if let Err(e) = sm_read.add_device(&new_device, &username, &password).await {
+                tracing::warn!("failed to persist primary router to device registry: {e}");
+            } else {
+                tracing::info!("migrated primary router to device registry");
+            }
+            drop(sm_read);
+            dm
+        }
+    } else {
+        // Legacy mode (no secrets manager) — build from config
+        device_manager::DeviceManager::from_config(&config)?
+    };
+
+    let device_manager = Arc::new(tokio::sync::RwLock::new(device_manager));
+
+    // Get primary router client (backward compat — existing handlers use state.mikrotik)
+    let mikrotik = {
+        let dm = device_manager.read().await;
+        dm.get_router()
+            .map(|d| d.client.clone())
+            .ok_or_else(|| anyhow::anyhow!("no primary router found in device manager"))?
+    };
+
+    // Test connectivity
     tracing::info!("connecting to router at {}:{}", config.router.host, config.router.port);
-    let mikrotik = mikrotik_core::MikrotikClient::new(config.mikrotik_config())?;
     let router_name = mikrotik.test_connection().await?;
     tracing::info!("connected to router: {router_name}");
+
+    // Update device status to Online
+    {
+        let mut dm = device_manager.write().await;
+        dm.set_status(
+            "rb4011",
+            device_manager::DeviceStatus::Online {
+                identity: router_name.clone(),
+            },
+        );
+    }
 
     // Set up VLAN flow counter mangle rules (non-fatal on failure)
     tracing::info!("setting up VLAN flow counters...");
@@ -256,6 +345,8 @@ async fn main() -> anyhow::Result<()> {
         behavior_store: behavior_store.clone(),
         firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))),
         secrets_manager: secrets_manager.clone(),
+        device_manager: device_manager.clone(),
+        switch_store: switch_store.clone(),
     };
 
     // Spawn background tasks
@@ -301,6 +392,16 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn syslog listener (UDP 5514 by default) — only accepts packets from configured router
     syslog::spawn_syslog_listener(5514, connection_store, geo_cache, config.router.host.clone());
+
+    // Spawn multi-device background tasks
+    switch_poller::spawn_switch_pollers(device_manager.clone(), switch_store.clone());
+    switch_poller::spawn_neighbor_poller(device_manager.clone(), switch_store.clone());
+    switch_poller::spawn_device_health_check(device_manager.clone());
+    correlation_engine::spawn_correlation_engine(
+        switch_store.clone(),
+        app_state.oui_db.clone(),
+        device_manager.clone(),
+    );
 
     // Spawn cert rotation background task if CertWarden is configured
     if let Some(ref sm) = secrets_manager {

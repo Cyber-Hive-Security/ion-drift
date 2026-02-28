@@ -56,6 +56,11 @@ import type {
   SyslogStatus,
   GeoIpStatus,
   ConnectionHistoryStats,
+  NetworkDevice,
+  CreateDeviceRequest,
+  UpdateDeviceRequest,
+  TestConnectionRequest,
+  TestConnectionResponse,
 } from "./types";
 
 // Auth
@@ -690,5 +695,73 @@ export function useGeoIpStatus() {
     queryKey: ["settings", "geoip"],
     queryFn: () => apiFetch<GeoIpStatus>("/api/settings/geoip"),
     staleTime: 300_000,
+  });
+}
+
+// ── Network Devices ──────────────────────────────────────────────
+
+export function useDevices() {
+  return useQuery({
+    queryKey: ["devices"],
+    queryFn: () => apiFetch<NetworkDevice[]>("/api/devices"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useCreateDevice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateDeviceRequest) =>
+      apiFetch<{ id: string; identity: string; message: string }>(
+        "/api/devices",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["devices"] });
+    },
+  });
+}
+
+export function useUpdateDevice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateDeviceRequest }) =>
+      apiFetch<{ message: string }>(`/api/devices/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["devices"] });
+    },
+  });
+}
+
+export function useDeleteDevice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ message: string }>(
+        `/api/devices/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["devices"] });
+    },
+  });
+}
+
+export function useTestDeviceConnection() {
+  return useMutation({
+    mutationFn: (data: TestConnectionRequest) =>
+      apiFetch<TestConnectionResponse>("/api/devices/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
   });
 }

@@ -6,7 +6,7 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rusqlite::params;
 use secrecy::{ExposeSecret, SecretString};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 // Secret name constants
@@ -57,6 +57,65 @@ pub struct SecretStatus {
     pub auto_generated: bool,
     /// Whether this secret has been stored (false = not yet configured).
     pub stored: bool,
+}
+
+/// A device registered in the device registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceRecord {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub tls: bool,
+    pub ca_cert_path: Option<String>,
+    pub device_type: String,
+    pub model: Option<String>,
+    pub is_primary: bool,
+    pub enabled: bool,
+    pub poll_interval_secs: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Data for creating a new device.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NewDevice {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
+    #[serde(default = "default_tls")]
+    pub tls: bool,
+    pub ca_cert_path: Option<String>,
+    pub device_type: String,
+    pub model: Option<String>,
+    #[serde(default)]
+    pub is_primary: bool,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_poll_interval")]
+    pub poll_interval_secs: u32,
+}
+
+fn default_port() -> u16 { 443 }
+fn default_tls() -> bool { true }
+fn default_enabled() -> bool { true }
+fn default_poll_interval() -> u32 { 60 }
+
+/// Data for updating an existing device (all fields optional).
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateDevice {
+    pub name: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub tls: Option<bool>,
+    pub ca_cert_path: Option<String>,
+    pub model: Option<String>,
+    pub enabled: Option<bool>,
+    pub poll_interval_secs: Option<u32>,
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 /// Manages encryption/decryption of secrets using a KEK retrieved from Keycloak.
@@ -333,6 +392,187 @@ impl SecretsManager {
     pub fn fingerprint(&self) -> &str {
         &self.key_fingerprint
     }
+
+    // ── Device registry ─────────────────────────────────────────
+
+    /// List all registered devices.
+    pub async fn list_devices(&self) -> anyhow::Result<Vec<DeviceRecord>> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT id, name, host, port, tls, ca_cert_path, device_type, model,
+                    is_primary, enabled, poll_interval_secs, created_at, updated_at
+             FROM devices ORDER BY is_primary DESC, name",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(DeviceRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                host: row.get(2)?,
+                port: row.get::<_, i64>(3)? as u16,
+                tls: row.get::<_, i32>(4)? != 0,
+                ca_cert_path: row.get(5)?,
+                device_type: row.get(6)?,
+                model: row.get(7)?,
+                is_primary: row.get::<_, i32>(8)? != 0,
+                enabled: row.get::<_, i32>(9)? != 0,
+                poll_interval_secs: row.get::<_, i64>(10)? as u32,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get a single device by ID.
+    pub async fn get_device(&self, id: &str) -> anyhow::Result<Option<DeviceRecord>> {
+        let db = self.db.lock().await;
+        let result = db.query_row(
+            "SELECT id, name, host, port, tls, ca_cert_path, device_type, model,
+                    is_primary, enabled, poll_interval_secs, created_at, updated_at
+             FROM devices WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(DeviceRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    host: row.get(2)?,
+                    port: row.get::<_, i64>(3)? as u16,
+                    tls: row.get::<_, i32>(4)? != 0,
+                    ca_cert_path: row.get(5)?,
+                    device_type: row.get(6)?,
+                    model: row.get(7)?,
+                    is_primary: row.get::<_, i32>(8)? != 0,
+                    enabled: row.get::<_, i32>(9)? != 0,
+                    poll_interval_secs: row.get::<_, i64>(10)? as u32,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
+                })
+            },
+        );
+        match result {
+            Ok(r) => Ok(Some(r)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Add a new device to the registry and store its encrypted credentials.
+    pub async fn add_device(
+        &self,
+        device: &NewDevice,
+        username: &str,
+        password: &str,
+    ) -> anyhow::Result<()> {
+        let now = now_unix();
+        {
+            let db = self.db.lock().await;
+            db.execute(
+                "INSERT INTO devices
+                 (id, name, host, port, tls, ca_cert_path, device_type, model,
+                  is_primary, enabled, poll_interval_secs, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                params![
+                    device.id,
+                    device.name,
+                    device.host,
+                    device.port as i64,
+                    device.tls as i32,
+                    device.ca_cert_path,
+                    device.device_type,
+                    device.model,
+                    device.is_primary as i32,
+                    device.enabled as i32,
+                    device.poll_interval_secs as i64,
+                    now,
+                ],
+            )?;
+        }
+        // Store encrypted credentials
+        self.encrypt_secret(&format!("device:{}:username", device.id), username)
+            .await?;
+        self.encrypt_secret(&format!("device:{}:password", device.id), password)
+            .await?;
+        Ok(())
+    }
+
+    /// Update a device's configuration.
+    pub async fn update_device(&self, id: &str, update: &UpdateDevice) -> anyhow::Result<()> {
+        let now = now_unix();
+        let db = self.db.lock().await;
+        db.execute(
+            "UPDATE devices SET
+                name = COALESCE(?2, name),
+                host = COALESCE(?3, host),
+                port = COALESCE(?4, port),
+                tls = COALESCE(?5, tls),
+                ca_cert_path = COALESCE(?6, ca_cert_path),
+                model = COALESCE(?7, model),
+                enabled = COALESCE(?8, enabled),
+                poll_interval_secs = COALESCE(?9, poll_interval_secs),
+                updated_at = ?1
+             WHERE id = ?10",
+            params![
+                now,
+                update.name,
+                update.host,
+                update.port.map(|p| p as i64),
+                update.tls.map(|t| t as i32),
+                update.ca_cert_path.as_deref(),
+                update.model.as_deref(),
+                update.enabled.map(|e| e as i32),
+                update.poll_interval_secs.map(|p| p as i64),
+                id,
+            ],
+        )?;
+        drop(db);
+
+        // Update credentials if provided
+        if let Some(ref username) = update.username {
+            self.encrypt_secret(&format!("device:{id}:username"), username)
+                .await?;
+        }
+        if let Some(ref password) = update.password {
+            self.encrypt_secret(&format!("device:{id}:password"), password)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Remove a device and its credentials.
+    pub async fn remove_device(&self, id: &str) -> anyhow::Result<()> {
+        let db = self.db.lock().await;
+        db.execute("DELETE FROM devices WHERE id = ?1", params![id])?;
+        drop(db);
+        // Remove encrypted credentials (ignore errors if they don't exist)
+        let _ = self.delete_secret(&format!("device:{id}:username")).await;
+        let _ = self.delete_secret(&format!("device:{id}:password")).await;
+        Ok(())
+    }
+
+    /// Get decrypted credentials for a device.
+    pub async fn get_device_credentials(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<(String, SecretString)>> {
+        let username = self
+            .decrypt_secret(&format!("device:{id}:username"))
+            .await?;
+        let password = self
+            .decrypt_secret(&format!("device:{id}:password"))
+            .await?;
+        match (username, password) {
+            (Some(u), Some(p)) => Ok(Some((u.expose_secret().to_string(), p))),
+            _ => Ok(None),
+        }
+    }
+
+    /// Check if the devices table has any entries.
+    pub async fn has_devices(&self) -> anyhow::Result<bool> {
+        let db = self.db.lock().await;
+        let count: i64 =
+            db.query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))?;
+        Ok(count > 0)
+    }
 }
 
 /// Compute a fingerprint: first 8 bytes of SHA-256(key) as hex (16 chars).
@@ -352,9 +592,32 @@ fn open_db(db_path: &Path) -> anyhow::Result<rusqlite::Connection> {
             nonce BLOB NOT NULL,
             key_fingerprint TEXT NOT NULL,
             updated_at INTEGER NOT NULL
-        )",
+        );
+        CREATE TABLE IF NOT EXISTS devices (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL DEFAULT 443,
+            tls INTEGER NOT NULL DEFAULT 1,
+            ca_cert_path TEXT,
+            device_type TEXT NOT NULL,
+            model TEXT,
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            poll_interval_secs INTEGER NOT NULL DEFAULT 60,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );",
     )?;
     // Enable WAL mode for better concurrent access
     db.execute_batch("PRAGMA journal_mode=WAL")?;
     Ok(db)
+}
+
+/// Current Unix timestamp in seconds.
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }

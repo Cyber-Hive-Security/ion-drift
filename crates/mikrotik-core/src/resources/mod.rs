@@ -1,7 +1,10 @@
-pub mod system;
+pub mod bridge;
+pub mod connection;
+pub mod ethernet;
+pub mod firewall;
 pub mod interface;
 pub mod ip;
-pub mod firewall;
 pub mod log;
 pub mod logging;
-pub mod connection;
+pub mod neighbor;
+pub mod system;

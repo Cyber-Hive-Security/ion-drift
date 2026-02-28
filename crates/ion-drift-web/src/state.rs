@@ -3,11 +3,12 @@ use std::sync::atomic::{AtomicBool, AtomicI64};
 
 use tokio::sync::RwLock;
 
-use mikrotik_core::{BehaviorStore, MikrotikClient, MetricsStore, SpeedTestStore, TrafficTracker};
+use mikrotik_core::{BehaviorStore, MikrotikClient, MetricsStore, SpeedTestStore, SwitchStore, TrafficTracker};
 use mikrotik_core::resources::firewall::FilterRule;
 use crate::auth::{OidcClient, SessionStore};
 use crate::config::ServerConfig;
 use crate::connection_store::ConnectionStore;
+use crate::device_manager::DeviceManager;
 use crate::geo::GeoCache;
 use crate::live_traffic::LiveTrafficBuffer;
 use crate::oui::OuiDb;
@@ -53,4 +54,8 @@ pub struct AppState {
     pub firewall_rules_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
     /// Encrypted secrets manager (None if bootstrap not configured).
     pub secrets_manager: Option<Arc<RwLock<SecretsManager>>>,
+    /// Multi-device manager (router + switches).
+    pub device_manager: Arc<RwLock<DeviceManager>>,
+    /// Switch-specific data store (port metrics, MAC table, neighbors, etc.).
+    pub switch_store: Arc<SwitchStore>,
 }

@@ -1,6 +1,7 @@
 pub mod arp;
 pub mod behavior;
 pub mod connections;
+pub mod devices;
 pub mod firewall;
 pub mod history;
 pub mod interfaces;
@@ -10,6 +11,7 @@ pub mod metrics;
 pub mod network_map_status;
 pub mod settings;
 pub mod speedtest;
+pub mod switch_data;
 pub mod system;
 pub mod traffic;
 pub mod vlan_activity;
@@ -20,7 +22,7 @@ use axum::extract::State;
 use axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use axum_extra::extract::CookieJar;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -121,7 +123,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
                     );
                 }),
         )
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .allow_credentials(true);
 
@@ -200,6 +202,24 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/settings/cert", get(settings::cert_status))
         .route("/settings/syslog", get(connections::syslog_status))
         .route("/settings/geoip", get(connections::geoip_status))
+        // Devices (CRUD)
+        .route("/devices", get(devices::list_devices).post(devices::create_device))
+        .route("/devices/test", post(devices::test_connection))
+        .route("/devices/{id}", get(devices::get_device).put(devices::update_device).delete(devices::delete_device))
+        .route("/devices/{id}/test", post(devices::test_device))
+        // Device-specific data
+        .route("/devices/{id}/resources", get(switch_data::device_resources))
+        .route("/devices/{id}/interfaces", get(switch_data::device_interfaces))
+        .route("/devices/{id}/ports", get(switch_data::device_ports))
+        .route("/devices/{id}/mac-table", get(switch_data::device_mac_table))
+        .route("/devices/{id}/neighbors", get(switch_data::device_neighbors))
+        .route("/devices/{id}/vlans", get(switch_data::device_vlans))
+        .route("/devices/{id}/port-roles", get(switch_data::device_port_roles))
+        // Network-wide correlation data
+        .route("/network/identities", get(switch_data::network_identities))
+        .route("/network/mac-table", get(switch_data::network_mac_table))
+        .route("/network/neighbors", get(switch_data::network_neighbors))
+        .route("/network/port-roles", get(switch_data::network_port_roles))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 

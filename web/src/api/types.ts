@@ -862,3 +862,71 @@ export interface ConnectionHistoryStats {
   db_size_bytes: number;
   oldest_record: string | null;
 }
+
+// ── Multi-device types (snake_case — custom Rust structs) ─────────
+
+export interface NetworkDevice {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  tls: boolean;
+  ca_cert_path: string | null;
+  device_type: string;
+  model: string | null;
+  is_primary: boolean;
+  enabled: boolean;
+  poll_interval_secs: number;
+  created_at: number;
+  updated_at: number;
+  /** "Online", "Offline", or "Unknown" */
+  status: string;
+  /** Router identity when online */
+  identity?: string;
+  /** Error message when offline */
+  error?: string;
+}
+
+export interface CreateDeviceRequest {
+  id: string;
+  name: string;
+  host: string;
+  port?: number;
+  tls?: boolean;
+  ca_cert_path?: string;
+  device_type: string;
+  model?: string;
+  is_primary?: boolean;
+  enabled?: boolean;
+  poll_interval_secs?: number;
+  username: string;
+  password: string;
+}
+
+export interface UpdateDeviceRequest {
+  name?: string;
+  host?: string;
+  port?: number;
+  tls?: boolean;
+  ca_cert_path?: string;
+  model?: string;
+  enabled?: boolean;
+  poll_interval_secs?: number;
+  username?: string;
+  password?: string;
+}
+
+export interface TestConnectionRequest {
+  host: string;
+  port?: number;
+  tls?: boolean;
+  ca_cert_path?: string;
+  username: string;
+  password: string;
+}
+
+export interface TestConnectionResponse {
+  status: "online" | "offline";
+  identity?: string;
+  error?: string;
+}

@@ -11,7 +11,12 @@ import {
   useSyslogStatus,
   useGeoIpStatus,
   useConnectionHistoryStats,
+  useDevices,
+  useCreateDevice,
+  useDeleteDevice,
+  useTestDeviceConnection,
 } from "@/api/queries";
+import type { CreateDeviceRequest } from "@/api/types";
 import {
   Shield,
   Key,
@@ -23,6 +28,11 @@ import {
   Radio,
   Globe,
   Database,
+  Server,
+  Plus,
+  Trash2,
+  Plug,
+  Network,
 } from "lucide-react";
 import { formatBytes, formatNumber } from "@/lib/format";
 
@@ -30,6 +40,7 @@ export function SettingsPage() {
   return (
     <PageShell title="Settings">
       <div className="space-y-6">
+        <NetworkDevicesSection />
         <SecretsSection />
         <CertWardenSection />
         <EncryptionSection />
@@ -38,6 +49,371 @@ export function SettingsPage() {
         <ConnectionHistorySection />
       </div>
     </PageShell>
+  );
+}
+
+// ── Network Devices Section ────────────────────────────────────
+
+function NetworkDevicesSection() {
+  const { data: devices, isLoading, error } = useDevices();
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [testResult, setTestResult] = useState<{ status: string; identity?: string; error?: string } | null>(null);
+
+  const createDevice = useCreateDevice();
+  const deleteDevice = useDeleteDevice();
+  const testConnection = useTestDeviceConnection();
+
+  const [form, setForm] = useState({
+    id: "",
+    name: "",
+    host: "",
+    port: "443",
+    tls: true,
+    device_type: "switch" as "router" | "switch",
+    model: "",
+    poll_interval_secs: "60",
+    username: "",
+    password: "",
+  });
+
+  if (isLoading) return <LoadingSpinner />;
+  if (error)
+    return (
+      <ErrorDisplay
+        message={
+          error instanceof Error ? error.message : "Failed to load devices"
+        }
+      />
+    );
+
+  const handleTest = async () => {
+    setTestResult(null);
+    const result = await testConnection.mutateAsync({
+      host: form.host,
+      port: parseInt(form.port) || 443,
+      tls: form.tls,
+      username: form.username,
+      password: form.password,
+    });
+    setTestResult(result);
+  };
+
+  const handleAdd = async () => {
+    const payload: CreateDeviceRequest = {
+      id: form.id,
+      name: form.name,
+      host: form.host,
+      port: parseInt(form.port) || 443,
+      tls: form.tls,
+      device_type: form.device_type,
+      model: form.model || undefined,
+      poll_interval_secs: parseInt(form.poll_interval_secs) || 60,
+      username: form.username,
+      password: form.password,
+    };
+    await createDevice.mutateAsync(payload);
+    setShowAddForm(false);
+    setForm({
+      id: "",
+      name: "",
+      host: "",
+      port: "443",
+      tls: true,
+      device_type: "switch",
+      model: "",
+      poll_interval_secs: "60",
+      username: "",
+      password: "",
+    });
+    setTestResult(null);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm(`Remove device "${id}"? This cannot be undone.`)) return;
+    await deleteDevice.mutateAsync(id);
+  };
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center justify-between border-b border-border p-4">
+        <div className="flex items-center gap-3">
+          <Network className="h-5 w-5 text-primary" />
+          <div>
+            <h2 className="text-lg font-semibold">Network Devices</h2>
+            <p className="text-xs text-muted-foreground">
+              Managed Mikrotik devices (router + switches)
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => setShowAddForm(!showAddForm)}
+          className="flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add Device
+        </button>
+      </div>
+
+      <div className="divide-y divide-border">
+        {devices?.map((device) => (
+          <div
+            key={device.id}
+            className="flex items-center gap-4 px-4 py-3"
+          >
+            <Server className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{device.name}</span>
+                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground uppercase">
+                  {device.device_type}
+                </span>
+                {device.is_primary && (
+                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                    primary
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span
+                  className={`inline-block h-2 w-2 rounded-full ${
+                    device.status === "Online"
+                      ? "bg-green-500"
+                      : device.status === "Offline"
+                        ? "bg-red-500"
+                        : "bg-gray-400"
+                  }`}
+                />
+                <span className="text-xs text-muted-foreground">
+                  {device.host}:{device.port}
+                  {device.identity ? ` — ${device.identity}` : ""}
+                  {device.error ? ` — ${device.error}` : ""}
+                </span>
+                {device.model && (
+                  <span className="text-xs text-muted-foreground">
+                    &middot; {device.model}
+                  </span>
+                )}
+              </div>
+            </div>
+            {!device.is_primary && (
+              <button
+                onClick={() => handleDelete(device.id)}
+                disabled={deleteDevice.isPending}
+                className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                title="Remove device"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        ))}
+
+        {(!devices || devices.length === 0) && (
+          <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+            No devices registered
+          </div>
+        )}
+      </div>
+
+      {showAddForm && (
+        <div className="border-t border-border p-4 space-y-3 bg-muted/30">
+          <h3 className="text-sm font-semibold flex items-center gap-2">
+            <Plus className="h-4 w-4" /> Add New Device
+          </h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Device ID
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. crs326-office"
+                value={form.id}
+                onChange={(e) => setForm({ ...form, id: e.target.value })}
+                className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Display Name
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. CRS326 Office"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Host
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. 10.2.2.2"
+                value={form.host}
+                onChange={(e) => setForm({ ...form, host: e.target.value })}
+                className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+              />
+            </div>
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="block text-xs text-muted-foreground mb-1">
+                  Port
+                </label>
+                <input
+                  type="number"
+                  value={form.port}
+                  onChange={(e) => setForm({ ...form, port: e.target.value })}
+                  className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                />
+              </div>
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={form.tls}
+                    onChange={(e) =>
+                      setForm({ ...form, tls: e.target.checked })
+                    }
+                  />
+                  TLS
+                </label>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Type
+              </label>
+              <select
+                value={form.device_type}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    device_type: e.target.value as "router" | "switch",
+                  })
+                }
+                className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+              >
+                <option value="switch">Switch</option>
+                <option value="router">Router</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Model (optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. CRS326-24G-2S+"
+                value={form.model}
+                onChange={(e) => setForm({ ...form, model: e.target.value })}
+                className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Username
+              </label>
+              <input
+                type="text"
+                placeholder="admin"
+                value={form.username}
+                onChange={(e) =>
+                  setForm({ ...form, username: e.target.value })
+                }
+                className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Password
+              </label>
+              <input
+                type="password"
+                value={form.password}
+                onChange={(e) =>
+                  setForm({ ...form, password: e.target.value })
+                }
+                className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Poll Interval (seconds)
+              </label>
+              <input
+                type="number"
+                value={form.poll_interval_secs}
+                onChange={(e) =>
+                  setForm({ ...form, poll_interval_secs: e.target.value })
+                }
+                className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+              />
+            </div>
+          </div>
+
+          {testResult && (
+            <div
+              className={`rounded px-3 py-2 text-xs ${
+                testResult.status === "online"
+                  ? "bg-green-500/10 text-green-400"
+                  : "bg-red-500/10 text-red-400"
+              }`}
+            >
+              {testResult.status === "online"
+                ? `Connected: ${testResult.identity}`
+                : `Failed: ${testResult.error}`}
+            </div>
+          )}
+
+          {createDevice.error && (
+            <div className="rounded bg-red-500/10 px-3 py-2 text-xs text-red-400">
+              {createDevice.error instanceof Error
+                ? createDevice.error.message
+                : "Failed to add device"}
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleTest}
+              disabled={
+                !form.host || !form.username || testConnection.isPending
+              }
+              className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
+            >
+              <Plug className="h-3.5 w-3.5" />
+              {testConnection.isPending ? "Testing..." : "Test Connection"}
+            </button>
+            <button
+              onClick={handleAdd}
+              disabled={
+                !form.id ||
+                !form.name ||
+                !form.host ||
+                !form.username ||
+                !form.password ||
+                createDevice.isPending
+              }
+              className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              {createDevice.isPending ? "Adding..." : "Add Device"}
+            </button>
+            <button
+              onClick={() => {
+                setShowAddForm(false);
+                setTestResult(null);
+              }}
+              className="rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
