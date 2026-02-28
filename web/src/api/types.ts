@@ -1034,3 +1034,86 @@ export interface StartScanRequest {
   vlan_id: number;
   profile: "quick" | "standard" | "deep";
 }
+
+// ── Network Topology ───────────────────────────────────────────
+
+export type TopologyNodeKind =
+  | "router"
+  | "managed_switch"
+  | "unmanaged_switch"
+  | "access_point"
+  | "server"
+  | "workstation"
+  | "camera"
+  | "printer"
+  | "phone"
+  | "iot"
+  | "smart_home"
+  | "media_player"
+  | "unknown";
+
+export type TopologyEdgeKind = "trunk" | "access" | "wireless" | "uplink";
+export type TopologyNodeStatus = "online" | "offline" | "unknown";
+
+export interface TopologyNode {
+  id: string;
+  label: string;
+  ip: string | null;
+  mac: string | null;
+  kind: TopologyNodeKind;
+  vlan_id: number | null;
+  vlans_served: number[];
+  device_type: string | null;
+  manufacturer: string | null;
+  is_infrastructure: boolean;
+  layer: number;
+  x: number;
+  y: number;
+  position_source: string;
+  first_seen: number;
+  last_seen: number;
+  parent_id: string | null;
+  switch_port: string | null;
+  status: TopologyNodeStatus;
+  confidence: number;
+}
+
+export interface TopologyEdge {
+  source: string;
+  target: string;
+  kind: TopologyEdgeKind;
+  source_port: string | null;
+  target_port: string | null;
+  vlans: number[];
+}
+
+export interface TopologyVlanGroup {
+  vlan_id: number;
+  name: string;
+  color: string;
+  subnet: string;
+  node_count: number;
+  bbox_x: number;
+  bbox_y: number;
+  bbox_w: number;
+  bbox_h: number;
+}
+
+export interface NetworkTopologyResponse {
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+  vlan_groups: TopologyVlanGroup[];
+  computed_at: number;
+  node_count: number;
+  edge_count: number;
+  infrastructure_count: number;
+  endpoint_count: number;
+}
+
+export interface TopologyPosition {
+  node_id: string;
+  x: number;
+  y: number;
+  source: string;
+  updated_at: string;
+}

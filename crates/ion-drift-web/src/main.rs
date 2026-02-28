@@ -15,6 +15,7 @@ mod oui;
 mod routes;
 pub mod scanner;
 mod secrets;
+pub mod topology;
 mod setup;
 mod snapshots;
 mod state;
@@ -338,6 +339,7 @@ async fn main() -> anyhow::Result<()> {
         device_manager: device_manager.clone(),
         switch_store: switch_store.clone(),
         scanner: Arc::new(scanner::NmapScanner::new(switch_store.clone())),
+        topology_cache: Arc::new(tokio::sync::RwLock::new(None)),
     };
 
     // Log nmap scanner availability
@@ -397,6 +399,11 @@ async fn main() -> anyhow::Result<()> {
         switch_store.clone(),
         app_state.oui_db.clone(),
         device_manager.clone(),
+    );
+    topology::spawn_topology_updater(
+        switch_store.clone(),
+        device_manager.clone(),
+        app_state.topology_cache.clone(),
     );
 
     // Spawn cert rotation background task if CertWarden is configured

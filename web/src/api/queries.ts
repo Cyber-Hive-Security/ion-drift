@@ -73,6 +73,8 @@ import type {
   ScanStatus,
   UpdateIdentityRequest,
   StartScanRequest,
+  NetworkTopologyResponse,
+  TopologyPosition,
 } from "./types";
 
 // Auth
@@ -975,6 +977,69 @@ export function useRemoveExclusion() {
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["scans", "exclusions"] });
+    },
+  });
+}
+
+// ── Network Topology ─────────────────────────────────────────
+
+export function useNetworkTopology() {
+  return useQuery({
+    queryKey: ["network", "topology"],
+    queryFn: () => apiFetch<NetworkTopologyResponse>("/api/network/topology"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useTopologyPositions() {
+  return useQuery({
+    queryKey: ["network", "topology", "positions"],
+    queryFn: () => apiFetch<TopologyPosition[]>("/api/network/topology/positions"),
+    staleTime: 60_000,
+  });
+}
+
+export function useRefreshTopology() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ status: string; nodes: number }>("/api/network/topology/refresh", {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    },
+  });
+}
+
+export function useUpdateNodePosition() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeId, x, y }: { nodeId: string; x: number; y: number }) =>
+      apiFetch<{ status: string }>(
+        `/api/network/topology/positions/${encodeURIComponent(nodeId)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ x, y }),
+        },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    },
+  });
+}
+
+export function useResetNodePosition() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (nodeId: string) =>
+      apiFetch<{ removed: boolean }>(
+        `/api/network/topology/positions/${encodeURIComponent(nodeId)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
     },
   });
 }

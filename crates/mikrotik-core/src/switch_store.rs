@@ -142,6 +142,16 @@ pub struct VlanMembershipEntry {
     pub tagged: bool,
 }
 
+/// A topology node position (auto-computed or human override).
+#[derive(Debug, Clone, Serialize)]
+pub struct TopologyPosition {
+    pub node_id: String,
+    pub x: f64,
+    pub y: f64,
+    pub source: String,
+    pub updated_at: String,
+}
+
 /// A port role classification entry.
 #[derive(Debug, Clone, Serialize)]
 pub struct PortRoleEntry {
@@ -307,6 +317,14 @@ impl SwitchStore {
                 confidence REAL NOT NULL,
                 evidence TEXT NOT NULL,
                 classified_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS topology_positions (
+                node_id TEXT PRIMARY KEY,
+                x REAL NOT NULL,
+                y REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT 'auto',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             PRAGMA journal_mode=WAL;",
@@ -1070,6 +1088,54 @@ impl SwitchStore {
              DELETE FROM network_identities WHERE switch_device_id = '{device_id}';"
         ))?;
         Ok(())
+    }
+
+    // ── Topology positions ─────────────────────────────────────────
+
+    /// Get all topology position overrides.
+    pub async fn get_topology_positions(&self) -> Result<Vec<TopologyPosition>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT node_id, x, y, source, updated_at FROM topology_positions ORDER BY node_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(TopologyPosition {
+                node_id: row.get(0)?,
+                x: row.get(1)?,
+                y: row.get(2)?,
+                source: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Upsert a topology position (human or auto).
+    pub async fn set_topology_position(
+        &self,
+        node_id: &str,
+        x: f64,
+        y: f64,
+        source: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO topology_positions (node_id, x, y, source, updated_at)
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))
+             ON CONFLICT(node_id) DO UPDATE SET x = ?2, y = ?3, source = ?4, updated_at = datetime('now')",
+            rusqlite::params![node_id, x, y, source],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a topology position override (revert to auto).
+    pub async fn delete_topology_position(&self, node_id: &str) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM topology_positions WHERE node_id = ?1",
+            rusqlite::params![node_id],
+        )?;
+        Ok(affected > 0)
     }
 }
 

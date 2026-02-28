@@ -13,6 +13,7 @@ pub mod network_map_status;
 pub mod settings;
 pub mod switch_data;
 pub mod system;
+pub mod topology;
 pub mod traffic;
 pub mod vlan_activity;
 pub mod vlan_flows;
@@ -227,6 +228,11 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/scans/exclusions/{ip}", delete(identity::remove_exclusion))
         .route("/scans/{id}", get(identity::get_scan))
         .route("/scans/{id}/results", get(identity::scan_results))
+        // Network topology
+        .route("/network/topology", get(topology::get_topology))
+        .route("/network/topology/refresh", post(topology::refresh_topology))
+        .route("/network/topology/positions", get(topology::get_positions))
+        .route("/network/topology/positions/{nodeId}", put(topology::update_position).delete(topology::reset_position))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 
