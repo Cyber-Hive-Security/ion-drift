@@ -340,6 +340,13 @@ async fn main() -> anyhow::Result<()> {
         scanner: Arc::new(scanner::NmapScanner::new(switch_store.clone())),
     };
 
+    // Log nmap scanner availability
+    if scanner::nmap_available() {
+        tracing::info!("nmap scanner available at /usr/bin/nmap");
+    } else {
+        tracing::warn!("nmap not found at /usr/bin/nmap — network scanning disabled");
+    }
+
     // Spawn background tasks
     spawn_traffic_poller(traffic_tracker.clone(), live_traffic.clone(), mikrotik.clone());
     spawn_metrics_poller(metrics_store.clone(), mikrotik.clone());

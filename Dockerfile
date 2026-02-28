@@ -17,8 +17,9 @@ RUN npm run build
 # Stage 3: Runtime
 FROM debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates gosu curl nmap \
+    && apt-get install -y --no-install-recommends ca-certificates gosu curl nmap libcap2-bin \
     && rm -rf /var/lib/apt/lists/* \
+    && setcap cap_net_raw,cap_net_admin+eip /usr/bin/nmap \
     && groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app
 
 WORKDIR /app
