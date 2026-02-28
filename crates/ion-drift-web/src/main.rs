@@ -399,6 +399,7 @@ async fn main() -> anyhow::Result<()> {
         switch_store.clone(),
         app_state.oui_db.clone(),
         device_manager.clone(),
+        app_state.mikrotik.clone(),
     );
     topology::spawn_topology_updater(
         switch_store.clone(),

@@ -1,19 +1,31 @@
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::SwitchStore;
+use hickory_resolver::Resolver;
+use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
+use hickory_resolver::name_server::TokioConnectionProvider;
+use mikrotik_core::{MikrotikClient, SwitchStore};
 use tokio::sync::RwLock;
 
 use crate::device_manager::DeviceManager;
 use crate::oui::OuiDb;
 
+/// Technitium internal DNS server for PTR lookups.
+const DNS_SERVER: IpAddr = {
+    // 10.20.25.6 — const IpAddr construction
+    use std::net::{IpAddr, Ipv4Addr};
+    IpAddr::V4(Ipv4Addr::new(10, 20, 25, 6))
+};
+
 /// Spawn the correlation engine that runs every 60s to:
 /// 1. Classify port roles (access/trunk/uplink/unused)
-/// 2. Build unified network identities from MAC/neighbor/OUI data
+/// 2. Build unified network identities from MAC/neighbor/OUI/ARP/DHCP data
 pub fn spawn_correlation_engine(
     switch_store: Arc<SwitchStore>,
     oui_db: Arc<OuiDb>,
     device_manager: Arc<RwLock<DeviceManager>>,
+    router_client: MikrotikClient,
 ) {
     tokio::spawn(async move {
         // 90-second startup delay — let switch pollers collect initial data
@@ -26,7 +38,7 @@ pub fn spawn_correlation_engine(
         loop {
             interval.tick().await;
 
-            if let Err(e) = run_correlation(&switch_store, &oui_db, &device_manager).await {
+            if let Err(e) = run_correlation(&switch_store, &oui_db, &device_manager, &router_client).await {
                 tracing::warn!("correlation engine error: {e}");
             }
         }
@@ -37,6 +49,7 @@ async fn run_correlation(
     store: &SwitchStore,
     oui_db: &OuiDb,
     device_manager: &Arc<RwLock<DeviceManager>>,
+    router_client: &MikrotikClient,
 ) -> anyhow::Result<()> {
     // ── 1. Port role classification ───────────────────────────────
     let dm_read = device_manager.read().await;
@@ -103,8 +116,8 @@ async fn run_correlation(
     // From MAC table
     for entry in &all_macs {
         let builder = identity_map
-            .entry(entry.mac_address.clone())
-            .or_insert_with(|| IdentityBuilder::default());
+            .entry(entry.mac_address.to_uppercase())
+            .or_insert_with(IdentityBuilder::default);
         builder.switch_device_id = Some(entry.device_id.clone());
         builder.switch_port = Some(entry.port_name.clone());
         if entry.vlan_id.is_some() {
@@ -115,12 +128,12 @@ async fn run_correlation(
     // From neighbor discovery
     for nb in &all_neighbors {
         let mac = match &nb.mac_address {
-            Some(m) if !m.is_empty() => m.clone(),
+            Some(m) if !m.is_empty() => m.to_uppercase(),
             _ => continue,
         };
         let builder = identity_map
             .entry(mac)
-            .or_insert_with(|| IdentityBuilder::default());
+            .or_insert_with(IdentityBuilder::default);
 
         if let Some(ref addr) = nb.address {
             builder.best_ip = Some(addr.clone());
@@ -142,6 +155,104 @@ async fn run_correlation(
             }
         }
         builder.discovery_protocol = Some("LLDP/MNDP".to_string());
+    }
+
+    // From router ARP table — MAC→IP for every active device on the network
+    match router_client.arp_table().await {
+        Ok(arp_entries) => {
+            for entry in &arp_entries {
+                if let Some(ref mac) = entry.mac_address {
+                    let mac_upper = mac.to_uppercase();
+                    let builder = identity_map
+                        .entry(mac_upper)
+                        .or_insert_with(IdentityBuilder::default);
+                    if builder.best_ip.is_none() {
+                        builder.best_ip = Some(entry.address.clone());
+                    }
+                }
+            }
+        }
+        Err(e) => tracing::warn!("correlation: ARP fetch failed: {e}"),
+    }
+
+    // From router DHCP leases — MAC→IP + hostname for every lease
+    match router_client.dhcp_leases().await {
+        Ok(leases) => {
+            for lease in &leases {
+                if let Some(ref mac) = lease.mac_address {
+                    let mac_upper = mac.to_uppercase();
+                    let builder = identity_map
+                        .entry(mac_upper)
+                        .or_insert_with(IdentityBuilder::default);
+                    // DHCP address is authoritative — prefer over ARP
+                    builder.best_ip = Some(lease.address.clone());
+                    if let Some(ref hostname) = lease.host_name {
+                        if !hostname.is_empty() && builder.hostname.is_none() {
+                            builder.hostname = Some(hostname.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => tracing::warn!("correlation: DHCP fetch failed: {e}"),
+    }
+
+    // Reverse DNS (PTR) lookups against Technitium for devices with IP but no hostname.
+    // This catches devices that have DNS records but don't advertise via DHCP or LLDP.
+    let ips_needing_ptr: Vec<(String, String)> = identity_map
+        .iter()
+        .filter(|(_, b)| b.hostname.is_none() && b.best_ip.is_some())
+        .map(|(mac, b)| (mac.clone(), b.best_ip.clone().unwrap()))
+        .collect();
+
+    if !ips_needing_ptr.is_empty() {
+        match build_ptr_resolver() {
+            Ok(resolver) => {
+                let mut resolved = 0u32;
+                for (mac, ip) in &ips_needing_ptr {
+                    if let Ok(addr) = ip.parse::<IpAddr>() {
+                        match tokio::time::timeout(
+                            Duration::from_millis(500),
+                            resolver.reverse_lookup(addr),
+                        )
+                        .await
+                        {
+                            Ok(Ok(lookup)) => {
+                                if let Some(name) = lookup.iter().next() {
+                                    let hostname = name.to_string().trim_end_matches('.').to_string();
+                                    if !hostname.is_empty() {
+                                        if let Some(builder) = identity_map.get_mut(mac) {
+                                            builder.hostname = Some(hostname);
+                                            resolved += 1;
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(Err(_)) => {} // no PTR record — that's fine
+                            Err(_) => {}     // timeout — skip
+                        }
+                    }
+                }
+                if resolved > 0 {
+                    tracing::debug!(resolved, total = ips_needing_ptr.len(), "PTR lookups");
+                }
+            }
+            Err(e) => tracing::warn!("correlation: PTR resolver setup failed: {e}"),
+        }
+    }
+
+    // Infer VLAN from IP when not already set.
+    // In this environment the third octet of the IP maps to the VLAN ID:
+    //   10.2.2.x → VLAN 2, 172.20.6.x → VLAN 6, 10.20.25.x → VLAN 25,
+    //   192.168.90.x → VLAN 90, etc.
+    for builder in identity_map.values_mut() {
+        if builder.vlan_id.is_none() {
+            if let Some(ref ip) = builder.best_ip {
+                if let Some(vlan) = vlan_from_ip(ip) {
+                    builder.vlan_id = Some(vlan);
+                }
+            }
+        }
     }
 
     // Enrich with OUI manufacturer + device type inference
@@ -245,4 +356,49 @@ impl IdentityBuilder {
         if self.vlan_id.is_some() { score += 0.15; }
         score
     }
+}
+
+/// Infer VLAN ID from an IP address based on the network's addressing scheme.
+/// The third octet of the IP maps to the VLAN:
+///   10.2.2.0/24    → VLAN 2
+///   172.20.6.0/24  → VLAN 6
+///   172.20.10.0/24 → VLAN 10
+///   10.20.25.0/24  → VLAN 25
+///   10.20.30.0/24  → VLAN 30
+///   10.20.35.0/24  → VLAN 35
+///   192.168.90.0/24 → VLAN 90
+///   192.168.99.0/24 → VLAN 99
+fn vlan_from_ip(ip: &str) -> Option<u32> {
+    let octets: Vec<&str> = ip.split('.').collect();
+    if octets.len() != 4 {
+        return None;
+    }
+    let third: u32 = octets[2].parse().ok()?;
+
+    // Known VLAN subnets mapped by third octet
+    match (octets[0], octets[1], third) {
+        ("10", "2", 2) => Some(2),
+        ("172", "20", 6) => Some(6),
+        ("172", "20", 10) => Some(10),
+        ("10", "20", 25) => Some(25),
+        ("10", "20", 30) => Some(30),
+        ("10", "20", 35) => Some(35),
+        ("192", "168", 90) => Some(90),
+        ("192", "168", 99) => Some(99),
+        // VLAN 40 (Guest) — no known subnet documented
+        _ => None,
+    }
+}
+
+/// Build an async DNS resolver pointing at Technitium for PTR lookups.
+fn build_ptr_resolver() -> anyhow::Result<Resolver<TokioConnectionProvider>> {
+    let ns_group = NameServerConfigGroup::from_ips_clear(&[DNS_SERVER], 53, true);
+    let config = ResolverConfig::from_parts(None, Vec::new(), ns_group);
+    let mut opts = ResolverOpts::default();
+    opts.timeout = Duration::from_millis(500);
+    opts.attempts = 1;
+    let resolver = Resolver::builder_with_config(config, TokioConnectionProvider::default())
+        .with_options(opts)
+        .build();
+    Ok(resolver)
 }
