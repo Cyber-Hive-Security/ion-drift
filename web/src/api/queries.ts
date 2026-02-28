@@ -61,6 +61,12 @@ import type {
   UpdateDeviceRequest,
   TestConnectionRequest,
   TestConnectionResponse,
+  PortMetricsTuple,
+  MacTableEntry,
+  NeighborEntry,
+  NetworkIdentity,
+  VlanMembershipEntry,
+  PortRoleEntry,
 } from "./types";
 
 // Auth
@@ -763,5 +769,109 @@ export function useTestDeviceConnection() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       }),
+  });
+}
+
+// ── Device-specific data queries ─────────────────────────────
+
+export function useDeviceResources(deviceId: string | undefined) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "resources"],
+    queryFn: () =>
+      apiFetch<SystemResource>(
+        `/api/devices/${encodeURIComponent(deviceId!)}/resources`,
+      ),
+    refetchInterval: 30_000,
+    enabled: !!deviceId,
+  });
+}
+
+export function useDeviceInterfaces(deviceId: string | undefined) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "interfaces"],
+    queryFn: () =>
+      apiFetch<RouterInterface[]>(
+        `/api/devices/${encodeURIComponent(deviceId!)}/interfaces`,
+      ),
+    refetchInterval: 30_000,
+    enabled: !!deviceId,
+  });
+}
+
+export function useDevicePorts(deviceId: string | undefined) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "ports"],
+    queryFn: () =>
+      apiFetch<PortMetricsTuple[]>(
+        `/api/devices/${encodeURIComponent(deviceId!)}/ports`,
+      ),
+    refetchInterval: 30_000,
+    enabled: !!deviceId,
+  });
+}
+
+export function useDeviceMacTable(deviceId: string | undefined) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "mac-table"],
+    queryFn: () =>
+      apiFetch<MacTableEntry[]>(
+        `/api/devices/${encodeURIComponent(deviceId!)}/mac-table`,
+      ),
+    refetchInterval: 60_000,
+    enabled: !!deviceId,
+  });
+}
+
+export function useDeviceNeighbors(deviceId: string | undefined) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "neighbors"],
+    queryFn: () =>
+      apiFetch<NeighborEntry[]>(
+        `/api/devices/${encodeURIComponent(deviceId!)}/neighbors`,
+      ),
+    refetchInterval: 60_000,
+    enabled: !!deviceId,
+  });
+}
+
+export function useDeviceVlans(deviceId: string | undefined) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "vlans"],
+    queryFn: () =>
+      apiFetch<VlanMembershipEntry[]>(
+        `/api/devices/${encodeURIComponent(deviceId!)}/vlans`,
+      ),
+    refetchInterval: 120_000,
+    enabled: !!deviceId,
+  });
+}
+
+export function useDevicePortRoles(deviceId: string | undefined) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "port-roles"],
+    queryFn: () =>
+      apiFetch<PortRoleEntry[]>(
+        `/api/devices/${encodeURIComponent(deviceId!)}/port-roles`,
+      ),
+    refetchInterval: 60_000,
+    enabled: !!deviceId,
+  });
+}
+
+// ── Network-wide correlation queries ─────────────────────────
+
+export function useNetworkIdentities() {
+  return useQuery({
+    queryKey: ["network", "identities"],
+    queryFn: () => apiFetch<NetworkIdentity[]>("/api/network/identities"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useNetworkPortRoles() {
+  return useQuery({
+    queryKey: ["network", "port-roles"],
+    queryFn: () => apiFetch<PortRoleEntry[]>("/api/network/port-roles"),
+    refetchInterval: 60_000,
   });
 }

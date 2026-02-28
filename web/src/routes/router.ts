@@ -16,6 +16,7 @@ import { BehaviorPage } from "./behavior";
 import { HistoryPage } from "./history";
 import { SettingsPage } from "./settings";
 import { NotFoundPage } from "./__root";
+import { SwitchDetailPageWrapper } from "@/features/switch-detail/switch-detail-page";
 
 // Lazy-load the network map page — it pulls in D3 and heavy SVG rendering
 // that benefits from being in a separate chunk.
@@ -124,6 +125,12 @@ const networkMapRoute = createRoute({
   component: NetworkMapWrapper,
 });
 
+const switchDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/switches/$deviceId",
+  component: SwitchDetailPageWrapper,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -141,6 +148,7 @@ const routeTree = rootRoute.addChildren([
   behaviorRoute,
   historyRoute,
   networkMapRoute,
+  switchDetailRoute,
   settingsRoute,
 ]);
 

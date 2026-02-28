@@ -1,6 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
-import { useConnectionSummary, useBehaviorAlerts } from "@/api/queries";
+import { useConnectionSummary, useBehaviorAlerts, useDevices } from "@/api/queries";
 import {
   LayoutDashboard,
   Network,
@@ -40,6 +40,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const hasFlagged = (connectionSummary.data?.flagged_count ?? 0) > 0;
   const behaviorAlerts = useBehaviorAlerts();
   const pendingAnomalies = behaviorAlerts.data?.pending_count ?? 0;
+  const { data: devices = [] } = useDevices();
+  const switchDevices = devices.filter((d) => d.device_type === "switch");
 
   const navContent = (
     <>
@@ -78,6 +80,43 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           );
         })}
       </nav>
+      {switchDevices.length > 0 && (
+        <div className="border-t border-border px-3 py-2">
+          <span className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Switches
+          </span>
+          <div className="mt-1 space-y-0.5">
+            {switchDevices.map((device) => {
+              const active = currentPath === `/switches/${device.id}`;
+              return (
+                <Link
+                  key={device.id}
+                  to={`/switches/${device.id}` as "/"}
+                  onClick={onClose}
+                  className={cn(
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    active
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "inline-block h-2 w-2 rounded-full flex-shrink-0",
+                      device.status === "Online"
+                        ? "bg-green-500"
+                        : device.status === "Offline"
+                          ? "bg-red-500"
+                          : "bg-gray-400",
+                    )}
+                  />
+                  <span className="truncate">{device.name}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div className="border-t border-border p-3">
         <Link
           to="/settings"

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { NetworkNode, ContainerInfo, MapInstance } from "./types";
 import { useBootSequence } from "./hooks/use-boot-sequence";
-import { useNetworkMapStatus, useBehaviorAlerts } from "@/api/queries";
+import { useNetworkMapStatus, useBehaviorAlerts, useNetworkIdentities } from "@/api/queries";
 import { BootOverlay } from "./components/boot-overlay";
 import { TopBar } from "./components/top-bar";
 import { MapCanvas } from "./components/map-canvas";
@@ -24,6 +24,7 @@ export function NetworkMapPage() {
   // Live status polling — only after boot sequence completes
   const statusQuery = useNetworkMapStatus({ enabled: boot.phase === "done" });
   const alertsQuery = useBehaviorAlerts();
+  const identitiesQuery = useNetworkIdentities();
 
   // ── Node selection ──
   const handleSelectNode = useCallback(
@@ -109,7 +110,10 @@ export function NetworkMapPage() {
     const anomalyMacs = new Set(alertsQuery.data?.anomaly_macs ?? []);
     mapInstanceRef.current.updateDeviceStatuses(statusQuery.data.devices, anomalyMacs);
     mapInstanceRef.current.updateInterfaceStatuses(statusQuery.data.interfaces);
-  }, [statusQuery.data, alertsQuery.data]);
+    if (identitiesQuery.data) {
+      mapInstanceRef.current.updatePortLabels(identitiesQuery.data);
+    }
+  }, [statusQuery.data, alertsQuery.data, identitiesQuery.data]);
 
   // ── Keyboard shortcuts ──
   useEffect(() => {

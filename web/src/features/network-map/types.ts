@@ -2,7 +2,7 @@
 //  Network Map — TypeScript Interfaces
 // ============================================================
 
-import type { DeviceStatus, InterfaceStatus } from "@/api/types";
+import type { DeviceStatus, InterfaceStatus, NetworkIdentity } from "@/api/types";
 
 export interface VlanConfig {
   name: string;
@@ -84,4 +84,5 @@ export interface MapInstance {
   resetView: () => void;
   updateDeviceStatuses: (devices: DeviceStatus[], anomalyMacs?: Set<string>) => void;
   updateInterfaceStatuses: (interfaces: InterfaceStatus[]) => void;
+  updatePortLabels: (identities: NetworkIdentity[]) => void;
 }

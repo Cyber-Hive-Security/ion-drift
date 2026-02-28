@@ -930,3 +930,65 @@ export interface TestConnectionResponse {
   identity?: string;
   error?: string;
 }
+
+// ── Switch data types (from switch_store.rs) ─────────────────
+
+/** Port metrics from GET /api/devices/{id}/ports.
+ *  Rust tuple: (port_name, rx_bytes, tx_bytes, timestamp, speed?, running) */
+export type PortMetricsTuple = [string, number, number, number, string | null, boolean];
+
+export interface MacTableEntry {
+  device_id: string;
+  mac_address: string;
+  port_name: string;
+  bridge: string;
+  vlan_id: number | null;
+  is_local: boolean;
+  first_seen: number;
+  last_seen: number;
+}
+
+export interface NeighborEntry {
+  device_id: string;
+  interface: string;
+  mac_address: string | null;
+  address: string | null;
+  identity: string | null;
+  platform: string | null;
+  board: string | null;
+  version: string | null;
+  first_seen: number;
+  last_seen: number;
+}
+
+export interface NetworkIdentity {
+  mac_address: string;
+  best_ip: string | null;
+  hostname: string | null;
+  manufacturer: string | null;
+  switch_device_id: string | null;
+  switch_port: string | null;
+  vlan_id: number | null;
+  discovery_protocol: string | null;
+  remote_identity: string | null;
+  remote_platform: string | null;
+  first_seen: number;
+  last_seen: number;
+  confidence: number;
+}
+
+export interface VlanMembershipEntry {
+  port_name: string;
+  vlan_id: number;
+  tagged: boolean;
+}
+
+export interface PortRoleEntry {
+  device_id: string;
+  port_name: string;
+  role: string;
+  vlan_count: number;
+  mac_count: number;
+  has_lldp_neighbor: boolean;
+  updated_at: number;
+}

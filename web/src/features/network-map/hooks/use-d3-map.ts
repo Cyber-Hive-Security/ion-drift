@@ -18,7 +18,7 @@ import type {
   MapInstance,
   VlanLayout,
 } from "../types";
-import type { DeviceStatus, InterfaceStatus } from "@/api/types";
+import type { DeviceStatus, InterfaceStatus, NetworkIdentity } from "@/api/types";
 import {
   MAP_WIDTH,
   MAP_HEIGHT,
@@ -974,6 +974,48 @@ export function createMapInstance(
           const srcActive = srcIp ? deviceStatusMap.get(srcIp)?.in_arp : false;
           const tgtActive = tgtIp ? deviceStatusMap.get(tgtIp)?.in_arp : false;
           el.classed("nm-conn-active", !!(srcActive && tgtActive));
+        });
+    },
+
+    updatePortLabels(identities: NetworkIdentity[]) {
+      // Build a map from device IP → switch port label
+      const portLabelByIp = new Map<string, string>();
+      for (const id of identities) {
+        if (id.switch_port && id.best_ip) {
+          // Abbreviate port name: ether12 → e12, sfp-sfpplus1 → S1
+          let label = id.switch_port;
+          const etherMatch = label.match(/^ether(\d+)$/);
+          if (etherMatch) label = `e${etherMatch[1]}`;
+          else if (label === "sfp-sfpplus1") label = "S1";
+          else if (label === "sfp-sfpplus2") label = "S2";
+
+          // Prefix with switch device ID if available
+          const deviceLabel = id.switch_device_id
+            ? `${id.switch_device_id}:${label}`
+            : label;
+          portLabelByIp.set(id.best_ip, deviceLabel);
+        }
+      }
+
+      // Remove previous port labels
+      layerNodes.selectAll(".node-port-label").remove();
+
+      // Append port label below IP label for matching nodes
+      layerNodes
+        .selectAll<SVGGElement, NetworkNode>(".node-group")
+        .each(function (d) {
+          const portLabel = portLabelByIp.get(d.ip);
+          if (!portLabel) return;
+          d3.select(this)
+            .append("text")
+            .attr("class", "node-port-label")
+            .attr("y", HEX_RADIUS + 38)
+            .attr("text-anchor", "middle")
+            .attr("fill", "#00f0ff")
+            .attr("font-size", "8px")
+            .attr("font-family", "'Share Tech Mono', monospace")
+            .attr("opacity", 0.8)
+            .text(portLabel);
         });
     },
 

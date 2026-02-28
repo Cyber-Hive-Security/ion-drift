@@ -19,6 +19,7 @@ import { FirewallDropsCard } from "@/components/dashboard/firewall-drops-card";
 import { VlanActivitySection } from "@/components/dashboard/vlan-activity";
 import { VlanTrafficBreakdown } from "@/components/dashboard/vlan-sankey";
 import { DirectionalPortSankeys } from "@/features/world-map/port-sankey";
+import { NetworkDevicesCard } from "@/components/dashboard/network-devices-card";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { PageShell } from "@/components/layout/page-shell";
@@ -223,6 +224,7 @@ export function DashboardPage() {
         <SpeedtestCard data={speedtest.data && "median_download_mbps" in speedtest.data ? speedtest.data : null} />
         {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
         {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
+        <NetworkDevicesCard />
       </div>
 
       <VlanActivitySection />
