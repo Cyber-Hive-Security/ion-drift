@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -108,6 +109,13 @@ async fn run_correlation(
         }
     }
 
+    // ── 1b. Build switch-local MAC ranges ─────────────────────────
+    // Manufacturers assign sequential MACs to switch ports. By collecting
+    // all is_local=true MACs per switch and computing [min, max], we can
+    // identify the full block — catching switch MACs even when they appear
+    // from other data sources (ARP, DHCP, neighbor tables).
+    let switch_local_macs = build_switch_local_mac_set(store, &device_ids).await;
+
     // ── 2. Unified identity assembly ──────────────────────────────
     let all_macs = store.get_mac_table(None).await?;
     let all_neighbors = store.get_neighbors(None).await?;
@@ -116,9 +124,12 @@ async fn run_correlation(
     let mut identity_map: std::collections::HashMap<String, IdentityBuilder> =
         std::collections::HashMap::new();
 
-    // From MAC table — skip is_local entries (switch's own port MACs, not real devices)
+    // From MAC table — skip switch-local MACs (exact flag or sequential range)
     for entry in &all_macs {
         if entry.is_local {
+            continue;
+        }
+        if is_switch_local_mac(&entry.mac_address, &switch_local_macs) {
             continue;
         }
         let builder = identity_map
@@ -168,6 +179,9 @@ async fn run_correlation(
         Ok(arp_entries) => {
             for entry in &arp_entries {
                 if let Some(ref mac) = entry.mac_address {
+                    if is_switch_local_mac(mac, &switch_local_macs) {
+                        continue;
+                    }
                     let mac_upper = mac.to_uppercase();
                     let builder = identity_map
                         .entry(mac_upper)
@@ -186,6 +200,9 @@ async fn run_correlation(
         Ok(leases) => {
             for lease in &leases {
                 if let Some(ref mac) = lease.mac_address {
+                    if is_switch_local_mac(mac, &switch_local_macs) {
+                        continue;
+                    }
                     let mac_upper = mac.to_uppercase();
                     let builder = identity_map
                         .entry(mac_upper)
@@ -393,6 +410,103 @@ fn vlan_from_ip(ip: &str) -> Option<u32> {
         ("192", "168", 99) => Some(99),
         // VLAN 40 (Guest) — no known subnet documented
         _ => None,
+    }
+}
+
+/// Parse a MAC address (colon or hyphen separated) into a u64 for range arithmetic.
+fn mac_to_u64(mac: &str) -> Option<u64> {
+    let hex: String = mac
+        .to_uppercase()
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect();
+    if hex.len() != 12 {
+        return None;
+    }
+    u64::from_str_radix(&hex, 16).ok()
+}
+
+/// Convert a u64 back to a colon-separated MAC string.
+fn u64_to_mac(val: u64) -> String {
+    format!(
+        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        (val >> 40) & 0xFF,
+        (val >> 32) & 0xFF,
+        (val >> 24) & 0xFF,
+        (val >> 16) & 0xFF,
+        (val >> 8) & 0xFF,
+        val & 0xFF,
+    )
+}
+
+/// Build the set of all switch-local MAC addresses by computing sequential
+/// ranges from the is_local=true entries on each managed switch.
+///
+/// Manufacturers assign MACs sequentially per switch (port 1 = base, port 2 =
+/// base+1, etc.). By finding [min, max] of the local MACs per switch, we can
+/// identify the full block — catching switch MACs even when they appear from
+/// other data sources like ARP or DHCP.
+async fn build_switch_local_mac_set(
+    store: &SwitchStore,
+    device_ids: &[String],
+) -> HashSet<u64> {
+    let mut local_macs = HashSet::new();
+
+    for device_id in device_ids {
+        let entries = match store.get_mac_table(Some(device_id)).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        // Collect all local MAC values for this switch
+        let local_vals: Vec<u64> = entries
+            .iter()
+            .filter(|e| e.is_local)
+            .filter_map(|e| mac_to_u64(&e.mac_address))
+            .collect();
+
+        if local_vals.is_empty() {
+            continue;
+        }
+
+        let min_mac = *local_vals.iter().min().unwrap();
+        let max_mac = *local_vals.iter().max().unwrap();
+
+        // Sanity check: the range should be reasonable (< 128 addresses).
+        // A 48-port switch uses ~48 MACs. If the range is absurdly large,
+        // the MACs aren't sequential and we fall back to the exact set.
+        let range_size = max_mac - min_mac + 1;
+        if range_size <= 128 {
+            for val in min_mac..=max_mac {
+                local_macs.insert(val);
+            }
+            tracing::debug!(
+                device = %device_id,
+                range = %format!("{} — {}", u64_to_mac(min_mac), u64_to_mac(max_mac)),
+                count = range_size,
+                "switch-local MAC range"
+            );
+        } else {
+            // Not sequential — just use the exact set
+            for val in &local_vals {
+                local_macs.insert(*val);
+            }
+            tracing::debug!(
+                device = %device_id,
+                count = local_vals.len(),
+                "switch-local MACs (non-sequential, exact set)"
+            );
+        }
+    }
+
+    local_macs
+}
+
+/// Check if a MAC address falls within any switch-local MAC range.
+fn is_switch_local_mac(mac: &str, local_set: &HashSet<u64>) -> bool {
+    match mac_to_u64(mac) {
+        Some(val) => local_set.contains(&val),
+        None => false,
     }
 }
 
