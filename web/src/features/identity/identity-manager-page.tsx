@@ -18,8 +18,11 @@ import {
   useUpdateIdentity,
   useBulkConfirmIdentities,
   useObservedServices,
+  useSetDisposition,
+  useBulkDisposition,
+  usePortViolations,
 } from "@/api/queries";
-import type { NetworkIdentity, ObservedService } from "@/api/types";
+import type { NetworkIdentity, ObservedService, DeviceDisposition } from "@/api/types";
 import { VLAN_CONFIG } from "@/features/network-map/data";
 
 // ── Device type options ─────────────────────────────────────────
@@ -71,6 +74,22 @@ const SOURCE_COLORS: Record<string, string> = {
   oui: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
   none: "bg-muted text-muted-foreground border-border",
 };
+
+const DISPOSITION_OPTIONS: { value: DeviceDisposition; label: string; color: string }[] = [
+  { value: "unknown", label: "Unknown", color: "bg-muted text-muted-foreground border-border" },
+  { value: "my_device", label: "My Device", color: "bg-green-500/20 text-green-400 border-green-500/30" },
+  { value: "external", label: "External", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
+  { value: "ignored", label: "Ignored", color: "bg-muted/50 text-muted-foreground/50 border-border/50" },
+  { value: "flagged", label: "Flagged", color: "bg-red-500/20 text-red-400 border-red-500/30" },
+];
+
+const DISPOSITION_COLORS: Record<string, string> = Object.fromEntries(
+  DISPOSITION_OPTIONS.map((d) => [d.value, d.color])
+);
+
+const DISPOSITION_LABELS: Record<string, string> = Object.fromEntries(
+  DISPOSITION_OPTIONS.map((d) => [d.value, d.label])
+);
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -185,6 +204,50 @@ function LabelCell({
   );
 }
 
+function DispositionCell({
+  identity,
+  onSave,
+}: {
+  identity: NetworkIdentity;
+  onSave: (disposition: DeviceDisposition) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const disp = identity.disposition || "unknown";
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        className={cn(
+          "rounded-full border px-2 py-0.5 text-[10px] font-medium",
+          DISPOSITION_COLORS[disp] || DISPOSITION_COLORS.unknown
+        )}
+      >
+        {DISPOSITION_LABELS[disp] || disp}
+      </button>
+    );
+  }
+
+  return (
+    <select
+      autoFocus
+      className="rounded border border-border bg-background px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+      defaultValue={disp}
+      onChange={(e) => {
+        onSave(e.target.value as DeviceDisposition);
+        setEditing(false);
+      }}
+      onBlur={() => setEditing(false)}
+    >
+      {DISPOSITION_OPTIONS.map((d) => (
+        <option key={d.value} value={d.value}>
+          {d.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 // ── Main page ───────────────────────────────────────────────────
 
 export default function IdentityManagerPage() {
@@ -193,6 +256,9 @@ export default function IdentityManagerPage() {
   const { data: allServices = [] } = useObservedServices();
   const updateIdentity = useUpdateIdentity();
   const bulkConfirm = useBulkConfirmIdentities();
+  const setDisposition = useSetDisposition();
+  const bulkDisposition = useBulkDisposition();
+  const { data: violations = [] } = usePortViolations();
 
   // Build IP → services lookup for showing ports per identity
   const servicesByIp = useMemo(() => {
@@ -210,7 +276,9 @@ export default function IdentityManagerPage() {
   const [filterSource, setFilterSource] = useState<string>("");
   const [filterConfirmed, setFilterConfirmed] = useState<string>(""); // "" | "confirmed" | "unconfirmed"
   const [filterVlan, setFilterVlan] = useState<string>("");
+  const [filterDisposition, setFilterDisposition] = useState<string>("visible"); // "visible" = default (hides ignored)
   const [showFilters, setShowFilters] = useState(false);
+  const [bulkDispositionValue, setBulkDispositionValue] = useState<DeviceDisposition>("my_device");
 
   // Filter identities
   const filtered = useMemo(() => {
@@ -233,8 +301,15 @@ export default function IdentityManagerPage() {
     if (filterVlan) {
       result = result.filter((i) => String(i.vlan_id) === filterVlan);
     }
+    // Disposition filter
+    if (filterDisposition === "visible") {
+      // Default: hide ignored
+      result = result.filter((i) => (i.disposition || "unknown") !== "ignored");
+    } else if (filterDisposition && filterDisposition !== "all") {
+      result = result.filter((i) => (i.disposition || "unknown") === filterDisposition);
+    }
     return result;
-  }, [identities, filterType, filterSource, filterConfirmed, filterVlan]);
+  }, [identities, filterType, filterSource, filterConfirmed, filterVlan, filterDisposition]);
 
   const toggleSelect = (mac: string) => {
     setSelected((prev) => {
@@ -269,6 +344,17 @@ export default function IdentityManagerPage() {
     bulkConfirm.mutate(Array.from(selected), {
       onSuccess: () => setSelected(new Set()),
     });
+  };
+
+  const handleSetDisposition = (mac: string, disposition: DeviceDisposition) => {
+    setDisposition.mutate({ mac, disposition });
+  };
+
+  const handleBulkDisposition = (disposition: DeviceDisposition) => {
+    bulkDisposition.mutate(
+      { macs: Array.from(selected), disposition },
+      { onSuccess: () => setSelected(new Set()) }
+    );
   };
 
   // Unique values for filter dropdowns
@@ -306,6 +392,17 @@ export default function IdentityManagerPage() {
       render: (row) => (
         <div className={cn("h-2.5 w-2.5 rounded-full", statusDot(row))} />
       ),
+    },
+    {
+      key: "disposition",
+      header: "Disposition",
+      render: (row) => (
+        <DispositionCell
+          identity={row}
+          onSave={(d) => handleSetDisposition(row.mac_address, d)}
+        />
+      ),
+      sortValue: (row) => row.disposition || "unknown",
     },
     {
       key: "mac",
@@ -483,7 +580,7 @@ export default function IdentityManagerPage() {
     },
   ];
 
-  const anyFiltersActive = filterType || filterSource || filterConfirmed || filterVlan;
+  const anyFiltersActive = filterType || filterSource || filterConfirmed || filterVlan || (filterDisposition !== "visible" && filterDisposition !== "");
 
   return (
     <PageShell
@@ -491,6 +588,19 @@ export default function IdentityManagerPage() {
       onRefresh={() => refetch()}
       isRefreshing={isLoading}
     >
+      {/* Port violation banner */}
+      {violations.length > 0 && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2">
+          <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
+          <span className="text-sm font-medium text-red-400">
+            {violations.length} port violation{violations.length !== 1 ? "s" : ""} detected
+          </span>
+          <span className="text-xs text-red-400/70">
+            — {violations.filter(v => v.violation_type === "mac_mismatch").length} MAC mismatch, {violations.filter(v => v.violation_type === "device_missing").length} device missing
+          </span>
+        </div>
+      )}
+
       {/* Stats bar */}
       <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard title="Total Identities" icon={<Users className="h-4 w-4" />}>
@@ -579,6 +689,7 @@ export default function IdentityManagerPage() {
               setFilterSource("");
               setFilterConfirmed("");
               setFilterVlan("");
+              setFilterDisposition("visible");
             }}
             className="flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted"
           >
@@ -651,6 +762,22 @@ export default function IdentityManagerPage() {
               ))}
             </select>
           </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] uppercase text-muted-foreground">Disposition</label>
+            <select
+              value={filterDisposition}
+              onChange={(e) => setFilterDisposition(e.target.value)}
+              className="rounded border border-border bg-background px-2 py-1 text-xs"
+            >
+              <option value="visible">Default (hide ignored)</option>
+              <option value="all">All</option>
+              {DISPOSITION_OPTIONS.map((d) => (
+                <option key={d.value} value={d.value}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       )}
 
@@ -693,6 +820,26 @@ export default function IdentityManagerPage() {
           >
             Confirm All
           </button>
+          <div className="h-4 w-px bg-border" />
+          <select
+            value={bulkDispositionValue}
+            onChange={(e) => setBulkDispositionValue(e.target.value as DeviceDisposition)}
+            className="rounded border border-border bg-background px-2 py-1 text-xs"
+          >
+            {DISPOSITION_OPTIONS.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => handleBulkDisposition(bulkDispositionValue)}
+            disabled={bulkDisposition.isPending}
+            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            Set Disposition
+          </button>
+          <div className="h-4 w-px bg-border" />
           <button
             onClick={() => setSelected(new Set())}
             className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"

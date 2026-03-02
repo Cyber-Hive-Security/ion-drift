@@ -18,6 +18,7 @@ import { VlanActivitySection } from "@/components/dashboard/vlan-activity";
 import { VlanTrafficBreakdown } from "@/components/dashboard/vlan-sankey";
 import { DirectionalPortSankeys } from "@/features/world-map/port-sankey";
 import { NetworkDevicesCard } from "@/components/dashboard/network-devices-card";
+import { IdentityOverviewCard } from "@/components/dashboard/identity-overview-card";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { PageShell } from "@/components/layout/page-shell";
@@ -221,6 +222,7 @@ export function DashboardPage() {
         {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
         {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
         <NetworkDevicesCard />
+        <IdentityOverviewCard />
       </div>
 
       <VlanActivitySection />

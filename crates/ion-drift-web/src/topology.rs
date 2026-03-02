@@ -73,6 +73,7 @@ pub struct TopologyNode {
     pub switch_port: Option<String>,
     pub status: NodeStatus,
     pub confidence: f64,
+    pub disposition: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,6 +203,7 @@ pub async fn compute_topology(
                 switch_port: None,
                 status,
                 confidence: 1.0,
+                disposition: "my_device".to_string(),
             },
         );
     }
@@ -309,6 +311,7 @@ pub async fn compute_topology(
                         switch_port: None,
                         status: NodeStatus::Unknown,
                         confidence: 0.7,
+                        disposition: "unknown".to_string(),
                     },
                 );
             }
@@ -492,6 +495,7 @@ pub async fn compute_topology(
                 switch_port: identity.switch_port.clone(),
                 status: NodeStatus::Unknown,
                 confidence: identity.confidence,
+                disposition: identity.disposition.clone(),
             },
         );
 

@@ -305,6 +305,8 @@ export function createTopologyMapInstance(
 
   // ── Visibility helpers ──
   function isNodeVisible(node: TopologyNode): boolean {
+    // Ignored devices hidden by default
+    if (node.disposition === "ignored") return false;
     if (!showEndpoints && !node.is_infrastructure) return false;
     if (vlanFilter && node.vlan_id != null && !vlanFilter.has(node.vlan_id)) return false;
     if (kindFilter && !kindFilter.has(node.kind)) return false;
@@ -321,6 +323,8 @@ export function createTopologyMapInstance(
   function nodeOpacity(node: TopologyNode): number {
     if (vlanFilter && node.vlan_id != null && !vlanFilter.has(node.vlan_id)) return 0.08;
     if (kindFilter && !kindFilter.has(node.kind)) return 0.08;
+    // External devices dimmed
+    if (node.disposition === "external") return 0.4;
     return 1;
   }
 
@@ -486,6 +490,32 @@ export function createTopologyMapInstance(
           .attr("font-size", 5)
           .attr("font-weight", "bold")
           .text("N");
+      }
+
+      // Flagged device red ring
+      if (node.disposition === "flagged") {
+        g.append("circle")
+          .attr("r", nodeRadius(node) + 4)
+          .attr("fill", "none")
+          .attr("stroke", "#ef4444")
+          .attr("stroke-width", 2)
+          .attr("stroke-dasharray", "4,2");
+        g.append("text")
+          .attr("x", nodeRadius(node) + 8)
+          .attr("y", nodeRadius(node) + 2)
+          .attr("font-size", 10)
+          .text("\u26A0"); // ⚠ warning sign
+      }
+
+      // External device dashed border
+      if (node.disposition === "external") {
+        g.append("circle")
+          .attr("r", nodeRadius(node) + 3)
+          .attr("fill", "none")
+          .attr("stroke", "#3b82f6")
+          .attr("stroke-width", 1)
+          .attr("stroke-dasharray", "3,3")
+          .attr("opacity", 0.6);
       }
 
       // Pin icon for human-positioned nodes

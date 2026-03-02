@@ -74,6 +74,7 @@ pub struct NetworkIdentity {
     pub device_type_confidence: f64,
     pub human_confirmed: bool,
     pub human_label: Option<String>,
+    pub disposition: String,
 }
 
 /// An nmap scan record.
@@ -132,6 +133,7 @@ pub struct IdentityStats {
     pub unconfirmed: i64,
     pub by_device_type: std::collections::HashMap<String, i64>,
     pub by_source: std::collections::HashMap<String, i64>,
+    pub by_disposition: std::collections::HashMap<String, i64>,
 }
 
 /// A VLAN membership entry for a switch port.
@@ -162,6 +164,31 @@ pub struct TopologyPosition {
     pub y: f64,
     pub source: String,
     pub updated_at: String,
+}
+
+/// A MAC-to-port binding (human-managed port security expectation).
+#[derive(Debug, Clone, Serialize)]
+pub struct PortMacBinding {
+    pub device_id: String,
+    pub port_name: String,
+    pub expected_mac: String,
+    pub created_at: String,
+    pub created_by: String,
+}
+
+/// A port violation event (binding enforcement alert).
+#[derive(Debug, Clone, Serialize)]
+pub struct PortViolation {
+    pub id: i64,
+    pub device_id: String,
+    pub port_name: String,
+    pub expected_mac: String,
+    pub actual_mac: Option<String>,
+    pub violation_type: String,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub resolved: bool,
+    pub resolved_at: Option<String>,
 }
 
 /// A port role classification entry.
@@ -350,6 +377,30 @@ impl SwitchStore {
                 PRIMARY KEY (ip_address, port, protocol)
             );
 
+            CREATE TABLE IF NOT EXISTS port_mac_bindings (
+                device_id TEXT NOT NULL,
+                port_name TEXT NOT NULL,
+                expected_mac TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                created_by TEXT NOT NULL DEFAULT 'human',
+                PRIMARY KEY (device_id, port_name)
+            );
+
+            CREATE TABLE IF NOT EXISTS port_violations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                port_name TEXT NOT NULL,
+                expected_mac TEXT NOT NULL,
+                actual_mac TEXT,
+                violation_type TEXT NOT NULL,
+                first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+                last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+                resolved INTEGER NOT NULL DEFAULT 0,
+                resolved_at TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pv_unique
+                ON port_violations (device_id, port_name, expected_mac, actual_mac);
+
             PRAGMA journal_mode=WAL;",
         )?;
 
@@ -360,6 +411,7 @@ impl SwitchStore {
             "ALTER TABLE network_identities ADD COLUMN device_type_confidence REAL DEFAULT 0.0",
             "ALTER TABLE network_identities ADD COLUMN human_confirmed INTEGER DEFAULT 0",
             "ALTER TABLE network_identities ADD COLUMN human_label TEXT",
+            "ALTER TABLE network_identities ADD COLUMN disposition TEXT DEFAULT 'unknown'",
         ] {
             let _ = conn.execute(alter, []);
         }
@@ -645,7 +697,7 @@ impl SwitchStore {
                     vlan_id, discovery_protocol, remote_identity, remote_platform,
                     first_seen, last_seen, confidence,
                     device_type, device_type_source, device_type_confidence,
-                    human_confirmed, human_label
+                    human_confirmed, human_label, disposition
              FROM network_identities ORDER BY last_seen DESC",
         )?;
         let rows = stmt.query_map([], map_identity_row)?;
@@ -664,7 +716,7 @@ impl SwitchStore {
                     vlan_id, discovery_protocol, remote_identity, remote_platform,
                     first_seen, last_seen, confidence,
                     device_type, device_type_source, device_type_confidence,
-                    human_confirmed, human_label
+                    human_confirmed, human_label, disposition
              FROM network_identities
              WHERE human_confirmed = 0
              ORDER BY device_type_confidence ASC, last_seen DESC
@@ -719,12 +771,28 @@ impl SwitchStore {
             }
         }
 
+        let mut by_disposition = std::collections::HashMap::new();
+        {
+            let mut stmt = db.prepare(
+                "SELECT COALESCE(disposition, 'unknown'), COUNT(*)
+                 FROM network_identities GROUP BY COALESCE(disposition, 'unknown')",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for r in rows {
+                let (k, v) = r?;
+                by_disposition.insert(k, v);
+            }
+        }
+
         Ok(IdentityStats {
             total,
             confirmed,
             unconfirmed: total - confirmed,
             by_device_type,
             by_source,
+            by_disposition,
         })
     }
 
@@ -1240,6 +1308,194 @@ impl SwitchStore {
         )?;
         Ok(affected > 0)
     }
+
+    // ── Disposition ─────────────────────────────────────────────────
+
+    /// Set the disposition of a network identity.
+    pub async fn set_disposition(
+        &self,
+        mac: &str,
+        disposition: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "UPDATE network_identities SET disposition = ?2 WHERE mac_address = ?1",
+            params![mac, disposition],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// Bulk-set disposition on multiple MACs.
+    pub async fn bulk_set_disposition(
+        &self,
+        macs: &[&str],
+        disposition: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut count = 0usize;
+        for mac in macs {
+            let rows = db.execute(
+                "UPDATE network_identities SET disposition = ?2 WHERE mac_address = ?1",
+                params![mac, disposition],
+            )?;
+            count += rows;
+        }
+        Ok(count)
+    }
+
+    // ── Port MAC bindings ───────────────────────────────────────────
+
+    /// Get all port MAC bindings.
+    pub async fn get_port_bindings(
+        &self,
+        device_id: Option<&str>,
+    ) -> Result<Vec<PortMacBinding>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let (sql, filter) = match device_id {
+            Some(id) => (
+                "SELECT device_id, port_name, expected_mac, created_at, created_by
+                 FROM port_mac_bindings WHERE device_id = ?1 ORDER BY port_name",
+                Some(id.to_string()),
+            ),
+            None => (
+                "SELECT device_id, port_name, expected_mac, created_at, created_by
+                 FROM port_mac_bindings ORDER BY device_id, port_name",
+                None,
+            ),
+        };
+        let mut stmt = db.prepare(sql)?;
+        let rows = if let Some(ref id) = filter {
+            stmt.query_map(params![id], map_port_binding_row)?
+        } else {
+            stmt.query_map([], map_port_binding_row)?
+        };
+        rows.collect()
+    }
+
+    /// Create or update a port MAC binding.
+    pub async fn upsert_port_binding(
+        &self,
+        device_id: &str,
+        port_name: &str,
+        expected_mac: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO port_mac_bindings (device_id, port_name, expected_mac)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(device_id, port_name) DO UPDATE SET
+                 expected_mac = excluded.expected_mac,
+                 created_at = datetime('now')",
+            params![device_id, port_name, expected_mac.to_uppercase()],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a port MAC binding.
+    pub async fn delete_port_binding(
+        &self,
+        device_id: &str,
+        port_name: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM port_mac_bindings WHERE device_id = ?1 AND port_name = ?2",
+            params![device_id, port_name],
+        )?;
+        Ok(affected > 0)
+    }
+
+    // ── Port violations ─────────────────────────────────────────────
+
+    /// Get active (unresolved) port violations, optionally filtered by device.
+    pub async fn get_port_violations(
+        &self,
+        device_id: Option<&str>,
+    ) -> Result<Vec<PortViolation>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let (sql, filter) = match device_id {
+            Some(id) => (
+                "SELECT id, device_id, port_name, expected_mac, actual_mac, violation_type,
+                        first_seen, last_seen, resolved, resolved_at
+                 FROM port_violations WHERE device_id = ?1 AND resolved = 0
+                 ORDER BY last_seen DESC",
+                Some(id.to_string()),
+            ),
+            None => (
+                "SELECT id, device_id, port_name, expected_mac, actual_mac, violation_type,
+                        first_seen, last_seen, resolved, resolved_at
+                 FROM port_violations WHERE resolved = 0
+                 ORDER BY last_seen DESC",
+                None,
+            ),
+        };
+        let mut stmt = db.prepare(sql)?;
+        let rows = if let Some(ref id) = filter {
+            stmt.query_map(params![id], map_port_violation_row)?
+        } else {
+            stmt.query_map([], map_port_violation_row)?
+        };
+        rows.collect()
+    }
+
+    /// Upsert a port violation (create if new, update last_seen if existing).
+    pub async fn upsert_port_violation(
+        &self,
+        device_id: &str,
+        port_name: &str,
+        expected_mac: &str,
+        actual_mac: Option<&str>,
+        violation_type: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO port_violations
+             (device_id, port_name, expected_mac, actual_mac, violation_type)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(device_id, port_name, expected_mac, actual_mac) DO UPDATE SET
+                 last_seen = datetime('now'),
+                 resolved = 0,
+                 resolved_at = NULL",
+            params![device_id, port_name, expected_mac.to_uppercase(), actual_mac.map(|m| m.to_uppercase()), violation_type],
+        )?;
+        Ok(())
+    }
+
+    /// Resolve a port violation by ID.
+    pub async fn resolve_port_violation(&self, id: i64) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "UPDATE port_violations SET resolved = 1, resolved_at = datetime('now') WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// Auto-resolve violations for a device+port when the correct MAC is back.
+    pub async fn auto_resolve_violations(
+        &self,
+        device_id: &str,
+        port_name: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "UPDATE port_violations SET resolved = 1, resolved_at = datetime('now')
+             WHERE device_id = ?1 AND port_name = ?2 AND resolved = 0",
+            params![device_id, port_name],
+        )?;
+        Ok(affected)
+    }
+
+    /// Prune resolved violations older than max_age_secs.
+    pub async fn prune_port_violations(&self, max_age_days: i64) -> Result<usize, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM port_violations
+             WHERE resolved = 1 AND resolved_at < datetime('now', ?1)",
+            params![format!("-{max_age_days} days")],
+        )?;
+        Ok(affected)
+    }
 }
 
 // ── Row mappers ─────────────────────────────────────────────────
@@ -1316,5 +1572,31 @@ fn map_identity_row(row: &rusqlite::Row<'_>) -> Result<NetworkIdentity, rusqlite
         device_type_confidence: row.get::<_, Option<f64>>(15)?.unwrap_or(0.0),
         human_confirmed: row.get::<_, Option<i32>>(16)?.unwrap_or(0) != 0,
         human_label: row.get(17)?,
+        disposition: row.get::<_, Option<String>>(18)?.unwrap_or_else(|| "unknown".to_string()),
+    })
+}
+
+fn map_port_binding_row(row: &rusqlite::Row<'_>) -> Result<PortMacBinding, rusqlite::Error> {
+    Ok(PortMacBinding {
+        device_id: row.get(0)?,
+        port_name: row.get(1)?,
+        expected_mac: row.get(2)?,
+        created_at: row.get(3)?,
+        created_by: row.get(4)?,
+    })
+}
+
+fn map_port_violation_row(row: &rusqlite::Row<'_>) -> Result<PortViolation, rusqlite::Error> {
+    Ok(PortViolation {
+        id: row.get(0)?,
+        device_id: row.get(1)?,
+        port_name: row.get(2)?,
+        expected_mac: row.get(3)?,
+        actual_mac: row.get(4)?,
+        violation_type: row.get(5)?,
+        first_seen: row.get(6)?,
+        last_seen: row.get(7)?,
+        resolved: row.get::<_, i32>(8)? != 0,
+        resolved_at: row.get(9)?,
     })
 }

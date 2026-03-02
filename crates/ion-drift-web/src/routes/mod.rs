@@ -220,10 +220,19 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/network/identities/stats", get(identity::identity_stats))
         .route("/network/identities/review-queue", get(identity::review_queue))
         .route("/network/identities/{mac}", put(identity::update_identity))
+        .route("/network/identities/{mac}/disposition", put(identity::set_disposition))
         .route("/network/identities/bulk-confirm", post(identity::bulk_confirm))
+        .route("/network/identities/bulk-disposition", post(identity::bulk_disposition))
         // Observed services (passive discovery)
         .route("/network/services", get(identity::observed_services))
-        // Nmap scan routes removed — replaced by passive_discovery (connection tracking)
+        // Port MAC bindings
+        .route("/network/port-bindings", get(identity::list_port_bindings).post(identity::create_port_binding))
+        .route("/network/port-bindings/{device_id}", get(identity::list_device_port_bindings))
+        .route("/network/port-bindings/{device_id}/{port}", put(identity::update_port_binding).delete(identity::delete_port_binding))
+        // Port violations
+        .route("/network/port-violations", get(identity::list_port_violations))
+        .route("/network/port-violations/{device_id}", get(identity::list_device_port_violations))
+        .route("/network/port-violations/{id}/resolve", put(identity::resolve_port_violation))
         // Network topology
         .route("/network/topology", get(topology::get_topology))
         .route("/network/topology/refresh", post(topology::refresh_topology))

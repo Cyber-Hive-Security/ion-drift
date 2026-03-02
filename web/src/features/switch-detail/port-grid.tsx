@@ -7,6 +7,8 @@ import type {
   PortRoleEntry,
   MacTableEntry,
   NetworkIdentity,
+  PortMacBinding,
+  PortViolation,
 } from "@/api/types";
 import {
   portToGridPosition,
@@ -27,6 +29,8 @@ interface PortGridProps {
   selectedPort: string | null;
   onSelectPort: (port: string | null) => void;
   deviceId?: string;
+  bindings?: PortMacBinding[];
+  violations?: PortViolation[];
 }
 
 interface PortCellData {
@@ -45,6 +49,8 @@ interface PortCellData {
   connectedMac: string | null;
   connectedIp: string | null;
   connectedManufacturer: string | null;
+  hasBound: boolean;
+  hasViolation: boolean;
 }
 
 export function PortGrid({
@@ -56,6 +62,8 @@ export function PortGrid({
   selectedPort,
   onSelectPort,
   deviceId,
+  bindings = [],
+  violations = [],
 }: PortGridProps) {
   const [hoveredPort, setHoveredPort] = useState<string | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -108,6 +116,20 @@ export function PortGrid({
     return map;
   }, [identities, deviceId]);
 
+  // Binding lookup by port name
+  const bindingByPort = useMemo(() => {
+    const map = new Map<string, PortMacBinding>();
+    for (const b of bindings) map.set(b.port_name, b);
+    return map;
+  }, [bindings]);
+
+  // Violation lookup by port name
+  const violationByPort = useMemo(() => {
+    const map = new Map<string, PortViolation>();
+    for (const v of violations) map.set(v.port_name, v);
+    return map;
+  }, [violations]);
+
   // Build cell data for all known ports
   const portCells = useMemo(() => {
     const allPortNames = new Set<string>();
@@ -138,11 +160,13 @@ export function PortGrid({
         connectedMac: identity?.mac_address ?? null,
         connectedIp: identity?.best_ip ?? null,
         connectedManufacturer: identity?.manufacturer ?? null,
+        hasBound: bindingByPort.has(portName),
+        hasViolation: violationByPort.has(portName),
       });
     }
 
     return cells.sort((a, b) => portSortKey(a.portName) - portSortKey(b.portName));
-  }, [latestMetrics, vlans, portRoles, macCounts, roleMap, identityByPort]);
+  }, [latestMetrics, vlans, portRoles, macCounts, roleMap, identityByPort, bindingByPort, violationByPort]);
 
   // Separate copper ports (with grid positions) from SFP and other ports
   const { topRow, bottomRow, sfpTop, sfpBottom, otherPorts } = useMemo(() => {
@@ -229,11 +253,13 @@ export function PortGrid({
         key={key}
         className={cn(
           "relative flex h-9 w-full cursor-pointer items-center justify-center rounded text-[9px] font-bold transition-all",
-          cell.running
-            ? isSfp
-              ? "border-2 border-yellow-400/60"
-              : "border-2 border-green-500/60"
-            : "border-2 border-dashed border-muted-foreground/30",
+          cell.hasViolation
+            ? "border-2 border-red-500"
+            : cell.running
+              ? isSfp
+                ? "border-2 border-yellow-400/60"
+                : "border-2 border-green-500/60"
+              : "border-2 border-dashed border-muted-foreground/30",
           isSelected && "ring-2 ring-primary ring-offset-1 ring-offset-background",
         )}
         style={{
@@ -261,6 +287,18 @@ export function PortGrid({
               cell.speed.includes("10G") ? "bg-yellow-400" : cell.speed.includes("1G") ? "bg-green-400" : "bg-blue-400",
             )}
           />
+        )}
+        {/* Binding lock icon */}
+        {cell.hasBound && !cell.hasViolation && (
+          <span className="absolute top-0 left-0.5 text-[7px] leading-none text-white/80 drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]">
+            🔒
+          </span>
+        )}
+        {/* Violation alert */}
+        {cell.hasViolation && (
+          <span className="absolute top-0 left-0.5 text-[8px] leading-none animate-pulse drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]">
+            ⚠️
+          </span>
         )}
       </div>
     );

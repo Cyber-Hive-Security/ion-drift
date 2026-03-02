@@ -12,6 +12,8 @@ import {
   useDeviceVlans,
   useDevicePortRoles,
   useNetworkIdentities,
+  usePortBindingsForDevice,
+  usePortViolationsForDevice,
 } from "@/api/queries";
 import { SystemInfoBar } from "./system-info-bar";
 import { PortGrid } from "./port-grid";
@@ -32,6 +34,8 @@ function SwitchDetailPage({ deviceId }: { deviceId: string }) {
   const vlans = useDeviceVlans(deviceId);
   const portRoles = useDevicePortRoles(deviceId);
   const identities = useNetworkIdentities();
+  const deviceBindings = usePortBindingsForDevice(deviceId);
+  const deviceViolations = usePortViolationsForDevice(deviceId);
 
   if (resources.isLoading) return <LoadingSpinner />;
 
@@ -66,6 +70,8 @@ function SwitchDetailPage({ deviceId }: { deviceId: string }) {
           selectedPort={selectedPort}
           onSelectPort={setSelectedPort}
           deviceId={deviceId}
+          bindings={deviceBindings.data}
+          violations={deviceViolations.data}
         />
       </div>
 

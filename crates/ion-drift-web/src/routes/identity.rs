@@ -118,4 +118,198 @@ pub async fn observed_services(
     Ok(Json(serde_json::to_value(data).unwrap()))
 }
 
+// ── Disposition ──────────────────────────────────────────────────
+
+const VALID_DISPOSITIONS: &[&str] = &["unknown", "my_device", "external", "ignored", "flagged"];
+
+/// Request body for setting disposition.
+#[derive(Deserialize)]
+pub struct SetDispositionRequest {
+    pub disposition: String,
+}
+
+/// PUT /api/network/identities/{mac}/disposition
+pub async fn set_disposition(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(mac): Path<String>,
+    Json(body): Json<SetDispositionRequest>,
+) -> Result<Json<serde_json::Value>, Response> {
+    if !VALID_DISPOSITIONS.contains(&body.disposition.as_str()) {
+        return Ok(Json(serde_json::json!({ "error": "invalid disposition" })));
+    }
+    let updated = state
+        .switch_store
+        .set_disposition(&mac, &body.disposition)
+        .await
+        .map_err(|e| internal_error("set disposition", e))?;
+    Ok(Json(serde_json::json!({ "updated": updated })))
+}
+
+/// Request body for bulk disposition.
+#[derive(Deserialize)]
+pub struct BulkDispositionRequest {
+    pub macs: Vec<String>,
+    pub disposition: String,
+}
+
+/// POST /api/network/identities/bulk-disposition
+pub async fn bulk_disposition(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Json(body): Json<BulkDispositionRequest>,
+) -> Result<Json<serde_json::Value>, Response> {
+    if !VALID_DISPOSITIONS.contains(&body.disposition.as_str()) {
+        return Ok(Json(serde_json::json!({ "error": "invalid disposition" })));
+    }
+    let mac_refs: Vec<&str> = body.macs.iter().map(|s| s.as_str()).collect();
+    let count = state
+        .switch_store
+        .bulk_set_disposition(&mac_refs, &body.disposition)
+        .await
+        .map_err(|e| internal_error("bulk disposition", e))?;
+    Ok(Json(serde_json::json!({ "updated": count })))
+}
+
+// ── Port MAC bindings ───────────────────────────────────────────
+
+/// GET /api/network/port-bindings (optionally ?device_id=...)
+#[derive(Deserialize)]
+pub struct PortBindingsParams {
+    pub device_id: Option<String>,
+}
+
+pub async fn list_port_bindings(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(params): Query<PortBindingsParams>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let data = state
+        .switch_store
+        .get_port_bindings(params.device_id.as_deref())
+        .await
+        .map_err(|e| internal_error("list port bindings", e))?;
+    Ok(Json(serde_json::to_value(data).unwrap()))
+}
+
+/// GET /api/network/port-bindings/{device_id}
+pub async fn list_device_port_bindings(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let data = state
+        .switch_store
+        .get_port_bindings(Some(&device_id))
+        .await
+        .map_err(|e| internal_error("device port bindings", e))?;
+    Ok(Json(serde_json::to_value(data).unwrap()))
+}
+
+/// Request body for creating a port binding.
+#[derive(Deserialize)]
+pub struct CreatePortBindingRequest {
+    pub device_id: String,
+    pub port_name: String,
+    pub expected_mac: String,
+}
+
+/// POST /api/network/port-bindings
+pub async fn create_port_binding(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Json(body): Json<CreatePortBindingRequest>,
+) -> Result<Json<serde_json::Value>, Response> {
+    state
+        .switch_store
+        .upsert_port_binding(&body.device_id, &body.port_name, &body.expected_mac)
+        .await
+        .map_err(|e| internal_error("create port binding", e))?;
+    Ok(Json(serde_json::json!({ "created": true })))
+}
+
+/// Request body for updating a port binding.
+#[derive(Deserialize)]
+pub struct UpdatePortBindingRequest {
+    pub expected_mac: String,
+}
+
+/// PUT /api/network/port-bindings/{device_id}/{port}
+pub async fn update_port_binding(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path((device_id, port)): Path<(String, String)>,
+    Json(body): Json<UpdatePortBindingRequest>,
+) -> Result<Json<serde_json::Value>, Response> {
+    state
+        .switch_store
+        .upsert_port_binding(&device_id, &port, &body.expected_mac)
+        .await
+        .map_err(|e| internal_error("update port binding", e))?;
+    Ok(Json(serde_json::json!({ "updated": true })))
+}
+
+/// DELETE /api/network/port-bindings/{device_id}/{port}
+pub async fn delete_port_binding(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path((device_id, port)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let deleted = state
+        .switch_store
+        .delete_port_binding(&device_id, &port)
+        .await
+        .map_err(|e| internal_error("delete port binding", e))?;
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
+}
+
+// ── Port violations ─────────────────────────────────────────────
+
+/// GET /api/network/port-violations (optionally ?device_id=...)
+#[derive(Deserialize)]
+pub struct PortViolationsParams {
+    pub device_id: Option<String>,
+}
+
+pub async fn list_port_violations(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(params): Query<PortViolationsParams>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let data = state
+        .switch_store
+        .get_port_violations(params.device_id.as_deref())
+        .await
+        .map_err(|e| internal_error("list port violations", e))?;
+    Ok(Json(serde_json::to_value(data).unwrap()))
+}
+
+/// GET /api/network/port-violations/{device_id}
+pub async fn list_device_port_violations(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let data = state
+        .switch_store
+        .get_port_violations(Some(&device_id))
+        .await
+        .map_err(|e| internal_error("device port violations", e))?;
+    Ok(Json(serde_json::to_value(data).unwrap()))
+}
+
+/// PUT /api/network/port-violations/{id}/resolve
+pub async fn resolve_port_violation(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let resolved = state
+        .switch_store
+        .resolve_port_violation(id)
+        .await
+        .map_err(|e| internal_error("resolve port violation", e))?;
+    Ok(Json(serde_json::json!({ "resolved": resolved })))
+}
+
 // Nmap scan endpoints removed — replaced by passive_discovery (connection tracking).

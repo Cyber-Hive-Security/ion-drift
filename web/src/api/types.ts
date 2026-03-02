@@ -962,7 +962,10 @@ export interface NetworkIdentity {
   device_type_confidence: number;
   human_confirmed: boolean;
   human_label: string | null;
+  disposition: DeviceDisposition;
 }
+
+export type DeviceDisposition = "unknown" | "my_device" | "external" | "ignored" | "flagged";
 
 export interface VlanMembershipEntry {
   port_name: string;
@@ -986,6 +989,7 @@ export interface IdentityStats {
   unconfirmed: number;
   by_device_type: Record<string, number>;
   by_source: Record<string, number>;
+  by_disposition: Record<string, number>;
 }
 
 export interface NmapScan {
@@ -1047,6 +1051,29 @@ export interface ObservedService {
   connection_count: number;
 }
 
+// ── Port MAC Bindings & Violations ─────────────────────────────
+
+export interface PortMacBinding {
+  device_id: string;
+  port_name: string;
+  expected_mac: string;
+  created_at: string;
+  created_by: string;
+}
+
+export interface PortViolation {
+  id: number;
+  device_id: string;
+  port_name: string;
+  expected_mac: string;
+  actual_mac: string | null;
+  violation_type: "mac_mismatch" | "device_missing";
+  first_seen: string;
+  last_seen: string;
+  resolved: boolean;
+  resolved_at: string | null;
+}
+
 // ── Network Topology ───────────────────────────────────────────
 
 export type TopologyNodeKind =
@@ -1088,6 +1115,7 @@ export interface TopologyNode {
   switch_port: string | null;
   status: TopologyNodeStatus;
   confidence: number;
+  disposition: DeviceDisposition;
 }
 
 export interface TopologyEdge {

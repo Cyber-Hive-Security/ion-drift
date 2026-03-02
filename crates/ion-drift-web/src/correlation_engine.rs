@@ -7,6 +7,7 @@ use hickory_resolver::Resolver;
 use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use mikrotik_core::{MikrotikClient, SwitchStore};
+use mikrotik_core::switch_store::MacTableEntry;
 use tokio::sync::RwLock;
 
 use crate::device_manager::DeviceManager;
@@ -324,10 +325,89 @@ async fn run_correlation(
         }
     }
 
-    if upserted > 0 {
+    // ── 5. Port binding enforcement ──────────────────────────────
+    // For each MAC-to-port binding, compare expected MAC against actual.
+    // Generate violations when mismatched; auto-resolve when correct.
+    let bindings = store.get_port_bindings(None).await.unwrap_or_default();
+    let mut violations_created = 0u32;
+    let mut violations_resolved = 0u32;
+
+    for binding in &bindings {
+        // Find the actual MAC on this port from the MAC table
+        let port_macs: Vec<&MacTableEntry> = all_macs
+            .iter()
+            .filter(|e| {
+                e.device_id == binding.device_id
+                    && e.port_name == binding.port_name
+                    && !e.is_local
+                    && !is_switch_local_mac(&e.mac_address, &switch_local_macs)
+            })
+            .collect();
+
+        let expected_upper = binding.expected_mac.to_uppercase();
+
+        if port_macs.is_empty() {
+            // No MAC on this port → device missing
+            if let Err(e) = store
+                .upsert_port_violation(
+                    &binding.device_id,
+                    &binding.port_name,
+                    &expected_upper,
+                    None,
+                    "device_missing",
+                )
+                .await
+            {
+                tracing::warn!(
+                    device = %binding.device_id, port = %binding.port_name,
+                    "port violation upsert: {e}"
+                );
+            } else {
+                violations_created += 1;
+            }
+        } else {
+            let actual_mac = port_macs[0].mac_address.to_uppercase();
+            if actual_mac != expected_upper {
+                // Wrong MAC on this port
+                if let Err(e) = store
+                    .upsert_port_violation(
+                        &binding.device_id,
+                        &binding.port_name,
+                        &expected_upper,
+                        Some(&actual_mac),
+                        "mac_mismatch",
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        device = %binding.device_id, port = %binding.port_name,
+                        "port violation upsert: {e}"
+                    );
+                } else {
+                    violations_created += 1;
+                }
+            } else {
+                // Correct MAC — auto-resolve any existing violations
+                match store
+                    .auto_resolve_violations(&binding.device_id, &binding.port_name)
+                    .await
+                {
+                    Ok(n) => violations_resolved += n as u32,
+                    Err(e) => tracing::warn!(
+                        device = %binding.device_id, port = %binding.port_name,
+                        "auto-resolve violations: {e}"
+                    ),
+                }
+            }
+        }
+    }
+
+    if upserted > 0 || violations_created > 0 || violations_resolved > 0 {
         tracing::debug!(
             identities = upserted,
             switches = device_ids.len(),
+            violations_new = violations_created,
+            violations_resolved = violations_resolved,
             "correlation cycle complete"
         );
     }
