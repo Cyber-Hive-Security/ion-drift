@@ -61,10 +61,13 @@ async fn run_correlation(
         let mac_entries = store.get_mac_table(Some(device_id)).await?;
         let vlan_entries = store.get_vlan_membership(device_id).await?;
 
-        // Count MACs per port
+        // Count MACs per port (skip switch-local MACs — they're the switch's own port addresses)
         let mut mac_counts: std::collections::HashMap<String, u32> =
             std::collections::HashMap::new();
         for entry in &mac_entries {
+            if entry.is_local {
+                continue;
+            }
             *mac_counts.entry(entry.port_name.clone()).or_default() += 1;
         }
 
@@ -113,8 +116,11 @@ async fn run_correlation(
     let mut identity_map: std::collections::HashMap<String, IdentityBuilder> =
         std::collections::HashMap::new();
 
-    // From MAC table
+    // From MAC table — skip is_local entries (switch's own port MACs, not real devices)
     for entry in &all_macs {
+        if entry.is_local {
+            continue;
+        }
         let builder = identity_map
             .entry(entry.mac_address.to_uppercase())
             .or_insert_with(IdentityBuilder::default);
