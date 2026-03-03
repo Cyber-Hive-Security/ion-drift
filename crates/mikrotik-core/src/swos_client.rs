@@ -100,21 +100,33 @@ impl SwosClient {
     /// second request includes the computed digest response.
     async fn fetch(&self, path: &str) -> Result<String, MikrotikError> {
         let url = format!("{}{}", self.base_url(), path);
+        tracing::debug!(url = %url, path = %path, "SwOS fetch: sending initial request");
 
         // First request — expect 401 with WWW-Authenticate header
-        let resp = self.http.get(&url).send().await?;
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            tracing::error!(url = %url, error = %e, "SwOS fetch: request failed");
+            e
+        })?;
 
-        if resp.status() == reqwest::StatusCode::OK {
-            // Some endpoints might not require auth (unlikely but handle it)
+        let status = resp.status();
+        tracing::debug!(url = %url, status = %status, "SwOS fetch: initial response");
+
+        if status == reqwest::StatusCode::OK {
             return Ok(resp.text().await?);
         }
 
-        if resp.status() != reqwest::StatusCode::UNAUTHORIZED {
+        if status != reqwest::StatusCode::UNAUTHORIZED {
+            tracing::error!(url = %url, status = %status.as_u16(), "SwOS fetch: unexpected status (expected 401)");
             return Err(MikrotikError::RouterOs {
-                status: resp.status().as_u16(),
+                status: status.as_u16(),
                 message: format!("unexpected status from {path}"),
                 detail: None,
             });
+        }
+
+        // Log all response headers for debugging
+        for (name, value) in resp.headers() {
+            tracing::debug!(header = %name, value = ?value, "SwOS 401 response header");
         }
 
         // Parse WWW-Authenticate header to extract realm and nonce
@@ -122,52 +134,99 @@ impl SwosClient {
             .headers()
             .get("www-authenticate")
             .and_then(|v| v.to_str().ok())
-            .ok_or(MikrotikError::AuthFailed)?
+            .ok_or_else(|| {
+                tracing::error!("SwOS fetch: no WWW-Authenticate header in 401 response");
+                MikrotikError::AuthFailed
+            })?
             .to_string();
 
+        tracing::debug!(www_authenticate = %www_auth, "SwOS fetch: parsing digest challenge");
+
         let realm = extract_quoted_value(&www_auth, "realm")
-            .ok_or(MikrotikError::AuthFailed)?;
+            .ok_or_else(|| {
+                tracing::error!(header = %www_auth, "SwOS fetch: no realm in WWW-Authenticate");
+                MikrotikError::AuthFailed
+            })?;
         let nonce = extract_quoted_value(&www_auth, "nonce")
-            .ok_or(MikrotikError::AuthFailed)?;
+            .ok_or_else(|| {
+                tracing::error!(header = %www_auth, "SwOS fetch: no nonce in WWW-Authenticate");
+                MikrotikError::AuthFailed
+            })?;
+
+        tracing::debug!(realm = %realm, nonce = %nonce, "SwOS fetch: parsed challenge");
 
         // Compute MD5 Digest auth response (RFC 2617, qop=auth)
         let cnonce: String = format!("{:016x}", rand::random::<u64>());
         let nc = "00000001";
 
-        let ha1 = format!("{:x}", md5::compute(format!(
-            "{}:{}:{}", self.username, realm, self.password
-        )));
-        let ha2 = format!("{:x}", md5::compute(format!("GET:{}", path)));
-        let response = format!("{:x}", md5::compute(format!(
-            "{}:{}:{}:{}:auth:{}", ha1, nonce, nc, cnonce, ha2
-        )));
+        let ha1_input = format!("{}:{}:{}", self.username, realm, self.password);
+        let ha1 = format!("{:x}", md5::compute(&ha1_input));
+        let ha2_input = format!("GET:{}", path);
+        let ha2 = format!("{:x}", md5::compute(&ha2_input));
+        let resp_input = format!("{}:{}:{}:{}:auth:{}", ha1, nonce, nc, cnonce, ha2);
+        let response_hash = format!("{:x}", md5::compute(&resp_input));
+
+        tracing::debug!(
+            ha1_input = %ha1_input,
+            ha1 = %ha1,
+            ha2_input = %ha2_input,
+            ha2 = %ha2,
+            resp_input = %resp_input,
+            response = %response_hash,
+            cnonce = %cnonce,
+            "SwOS fetch: computed digest"
+        );
 
         let auth_header = format!(
             r#"Digest username="{}", realm="{}", nonce="{}", uri="{}", qop=auth, nc={}, cnonce="{}", response="{}""#,
-            self.username, realm, nonce, path, nc, cnonce, response
+            self.username, realm, nonce, path, nc, cnonce, response_hash
         );
+
+        tracing::debug!(authorization = %auth_header, "SwOS fetch: sending authenticated request");
 
         // Second request with Authorization
         let resp = self
             .http
             .get(&url)
-            .header("Authorization", auth_header)
+            .header("Authorization", &auth_header)
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                tracing::error!(url = %url, error = %e, "SwOS fetch: auth request failed");
+                e
+            })?;
 
-        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let auth_status = resp.status();
+        tracing::debug!(url = %url, status = %auth_status, "SwOS fetch: auth response");
+
+        // Log response headers on failure
+        if auth_status != reqwest::StatusCode::OK {
+            for (name, value) in resp.headers() {
+                tracing::debug!(header = %name, value = ?value, "SwOS auth response header");
+            }
+        }
+
+        if auth_status == reqwest::StatusCode::UNAUTHORIZED {
+            tracing::error!(
+                url = %url,
+                auth_header = %auth_header,
+                "SwOS fetch: still 401 after auth — digest rejected"
+            );
             return Err(MikrotikError::AuthFailed);
         }
 
-        if !resp.status().is_success() {
+        if !auth_status.is_success() {
+            tracing::error!(url = %url, status = %auth_status.as_u16(), "SwOS fetch: non-success after auth");
             return Err(MikrotikError::RouterOs {
-                status: resp.status().as_u16(),
+                status: auth_status.as_u16(),
                 message: format!("request to {path} failed"),
                 detail: None,
             });
         }
 
-        Ok(resp.text().await?)
+        let body = resp.text().await?;
+        tracing::debug!(url = %url, body_len = body.len(), "SwOS fetch: success");
+        Ok(body)
     }
 
     /// Test connectivity by fetching system info. Returns the device identity.
