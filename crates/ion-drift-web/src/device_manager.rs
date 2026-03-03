@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use mikrotik_core::{MikrotikClient, MikrotikConfig};
+use mikrotik_core::{MikrotikClient, MikrotikConfig, SwosClient};
 use secrecy::ExposeSecret;
 use tokio::time::Instant;
 
@@ -18,9 +17,44 @@ pub enum DeviceStatus {
     Unknown,
 }
 
+/// Client variant for different device types.
+#[derive(Clone)]
+pub enum DeviceClient {
+    /// RouterOS REST API client (routers + RouterOS switches).
+    RouterOs(MikrotikClient),
+    /// SwOS HTTP API client.
+    SwOs(SwosClient),
+}
+
+impl DeviceClient {
+    /// Test connectivity and return the device identity string.
+    pub async fn test_connection(&self) -> Result<String, mikrotik_core::MikrotikError> {
+        match self {
+            DeviceClient::RouterOs(c) => c.test_connection().await,
+            DeviceClient::SwOs(c) => c.test_connection().await,
+        }
+    }
+
+    /// Get the RouterOS client, if this is a RouterOS device.
+    pub fn as_routeros(&self) -> Option<&MikrotikClient> {
+        match self {
+            DeviceClient::RouterOs(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Get the SwOS client, if this is a SwOS device.
+    pub fn as_swos(&self) -> Option<&SwosClient> {
+        match self {
+            DeviceClient::SwOs(c) => Some(c),
+            _ => None,
+        }
+    }
+}
+
 /// A device entry with its client, record, and runtime status.
 pub struct DeviceEntry {
-    pub client: MikrotikClient,
+    pub client: DeviceClient,
     pub record: DeviceRecord,
     pub status: DeviceStatus,
     pub last_poll: Option<Instant>,
@@ -58,48 +92,70 @@ impl DeviceManager {
                 }
             };
 
-            let ca_cert_path = record
-                .ca_cert_path
-                .as_deref()
-                .or(default_ca_cert)
-                .map(PathBuf::from);
+            let client = if record.device_type == "swos_switch" {
+                // SwOS devices use HTTP (no TLS)
+                let swos = SwosClient::new(
+                    record.host.clone(),
+                    record.port,
+                    username,
+                    password,
+                );
+                tracing::info!(
+                    id = %record.id,
+                    name = %record.name,
+                    host = %record.host,
+                    device_type = %record.device_type,
+                    "SwOS client created"
+                );
+                DeviceClient::SwOs(swos)
+            } else {
+                // RouterOS devices (router, switch)
+                let ca_cert_path = record
+                    .ca_cert_path
+                    .as_deref()
+                    .or(default_ca_cert)
+                    .map(PathBuf::from);
 
-            let config = MikrotikConfig {
-                host: record.host.clone(),
-                port: record.port,
-                tls: record.tls,
-                ca_cert_path,
-                username,
-                password,
+                let config = MikrotikConfig {
+                    host: record.host.clone(),
+                    port: record.port,
+                    tls: record.tls,
+                    ca_cert_path,
+                    username,
+                    password,
+                };
+
+                match MikrotikClient::new(config) {
+                    Ok(c) => {
+                        tracing::info!(
+                            id = %record.id,
+                            name = %record.name,
+                            host = %record.host,
+                            device_type = %record.device_type,
+                            "device client created"
+                        );
+                        DeviceClient::RouterOs(c)
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            id = %record.id,
+                            error = %e,
+                            "failed to create client for device"
+                        );
+                        continue;
+                    }
+                }
             };
 
-            match MikrotikClient::new(config) {
-                Ok(client) => {
-                    tracing::info!(
-                        id = %record.id,
-                        name = %record.name,
-                        host = %record.host,
-                        device_type = %record.device_type,
-                        "device client created"
-                    );
-                    devices.insert(
-                        record.id.clone(),
-                        DeviceEntry {
-                            client,
-                            record,
-                            status: DeviceStatus::Unknown,
-                            last_poll: None,
-                        },
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        id = %record.id,
-                        error = %e,
-                        "failed to create client for device"
-                    );
-                }
-            }
+            devices.insert(
+                record.id.clone(),
+                DeviceEntry {
+                    client,
+                    record,
+                    status: DeviceStatus::Unknown,
+                    last_poll: None,
+                },
+            );
         }
 
         Ok(Self { devices })
@@ -130,7 +186,7 @@ impl DeviceManager {
         devices.insert(
             "rb4011".to_string(),
             DeviceEntry {
-                client,
+                client: DeviceClient::RouterOs(client),
                 record,
                 status: DeviceStatus::Unknown,
                 last_poll: None,
@@ -152,11 +208,26 @@ impl DeviceManager {
             .find(|d| d.record.is_primary && d.record.device_type == "router")
     }
 
-    /// Get all switch entries.
+    /// Get the primary router's RouterOS client directly (backward compat).
+    pub fn get_router_client(&self) -> Option<MikrotikClient> {
+        self.get_router()
+            .and_then(|d| d.client.as_routeros())
+            .cloned()
+    }
+
+    /// Get all RouterOS switch entries.
     pub fn get_switches(&self) -> Vec<&DeviceEntry> {
         self.devices
             .values()
             .filter(|d| d.record.device_type == "switch")
+            .collect()
+    }
+
+    /// Get all SwOS switch entries.
+    pub fn get_swos_switches(&self) -> Vec<&DeviceEntry> {
+        self.devices
+            .values()
+            .filter(|d| d.record.device_type == "swos_switch")
             .collect()
     }
 
@@ -177,7 +248,7 @@ impl DeviceManager {
     }
 
     /// Add a device at runtime.
-    pub fn add_device(&mut self, record: DeviceRecord, client: MikrotikClient) {
+    pub fn add_device(&mut self, record: DeviceRecord, client: DeviceClient) {
         self.devices.insert(
             record.id.clone(),
             DeviceEntry {

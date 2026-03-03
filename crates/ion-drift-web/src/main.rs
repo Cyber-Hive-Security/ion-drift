@@ -21,6 +21,7 @@ mod setup;
 mod snapshots;
 mod state;
 mod switch_poller;
+mod swos_poller;
 mod syslog;
 
 use std::collections::HashMap;
@@ -203,8 +204,7 @@ async fn main() -> anyhow::Result<()> {
     // Get primary router client (backward compat — existing handlers use state.mikrotik)
     let mikrotik = {
         let dm = device_manager.read().await;
-        dm.get_router()
-            .map(|d| d.client.clone())
+        dm.get_router_client()
             .ok_or_else(|| anyhow::anyhow!("no primary router found in device manager"))?
     };
 
@@ -388,6 +388,7 @@ async fn main() -> anyhow::Result<()> {
     switch_poller::spawn_switch_pollers(device_manager.clone(), switch_store.clone());
     switch_poller::spawn_neighbor_poller(device_manager.clone(), switch_store.clone());
     switch_poller::spawn_device_health_check(device_manager.clone());
+    swos_poller::spawn_swos_pollers(device_manager.clone(), switch_store.clone());
     correlation_engine::spawn_correlation_engine(
         switch_store.clone(),
         app_state.oui_db.clone(),

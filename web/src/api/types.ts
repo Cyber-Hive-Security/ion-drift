@@ -903,6 +903,7 @@ export interface TestConnectionRequest {
   port?: number;
   tls?: boolean;
   ca_cert_path?: string;
+  device_type?: string;
   username: string;
   password: string;
 }

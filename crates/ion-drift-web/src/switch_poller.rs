@@ -5,9 +5,9 @@ use mikrotik_core::{MikrotikClient, SwitchStore};
 use mikrotik_core::switch_store::{PortMetricEntry, VlanMembershipEntry};
 use tokio::sync::RwLock;
 
-use crate::device_manager::{DeviceManager, DeviceStatus};
+use crate::device_manager::{DeviceClient, DeviceManager, DeviceStatus};
 
-/// Spawn switch pollers for all enabled switch devices.
+/// Spawn switch pollers for all enabled RouterOS switch devices.
 ///
 /// Each switch gets its own tokio task with an independent polling interval
 /// from its `poll_interval_secs` configuration.
@@ -24,7 +24,7 @@ pub fn spawn_switch_pollers(
         let switches = dm_read.get_switches();
 
         if switches.is_empty() {
-            tracing::info!("no switch devices configured, switch poller idle");
+            tracing::info!("no RouterOS switch devices configured, switch poller idle");
             return;
         }
 
@@ -32,7 +32,8 @@ pub fn spawn_switch_pollers(
             let device_id = entry.record.id.clone();
             let device_name = entry.record.name.clone();
             let poll_interval = entry.record.poll_interval_secs as u64;
-            let client = entry.client.clone();
+            // get_switches() only returns RouterOS switches, so unwrap is safe
+            let client = entry.client.as_routeros().cloned().unwrap();
             let store = switch_store.clone();
             let dm_ref = device_manager.clone();
 
@@ -226,7 +227,9 @@ async fn poll_switch(
     tracing::debug!(device = %device_id, "switch poll cycle complete");
 }
 
-/// Spawn a neighbor discovery poller that runs against ALL devices every 120s.
+/// Spawn a neighbor discovery poller that runs against RouterOS devices every 120s.
+///
+/// SwOS devices are skipped — they don't support LLDP/neighbor discovery.
 pub fn spawn_neighbor_poller(
     device_manager: Arc<RwLock<DeviceManager>>,
     switch_store: Arc<SwitchStore>,
@@ -234,7 +237,7 @@ pub fn spawn_neighbor_poller(
     tokio::spawn(async move {
         // 60-second startup delay
         tokio::time::sleep(Duration::from_secs(60)).await;
-        tracing::info!("neighbor discovery poller starting (all devices, 120s interval)");
+        tracing::info!("neighbor discovery poller starting (RouterOS devices, 120s interval)");
 
         let mut interval = tokio::time::interval(Duration::from_secs(120));
         interval.tick().await;
@@ -243,10 +246,15 @@ pub fn spawn_neighbor_poller(
             interval.tick().await;
 
             let dm_read = device_manager.read().await;
+            // Only poll RouterOS devices (SwOS has no LLDP)
             let devices: Vec<(String, MikrotikClient)> = dm_read
                 .all_devices()
                 .into_iter()
-                .map(|d| (d.record.id.clone(), d.client.clone()))
+                .filter_map(|d| {
+                    d.client
+                        .as_routeros()
+                        .map(|c| (d.record.id.clone(), c.clone()))
+                })
                 .collect();
             drop(dm_read);
 
@@ -286,6 +294,8 @@ pub fn spawn_neighbor_poller(
 }
 
 /// Spawn a device health check that pings all devices every 60s.
+///
+/// Works with both RouterOS and SwOS devices via `DeviceClient::test_connection()`.
 pub fn spawn_device_health_check(device_manager: Arc<RwLock<DeviceManager>>) {
     tokio::spawn(async move {
         // Brief startup delay to let device clients initialize
@@ -295,9 +305,10 @@ pub fn spawn_device_health_check(device_manager: Arc<RwLock<DeviceManager>>) {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
 
         loop {
+            interval.tick().await;
 
             let dm_read = device_manager.read().await;
-            let devices: Vec<(String, MikrotikClient)> = dm_read
+            let devices: Vec<(String, DeviceClient)> = dm_read
                 .all_devices()
                 .into_iter()
                 .map(|d| (d.record.id.clone(), d.client.clone()))

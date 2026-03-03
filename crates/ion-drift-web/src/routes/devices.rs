@@ -3,12 +3,11 @@ use std::path::PathBuf;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use secrecy::ExposeSecret;
 use serde::Deserialize;
 
-use mikrotik_core::{MikrotikClient, MikrotikConfig};
+use mikrotik_core::{MikrotikClient, MikrotikConfig, SwosClient};
 
-use crate::device_manager::{DeviceStatus, DeviceInfo};
+use crate::device_manager::{DeviceClient, DeviceStatus, DeviceInfo};
 use crate::middleware::RequireAuth;
 use crate::secrets::{NewDevice, UpdateDevice};
 use crate::state::AppState;
@@ -69,38 +68,56 @@ pub async fn create_device(
             .into_response()
     })?;
 
-    // Build client and test connection
-    let ca_cert_path = req
-        .device
-        .ca_cert_path
-        .as_deref()
-        .or(state.config.router.ca_cert_path.as_deref())
-        .map(PathBuf::from);
+    // Build client based on device type and test connection
+    let (client, identity) = if req.device.device_type == "swos_switch" {
+        let swos = SwosClient::new(
+            req.device.host.clone(),
+            req.device.port,
+            req.username.clone(),
+            req.password.clone(),
+        );
+        let identity = swos.test_connection().await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("connection test failed: {e}") })),
+            )
+                .into_response()
+        })?;
+        (DeviceClient::SwOs(swos), identity)
+    } else {
+        let ca_cert_path = req
+            .device
+            .ca_cert_path
+            .as_deref()
+            .or(state.config.router.ca_cert_path.as_deref())
+            .map(PathBuf::from);
 
-    let config = MikrotikConfig {
-        host: req.device.host.clone(),
-        port: req.device.port,
-        tls: req.device.tls,
-        ca_cert_path,
-        username: req.username.clone(),
-        password: req.password.clone(),
+        let config = MikrotikConfig {
+            host: req.device.host.clone(),
+            port: req.device.port,
+            tls: req.device.tls,
+            ca_cert_path,
+            username: req.username.clone(),
+            password: req.password.clone(),
+        };
+
+        let routeros = MikrotikClient::new(config).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("failed to create client: {e}") })),
+            )
+                .into_response()
+        })?;
+
+        let identity = routeros.test_connection().await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("connection test failed: {e}") })),
+            )
+                .into_response()
+        })?;
+        (DeviceClient::RouterOs(routeros), identity)
     };
-
-    let client = MikrotikClient::new(config).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("failed to create client: {e}") })),
-        )
-            .into_response()
-    })?;
-
-    let identity = client.test_connection().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": format!("connection test failed: {e}") })),
-        )
-            .into_response()
-    })?;
 
     // Store in database
     let sm_read = sm.read().await;
@@ -280,6 +297,7 @@ pub struct TestConnectionRequest {
     pub port: Option<u16>,
     pub tls: Option<bool>,
     pub ca_cert_path: Option<String>,
+    pub device_type: Option<String>,
     pub username: String,
     pub password: String,
 }
@@ -289,37 +307,58 @@ pub async fn test_connection(
     State(state): State<AppState>,
     Json(req): Json<TestConnectionRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let ca_cert_path = req
-        .ca_cert_path
-        .as_deref()
-        .or(state.config.router.ca_cert_path.as_deref())
-        .map(PathBuf::from);
+    let device_type = req.device_type.as_deref().unwrap_or("switch");
 
-    let config = MikrotikConfig {
-        host: req.host,
-        port: req.port.unwrap_or(443),
-        tls: req.tls.unwrap_or(true),
-        ca_cert_path,
-        username: req.username,
-        password: req.password,
-    };
+    if device_type == "swos_switch" {
+        let client = SwosClient::new(
+            req.host,
+            req.port.unwrap_or(80),
+            req.username,
+            req.password,
+        );
+        match client.test_connection().await {
+            Ok(identity) => Ok(Json(serde_json::json!({
+                "status": "online",
+                "identity": identity
+            }))),
+            Err(e) => Ok(Json(serde_json::json!({
+                "status": "offline",
+                "error": e.to_string()
+            }))),
+        }
+    } else {
+        let ca_cert_path = req
+            .ca_cert_path
+            .as_deref()
+            .or(state.config.router.ca_cert_path.as_deref())
+            .map(PathBuf::from);
 
-    let client = MikrotikClient::new(config).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("failed to create client: {e}") })),
-        )
-            .into_response()
-    })?;
+        let config = MikrotikConfig {
+            host: req.host,
+            port: req.port.unwrap_or(443),
+            tls: req.tls.unwrap_or(true),
+            ca_cert_path,
+            username: req.username,
+            password: req.password,
+        };
 
-    match client.test_connection().await {
-        Ok(identity) => Ok(Json(serde_json::json!({
-            "status": "online",
-            "identity": identity
-        }))),
-        Err(e) => Ok(Json(serde_json::json!({
-            "status": "offline",
-            "error": e.to_string()
-        }))),
+        let client = MikrotikClient::new(config).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("failed to create client: {e}") })),
+            )
+                .into_response()
+        })?;
+
+        match client.test_connection().await {
+            Ok(identity) => Ok(Json(serde_json::json!({
+                "status": "online",
+                "identity": identity
+            }))),
+            Err(e) => Ok(Json(serde_json::json!({
+                "status": "offline",
+                "error": e.to_string()
+            }))),
+        }
     }
 }

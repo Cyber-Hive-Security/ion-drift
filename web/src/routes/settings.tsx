@@ -73,7 +73,7 @@ function NetworkDevicesSection() {
     host: "",
     port: "443",
     tls: true,
-    device_type: "switch" as "router" | "switch",
+    device_type: "switch" as "router" | "switch" | "swos_switch",
     model: "",
     poll_interval_secs: "60",
     username: "",
@@ -105,8 +105,9 @@ function NetworkDevicesSection() {
     setTestResult(null);
     const result = await testConnection.mutateAsync({
       host: form.host,
-      port: parseInt(form.port) || 443,
+      port: parseInt(form.port) || (form.device_type === "swos_switch" ? 80 : 443),
       tls: form.tls,
+      device_type: form.device_type,
       username: form.username,
       password: form.password,
     });
@@ -114,11 +115,12 @@ function NetworkDevicesSection() {
   };
 
   const handleAdd = async () => {
+    const defaultPort = form.device_type === "swos_switch" ? 80 : 443;
     const payload: CreateDeviceRequest = {
       id: form.id,
       name: form.name,
       host: form.host,
-      port: parseInt(form.port) || 443,
+      port: parseInt(form.port) || defaultPort,
       tls: form.tls,
       device_type: form.device_type,
       model: form.model || undefined,
@@ -208,7 +210,7 @@ function NetworkDevicesSection() {
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{device.name}</span>
                   <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground uppercase">
-                    {device.device_type}
+                    {device.device_type === "swos_switch" ? "SwOS" : device.device_type}
                   </span>
                   {device.is_primary && (
                     <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
@@ -449,16 +451,22 @@ function NetworkDevicesSection() {
               </label>
               <select
                 value={form.device_type}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    device_type: e.target.value as "router" | "switch",
-                  })
-                }
+                onChange={(e) => {
+                  const dt = e.target.value as "router" | "switch" | "swos_switch";
+                  if (dt === "swos_switch") {
+                    setForm({ ...form, device_type: dt, port: "80", tls: false });
+                  } else if (form.device_type === "swos_switch") {
+                    // Switching away from SwOS — restore RouterOS defaults
+                    setForm({ ...form, device_type: dt, port: "443", tls: true });
+                  } else {
+                    setForm({ ...form, device_type: dt });
+                  }
+                }}
                 className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
               >
-                <option value="switch">Switch</option>
+                <option value="switch">Switch (RouterOS)</option>
                 <option value="router">Router</option>
+                <option value="swos_switch">Switch (SwOS)</option>
               </select>
             </div>
             <div>

@@ -6,6 +6,7 @@ use serde::Deserialize;
 use mikrotik_core::resources::system::SystemResource;
 use mikrotik_core::resources::interface::Interface;
 
+use crate::device_manager::DeviceClient;
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 
@@ -44,7 +45,16 @@ pub async fn device_resources(
         )
             .into_response()
     })?;
-    let client = entry.client.clone();
+    let client = match &entry.client {
+        DeviceClient::RouterOs(c) => c.clone(),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "system resources not available for this device type" })),
+            )
+                .into_response());
+        }
+    };
     drop(dm);
 
     let res: SystemResource = client.system_resources().await.map_err(api_error)?;
@@ -66,7 +76,16 @@ pub async fn device_interfaces(
         )
             .into_response()
     })?;
-    let client = entry.client.clone();
+    let client = match &entry.client {
+        DeviceClient::RouterOs(c) => c.clone(),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "interfaces not available for this device type" })),
+            )
+                .into_response());
+        }
+    };
     drop(dm);
 
     let interfaces: Vec<Interface> = client.interfaces().await.map_err(api_error)?;
