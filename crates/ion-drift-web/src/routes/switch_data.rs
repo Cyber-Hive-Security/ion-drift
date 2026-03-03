@@ -45,20 +45,52 @@ pub async fn device_resources(
         )
             .into_response()
     })?;
-    let client = match &entry.client {
-        DeviceClient::RouterOs(c) => c.clone(),
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "system resources not available for this device type" })),
-            )
-                .into_response());
-        }
-    };
-    drop(dm);
 
-    let res: SystemResource = client.system_resources().await.map_err(api_error)?;
-    Ok(Json(serde_json::to_value(res).unwrap()))
+    match &entry.client {
+        DeviceClient::RouterOs(c) => {
+            let client = c.clone();
+            drop(dm);
+            let res: SystemResource = client.system_resources().await.map_err(api_error)?;
+            Ok(Json(serde_json::to_value(res).unwrap()))
+        }
+        DeviceClient::SwOs(c) => {
+            let client = c.clone();
+            drop(dm);
+            let sys = client.get_system().await.map_err(api_error)?;
+            // Map SwOS system info into a SystemResource-shaped JSON so the
+            // frontend switch detail page can render it without a separate type.
+            let uptime_str = format_uptime_secs(sys.uptime_secs);
+            Ok(Json(serde_json::json!({
+                "uptime": uptime_str,
+                "version": sys.firmware_version,
+                "board-name": sys.board_name,
+                "platform": "SwOS",
+                "cpu": "SwOS",
+                "cpu-count": 0,
+                "cpu-frequency": 0,
+                "cpu-load": 0,
+                "total-memory": 0,
+                "free-memory": 0,
+                "free-hdd-space": 0,
+                "total-hdd-space": 0,
+                "mac-address": sys.mac_address,
+            })))
+        }
+    }
+}
+
+/// Format seconds into a human-readable uptime string like "3d 12h 5m".
+fn format_uptime_secs(secs: u64) -> String {
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let minutes = (secs % 3600) / 60;
+    if days > 0 {
+        format!("{days}d {hours}h {minutes}m")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{minutes}m")
+    }
 }
 
 // ── GET /api/devices/{id}/interfaces ─────────────────────────────
@@ -78,12 +110,10 @@ pub async fn device_interfaces(
     })?;
     let client = match &entry.client {
         DeviceClient::RouterOs(c) => c.clone(),
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "interfaces not available for this device type" })),
-            )
-                .into_response());
+        // SwOS has no interface concept — return empty array
+        DeviceClient::SwOs(_) => {
+            drop(dm);
+            return Ok(Json(serde_json::json!([])));
         }
     };
     drop(dm);

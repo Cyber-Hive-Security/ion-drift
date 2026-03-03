@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { formatUptime, percentColor } from "@/lib/format";
 import type { SystemResource, NetworkDevice } from "@/api/types";
-import { Server, Cpu, MemoryStick, Clock, Wifi } from "lucide-react";
+import { Server, Cpu, MemoryStick, Clock, Wifi, Hash } from "lucide-react";
 
 interface SystemInfoBarProps {
   resource: SystemResource;
@@ -9,6 +9,7 @@ interface SystemInfoBarProps {
 }
 
 export function SystemInfoBar({ resource, device }: SystemInfoBarProps) {
+  const isSwos = resource.platform === "SwOS";
   const cpuLoad = resource["cpu-load"];
   const totalMem = parseInt(String(resource["total-memory"])) || 0;
   const freeMem = parseInt(String(resource["free-memory"])) || 0;
@@ -45,9 +46,9 @@ export function SystemInfoBar({ resource, device }: SystemInfoBarProps) {
           </span>
         </div>
 
-        {/* RouterOS version */}
+        {/* OS version */}
         <div className="text-xs text-muted-foreground">
-          RouterOS {resource.version}
+          {isSwos ? "SwOS" : "RouterOS"} {resource.version}
         </div>
 
         {/* Board name */}
@@ -63,39 +64,53 @@ export function SystemInfoBar({ resource, device }: SystemInfoBarProps) {
           </span>
         </div>
 
-        {/* CPU */}
-        <div className="flex items-center gap-1.5">
-          <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className={cn("text-xs font-medium", percentColor(cpuLoad))}>
-            {cpuLoad}%
-          </span>
-          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-            <div
-              className={cn(
-                "h-full rounded-full transition-all",
-                cpuLoad >= 90 ? "bg-destructive" : cpuLoad >= 70 ? "bg-warning" : "bg-success",
-              )}
-              style={{ width: `${cpuLoad}%` }}
-            />
+        {/* CPU — RouterOS only */}
+        {!isSwos && (
+          <div className="flex items-center gap-1.5">
+            <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className={cn("text-xs font-medium", percentColor(cpuLoad))}>
+              {cpuLoad}%
+            </span>
+            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  cpuLoad >= 90 ? "bg-destructive" : cpuLoad >= 70 ? "bg-warning" : "bg-success",
+                )}
+                style={{ width: `${cpuLoad}%` }}
+              />
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Memory */}
-        <div className="flex items-center gap-1.5">
-          <MemoryStick className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className={cn("text-xs font-medium", percentColor(memPct))}>
-            {memPct}%
-          </span>
-          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-            <div
-              className={cn(
-                "h-full rounded-full transition-all",
-                memPct >= 90 ? "bg-destructive" : memPct >= 70 ? "bg-warning" : "bg-success",
-              )}
-              style={{ width: `${memPct}%` }}
-            />
+        {/* Memory — RouterOS only */}
+        {!isSwos && (
+          <div className="flex items-center gap-1.5">
+            <MemoryStick className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className={cn("text-xs font-medium", percentColor(memPct))}>
+              {memPct}%
+            </span>
+            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  memPct >= 90 ? "bg-destructive" : memPct >= 70 ? "bg-warning" : "bg-success",
+                )}
+                style={{ width: `${memPct}%` }}
+              />
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* MAC address — SwOS only */}
+        {isSwos && resource["mac-address"] && (
+          <div className="flex items-center gap-1.5">
+            <Hash className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-xs font-mono text-muted-foreground">
+              {resource["mac-address"]}
+            </span>
+          </div>
+        )}
 
         {/* Management IP */}
         {device && (

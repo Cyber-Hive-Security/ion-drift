@@ -30,6 +30,7 @@ export interface SystemResource {
   "architecture-name"?: string;
   "board-name": string;
   platform: string;
+  "mac-address"?: string;
 }
 
 export interface SystemIdentity {
