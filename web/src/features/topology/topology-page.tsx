@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   useNetworkTopology,
   useRefreshTopology,
@@ -166,13 +166,16 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
 function VlanFilterBar({
   activeVlans,
   onToggle,
+  dataVlans,
 }: {
   activeVlans: Set<number> | null;
   onToggle: (vlan: number) => void;
+  dataVlans: number[];
 }) {
-  const vlans = Object.keys(VLAN_COLORS)
-    .map(Number)
-    .sort((a, b) => a - b);
+  // Only show VLANs that actually have data, sorted by ID
+  const vlans = dataVlans.length > 0
+    ? [...dataVlans].sort((a, b) => a - b)
+    : Object.keys(VLAN_COLORS).map(Number).sort((a, b) => a - b);
 
   return (
     <div className="flex flex-wrap gap-1">
@@ -213,6 +216,14 @@ export function TopologyPage() {
   const topology = useNetworkTopology();
   const refreshMutation = useRefreshTopology();
   const positionMutation = useUpdateNodePosition();
+
+  // Derive VLANs actually present in topology data (for filter pills)
+  const dataVlans = useMemo(() => {
+    if (!topology.data) return [];
+    const vlans = new Set<number>();
+    topology.data.vlan_groups.forEach((g) => vlans.add(g.vlan_id));
+    return Array.from(vlans);
+  }, [topology.data]);
 
   // ── Initialize D3 instance ──
   useEffect(() => {
@@ -262,8 +273,7 @@ export function TopologyPage() {
     setVlanFilter((prev) => {
       if (prev === null) {
         // All are active, toggling one off → show all except this one
-        const allVlans = Object.keys(VLAN_COLORS).map(Number);
-        const next = new Set(allVlans.filter((v) => v !== vlan));
+        const next = new Set(dataVlans.filter((v) => v !== vlan));
         return next;
       }
       const next = new Set(prev);
@@ -274,11 +284,11 @@ export function TopologyPage() {
       } else {
         next.add(vlan);
         // If all are added back, reset to null
-        if (next.size === Object.keys(VLAN_COLORS).length) return null;
+        if (next.size === dataVlans.length) return null;
       }
       return next;
     });
-  }, []);
+  }, [dataVlans]);
 
   const handleResetView = useCallback(() => {
     mapRef.current?.resetView();
@@ -319,7 +329,7 @@ export function TopologyPage() {
         </div>
 
         {/* VLAN chips */}
-        <VlanFilterBar activeVlans={vlanFilter} onToggle={handleVlanToggle} />
+        <VlanFilterBar activeVlans={vlanFilter} onToggle={handleVlanToggle} dataVlans={dataVlans} />
 
         <div className="flex-1" />
 

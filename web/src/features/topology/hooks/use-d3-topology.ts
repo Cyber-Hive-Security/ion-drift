@@ -142,7 +142,10 @@ export function createTopologyMapInstance(
   }
 
   function edgeDash(edge: TopologyEdge): string {
-    return edge.kind === "wireless" ? "4,3" : "none";
+    if (edge.kind === "wireless") return "4,3";
+    // Inferred access edge: device is downstream but exact port unknown
+    if (edge.kind === "access" && !edge.source_port) return "3,3";
+    return "none";
   }
 
   function edgeColor(edge: TopologyEdge): string {
@@ -298,7 +301,11 @@ export function createTopologyMapInstance(
     if (node.vlan_id != null) lines.push(`<span style="color:#999">VLAN:</span> ${node.vlan_id}`);
     if (node.device_type) lines.push(`<span style="color:#999">Type:</span> ${node.device_type}`);
     if (node.manufacturer) lines.push(`<span style="color:#999">Mfg:</span> ${node.manufacturer}`);
-    if (node.switch_port) lines.push(`<span style="color:#999">Port:</span> ${node.switch_port}`);
+    if (node.switch_port) {
+      lines.push(`<span style="color:#999">Port:</span> ${node.switch_port}`);
+    } else if (node.parent_id) {
+      lines.push(`<span style="color:#999">Port:</span> <em style="color:#777">unknown — downstream of ${node.parent_id}</em>`);
+    }
     tip.innerHTML = lines.join("<br>");
     tip.style.display = "block";
     tip.style.left = `${event.clientX + 12}px`;

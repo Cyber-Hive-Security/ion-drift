@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -173,11 +173,54 @@ async fn run_correlation(
     let all_macs = store.get_mac_table(None).await?;
     let all_neighbors = store.get_neighbors(None).await?;
 
-    // Build a map: MAC → best known info
-    let mut identity_map: std::collections::HashMap<String, IdentityBuilder> =
-        std::collections::HashMap::new();
+    // ── 2a. Trunk port detection + peer resolution ──────────────
+    // Identify trunk/uplink ports so we can deprioritise their MAC bindings.
+    // MACs learned on a trunk port are *transiting*, not directly connected.
+    let port_roles = store.get_port_roles(None).await.unwrap_or_default();
+    let trunk_ports: HashSet<(String, String)> = port_roles
+        .iter()
+        .filter(|r| r.role == "trunk" || r.role == "uplink")
+        .map(|r| (r.device_id.clone(), r.port_name.clone()))
+        .collect();
 
-    // From MAC table — skip switch-local MACs (exact flag or sequential range)
+    // Build device resolution maps for LLDP identity → device_id
+    let dm_read = device_manager.read().await;
+    let mut lldp_identity_to_device: HashMap<String, String> = HashMap::new();
+    let mut lldp_ip_to_device: HashMap<String, String> = HashMap::new();
+    for entry in dm_read.all_devices() {
+        lldp_identity_to_device.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
+        lldp_identity_to_device.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
+        lldp_ip_to_device.insert(entry.record.host.clone(), entry.record.id.clone());
+    }
+    drop(dm_read);
+
+    // Build trunk peer map: (device_id, normalized_port) → peer_device_id.
+    // When a MAC is only seen on a trunk port, we redirect it to the peer
+    // device (e.g. router's trunk to CRS326 → attribute MAC to CRS326).
+    let mut trunk_peer: HashMap<(String, String), String> = HashMap::new();
+    for nb in &all_neighbors {
+        let resolved = nb
+            .identity
+            .as_deref()
+            .and_then(|id| lldp_identity_to_device.get(&id.to_lowercase()).cloned())
+            .or_else(|| {
+                nb.address
+                    .as_deref()
+                    .and_then(|addr| lldp_ip_to_device.get(addr).cloned())
+            });
+        if let Some(peer_id) = resolved {
+            // Normalize LLDP interface: "1-sfp-sfpplus,B-VLANs" → "1-sfp-sfpplus"
+            let port = nb.interface.split(',').next().unwrap_or(&nb.interface);
+            trunk_peer.insert((nb.device_id.clone(), port.to_string()), peer_id);
+        }
+    }
+
+    // Build a map: MAC → best known info
+    let mut identity_map: HashMap<String, IdentityBuilder> = HashMap::new();
+
+    // From MAC table — priority-based binding.
+    // Access port (directly connected) beats switch trunk (downstream aggregation)
+    // which beats router trunk (sees everything via ARP gateway).
     for entry in &all_macs {
         if entry.is_local {
             continue;
@@ -185,13 +228,56 @@ async fn run_correlation(
         if is_switch_local_mac(&entry.mac_address, &switch_local_macs) {
             continue;
         }
+
+        let is_trunk = trunk_ports.contains(&(entry.device_id.clone(), entry.port_name.clone()));
+        let is_router = entry.device_id == router_id;
+        let new_priority: u8 = match (is_trunk, is_router) {
+            (true, true) => 1,  // Router trunk: lowest (sees every MAC via ARP)
+            (true, false) => 2, // Switch trunk: medium (downstream aggregation)
+            (false, _) => 3,    // Access port: highest (directly connected)
+        };
+
         let builder = identity_map
             .entry(entry.mac_address.to_uppercase())
             .or_insert_with(IdentityBuilder::default);
-        builder.switch_device_id = Some(entry.device_id.clone());
-        builder.switch_port = Some(entry.port_name.clone());
+
+        // Only update switch binding if new priority >= existing
+        if new_priority >= builder.binding_priority {
+            builder.switch_device_id = Some(entry.device_id.clone());
+            builder.switch_port = Some(entry.port_name.clone());
+            builder.binding_priority = new_priority;
+        }
+
         if entry.vlan_id.is_some() {
             builder.vlan_id = entry.vlan_id;
+        }
+    }
+
+    // ── 2b. Trunk redirection ───────────────────────────────────
+    // MACs still bound to a trunk port get redirected to the peer device on
+    // that trunk. Example: router sees VM MAC on 1-sfp-sfpplus (trunk to
+    // CRS326) → redirect to CRS326 with port=None (exact port unknown).
+    {
+        let mut redirected = 0u32;
+        for builder in identity_map.values_mut() {
+            let dev = builder.switch_device_id.clone();
+            let port = builder.switch_port.clone();
+            if let (Some(dev), Some(port)) = (dev, port) {
+                if trunk_ports.contains(&(dev.clone(), port.clone())) {
+                    let normalized = port.split(',').next().unwrap_or(&port);
+                    if let Some(peer_id) =
+                        trunk_peer.get(&(dev.clone(), normalized.to_string()))
+                    {
+                        builder.switch_device_id = Some(peer_id.clone());
+                        builder.switch_port = None;
+                        builder.binding_priority = 2; // lower than access
+                        redirected += 1;
+                    }
+                }
+            }
+        }
+        if redirected > 0 {
+            tracing::info!(count = redirected, "trunk port MACs redirected to peer device");
         }
     }
 
@@ -500,6 +586,9 @@ struct IdentityBuilder {
     device_type: Option<String>,
     device_type_source: Option<String>,
     device_type_confidence: f64,
+    /// Priority of the current switch binding (0=none, 1=router-trunk, 2=switch-trunk, 3=access).
+    /// Higher priority bindings are not overwritten by lower ones.
+    binding_priority: u8,
 }
 
 impl IdentityBuilder {
