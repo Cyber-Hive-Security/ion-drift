@@ -41,7 +41,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const behaviorAlerts = useBehaviorAlerts();
   const pendingAnomalies = behaviorAlerts.data?.pending_count ?? 0;
   const { data: devices = [] } = useDevices();
-  const switchDevices = devices.filter((d) => d.device_type === "switch");
+  const switchDevices = devices.filter((d) => d.device_type === "switch" || d.device_type === "swos_switch");
 
   const navContent = (
     <>
