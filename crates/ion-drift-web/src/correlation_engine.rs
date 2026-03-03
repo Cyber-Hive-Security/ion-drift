@@ -56,8 +56,40 @@ async fn run_correlation(
     // ── 1. Port role classification ───────────────────────────────
     let dm_read = device_manager.read().await;
     let switches = dm_read.get_switches();
-    let device_ids: Vec<String> = switches.iter().map(|d| d.record.id.clone()).collect();
+    let switch_ids: Vec<String> = switches.iter().map(|d| d.record.id.clone()).collect();
+    let router_id = dm_read
+        .get_router()
+        .map(|r| r.record.id.clone())
+        .unwrap_or_else(|| "rb4011".to_string());
     drop(dm_read);
+
+    // Fetch the router's bridge hosts so its local MACs enter the MAC table.
+    // Without this, the router's port MACs (seen by switches on trunk ports)
+    // would never be identified as switch-local and would leak into identities.
+    match router_client.bridge_hosts().await {
+        Ok(hosts) => {
+            for host in &hosts {
+                let on_iface = host.on_interface.as_deref().unwrap_or("");
+                let is_local = host.local.unwrap_or(false);
+                if let Err(e) = store
+                    .upsert_mac_entry(
+                        &router_id,
+                        &host.mac_address,
+                        on_iface,
+                        &host.bridge,
+                        None,
+                        is_local,
+                    )
+                    .await
+                {
+                    tracing::warn!(mac = %host.mac_address, "router bridge host upsert: {e}");
+                }
+            }
+        }
+        Err(e) => tracing::warn!("correlation: router bridge_hosts fetch failed: {e}"),
+    }
+
+    let device_ids: Vec<String> = switch_ids.clone();
 
     for device_id in &device_ids {
         let mac_entries = store.get_mac_table(Some(device_id)).await?;
@@ -111,11 +143,31 @@ async fn run_correlation(
     }
 
     // ── 1b. Build switch-local MAC ranges ─────────────────────────
-    // Manufacturers assign sequential MACs to switch ports. By collecting
-    // all is_local=true MACs per switch and computing [min, max], we can
-    // identify the full block — catching switch MACs even when they appear
-    // from other data sources (ARP, DHCP, neighbor tables).
-    let switch_local_macs = build_switch_local_mac_set(store, &device_ids).await;
+    // Manufacturers assign sequential MACs to switch/router ports. By collecting
+    // all is_local=true MACs per device and computing [min, max], we can
+    // identify the full block — catching infrastructure MACs even when they
+    // appear from other data sources (ARP, DHCP, neighbor tables, or
+    // other switches' MAC tables where they are NOT marked local).
+    let mut all_infra_ids = device_ids.clone();
+    all_infra_ids.push(router_id.clone());
+    let switch_local_macs = build_switch_local_mac_set(store, &all_infra_ids).await;
+
+    // Clean up any existing identities that we now recognise as infrastructure MACs.
+    // These may have been created in earlier cycles before the range was computed.
+    if !switch_local_macs.is_empty() {
+        let existing = store.get_network_identities().await.unwrap_or_default();
+        let mut purged = 0u32;
+        for ident in &existing {
+            if is_switch_local_mac(&ident.mac_address, &switch_local_macs) {
+                if let Ok(true) = store.delete_network_identity(&ident.mac_address).await {
+                    purged += 1;
+                }
+            }
+        }
+        if purged > 0 {
+            tracing::info!(count = purged, "purged infrastructure MAC identities");
+        }
+    }
 
     // ── 2. Unified identity assembly ──────────────────────────────
     let all_macs = store.get_mac_table(None).await?;
@@ -143,12 +195,15 @@ async fn run_correlation(
         }
     }
 
-    // From neighbor discovery
+    // From neighbor discovery — skip infrastructure MACs
     for nb in &all_neighbors {
         let mac = match &nb.mac_address {
             Some(m) if !m.is_empty() => m.to_uppercase(),
             _ => continue,
         };
+        if is_switch_local_mac(&mac, &switch_local_macs) {
+            continue;
+        }
         let builder = identity_map
             .entry(mac)
             .or_insert_with(IdentityBuilder::default);

@@ -212,16 +212,41 @@ pub async fn compute_topology(
     // 1b. LLDP/MNDP neighbors → trunk edges + inferred infrastructure
     let neighbors = store.get_neighbors(None).await?;
 
-    // Build mappings: identity/name/IP → registered device ID
+    // Build mappings: identity/name/IP/MAC → registered device ID
+    // Multiple keys can map to the same device to handle LLDP reporting
+    // alternate names (e.g. RouterOS identity vs registered name).
     let dm = device_manager.read().await;
     let mut identity_to_device: HashMap<String, String> = HashMap::new();
     let mut ip_to_device: HashMap<String, String> = HashMap::new();
+    let mut mac_to_device: HashMap<String, String> = HashMap::new();
     for entry in dm.all_devices() {
         identity_to_device.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
         identity_to_device.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
         ip_to_device.insert(entry.record.host.clone(), entry.record.id.clone());
     }
     drop(dm);
+
+    // Also build MAC → device from neighbor records: if a neighbor was seen
+    // FROM a device and matches a registered device, record the neighbor MAC
+    // so we can dedup later even when identity names don't match.
+    for nb in &neighbors {
+        if let Some(ref mac) = nb.mac_address {
+            // If this neighbor's identity or IP resolves to a registered device,
+            // associate its MAC with that device too.
+            let resolved = nb
+                .identity
+                .as_deref()
+                .and_then(|id| identity_to_device.get(&id.to_lowercase()).cloned())
+                .or_else(|| {
+                    nb.address
+                        .as_deref()
+                        .and_then(|addr| ip_to_device.get(addr).cloned())
+                });
+            if let Some(dev_id) = resolved {
+                mac_to_device.insert(mac.to_uppercase(), dev_id);
+            }
+        }
+    }
 
     // Track edges we've already created (both directions)
     let mut edge_set: HashSet<(String, String)> = HashSet::new();
@@ -230,7 +255,10 @@ pub async fn compute_topology(
         let source_device = nb.device_id.clone();
         let source_port = nb.interface.clone();
 
-        // Try to match neighbor to a registered device (by identity name, then IP)
+        // Try to match neighbor to a registered device:
+        //   1. By LLDP identity name
+        //   2. By IP address
+        //   3. By MAC address (catches routers whose LLDP identity differs from registered name)
         let remote_id = nb
             .identity
             .as_deref()
@@ -239,7 +267,27 @@ pub async fn compute_topology(
                 nb.address
                     .as_deref()
                     .and_then(|addr| ip_to_device.get(addr).cloned())
+            })
+            .or_else(|| {
+                nb.mac_address
+                    .as_deref()
+                    .and_then(|mac| mac_to_device.get(&mac.to_uppercase()).cloned())
             });
+
+        // When we DO match, learn the identity name → device mapping so future
+        // lookups from other switches also match (e.g., "MT-4011-R-Office" → "rb4011").
+        if let Some(ref matched_id) = remote_id {
+            if let Some(ref ident) = nb.identity {
+                identity_to_device
+                    .entry(ident.to_lowercase())
+                    .or_insert_with(|| matched_id.clone());
+            }
+            if let Some(ref mac) = nb.mac_address {
+                mac_to_device
+                    .entry(mac.to_uppercase())
+                    .or_insert_with(|| matched_id.clone());
+            }
+        }
 
         if let Some(ref target_id) = remote_id {
             // Known registered device — trunk edge

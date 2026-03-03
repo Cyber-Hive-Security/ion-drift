@@ -689,6 +689,16 @@ impl SwitchStore {
         Ok(())
     }
 
+    /// Delete a network identity by MAC address.
+    pub async fn delete_network_identity(&self, mac_address: &str) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let rows = db.execute(
+            "DELETE FROM network_identities WHERE mac_address = ?1",
+            params![mac_address],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Get all network identity records.
     pub async fn get_network_identities(&self) -> Result<Vec<NetworkIdentity>, rusqlite::Error> {
         let db = self.db.lock().await;

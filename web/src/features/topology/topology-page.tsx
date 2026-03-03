@@ -361,7 +361,7 @@ export function TopologyPage() {
         <svg
           ref={svgRef}
           className="h-full w-full"
-          style={{ background: "#0a0a1e" }}
+          style={{ background: "#0d0d24" }}
         />
 
         {/* Detail Panel */}

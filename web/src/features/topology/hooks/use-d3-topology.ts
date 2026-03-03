@@ -16,6 +16,8 @@ import { VLAN_COLORS } from "@/constants/vlans";
 
 const MAP_WIDTH = 4000;
 const MAP_HEIGHT = 3000;
+const INFRA_LABEL_MAX = 24;
+const ENDPOINT_LABEL_MAX = 16;
 
 // ─── Public Types ───────────────────────────────────────
 
@@ -36,6 +38,12 @@ export interface TopologyMapInstance {
   setEndpointsVisible: (visible: boolean) => void;
 }
 
+// ─── Helpers ───────────────────────────────────────────
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
+}
+
 // ─── Factory ────────────────────────────────────────────
 
 export function createTopologyMapInstance(
@@ -48,7 +56,7 @@ export function createTopologyMapInstance(
     if (node.kind === "router") return "#ffd700";
     if (node.vlan_id != null && VLAN_COLORS[node.vlan_id]) return VLAN_COLORS[node.vlan_id];
     if (node.is_infrastructure) return "#00e5ff";
-    return "#888888";
+    return "#aaaaaa";
   }
 
   function nodeRadius(node: TopologyNode): number {
@@ -74,7 +82,6 @@ export function createTopologyMapInstance(
     const color = nodeColor(node);
 
     if (node.kind === "router") {
-      // Rounded rectangle
       g.append("rect")
         .attr("x", -20)
         .attr("y", -15)
@@ -82,11 +89,10 @@ export function createTopologyMapInstance(
         .attr("height", 30)
         .attr("rx", 6)
         .attr("fill", color)
-        .attr("fill-opacity", 0.15)
+        .attr("fill-opacity", 0.3)
         .attr("stroke", color)
-        .attr("stroke-width", 2);
+        .attr("stroke-width", 2.5);
     } else if (node.kind === "managed_switch" || node.kind === "unmanaged_switch") {
-      // Rectangle
       g.append("rect")
         .attr("x", -18)
         .attr("y", -12)
@@ -94,18 +100,16 @@ export function createTopologyMapInstance(
         .attr("height", 24)
         .attr("rx", 3)
         .attr("fill", color)
-        .attr("fill-opacity", 0.15)
+        .attr("fill-opacity", 0.25)
         .attr("stroke", color)
-        .attr("stroke-width", 1.5);
+        .attr("stroke-width", 2);
     } else if (node.kind === "access_point") {
-      // Circle with signal arcs
       g.append("circle")
         .attr("r", r)
         .attr("fill", color)
-        .attr("fill-opacity", 0.15)
+        .attr("fill-opacity", 0.25)
         .attr("stroke", color)
-        .attr("stroke-width", 1.5);
-      // Signal arcs
+        .attr("stroke-width", 2);
       for (let i = 1; i <= 2; i++) {
         g.append("path")
           .attr("d", d3.arc()({
@@ -115,16 +119,15 @@ export function createTopologyMapInstance(
             endAngle: Math.PI / 3,
           })!)
           .attr("fill", color)
-          .attr("opacity", 0.4);
+          .attr("opacity", 0.6);
       }
     } else {
-      // Circle for everything else
       g.append("circle")
         .attr("r", r)
         .attr("fill", color)
-        .attr("fill-opacity", node.is_infrastructure ? 0.2 : 0.12)
+        .attr("fill-opacity", node.is_infrastructure ? 0.3 : 0.2)
         .attr("stroke", color)
-        .attr("stroke-width", node.is_infrastructure ? 1.5 : 1);
+        .attr("stroke-width", node.is_infrastructure ? 2 : 1.5);
     }
   }
 
@@ -146,7 +149,7 @@ export function createTopologyMapInstance(
     if (edge.kind === "uplink") return "#ffd700";
     if (edge.kind === "trunk") return "#00e5ff";
     if (edge.vlans.length === 1 && VLAN_COLORS[edge.vlans[0]]) return VLAN_COLORS[edge.vlans[0]];
-    return "#555555";
+    return "#666666";
   }
 
   function matchesSearch(node: TopologyNode, term: string): boolean {
@@ -165,7 +168,6 @@ export function createTopologyMapInstance(
 
   function isNew(node: TopologyNode): boolean {
     if (!node.first_seen) return false;
-    // first_seen is Unix epoch in seconds
     return Date.now() - node.first_seen * 1000 < 86400_000;
   }
 
@@ -177,6 +179,7 @@ export function createTopologyMapInstance(
   let kindFilter: Set<string> | null = null;
   let showEndpoints = true;
   let tooltip: HTMLDivElement | null = null;
+  let hasInitialFit = false;
 
   // ── SVG setup ──
   const svg = d3
@@ -212,10 +215,10 @@ export function createTopologyMapInstance(
     m.append("feMergeNode").attr("in", "SourceGraphic");
   }
 
-  addGlowFilter("glow-active", "#00ff88", 0.3, 4);
-  addGlowFilter("glow-inactive", "#ff4444", 0.3, 4);
-  addGlowFilter("glow-anomaly", "#ffaa00", 0.45, 5);
-  addGlowFilter("glow-selected", "#ffffff", 0.5, 6);
+  addGlowFilter("glow-active", "#00ff88", 0.4, 4);
+  addGlowFilter("glow-inactive", "#ff4444", 0.4, 4);
+  addGlowFilter("glow-anomaly", "#ffaa00", 0.5, 5);
+  addGlowFilter("glow-selected", "#ffffff", 0.6, 6);
 
   // Soft glow for general node hover
   const fSoft = defs
@@ -256,7 +259,7 @@ export function createTopologyMapInstance(
         .append("line")
         .attr("x1", x).attr("y1", 0)
         .attr("x2", x).attr("y2", MAP_HEIGHT)
-        .attr("stroke", "#1a1a2e")
+        .attr("stroke", "#1e1e3a")
         .attr("stroke-width", 0.5);
     }
     for (let y = 0; y <= MAP_HEIGHT; y += gridSpacing) {
@@ -264,7 +267,7 @@ export function createTopologyMapInstance(
         .append("line")
         .attr("x1", 0).attr("y1", y)
         .attr("x2", MAP_WIDTH).attr("y2", y)
-        .attr("stroke", "#1a1a2e")
+        .attr("stroke", "#1e1e3a")
         .attr("stroke-width", 0.5);
     }
   }
@@ -275,7 +278,7 @@ export function createTopologyMapInstance(
     const div = document.createElement("div");
     div.style.cssText =
       "position:fixed;pointer-events:none;z-index:9999;background:rgba(10,10,30,0.95);" +
-      "border:1px solid rgba(0,240,255,0.3);border-radius:6px;padding:8px 12px;" +
+      "border:1px solid rgba(0,240,255,0.4);border-radius:6px;padding:8px 12px;" +
       "font-size:12px;color:#e0e0e0;max-width:300px;display:none;font-family:monospace;";
     document.body.appendChild(div);
     tooltip = div;
@@ -286,13 +289,13 @@ export function createTopologyMapInstance(
     const tip = createTooltip();
     const lines: string[] = [];
     lines.push(`<strong style="color:${nodeColor(node)}">${node.label}</strong>`);
-    if (node.kind) lines.push(`<span style="color:#888">Kind:</span> ${node.kind}`);
-    if (node.ip) lines.push(`<span style="color:#888">IP:</span> ${node.ip}`);
-    if (node.mac) lines.push(`<span style="color:#888">MAC:</span> ${node.mac}`);
-    if (node.vlan_id != null) lines.push(`<span style="color:#888">VLAN:</span> ${node.vlan_id}`);
-    if (node.device_type) lines.push(`<span style="color:#888">Type:</span> ${node.device_type}`);
-    if (node.manufacturer) lines.push(`<span style="color:#888">Mfg:</span> ${node.manufacturer}`);
-    if (node.switch_port) lines.push(`<span style="color:#888">Port:</span> ${node.switch_port}`);
+    if (node.kind) lines.push(`<span style="color:#999">Kind:</span> ${node.kind}`);
+    if (node.ip) lines.push(`<span style="color:#999">IP:</span> ${node.ip}`);
+    if (node.mac) lines.push(`<span style="color:#999">MAC:</span> ${node.mac}`);
+    if (node.vlan_id != null) lines.push(`<span style="color:#999">VLAN:</span> ${node.vlan_id}`);
+    if (node.device_type) lines.push(`<span style="color:#999">Type:</span> ${node.device_type}`);
+    if (node.manufacturer) lines.push(`<span style="color:#999">Mfg:</span> ${node.manufacturer}`);
+    if (node.switch_port) lines.push(`<span style="color:#999">Port:</span> ${node.switch_port}`);
     tip.innerHTML = lines.join("<br>");
     tip.style.display = "block";
     tip.style.left = `${event.clientX + 12}px`;
@@ -305,7 +308,6 @@ export function createTopologyMapInstance(
 
   // ── Visibility helpers ──
   function isNodeVisible(node: TopologyNode): boolean {
-    // Ignored devices hidden by default
     if (node.disposition === "ignored") return false;
     if (!showEndpoints && !node.is_infrastructure) return false;
     if (vlanFilter && node.vlan_id != null && !vlanFilter.has(node.vlan_id)) return false;
@@ -323,9 +325,15 @@ export function createTopologyMapInstance(
   function nodeOpacity(node: TopologyNode): number {
     if (vlanFilter && node.vlan_id != null && !vlanFilter.has(node.vlan_id)) return 0.08;
     if (kindFilter && !kindFilter.has(node.kind)) return 0.08;
-    // External devices dimmed
     if (node.disposition === "external") return 0.4;
     return 1;
+  }
+
+  function statusFilter(node: TopologyNode): string {
+    if (selectedNodeId === node.id) return "url(#glow-selected)";
+    if (node.status === "online") return "url(#glow-active)";
+    if (node.status === "offline") return "url(#glow-inactive)";
+    return "";
   }
 
   // ── Main render ──
@@ -350,7 +358,6 @@ export function createTopologyMapInstance(
 
       const g = layerVlanBg.append("g").attr("class", `vlan-bg-${group.vlan_id}`);
 
-      // Background rectangle
       g.append("rect")
         .attr("x", group.bbox_x)
         .attr("y", group.bbox_y)
@@ -358,40 +365,38 @@ export function createTopologyMapInstance(
         .attr("height", group.bbox_h)
         .attr("rx", 12)
         .attr("fill", color)
-        .attr("fill-opacity", 0.04)
+        .attr("fill-opacity", 0.07)
         .attr("stroke", color)
-        .attr("stroke-opacity", 0.15)
+        .attr("stroke-opacity", 0.3)
         .attr("stroke-width", 1);
 
-      // VLAN label at top
       g.append("text")
         .attr("x", group.bbox_x + 12)
         .attr("y", group.bbox_y + 18)
         .attr("fill", color)
-        .attr("fill-opacity", 0.5)
-        .attr("font-size", 11)
+        .attr("fill-opacity", 0.8)
+        .attr("font-size", 12)
         .attr("font-family", "monospace")
-        .text(`VLAN ${group.vlan_id} — ${group.name}`);
+        .attr("font-weight", "bold")
+        .text(`VLAN ${group.vlan_id} \u2014 ${group.name}`);
 
-      // Subnet label
       if (group.subnet) {
         g.append("text")
           .attr("x", group.bbox_x + 12)
-          .attr("y", group.bbox_y + 32)
+          .attr("y", group.bbox_y + 33)
           .attr("fill", color)
-          .attr("fill-opacity", 0.3)
-          .attr("font-size", 9)
+          .attr("fill-opacity", 0.5)
+          .attr("font-size", 10)
           .attr("font-family", "monospace")
           .text(group.subnet);
       }
 
-      // Node count badge
       g.append("text")
         .attr("x", group.bbox_x + group.bbox_w - 12)
         .attr("y", group.bbox_y + 18)
         .attr("text-anchor", "end")
         .attr("fill", color)
-        .attr("fill-opacity", 0.35)
+        .attr("fill-opacity", 0.5)
         .attr("font-size", 10)
         .attr("font-family", "monospace")
         .text(`${group.node_count} devices`);
@@ -414,32 +419,39 @@ export function createTopologyMapInstance(
         .attr("data-target", edge.target)
         .attr("opacity", visible ? 1 : 0.05);
 
-      // Main line
       g.append("line")
         .attr("x1", src.x).attr("y1", src.y)
         .attr("x2", tgt.x).attr("y2", tgt.y)
         .attr("stroke", edgeColor(edge))
         .attr("stroke-width", edgeWidth(edge))
         .attr("stroke-dasharray", edgeDash(edge))
-        .attr("stroke-opacity", edge.kind === "access" ? 0.3 : 0.6);
+        .attr("stroke-opacity", edge.kind === "access" ? 0.5 : 0.85);
 
-      // Port labels for trunk/uplink edges
+      // Port labels for trunk/uplink: place near each end instead of midpoint
       if ((edge.kind === "trunk" || edge.kind === "uplink") && (edge.source_port || edge.target_port)) {
-        const mx = (src.x + tgt.x) / 2;
-        const my = (src.y + tgt.y) / 2;
-        const parts: string[] = [];
-        if (edge.source_port) parts.push(edge.source_port);
-        if (edge.target_port) parts.push(edge.target_port);
-        const label = parts.join(" \u2194 ");
+        const dx = tgt.x - src.x;
+        const dy = tgt.y - src.y;
 
-        g.append("text")
-          .attr("x", mx)
-          .attr("y", my - 6)
-          .attr("text-anchor", "middle")
-          .attr("fill", "#666")
-          .attr("font-size", 8)
-          .attr("font-family", "monospace")
-          .text(label);
+        if (edge.source_port) {
+          g.append("text")
+            .attr("x", src.x + dx * 0.15)
+            .attr("y", src.y + dy * 0.15 - 6)
+            .attr("text-anchor", "middle")
+            .attr("fill", "#888")
+            .attr("font-size", 8)
+            .attr("font-family", "monospace")
+            .text(edge.source_port);
+        }
+        if (edge.target_port) {
+          g.append("text")
+            .attr("x", src.x + dx * 0.85)
+            .attr("y", src.y + dy * 0.85 - 6)
+            .attr("text-anchor", "middle")
+            .attr("fill", "#888")
+            .attr("font-size", 8)
+            .attr("font-family", "monospace")
+            .text(edge.target_port);
+        }
       }
     });
   }
@@ -467,10 +479,8 @@ export function createTopologyMapInstance(
         .attr("transform", `translate(${node.x},${node.y})`)
         .attr("opacity", visible ? opacity : 0)
         .attr("cursor", "pointer")
-        .attr("filter", node.status === "online" ? "url(#glow-active)" :
-               node.status === "offline" ? "url(#glow-inactive)" : "");
+        .attr("filter", statusFilter(node));
 
-      // Draw shape
       nodeShape(g, node);
 
       // "NEW" badge for recently discovered
@@ -504,7 +514,7 @@ export function createTopologyMapInstance(
           .attr("x", nodeRadius(node) + 8)
           .attr("y", nodeRadius(node) + 2)
           .attr("font-size", 10)
-          .text("\u26A0"); // ⚠ warning sign
+          .text("\u26A0");
       }
 
       // External device dashed border
@@ -540,12 +550,7 @@ export function createTopologyMapInstance(
           }
         })
         .on("mouseout", function () {
-          // Restore status-based filter
-          d3.select(this).attr("filter",
-            selectedNodeId === node.id ? "url(#glow-selected)" :
-            node.status === "online" ? "url(#glow-active)" :
-            node.status === "offline" ? "url(#glow-inactive)" : "",
-          );
+          d3.select(this).attr("filter", statusFilter(node));
           hideTooltip();
         })
         .on("click", function () {
@@ -555,12 +560,7 @@ export function createTopologyMapInstance(
             const el = d3.select(this);
             const nid = el.attr("data-node-id");
             const n = nodeMap.get(nid || "");
-            if (n) {
-              el.attr("filter",
-                n.status === "online" ? "url(#glow-active)" :
-                n.status === "offline" ? "url(#glow-inactive)" : "",
-              );
-            }
+            if (n) el.attr("filter", statusFilter(n));
           });
           // Highlight selected
           d3.select(this).attr("filter", "url(#glow-selected)");
@@ -571,7 +571,6 @@ export function createTopologyMapInstance(
       const drag = d3.drag<SVGGElement, unknown>()
         .on("drag", function (event) {
           d3.select(this).attr("transform", `translate(${event.x},${event.y})`);
-          // Update node coords in our map for edge re-rendering
           node.x = event.x;
           node.y = event.y;
           // Update connected edges
@@ -589,6 +588,15 @@ export function createTopologyMapInstance(
               }
             }
           });
+          // Update label position
+          layerLabels.selectAll<SVGTextElement, unknown>(`[data-node-id="${node.id}"]`).each(function () {
+            const el = d3.select(this);
+            const isSubLabel = el.classed("node-sublabel");
+            const labelX = node.is_infrastructure ? nodeRadius(node) + 8 : 0;
+            const labelY = node.is_infrastructure ? 4 : nodeRadius(node) + 14;
+            el.attr("x", event.x + labelX);
+            el.attr("y", event.y + labelY + (isSubLabel ? 13 : 0));
+          });
         })
         .on("end", function (event) {
           callbacks.onDragEnd?.(node.id, event.x, event.y);
@@ -597,12 +605,13 @@ export function createTopologyMapInstance(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       g.call(drag as any);
 
-      // Node label (below node for endpoints, to the right for infrastructure)
+      // Node label
       if (visible) {
         const labelX = node.is_infrastructure ? nodeRadius(node) + 8 : 0;
         const labelY = node.is_infrastructure ? 4 : nodeRadius(node) + 14;
         const anchor = node.is_infrastructure ? "start" : "middle";
         const fontSize = node.is_infrastructure ? 11 : 9;
+        const maxLen = node.is_infrastructure ? INFRA_LABEL_MAX : ENDPOINT_LABEL_MAX;
 
         layerLabels.append("text")
           .attr("class", "node-label")
@@ -611,11 +620,11 @@ export function createTopologyMapInstance(
           .attr("y", node.y + labelY)
           .attr("text-anchor", anchor)
           .attr("fill", nodeColor(node))
-          .attr("fill-opacity", 0.8)
+          .attr("fill-opacity", 1)
           .attr("font-size", fontSize)
           .attr("font-family", "monospace")
           .attr("font-weight", node.is_infrastructure ? "bold" : "normal")
-          .text(node.label);
+          .text(truncate(node.label, maxLen));
 
         // IP sublabel for infrastructure
         if (node.is_infrastructure && node.ip) {
@@ -625,7 +634,7 @@ export function createTopologyMapInstance(
             .attr("x", node.x + labelX)
             .attr("y", node.y + labelY + 13)
             .attr("text-anchor", anchor)
-            .attr("fill", "#666")
+            .attr("fill", "#888")
             .attr("font-size", 9)
             .attr("font-family", "monospace")
             .text(node.ip);
@@ -666,7 +675,6 @@ export function createTopologyMapInstance(
       eg.attr("opacity", visible ? 1 : 0.05);
     });
 
-    // Update VLAN backgrounds
     if (currentData.vlan_groups) {
       currentData.vlan_groups.forEach((group) => {
         const bg = layerVlanBg.select(`.vlan-bg-${group.vlan_id}`);
@@ -675,6 +683,40 @@ export function createTopologyMapInstance(
           bg.attr("opacity", visible ? 1 : 0.08);
         }
       });
+    }
+  }
+
+  // ── Zoom-to-fit helper ──
+  function zoomToFit(animate = false) {
+    if (!currentData || currentData.nodes.length === 0) return;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    currentData.nodes.forEach((n) => {
+      if (n.x < minX) minX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.x > maxX) maxX = n.x;
+      if (n.y > maxY) maxY = n.y;
+    });
+    const pad = 80;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    const w = maxX - minX;
+    const h = maxY - minY;
+    const svgRect = svgElement.getBoundingClientRect();
+    if (svgRect.width === 0 || svgRect.height === 0) return;
+    const scaleX = svgRect.width / w;
+    const scaleY = svgRect.height / h;
+    // Floor at 0.4 so it never becomes a postage stamp; cap at 1.2 for comfortable reading
+    const scale = Math.max(Math.min(scaleX, scaleY, 1.2), 0.4);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const tx = svgRect.width / 2 - cx * scale;
+    const ty = svgRect.height / 2 - cy * scale;
+
+    const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
+    if (animate) {
+      svg.transition().duration(500).call(zoomBehavior.transform, transform);
+    } else {
+      svg.call(zoomBehavior.transform, transform);
     }
   }
 
@@ -694,32 +736,11 @@ export function createTopologyMapInstance(
 
     render(data: NetworkTopologyResponse) {
       renderAll(data);
-      // Auto-fit: zoom to show all nodes with padding
-      if (data.nodes.length > 0) {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        data.nodes.forEach((n) => {
-          if (n.x < minX) minX = n.x;
-          if (n.y < minY) minY = n.y;
-          if (n.x > maxX) maxX = n.x;
-          if (n.y > maxY) maxY = n.y;
-        });
-        const pad = 200;
-        minX -= pad; minY -= pad; maxX += pad; maxY += pad;
-        const w = maxX - minX;
-        const h = maxY - minY;
-        const svgRect = svgElement.getBoundingClientRect();
-        const scaleX = svgRect.width / w;
-        const scaleY = svgRect.height / h;
-        const scale = Math.min(scaleX, scaleY, 1.5);
-        const cx = (minX + maxX) / 2;
-        const cy = (minY + maxY) / 2;
-        const tx = svgRect.width / 2 - cx * scale;
-        const ty = svgRect.height / 2 - cy * scale;
-
-        svg.call(
-          zoomBehavior.transform,
-          d3.zoomIdentity.translate(tx, ty).scale(scale),
-        );
+      // Only auto-fit on the FIRST render. Subsequent data refreshes
+      // preserve the user's current zoom/pan position.
+      if (!hasInitialFit) {
+        hasInitialFit = true;
+        zoomToFit(false);
       }
     },
 
@@ -730,13 +751,18 @@ export function createTopologyMapInstance(
           const n = nodeMap.get(nid || "");
           return n && isNodeVisible(n) ? 1 : 0;
         });
+        layerLabels.selectAll<SVGTextElement, unknown>(".node-label, .node-sublabel").each(function () {
+          const el = d3.select(this);
+          const nid = el.attr("data-node-id") || "";
+          const n = nodeMap.get(nid);
+          el.attr("opacity", n && isNodeVisible(n) ? 1 : 0);
+        });
         return [];
       }
       const matches: string[] = [];
       currentData.nodes.forEach((node) => {
         if (matchesSearch(node, term)) matches.push(node.id);
       });
-      // Dim non-matching, highlight matching
       layerNodes.selectAll<SVGGElement, unknown>(".topo-node").each(function () {
         const el = d3.select(this);
         const nid = el.attr("data-node-id") || "";
@@ -747,7 +773,6 @@ export function createTopologyMapInstance(
         const nid = el.attr("data-node-id") || "";
         el.attr("opacity", matches.includes(nid) ? 1 : 0.1);
       });
-      // Zoom to first match
       if (matches.length > 0) {
         const first = nodeMap.get(matches[0]);
         if (first) {
@@ -771,7 +796,6 @@ export function createTopologyMapInstance(
         const nid = el.attr("data-node-id");
         if (nid === id) {
           el.attr("filter", "url(#glow-selected)");
-          // Zoom to it
           const node = nodeMap.get(id);
           if (node) {
             const svgRect = svgElement.getBoundingClientRect();
@@ -793,21 +817,13 @@ export function createTopologyMapInstance(
         const el = d3.select(this);
         const nid = el.attr("data-node-id");
         const n = nodeMap.get(nid || "");
-        if (n) {
-          el.attr("filter",
-            n.status === "online" ? "url(#glow-active)" :
-            n.status === "offline" ? "url(#glow-inactive)" : "",
-          );
-        }
+        if (n) el.attr("filter", statusFilter(n));
       });
       updateVisibility();
     },
 
     resetView() {
-      svg.transition().duration(500).call(
-        zoomBehavior.transform,
-        d3.zoomIdentity,
-      );
+      zoomToFit(true);
     },
 
     setVlanFilter(vlans: Set<number> | null) {
