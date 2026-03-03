@@ -75,13 +75,16 @@ pub struct SwosClient {
 impl SwosClient {
     /// Create a new SwOS client. Does not make any network requests.
     pub fn new(host: String, port: u16, username: String, password: String) -> Self {
-        // SwOS is HTTP/1.0 — disable connection pooling to avoid keep-alive issues.
-        // Each digest auth flow requires two requests; connection reuse confuses SwOS.
+        // SwOS is a simple HTTP/1.0 server:
+        // - Title-case headers required (it does case-sensitive header matching)
+        // - No connection pooling (each digest auth needs fresh connections)
+        // - HTTP/1.1 only (disable h2 negotiation)
         let http = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(std::time::Duration::from_secs(15))
             .pool_max_idle_per_host(0)
             .http1_only()
+            .http1_title_case_headers()
             .build()
             .expect("failed to build HTTP client");
 
