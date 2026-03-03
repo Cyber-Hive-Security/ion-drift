@@ -1180,8 +1180,17 @@ export function useUpdateNodePosition() {
           body: JSON.stringify({ x, y }),
         },
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    onSuccess: (_data, { nodeId, x, y }) => {
+      // Optimistic cache patch — avoids refetch from stale topology cache
+      queryClient.setQueryData<NetworkTopologyResponse>(["network", "topology"], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          nodes: old.nodes.map((n) =>
+            n.id === nodeId ? { ...n, x, y, position_source: "human" } : n,
+          ),
+        };
+      });
     },
   });
 }
@@ -1194,8 +1203,17 @@ export function useResetNodePosition() {
         `/api/network/topology/positions/${encodeURIComponent(nodeId)}`,
         { method: "DELETE" },
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    onSuccess: (_data, nodeId) => {
+      // Optimistic cache patch — mark as auto-positioned
+      queryClient.setQueryData<NetworkTopologyResponse>(["network", "topology"], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          nodes: old.nodes.map((n) =>
+            n.id === nodeId ? { ...n, position_source: "auto" } : n,
+          ),
+        };
+      });
     },
   });
 }

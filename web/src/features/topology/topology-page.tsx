@@ -3,6 +3,7 @@ import {
   useNetworkTopology,
   useRefreshTopology,
   useUpdateNodePosition,
+  useResetNodePosition,
 } from "@/api/queries";
 import type { TopologyNode, NetworkTopologyResponse } from "@/api/types";
 import {
@@ -216,6 +217,7 @@ export function TopologyPage() {
   const topology = useNetworkTopology();
   const refreshMutation = useRefreshTopology();
   const positionMutation = useUpdateNodePosition();
+  const resetMutation = useResetNodePosition();
 
   // Derive VLANs actually present in topology data (for filter pills)
   const dataVlans = useMemo(() => {
@@ -233,6 +235,10 @@ export function TopologyPage() {
       onNodeClick: (node) => setSelectedNode(node),
       onDragEnd: (nodeId, x, y) => {
         positionMutation.mutate({ nodeId, x, y });
+      },
+      onUnpin: (nodeId) => {
+        mapRef.current?.clearDraggedPosition(nodeId);
+        resetMutation.mutate(nodeId);
       },
     });
     mapRef.current = instance;

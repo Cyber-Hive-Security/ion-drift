@@ -24,6 +24,7 @@ const ENDPOINT_LABEL_MAX = 16;
 export interface TopologyCallbacks {
   onNodeClick?: (node: TopologyNode) => void;
   onDragEnd?: (nodeId: string, x: number, y: number) => void;
+  onUnpin?: (nodeId: string) => void;
 }
 
 export interface TopologyMapInstance {
@@ -36,6 +37,7 @@ export interface TopologyMapInstance {
   setVlanFilter: (vlans: Set<number> | null) => void;
   setKindFilter: (kinds: Set<string> | null) => void;
   setEndpointsVisible: (visible: boolean) => void;
+  clearDraggedPosition: (nodeId: string) => void;
 }
 
 // ─── Helpers ───────────────────────────────────────────
@@ -184,6 +186,8 @@ export function createTopologyMapInstance(
   let tooltip: HTMLDivElement | null = null;
   let hasInitialFit = false;
   let currentScale = 1;
+  // Positions set by drag — survives re-renders until backend confirms
+  const draggedPositions: Map<string, { x: number; y: number }> = new Map();
 
   // ── SVG setup ──
   const svg = d3
@@ -350,7 +354,25 @@ export function createTopologyMapInstance(
   function renderAll(data: NetworkTopologyResponse) {
     currentData = data;
     nodeMap.clear();
-    data.nodes.forEach((n) => nodeMap.set(n.id, n));
+
+    // Merge locally-dragged positions to prevent snap-back from stale refetches.
+    // The backend topology cache only updates on recompute (120s), so refetches
+    // after a position save return stale auto-computed positions.
+    data.nodes.forEach((n) => {
+      const dragged = draggedPositions.get(n.id);
+      if (dragged) {
+        if (n.position_source === "human") {
+          // Backend confirmed the save — clear local override
+          draggedPositions.delete(n.id);
+        } else {
+          // Override with local position until backend catches up
+          n.x = dragged.x;
+          n.y = dragged.y;
+          n.position_source = "human";
+        }
+      }
+      nodeMap.set(n.id, n);
+    });
 
     renderGrid();
     renderVlanBackgrounds(data.vlan_groups);
@@ -538,14 +560,20 @@ export function createTopologyMapInstance(
           .attr("opacity", 0.6);
       }
 
-      // Pin icon for human-positioned nodes
+      // Pin icon for human-positioned nodes — click to unpin
       if (node.position_source === "human") {
         g.append("text")
+          .attr("class", "pin-icon")
           .attr("x", -(nodeRadius(node) + 6))
           .attr("y", -(nodeRadius(node) + 2))
           .attr("font-size", 10)
           .attr("text-anchor", "middle")
-          .text("\uD83D\uDCCC");
+          .attr("cursor", "pointer")
+          .text("\uD83D\uDCCC")
+          .on("click", function (event) {
+            event.stopPropagation();
+            callbacks.onUnpin?.(node.id);
+          });
       }
 
       // Hover
@@ -609,6 +637,7 @@ export function createTopologyMapInstance(
           });
         })
         .on("end", function (event) {
+          draggedPositions.set(node.id, { x: event.x, y: event.y });
           callbacks.onDragEnd?.(node.id, event.x, event.y);
         });
 
@@ -893,6 +922,10 @@ export function createTopologyMapInstance(
     setEndpointsVisible(visible: boolean) {
       showEndpoints = visible;
       updateVisibility();
+    },
+
+    clearDraggedPosition(nodeId: string) {
+      draggedPositions.delete(nodeId);
     },
   };
 }
