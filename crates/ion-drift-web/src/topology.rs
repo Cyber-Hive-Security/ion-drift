@@ -136,10 +136,14 @@ const VLAN_ORDER: &[u32] = &[2, 6, 10, 25, 30, 35, 40, 90, 99];
 const CANVAS_W: f64 = 4000.0;
 const LAYER_SPACING: f64 = 300.0;
 const VLAN_SECTOR_MIN_W: f64 = 350.0;
-const NODE_SPACING: f64 = 60.0;
+const NODE_SPACING: f64 = 100.0;
 const TOP_MARGIN: f64 = 150.0;
 const ENDPOINT_OFFSET: f64 = 200.0;
 const SECTOR_PADDING: f64 = 40.0;
+
+/// Interfaces on the router that face the WAN/ISP.
+/// LLDP neighbors on these ports are collapsed into a single "WAN" node.
+const WAN_INTERFACES: &[&str] = &["ether1"];
 
 // ── Graph construction ───────────────────────────────────────────
 
@@ -250,10 +254,20 @@ pub async fn compute_topology(
 
     // Track edges we've already created (both directions)
     let mut edge_set: HashSet<(String, String)> = HashSet::new();
+    let mut wan_neighbor_count = 0u32;
 
     for nb in &neighbors {
         let source_device = nb.device_id.clone();
         let source_port = nb.interface.clone();
+
+        // Skip WAN-facing neighbors on the router — they are ISP/external equipment
+        // and will be collapsed into a single "WAN / ISP" node below.
+        if Some(&source_device) == router_id.as_ref()
+            && WAN_INTERFACES.contains(&source_port.as_str())
+        {
+            wan_neighbor_count += 1;
+            continue;
+        }
 
         // Try to match neighbor to a registered device:
         //   1. By LLDP identity name
@@ -383,6 +397,48 @@ pub async fn compute_topology(
         }
     }
 
+    // Create a single WAN/ISP placeholder if any WAN-facing neighbors were seen
+    if wan_neighbor_count > 0 {
+        if let Some(ref rid) = router_id {
+            let wan_id = "WAN".to_string();
+            infra_ids.insert(wan_id.clone());
+            nodes.insert(
+                wan_id.clone(),
+                TopologyNode {
+                    id: wan_id.clone(),
+                    label: format!("WAN / ISP ({})", wan_neighbor_count),
+                    ip: None,
+                    mac: None,
+                    kind: NodeKind::Router,
+                    vlan_id: None,
+                    vlans_served: Vec::new(),
+                    device_type: Some("wan_gateway".to_string()),
+                    manufacturer: None,
+                    is_infrastructure: true,
+                    layer: 0,
+                    x: 0.0,
+                    y: 0.0,
+                    position_source: "auto".to_string(),
+                    first_seen: now,
+                    last_seen: now,
+                    parent_id: None,
+                    switch_port: None,
+                    status: NodeStatus::Unknown,
+                    confidence: 1.0,
+                    disposition: "external".to_string(),
+                },
+            );
+            edges.push(TopologyEdge {
+                source: rid.clone(),
+                target: wan_id,
+                kind: EdgeKind::Uplink,
+                source_port: Some("ether1".to_string()),
+                target_port: None,
+                vlans: Vec::new(),
+            });
+        }
+    }
+
     // Fill in reverse port labels on trunk edges
     for edge in &mut edges {
         if edge.target_port.is_none() && edge.kind == EdgeKind::Trunk {
@@ -450,6 +506,11 @@ pub async fn compute_topology(
         }
     }
 
+    // WAN node sits alongside the router at layer 0 (BFS doesn't traverse Uplink edges)
+    if let Some(wan) = nodes.get_mut("WAN") {
+        wan.layer = 0;
+    }
+
     // Compute VLANs served by each infrastructure node (from VLAN membership)
     for infra_id in &infra_ids {
         let memberships = store.get_vlan_membership(infra_id).await.unwrap_or_default();
@@ -505,6 +566,17 @@ pub async fn compute_topology(
         }
         // Skip if already in nodes (e.g., inferred infrastructure)
         if nodes.contains_key(&mac) {
+            continue;
+        }
+        // Skip if this identity's IP matches a registered device (catches router
+        // gateway IPs that leak through ARP/DHCP into network_identities)
+        if let Some(ref ip) = identity.best_ip {
+            if ip_to_device.contains_key(ip) {
+                continue;
+            }
+        }
+        // Skip if this identity's MAC matches a known infrastructure device
+        if mac_to_device.contains_key(&mac) {
             continue;
         }
 
@@ -573,6 +645,18 @@ pub async fn compute_topology(
 
     // ── Layout computation ───────────────────────────────────────
     compute_layout(&mut nodes, &edges);
+
+    // Position WAN node to the left of the router
+    if let Some(router_pos) = router_id
+        .as_ref()
+        .and_then(|rid| nodes.get(rid))
+        .map(|n| (n.x, n.y))
+    {
+        if let Some(wan) = nodes.get_mut("WAN") {
+            wan.x = router_pos.0 - 300.0;
+            wan.y = router_pos.1;
+        }
+    }
 
     // ── Position override merging ────────────────────────────────
     let positions = store.get_topology_positions().await.unwrap_or_default();
@@ -664,16 +748,40 @@ fn compute_layout(nodes: &mut BTreeMap<String, TopologyNode>, edges: &[TopologyE
         }
     }
 
-    let sector_count = active_vlans.len().max(1);
-    let sector_w = (CANVAS_W / sector_count as f64).max(VLAN_SECTOR_MIN_W);
-    let total_w = sector_w * sector_count as f64;
-    let x_offset = (CANVAS_W - total_w) / 2.0;
+    // Count endpoints per VLAN for proportional sector sizing
+    let mut vlan_endpoint_counts: HashMap<u32, usize> = HashMap::new();
+    for node in nodes.values() {
+        if !node.is_infrastructure {
+            if let Some(vid) = node.vlan_id {
+                *vlan_endpoint_counts.entry(vid).or_default() += 1;
+            }
+        }
+    }
 
-    let vlan_center_x: HashMap<u32, f64> = active_vlans
+    // Calculate proportional widths: wider sectors for VLANs with more devices
+    let sector_widths: Vec<(u32, f64)> = active_vlans
         .iter()
-        .enumerate()
-        .map(|(i, &vid)| (vid, x_offset + sector_w * i as f64 + sector_w / 2.0))
+        .map(|&vid| {
+            let count = vlan_endpoint_counts.get(&vid).copied().unwrap_or(0);
+            let cols = (count as f64).sqrt().ceil().max(1.0) as usize;
+            let needed = cols as f64 * NODE_SPACING + 2.0 * SECTOR_PADDING;
+            (vid, needed.max(VLAN_SECTOR_MIN_W))
+        })
         .collect();
+
+    let total_w: f64 = sector_widths.iter().map(|(_, w)| w).sum();
+    let x_offset = if total_w < CANVAS_W {
+        (CANVAS_W - total_w) / 2.0
+    } else {
+        0.0
+    };
+
+    let mut vlan_center_x: HashMap<u32, f64> = HashMap::new();
+    let mut cursor_x = x_offset;
+    for &(vid, w) in &sector_widths {
+        vlan_center_x.insert(vid, cursor_x + w / 2.0);
+        cursor_x += w;
+    }
 
     // ── Position infrastructure nodes ────────────────────────────
     // Infrastructure nodes that serve multiple VLANs: center across those sectors

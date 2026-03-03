@@ -180,6 +180,7 @@ export function createTopologyMapInstance(
   let showEndpoints = true;
   let tooltip: HTMLDivElement | null = null;
   let hasInitialFit = false;
+  let currentScale = 1;
 
   // ── SVG setup ──
   const svg = d3
@@ -237,9 +238,11 @@ export function createTopologyMapInstance(
   const zoomGroup = svg.append("g").attr("id", "topo-zoom-group");
   const zoomBehavior = d3
     .zoom<SVGSVGElement, unknown>()
-    .scaleExtent([0.1, 5])
+    .scaleExtent([0.05, 5])
     .on("zoom", (event) => {
       zoomGroup.attr("transform", event.transform);
+      currentScale = event.transform.k;
+      updateLabelVisibility();
     });
   svg.call(zoomBehavior);
 
@@ -686,6 +689,48 @@ export function createTopologyMapInstance(
     }
   }
 
+  // ── Zoom-dependent label visibility ──
+  function updateLabelVisibility() {
+    // Infrastructure labels: always visible
+    // Endpoint labels: visible at scale > 0.5
+    // IP sublabels: visible at scale > 0.7
+    // Port labels (on edges): visible at scale > 0.6
+    layerLabels
+      .selectAll<SVGTextElement, unknown>(".node-label")
+      .each(function () {
+        const el = d3.select(this);
+        const nid = el.attr("data-node-id") || "";
+        const node = nodeMap.get(nid);
+        if (!node) return;
+        if (!isNodeVisible(node)) {
+          el.attr("opacity", 0);
+          return;
+        }
+        if (node.is_infrastructure) {
+          el.attr("opacity", 1);
+        } else {
+          el.attr("opacity", currentScale > 0.5 ? 1 : 0);
+        }
+      });
+
+    layerLabels
+      .selectAll<SVGTextElement, unknown>(".node-sublabel")
+      .each(function () {
+        const el = d3.select(this);
+        const nid = el.attr("data-node-id") || "";
+        const node = nodeMap.get(nid);
+        if (!node || !isNodeVisible(node)) {
+          el.attr("opacity", 0);
+          return;
+        }
+        el.attr("opacity", currentScale > 0.7 ? 1 : 0);
+      });
+
+    layerEdges.selectAll<SVGTextElement, unknown>("text").each(function () {
+      d3.select(this).attr("opacity", currentScale > 0.6 ? 1 : 0);
+    });
+  }
+
   // ── Zoom-to-fit helper ──
   function zoomToFit(animate = false) {
     if (!currentData || currentData.nodes.length === 0) return;
@@ -705,8 +750,8 @@ export function createTopologyMapInstance(
     if (svgRect.width === 0 || svgRect.height === 0) return;
     const scaleX = svgRect.width / w;
     const scaleY = svgRect.height / h;
-    // Floor at 0.4 so it never becomes a postage stamp; cap at 1.2 for comfortable reading
-    const scale = Math.max(Math.min(scaleX, scaleY, 1.2), 0.4);
+    // Cap at 2.0 to avoid over-zoom on tiny topologies; no floor so wide layouts fit
+    const scale = Math.min(scaleX, scaleY, 2.0);
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     const tx = svgRect.width / 2 - cx * scale;
@@ -742,6 +787,8 @@ export function createTopologyMapInstance(
         hasInitialFit = true;
         zoomToFit(false);
       }
+      // Ensure labels respect current zoom level after re-render
+      updateLabelVisibility();
     },
 
     search(term: string): string[] {
