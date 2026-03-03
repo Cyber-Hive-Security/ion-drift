@@ -10,8 +10,8 @@ export const VLAN_COLORS: Record<number, string> = {
   30: "#22cc88",
   35: "#44ddaa",
   40: "#ffaa00",
-  90: "#666666",
-  99: "#444444",
+  90: "#f97316",
+  99: "#7FFF00",
 };
 
 export const VLAN_NAMES: Record<number, string> = {

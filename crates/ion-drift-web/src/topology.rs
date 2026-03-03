@@ -123,8 +123,8 @@ fn vlan_config(id: u32) -> (&'static str, &'static str, &'static str) {
         30 => ("Trusted Wired", "#22cc88", "10.20.30.0/24"),
         35 => ("Trusted Wireless", "#44ddaa", "10.20.35.0/24"),
         40 => ("Guest", "#ffaa00", "10.20.40.0/24"),
-        90 => ("IoT Internet", "#666666", "192.168.90.0/24"),
-        99 => ("IoT Restricted", "#444444", "192.168.99.0/24"),
+        90 => ("IoT Internet", "#f97316", "192.168.90.0/24"),
+        99 => ("IoT Restricted", "#7FFF00", "192.168.99.0/24"),
         _ => ("Unknown", "#888888", ""),
     }
 }
@@ -687,6 +687,7 @@ pub async fn compute_topology(
     }
 
     // ── Layout computation ───────────────────────────────────────
+    // Returns (left_x, top_y, width, height) per VLAN sector
     let sector_geometry = compute_layout(&mut nodes, &edges);
 
     // Position WAN node to the left of the router
@@ -721,14 +722,6 @@ pub async fn compute_topology(
         }
     }
 
-    // Compute endpoint layer Y for sizing empty sectors
-    let ep_y = nodes
-        .values()
-        .filter(|n| !n.is_infrastructure)
-        .map(|n| n.y)
-        .fold(f64::INFINITY, f64::min);
-    let empty_sector_y = if ep_y.is_finite() { ep_y } else { TOP_MARGIN + LAYER_SPACING * 2.0 };
-
     // Load human sector position overrides
     let sector_positions = store.get_sector_positions().await.unwrap_or_default();
     let sector_overrides: HashMap<u32, &SectorPosition> = sector_positions
@@ -738,15 +731,15 @@ pub async fn compute_topology(
         .collect();
 
     let mut vlan_groups: Vec<VlanGroup> = Vec::new();
-    for (&vlan_id, (center_x, width)) in &sector_geometry {
+    for (&vlan_id, &(left_x, top_y, width, height)) in &sector_geometry {
         let group_nodes = vlan_nodes.get(&vlan_id);
         let (name, color, subnet) = vlan_config(vlan_id);
 
         // Check for human override
         if let Some(sp) = sector_overrides.get(&vlan_id) {
             let node_count = group_nodes.map(|gn| gn.len() as u32).unwrap_or(0);
-            let w = sp.width.unwrap_or(*width);
-            let h = sp.height.unwrap_or(80.0);
+            let w = sp.width.unwrap_or(width);
+            let h = sp.height.unwrap_or(height);
             vlan_groups.push(VlanGroup {
                 vlan_id,
                 name: name.to_string(),
@@ -762,27 +755,7 @@ pub async fn compute_topology(
             continue;
         }
 
-        let (bbox_x, bbox_y, bbox_w, bbox_h, node_count) = if let Some(gn) = group_nodes {
-            if gn.is_empty() {
-                // Empty VLAN — use sector geometry
-                (center_x - width / 2.0, empty_sector_y - SECTOR_PADDING, *width, 80.0, 0)
-            } else {
-                let min_x = gn.iter().map(|n| n.x).fold(f64::INFINITY, f64::min);
-                let max_x = gn.iter().map(|n| n.x).fold(f64::NEG_INFINITY, f64::max);
-                let min_y = gn.iter().map(|n| n.y).fold(f64::INFINITY, f64::min);
-                let max_y = gn.iter().map(|n| n.y).fold(f64::NEG_INFINITY, f64::max);
-                (
-                    min_x - SECTOR_PADDING,
-                    min_y - SECTOR_PADDING,
-                    (max_x - min_x) + SECTOR_PADDING * 2.0,
-                    (max_y - min_y) + SECTOR_PADDING * 2.0,
-                    gn.len() as u32,
-                )
-            }
-        } else {
-            // No nodes at all for this VLAN — empty sector
-            (center_x - width / 2.0, empty_sector_y - SECTOR_PADDING, *width, 80.0, 0)
-        };
+        let node_count = group_nodes.map(|gn| gn.len() as u32).unwrap_or(0);
 
         vlan_groups.push(VlanGroup {
             vlan_id,
@@ -790,10 +763,10 @@ pub async fn compute_topology(
             color: color.to_string(),
             subnet: subnet.to_string(),
             node_count,
-            bbox_x,
-            bbox_y,
-            bbox_w,
-            bbox_h,
+            bbox_x: left_x,
+            bbox_y: top_y,
+            bbox_w: width,
+            bbox_h: height,
             position_source: "auto".to_string(),
         });
     }
@@ -817,22 +790,26 @@ pub async fn compute_topology(
     })
 }
 
-// ── Deterministic hierarchical layout ────────────────────────────
+// ── Center-spine layout ─────────────────────────────────────────
+//
+// VLAN 2 (Management) renders as a vertical spine down the center.
+// All other VLAN sectors stack in two columns (left/right) flanking it.
+// Heights are proportional to device count; columns are balanced by
+// total device count using a greedy assignment algorithm.
 
-/// Returns a map of vlan_id → (center_x, width) for VLAN sector geometry.
+const SPINE_WIDTH: f64 = 300.0;
+const COLUMN_GAP: f64 = 60.0;
+const SECTOR_V_GAP: f64 = 30.0;
+const MIN_SECTOR_H: f64 = 100.0;
+const SECTOR_HEADER_H: f64 = 50.0;
+
+/// Returns a map of vlan_id → (left_x, top_y, width, height) for sector geometry.
 fn compute_layout(
     nodes: &mut BTreeMap<String, TopologyNode>,
-    edges: &[TopologyEdge],
-) -> BTreeMap<u32, (f64, f64)> {
-    // Group nodes by layer
-    let mut layers: BTreeMap<u32, Vec<String>> = BTreeMap::new();
-    for (id, node) in nodes.iter() {
-        layers.entry(node.layer).or_default().push(id.clone());
-    }
-
-    // Build VLAN → sector X mapping — always include all configured VLANs
+    _edges: &[TopologyEdge],
+) -> BTreeMap<u32, (f64, f64, f64, f64)> {
+    // ── Collect VLANs and device counts ──────────────────────────
     let mut active_vlans: Vec<u32> = VLAN_ORDER.to_vec();
-    // Also include any VLANs not in VLAN_ORDER that have nodes
     for node in nodes.values() {
         if let Some(vid) = node.vlan_id {
             if !active_vlans.contains(&vid) {
@@ -841,7 +818,6 @@ fn compute_layout(
         }
     }
 
-    // Count endpoints per VLAN for proportional sector sizing
     let mut vlan_endpoint_counts: HashMap<u32, usize> = HashMap::new();
     for node in nodes.values() {
         if !node.is_infrastructure {
@@ -851,129 +827,186 @@ fn compute_layout(
         }
     }
 
-    // Calculate proportional widths: wider sectors for VLANs with more devices
-    let sector_widths: Vec<(u32, f64)> = active_vlans
-        .iter()
-        .map(|&vid| {
-            let count = vlan_endpoint_counts.get(&vid).copied().unwrap_or(0);
-            if count == 0 {
-                return (vid, VLAN_SECTOR_EMPTY_W);
-            }
-            let cols = (count as f64).sqrt().ceil().max(1.0) as usize;
-            let needed = cols as f64 * NODE_SPACING + 2.0 * SECTOR_PADDING;
-            (vid, needed.max(VLAN_SECTOR_MIN_W))
-        })
-        .collect();
+    // ── Balance VLANs across left/right columns ─────────────────
+    let side_vlans: Vec<u32> = active_vlans.iter().filter(|&&v| v != 2).copied().collect();
 
-    let total_w: f64 = sector_widths.iter().map(|(_, w)| w).sum();
-    let x_offset = if total_w < CANVAS_W {
-        (CANVAS_W - total_w) / 2.0
-    } else {
+    // Sort by device count descending for greedy balancing
+    let mut sorted_by_count: Vec<(u32, usize)> = side_vlans
+        .iter()
+        .map(|&v| (v, vlan_endpoint_counts.get(&v).copied().unwrap_or(0)))
+        .collect();
+    sorted_by_count.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let (mut left_vlans, mut right_vlans) = (Vec::new(), Vec::new());
+    let (mut left_total, mut right_total) = (0usize, 0usize);
+
+    for &(vid, count) in &sorted_by_count {
+        let weight = count.max(1);
+        if left_total <= right_total {
+            left_vlans.push(vid);
+            left_total += weight;
+        } else {
+            right_vlans.push(vid);
+            right_total += weight;
+        }
+    }
+
+    // Sort within columns by VLAN ID for consistency
+    left_vlans.sort();
+    right_vlans.sort();
+
+    // ── Compute column widths (uniform per column) ──────────────
+    fn col_width(vlans: &[u32], counts: &HashMap<u32, usize>) -> f64 {
+        if vlans.is_empty() {
+            return VLAN_SECTOR_MIN_W;
+        }
+        vlans
+            .iter()
+            .map(|&v| {
+                let count = counts.get(&v).copied().unwrap_or(0);
+                if count == 0 {
+                    return VLAN_SECTOR_EMPTY_W;
+                }
+                let cols = (count as f64).sqrt().ceil().max(1.0);
+                (cols * NODE_SPACING + 2.0 * SECTOR_PADDING).max(VLAN_SECTOR_MIN_W)
+            })
+            .fold(VLAN_SECTOR_MIN_W, f64::max)
+    }
+
+    let left_w = col_width(&left_vlans, &vlan_endpoint_counts);
+    let right_w = col_width(&right_vlans, &vlan_endpoint_counts);
+
+    // ── Compute sector heights ──────────────────────────────────
+    fn sector_height(count: usize, sector_width: f64) -> f64 {
+        if count == 0 {
+            return MIN_SECTOR_H;
+        }
+        let usable_w = (sector_width - 2.0 * SECTOR_PADDING).max(NODE_SPACING);
+        let cols = (usable_w / NODE_SPACING).floor().max(1.0) as usize;
+        let rows = (count + cols - 1) / cols;
+        let grid_h = rows as f64 * NODE_SPACING;
+        (grid_h + SECTOR_HEADER_H + 2.0 * SECTOR_PADDING).max(MIN_SECTOR_H)
+    }
+
+    // ── Position sectors ────────────────────────────────────────
+    let canvas_center = CANVAS_W / 2.0;
+    let spine_left = canvas_center - SPINE_WIDTH / 2.0;
+    let spine_right = canvas_center + SPINE_WIDTH / 2.0;
+
+    let left_right_edge = spine_left - COLUMN_GAP;
+    let left_left_edge = left_right_edge - left_w;
+    let right_left_edge = spine_right + COLUMN_GAP;
+
+    let mut sector_geom: BTreeMap<u32, (f64, f64, f64, f64)> = BTreeMap::new();
+
+    // Stack left column
+    let mut cursor_y = TOP_MARGIN;
+    for &vid in &left_vlans {
+        let count = vlan_endpoint_counts.get(&vid).copied().unwrap_or(0);
+        let h = sector_height(count, left_w);
+        sector_geom.insert(vid, (left_left_edge, cursor_y, left_w, h));
+        cursor_y += h + SECTOR_V_GAP;
+    }
+    let left_total_h = if left_vlans.is_empty() {
         0.0
+    } else {
+        cursor_y - SECTOR_V_GAP - TOP_MARGIN
     };
 
-    let mut vlan_center_x: HashMap<u32, f64> = HashMap::new();
-    let mut cursor_x = x_offset;
-    for &(vid, w) in &sector_widths {
-        vlan_center_x.insert(vid, cursor_x + w / 2.0);
-        cursor_x += w;
+    // Stack right column
+    cursor_y = TOP_MARGIN;
+    for &vid in &right_vlans {
+        let count = vlan_endpoint_counts.get(&vid).copied().unwrap_or(0);
+        let h = sector_height(count, right_w);
+        sector_geom.insert(vid, (right_left_edge, cursor_y, right_w, h));
+        cursor_y += h + SECTOR_V_GAP;
     }
+    let right_total_h = if right_vlans.is_empty() {
+        0.0
+    } else {
+        cursor_y - SECTOR_V_GAP - TOP_MARGIN
+    };
 
-    // ── Position infrastructure nodes ────────────────────────────
-    // Infrastructure nodes that serve multiple VLANs: center across those sectors
-    // Infrastructure with no VLANs served: center of canvas
+    // VLAN 2 spine — spans the full height of the taller column
+    let max_infra_layer = nodes
+        .values()
+        .filter(|n| n.is_infrastructure)
+        .map(|n| n.layer)
+        .max()
+        .unwrap_or(0);
+    let infra_bottom = TOP_MARGIN + max_infra_layer as f64 * LAYER_SPACING + LAYER_SPACING;
+    let spine_h = left_total_h
+        .max(right_total_h)
+        .max(infra_bottom - TOP_MARGIN)
+        .max(MIN_SECTOR_H);
+    sector_geom.insert(2, (spine_left, TOP_MARGIN, SPINE_WIDTH, spine_h));
+
+    // ── Position infrastructure nodes (in center spine) ─────────
+    let mut layers: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+    for (id, node) in nodes.iter() {
+        if node.is_infrastructure {
+            layers.entry(node.layer).or_default().push(id.clone());
+        }
+    }
 
     for (_layer, ids) in &layers {
-        let mut infra_in_layer: Vec<String> = ids
-            .iter()
-            .filter(|id| nodes.get(*id).map(|n| n.is_infrastructure).unwrap_or(false))
-            .cloned()
-            .collect();
-        infra_in_layer.sort(); // deterministic
+        let mut infra_ids = ids.clone();
+        infra_ids.sort();
 
-        for (i, id) in infra_in_layer.iter().enumerate() {
+        let count = infra_ids.len();
+        for (i, id) in infra_ids.iter().enumerate() {
             if let Some(node) = nodes.get_mut(id) {
-                let y = TOP_MARGIN + node.layer as f64 * LAYER_SPACING;
-
-                let x = if !node.vlans_served.is_empty() {
-                    // Average X of all VLAN sectors this node serves
-                    let sum: f64 = node
-                        .vlans_served
-                        .iter()
-                        .filter_map(|v| vlan_center_x.get(v))
-                        .sum();
-                    let count = node
-                        .vlans_served
-                        .iter()
-                        .filter(|v| vlan_center_x.contains_key(v))
-                        .count()
-                        .max(1);
-                    sum / count as f64 + (i as f64 * NODE_SPACING * 0.5)
-                } else {
-                    // Center of canvas with offset
-                    CANVAS_W / 2.0 + (i as f64 - infra_in_layer.len() as f64 / 2.0) * NODE_SPACING
-                };
-
-                node.x = x;
-                node.y = y;
+                node.y = TOP_MARGIN + node.layer as f64 * LAYER_SPACING;
+                // Spread evenly within spine width
+                let slot_w = SPINE_WIDTH / (count + 1) as f64;
+                node.x = spine_left + slot_w * (i + 1) as f64;
             }
         }
     }
 
-    // ── Position endpoint nodes ──────────────────────────────────
-    // Group endpoints by (parent_switch, vlan_id)
-    let mut groups: BTreeMap<(Option<String>, Option<u32>), Vec<String>> = BTreeMap::new();
+    // ── Position endpoint nodes (within their VLAN sector) ──────
+    let mut vlan_endpoints: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for (id, node) in nodes.iter() {
         if !node.is_infrastructure {
-            groups
-                .entry((node.parent_id.clone(), node.vlan_id))
-                .or_default()
-                .push(id.clone());
-        }
-    }
-
-    for ((parent, vlan), mut endpoint_ids) in groups {
-        endpoint_ids.sort(); // deterministic
-
-        // Determine the base X from VLAN sector
-        let base_x = vlan
-            .and_then(|v| vlan_center_x.get(&v))
-            .copied()
-            .unwrap_or(CANVAS_W / 2.0);
-
-        // Determine the base Y: below the parent switch, or at endpoint layer
-        let parent_y = parent
-            .as_deref()
-            .and_then(|pid| nodes.get(pid))
-            .map(|n| n.y)
-            .unwrap_or(TOP_MARGIN + 2.0 * LAYER_SPACING);
-
-        let base_y = parent_y + ENDPOINT_OFFSET;
-
-        // Arrange in a grid
-        let cols = (endpoint_ids.len() as f64).sqrt().ceil() as usize;
-        let cols = cols.max(1);
-
-        for (i, id) in endpoint_ids.iter().enumerate() {
-            let col = i % cols;
-            let row = i / cols;
-            let grid_w = (cols as f64 - 1.0) * NODE_SPACING;
-
-            if let Some(node) = nodes.get_mut(id) {
-                node.x = base_x - grid_w / 2.0 + col as f64 * NODE_SPACING;
-                node.y = base_y + row as f64 * NODE_SPACING;
+            if let Some(vid) = node.vlan_id {
+                vlan_endpoints.entry(vid).or_default().push(id.clone());
             }
         }
     }
 
-    // Return sector geometry for VLAN group bounding box computation
-    let mut geometry = BTreeMap::new();
-    for &(vid, w) in &sector_widths {
-        if let Some(&cx) = vlan_center_x.get(&vid) {
-            geometry.insert(vid, (cx, w));
+    for (vid, mut ep_ids) in vlan_endpoints {
+        ep_ids.sort();
+
+        if let Some(&(lx, ty, w, _h)) = sector_geom.get(&vid) {
+            let usable_w = (w - 2.0 * SECTOR_PADDING).max(NODE_SPACING);
+            let cols = (usable_w / NODE_SPACING).floor().max(1.0) as usize;
+
+            // For VLAN 2 endpoints, start below infrastructure
+            let grid_start_y = if vid == 2 {
+                let max_iy = nodes
+                    .values()
+                    .filter(|n| n.is_infrastructure)
+                    .map(|n| n.y)
+                    .fold(TOP_MARGIN, f64::max);
+                max_iy + ENDPOINT_OFFSET
+            } else {
+                ty + SECTOR_HEADER_H + SECTOR_PADDING
+            };
+
+            let grid_start_x = lx + SECTOR_PADDING + NODE_SPACING / 2.0;
+
+            for (i, id) in ep_ids.iter().enumerate() {
+                let col = i % cols;
+                let row = i / cols;
+                if let Some(node) = nodes.get_mut(id) {
+                    node.x = grid_start_x + col as f64 * NODE_SPACING;
+                    node.y = grid_start_y + row as f64 * NODE_SPACING;
+                }
+            }
         }
     }
-    geometry
+
+    sector_geom
 }
 
 // ── Device type mapping ──────────────────────────────────────────
