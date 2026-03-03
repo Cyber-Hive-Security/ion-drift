@@ -117,7 +117,7 @@ impl SwosClient {
             });
         }
 
-        // Parse WWW-Authenticate header
+        // Parse WWW-Authenticate header to extract realm and nonce
         let www_auth = resp
             .headers()
             .get("www-authenticate")
@@ -125,20 +125,27 @@ impl SwosClient {
             .ok_or(MikrotikError::AuthFailed)?
             .to_string();
 
-        // Use digest_auth crate to compute the authorization header
-        let context = digest_auth::AuthContext::new(
-            &self.username,
-            &self.password,
-            path,
+        let realm = extract_quoted_value(&www_auth, "realm")
+            .ok_or(MikrotikError::AuthFailed)?;
+        let nonce = extract_quoted_value(&www_auth, "nonce")
+            .ok_or(MikrotikError::AuthFailed)?;
+
+        // Compute MD5 Digest auth response (RFC 2617, qop=auth)
+        let cnonce: String = format!("{:016x}", rand::random::<u64>());
+        let nc = "00000001";
+
+        let ha1 = format!("{:x}", md5::compute(format!(
+            "{}:{}:{}", self.username, realm, self.password
+        )));
+        let ha2 = format!("{:x}", md5::compute(format!("GET:{}", path)));
+        let response = format!("{:x}", md5::compute(format!(
+            "{}:{}:{}:{}:auth:{}", ha1, nonce, nc, cnonce, ha2
+        )));
+
+        let auth_header = format!(
+            r#"Digest username="{}", realm="{}", nonce="{}", uri="{}", qop=auth, nc={}, cnonce="{}", response="{}""#,
+            self.username, realm, nonce, path, nc, cnonce, response
         );
-
-        let mut prompt = digest_auth::parse(&www_auth)
-            .map_err(|e| MikrotikError::Deserialize(format!("digest auth parse: {e}")))?;
-
-        let auth_header = prompt
-            .respond(&context)
-            .map_err(|e| MikrotikError::Deserialize(format!("digest auth respond: {e}")))?
-            .to_header_string();
 
         // Second request with Authorization
         let resp = self
@@ -484,6 +491,17 @@ fn get_u64_array(val: &serde_json::Value, field: &str) -> Vec<u64> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Extract a quoted value from a Digest auth header.
+///
+/// Input: `Digest realm="CSS310-8G+2S+", nonce="abc"`, key: `realm`
+/// Output: `Some("CSS310-8G+2S+")`
+fn extract_quoted_value(header: &str, key: &str) -> Option<String> {
+    let pattern = format!("{}=\"", key);
+    let start = header.find(&pattern)? + pattern.len();
+    let end = header[start..].find('"')? + start;
+    Some(header[start..end].to_string())
 }
 
 /// Transform SwOS JavaScript-like response to valid JSON.
