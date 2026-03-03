@@ -75,9 +75,13 @@ pub struct SwosClient {
 impl SwosClient {
     /// Create a new SwOS client. Does not make any network requests.
     pub fn new(host: String, port: u16, username: String, password: String) -> Self {
+        // SwOS is HTTP/1.0 — disable connection pooling to avoid keep-alive issues.
+        // Each digest auth flow requires two requests; connection reuse confuses SwOS.
         let http = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(std::time::Duration::from_secs(15))
+            .pool_max_idle_per_host(0)
+            .http1_only()
             .build()
             .expect("failed to build HTTP client");
 
@@ -102,8 +106,9 @@ impl SwosClient {
         let url = format!("{}{}", self.base_url(), path);
         tracing::debug!(url = %url, path = %path, "SwOS fetch: sending initial request");
 
-        // First request — expect 401 with WWW-Authenticate header
-        let resp = self.http.get(&url).send().await.map_err(|e| {
+        // First request — expect 401 with WWW-Authenticate header.
+        // Send Connection: close since SwOS is HTTP/1.0.
+        let resp = self.http.get(&url).header("Connection", "close").send().await.map_err(|e| {
             tracing::error!(url = %url, error = %e, "SwOS fetch: request failed");
             e
         })?;
@@ -139,6 +144,11 @@ impl SwosClient {
                 MikrotikError::AuthFailed
             })?
             .to_string();
+
+        // Drain the 401 response body to fully close the connection.
+        // SwOS is HTTP/1.0 — the body is terminated by connection close,
+        // so we must consume it before making a new request.
+        drop(resp.bytes().await);
 
         tracing::debug!(www_authenticate = %www_auth, "SwOS fetch: parsing digest challenge");
 
@@ -184,11 +194,12 @@ impl SwosClient {
 
         tracing::debug!(authorization = %auth_header, "SwOS fetch: sending authenticated request");
 
-        // Second request with Authorization
+        // Second request with Authorization (new connection, Connection: close)
         let resp = self
             .http
             .get(&url)
             .header("Authorization", &auth_header)
+            .header("Connection", "close")
             .send()
             .await
             .map_err(|e| {
