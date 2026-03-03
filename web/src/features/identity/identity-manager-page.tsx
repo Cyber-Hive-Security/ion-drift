@@ -21,6 +21,7 @@ import {
   useSetDisposition,
   useBulkDisposition,
   usePortViolations,
+  useDevices,
 } from "@/api/queries";
 import type { NetworkIdentity, ObservedService, DeviceDisposition } from "@/api/types";
 import { VLAN_CONFIG } from "@/features/network-map/data";
@@ -248,6 +249,109 @@ function DispositionCell({
   );
 }
 
+// ── Switch binding cell ──────────────────────────────────────────
+
+function SwitchBindingCell({
+  identity,
+  devices,
+  onSave,
+}: {
+  identity: NetworkIdentity;
+  devices: { id: string; name: string }[];
+  onSave: (switchId: string, port: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [switchId, setSwitchId] = useState(identity.switch_device_id || "");
+  const [port, setPort] = useState(identity.switch_port || "");
+  const isHuman = identity.switch_binding_source === "human";
+
+  if (!editing) {
+    const deviceName = devices.find((d) => d.id === identity.switch_device_id)?.name;
+    return (
+      <button
+        onClick={() => {
+          setSwitchId(identity.switch_device_id || "");
+          setPort(identity.switch_port || "");
+          setEditing(true);
+        }}
+        className={cn("rounded px-1.5 py-0.5 text-left text-xs hover:bg-muted/50", isHuman && "text-green-400")}
+        title={isHuman ? "Human override" : "Auto-detected"}
+      >
+        {deviceName || identity.switch_device_id || "—"}
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <select
+        autoFocus
+        className="rounded border border-border bg-background px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+        value={switchId}
+        onChange={(e) => setSwitchId(e.target.value)}
+      >
+        <option value="">— None —</option>
+        {devices.map((d) => (
+          <option key={d.id} value={d.id}>
+            {d.name}
+          </option>
+        ))}
+      </select>
+      <div className="flex gap-1">
+        <input
+          type="text"
+          placeholder="Port"
+          className="w-20 rounded border border-border bg-background px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+          value={port}
+          onChange={(e) => setPort(e.target.value)}
+        />
+        <button
+          onClick={() => { onSave(switchId, port); setEditing(false); }}
+          className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] text-primary hover:bg-primary/30"
+        >
+          Save
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          className="rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Infrastructure toggle cell ───────────────────────────────────
+
+function InfrastructureCell({
+  identity,
+  onSave,
+}: {
+  identity: NetworkIdentity;
+  onSave: (value: boolean | null) => void;
+}) {
+  const val = identity.is_infrastructure;
+  // Cycle: null (Auto) → true (Yes) → false (No) → null
+  const next = val === null ? true : val === true ? false : null;
+  const label = val === null ? "Auto" : val ? "Yes" : "No";
+  const color = val === null
+    ? "bg-muted text-muted-foreground border-border"
+    : val
+      ? "bg-blue-500/20 text-blue-400 border-blue-500/30"
+      : "bg-muted/50 text-muted-foreground/50 border-border/50";
+
+  return (
+    <button
+      onClick={() => onSave(next)}
+      className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", color)}
+      title={`Is infrastructure: ${label}. Click to change.`}
+    >
+      {label}
+    </button>
+  );
+}
+
 // ── Main page ───────────────────────────────────────────────────
 
 export default function IdentityManagerPage() {
@@ -259,6 +363,7 @@ export default function IdentityManagerPage() {
   const setDisposition = useSetDisposition();
   const bulkDisposition = useBulkDisposition();
   const { data: violations = [] } = usePortViolations();
+  const { data: devices = [] } = useDevices();
 
   // Build IP → services lookup for showing ports per identity
   const servicesByIp = useMemo(() => {
@@ -348,6 +453,23 @@ export default function IdentityManagerPage() {
 
   const handleSetDisposition = (mac: string, disposition: DeviceDisposition) => {
     setDisposition.mutate({ mac, disposition });
+  };
+
+  const handleSaveSwitch = (mac: string, switchDeviceId: string, switchPort: string) => {
+    updateIdentity.mutate({
+      mac,
+      data: {
+        switch_device_id: switchDeviceId || undefined,
+        switch_port: switchPort || undefined,
+      },
+    });
+  };
+
+  const handleSetInfrastructure = (mac: string, value: boolean | null) => {
+    updateIdentity.mutate({
+      mac,
+      data: { is_infrastructure: value },
+    });
   };
 
   const handleBulkDisposition = (disposition: DeviceDisposition) => {
@@ -513,12 +635,40 @@ export default function IdentityManagerPage() {
       sortValue: (row) => row.vlan_id || 0,
     },
     {
+      key: "switch",
+      header: "Switch",
+      render: (row) => (
+        <SwitchBindingCell
+          identity={row}
+          devices={devices}
+          onSave={(switchId, port) => handleSaveSwitch(row.mac_address, switchId, port)}
+        />
+      ),
+      sortValue: (row) => row.switch_device_id || "",
+    },
+    {
       key: "port",
       header: "Port",
-      render: (row) => (
-        <span className="text-xs">{row.switch_port || "—"}</span>
-      ),
+      render: (row) => {
+        const isHuman = row.switch_binding_source === "human";
+        return (
+          <span className={cn("text-xs", isHuman && "text-green-400")} title={isHuman ? "Human override" : undefined}>
+            {row.switch_port || "—"}
+          </span>
+        );
+      },
       sortValue: (row) => row.switch_port || "",
+    },
+    {
+      key: "infra",
+      header: "Infra",
+      render: (row) => (
+        <InfrastructureCell
+          identity={row}
+          onSave={(val) => handleSetInfrastructure(row.mac_address, val)}
+        />
+      ),
+      sortValue: (row) => row.is_infrastructure === null ? 1 : row.is_infrastructure ? 2 : 0,
     },
     {
       key: "services",

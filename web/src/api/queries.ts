@@ -79,6 +79,7 @@ import type {
   DeviceDisposition,
   NetworkTopologyResponse,
   TopologyPosition,
+  SectorPosition,
 } from "./types";
 
 // Auth
@@ -1211,6 +1212,84 @@ export function useResetNodePosition() {
           ...old,
           nodes: old.nodes.map((n) =>
             n.id === nodeId ? { ...n, position_source: "auto" } : n,
+          ),
+        };
+      });
+    },
+  });
+}
+
+export function useSectorPositions() {
+  return useQuery({
+    queryKey: ["network", "topology", "sectors"],
+    queryFn: () => apiFetch<SectorPosition[]>("/api/network/topology/sectors"),
+    staleTime: 60_000,
+  });
+}
+
+export function useUpdateSectorPosition() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      vlanId,
+      x,
+      y,
+      width,
+      height,
+    }: {
+      vlanId: number;
+      x: number;
+      y: number;
+      width?: number;
+      height?: number;
+    }) =>
+      apiFetch<{ status: string }>(
+        `/api/network/topology/sectors/${vlanId}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ x, y, width, height }),
+        },
+      ),
+    onSuccess: (_data, { vlanId, x, y, width, height }) => {
+      // Optimistic cache patch
+      queryClient.setQueryData<NetworkTopologyResponse>(["network", "topology"], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          vlan_groups: old.vlan_groups.map((g) =>
+            g.vlan_id === vlanId
+              ? {
+                  ...g,
+                  bbox_x: x,
+                  bbox_y: y,
+                  bbox_w: width ?? g.bbox_w,
+                  bbox_h: height ?? g.bbox_h,
+                  position_source: "human",
+                }
+              : g,
+          ),
+        };
+      });
+    },
+  });
+}
+
+export function useResetSectorPosition() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vlanId: number) =>
+      apiFetch<{ removed: boolean }>(
+        `/api/network/topology/sectors/${vlanId}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: (_data, vlanId) => {
+      queryClient.setQueryData<NetworkTopologyResponse>(["network", "topology"], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          vlan_groups: old.vlan_groups.map((g) =>
+            g.vlan_id === vlanId ? { ...g, position_source: "auto" } : g,
           ),
         };
       });

@@ -93,3 +93,55 @@ pub async fn reset_position(
         .map_err(|e| internal_error("reset position", e))?;
     Ok(Json(serde_json::json!({ "removed": removed })))
 }
+
+// ── Sector positions ──────────────────────────────────────────
+
+/// GET /api/network/topology/sectors — all sector position records.
+pub async fn get_sectors(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let sectors = state
+        .switch_store
+        .get_sector_positions()
+        .await
+        .map_err(|e| internal_error("sector positions", e))?;
+    Ok(Json(serde_json::to_value(sectors).unwrap()))
+}
+
+#[derive(Deserialize)]
+pub struct SectorUpdate {
+    pub x: f64,
+    pub y: f64,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+/// PUT /api/network/topology/sectors/{vlanId} — human sector position override.
+pub async fn update_sector(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(vlan_id): Path<u32>,
+    Json(body): Json<SectorUpdate>,
+) -> Result<Json<serde_json::Value>, Response> {
+    state
+        .switch_store
+        .set_sector_position(vlan_id, body.x, body.y, body.width, body.height, "human")
+        .await
+        .map_err(|e| internal_error("set sector position", e))?;
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+/// DELETE /api/network/topology/sectors/{vlanId} — reset sector to auto.
+pub async fn reset_sector(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(vlan_id): Path<u32>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let removed = state
+        .switch_store
+        .delete_sector_position(vlan_id)
+        .await
+        .map_err(|e| internal_error("reset sector", e))?;
+    Ok(Json(serde_json::json!({ "removed": removed })))
+}

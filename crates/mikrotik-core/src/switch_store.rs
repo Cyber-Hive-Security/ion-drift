@@ -75,6 +75,8 @@ pub struct NetworkIdentity {
     pub human_confirmed: bool,
     pub human_label: Option<String>,
     pub disposition: String,
+    pub is_infrastructure: Option<bool>,
+    pub switch_binding_source: String,
 }
 
 /// An nmap scan record.
@@ -162,6 +164,18 @@ pub struct TopologyPosition {
     pub node_id: String,
     pub x: f64,
     pub y: f64,
+    pub source: String,
+    pub updated_at: String,
+}
+
+/// A VLAN sector position (auto-computed or human override).
+#[derive(Debug, Clone, Serialize)]
+pub struct SectorPosition {
+    pub vlan_id: u32,
+    pub x: f64,
+    pub y: f64,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
     pub source: String,
     pub updated_at: String,
 }
@@ -366,6 +380,16 @@ impl SwitchStore {
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS topology_sector_positions (
+                vlan_id INTEGER PRIMARY KEY,
+                x REAL NOT NULL,
+                y REAL NOT NULL,
+                width REAL,
+                height REAL,
+                source TEXT NOT NULL DEFAULT 'auto',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS observed_services (
                 ip_address TEXT NOT NULL,
                 port INTEGER NOT NULL,
@@ -412,6 +436,8 @@ impl SwitchStore {
             "ALTER TABLE network_identities ADD COLUMN human_confirmed INTEGER DEFAULT 0",
             "ALTER TABLE network_identities ADD COLUMN human_label TEXT",
             "ALTER TABLE network_identities ADD COLUMN disposition TEXT DEFAULT 'unknown'",
+            "ALTER TABLE network_identities ADD COLUMN is_infrastructure INTEGER",
+            "ALTER TABLE network_identities ADD COLUMN switch_binding_source TEXT DEFAULT 'auto'",
         ] {
             let _ = conn.execute(alter, []);
         }
@@ -639,8 +665,16 @@ impl SwitchStore {
                  best_ip = COALESCE(excluded.best_ip, network_identities.best_ip),
                  hostname = COALESCE(excluded.hostname, network_identities.hostname),
                  manufacturer = COALESCE(excluded.manufacturer, network_identities.manufacturer),
-                 switch_device_id = COALESCE(excluded.switch_device_id, network_identities.switch_device_id),
-                 switch_port = COALESCE(excluded.switch_port, network_identities.switch_port),
+                 switch_device_id = CASE
+                     WHEN COALESCE(network_identities.switch_binding_source, 'auto') = 'human'
+                         THEN network_identities.switch_device_id
+                     ELSE COALESCE(excluded.switch_device_id, network_identities.switch_device_id)
+                 END,
+                 switch_port = CASE
+                     WHEN COALESCE(network_identities.switch_binding_source, 'auto') = 'human'
+                         THEN network_identities.switch_port
+                     ELSE COALESCE(excluded.switch_port, network_identities.switch_port)
+                 END,
                  vlan_id = COALESCE(excluded.vlan_id, network_identities.vlan_id),
                  discovery_protocol = COALESCE(excluded.discovery_protocol, network_identities.discovery_protocol),
                  remote_identity = COALESCE(excluded.remote_identity, network_identities.remote_identity),
@@ -707,7 +741,8 @@ impl SwitchStore {
                     vlan_id, discovery_protocol, remote_identity, remote_platform,
                     first_seen, last_seen, confidence,
                     device_type, device_type_source, device_type_confidence,
-                    human_confirmed, human_label, disposition
+                    human_confirmed, human_label, disposition,
+                    is_infrastructure, switch_binding_source
              FROM network_identities ORDER BY last_seen DESC",
         )?;
         let rows = stmt.query_map([], map_identity_row)?;
@@ -726,7 +761,8 @@ impl SwitchStore {
                     vlan_id, discovery_protocol, remote_identity, remote_platform,
                     first_seen, last_seen, confidence,
                     device_type, device_type_source, device_type_confidence,
-                    human_confirmed, human_label, disposition
+                    human_confirmed, human_label, disposition,
+                    is_infrastructure, switch_binding_source
              FROM network_identities
              WHERE human_confirmed = 0
              ORDER BY device_type_confidence ASC, last_seen DESC
@@ -806,23 +842,43 @@ impl SwitchStore {
         })
     }
 
-    /// Set a human override on an identity's device type and/or label.
+    /// Set a human override on an identity's device type, label, switch binding,
+    /// and/or infrastructure classification.
     pub async fn update_identity_human_override(
         &self,
         mac: &str,
         device_type: Option<&str>,
         label: Option<&str>,
+        switch_device_id: Option<&str>,
+        switch_port: Option<&str>,
+        is_infrastructure: Option<Option<bool>>,
     ) -> Result<bool, rusqlite::Error> {
         let db = self.db.lock().await;
+        // Convert is_infrastructure Option<Option<bool>> to SQL:
+        //   None → don't change, Some(None) → set NULL (auto), Some(Some(v)) → set 0/1
+        let infra_sql_val: Option<Option<i32>> = is_infrastructure.map(|opt| opt.map(|b| b as i32));
+
         let rows = db.execute(
             "UPDATE network_identities SET
                  human_confirmed = 1,
                  device_type = COALESCE(?2, device_type),
                  device_type_source = CASE WHEN ?2 IS NOT NULL THEN 'human' ELSE device_type_source END,
                  device_type_confidence = CASE WHEN ?2 IS NOT NULL THEN 1.0 ELSE device_type_confidence END,
-                 human_label = COALESCE(?3, human_label)
+                 human_label = COALESCE(?3, human_label),
+                 switch_device_id = CASE WHEN ?4 IS NOT NULL THEN ?4 ELSE switch_device_id END,
+                 switch_port = CASE WHEN ?5 IS NOT NULL THEN ?5 ELSE switch_port END,
+                 switch_binding_source = CASE WHEN ?4 IS NOT NULL OR ?5 IS NOT NULL THEN 'human' ELSE switch_binding_source END,
+                 is_infrastructure = CASE WHEN ?6 = 1 THEN ?7 ELSE is_infrastructure END
              WHERE mac_address = ?1",
-            params![mac, device_type, label],
+            params![
+                mac,
+                device_type,
+                label,
+                switch_device_id,
+                switch_port,
+                infra_sql_val.is_some() as i32,
+                infra_sql_val.flatten(),
+            ],
         )?;
         Ok(rows > 0)
     }
@@ -1319,6 +1375,60 @@ impl SwitchStore {
         Ok(affected > 0)
     }
 
+    // ── Sector positions ──────────────────────────────────────────
+
+    /// Get all sector position overrides.
+    pub async fn get_sector_positions(&self) -> Result<Vec<SectorPosition>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT vlan_id, x, y, width, height, source, updated_at
+             FROM topology_sector_positions ORDER BY vlan_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SectorPosition {
+                vlan_id: row.get(0)?,
+                x: row.get(1)?,
+                y: row.get(2)?,
+                width: row.get(3)?,
+                height: row.get(4)?,
+                source: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Upsert a sector position (human or auto).
+    pub async fn set_sector_position(
+        &self,
+        vlan_id: u32,
+        x: f64,
+        y: f64,
+        width: Option<f64>,
+        height: Option<f64>,
+        source: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO topology_sector_positions (vlan_id, x, y, width, height, source, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+             ON CONFLICT(vlan_id) DO UPDATE SET
+                x = ?2, y = ?3, width = ?4, height = ?5, source = ?6, updated_at = datetime('now')",
+            rusqlite::params![vlan_id, x, y, width, height, source],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a sector position override (revert to auto).
+    pub async fn delete_sector_position(&self, vlan_id: u32) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM topology_sector_positions WHERE vlan_id = ?1",
+            rusqlite::params![vlan_id],
+        )?;
+        Ok(affected > 0)
+    }
+
     // ── Disposition ─────────────────────────────────────────────────
 
     /// Set the disposition of a network identity.
@@ -1583,6 +1693,8 @@ fn map_identity_row(row: &rusqlite::Row<'_>) -> Result<NetworkIdentity, rusqlite
         human_confirmed: row.get::<_, Option<i32>>(16)?.unwrap_or(0) != 0,
         human_label: row.get(17)?,
         disposition: row.get::<_, Option<String>>(18)?.unwrap_or_else(|| "unknown".to_string()),
+        is_infrastructure: row.get::<_, Option<i32>>(19)?.map(|v| v != 0),
+        switch_binding_source: row.get::<_, Option<String>>(20)?.unwrap_or_else(|| "auto".to_string()),
     })
 }
 

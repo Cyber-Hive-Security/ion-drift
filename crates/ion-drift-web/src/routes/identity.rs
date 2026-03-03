@@ -52,6 +52,25 @@ pub async fn review_queue(
 pub struct UpdateIdentityRequest {
     pub device_type: Option<String>,
     pub human_label: Option<String>,
+    pub switch_device_id: Option<String>,
+    pub switch_port: Option<String>,
+    /// Tri-state: omitted = don't change, null = auto-detect, true/false = human override.
+    #[serde(default, deserialize_with = "deserialize_optional_nullable")]
+    pub is_infrastructure: Option<Option<bool>>,
+}
+
+/// Custom deserializer for Option<Option<bool>>:
+///   field absent → None (don't change)
+///   field: null  → Some(None) (set to auto)
+///   field: true  → Some(Some(true))
+///   field: false → Some(Some(false))
+fn deserialize_optional_nullable<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<bool>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 /// PUT /api/network/identities/{mac}
@@ -67,6 +86,9 @@ pub async fn update_identity(
             &mac,
             body.device_type.as_deref(),
             body.human_label.as_deref(),
+            body.switch_device_id.as_deref(),
+            body.switch_port.as_deref(),
+            body.is_infrastructure,
         )
         .await
         .map_err(|e| internal_error("update identity", e))?;

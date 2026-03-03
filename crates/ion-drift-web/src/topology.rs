@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::switch_store::SwitchStore;
+use mikrotik_core::switch_store::{NetworkIdentity, SectorPosition, SwitchStore};
 use serde::Serialize;
 use tokio::sync::RwLock;
 
@@ -97,6 +97,7 @@ pub struct VlanGroup {
     pub bbox_y: f64,
     pub bbox_w: f64,
     pub bbox_h: f64,
+    pub position_source: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -135,8 +136,9 @@ const VLAN_ORDER: &[u32] = &[2, 6, 10, 25, 30, 35, 40, 90, 99];
 
 const CANVAS_W: f64 = 4000.0;
 const LAYER_SPACING: f64 = 300.0;
-const VLAN_SECTOR_MIN_W: f64 = 350.0;
-const NODE_SPACING: f64 = 100.0;
+const VLAN_SECTOR_MIN_W: f64 = 200.0;
+const VLAN_SECTOR_EMPTY_W: f64 = 150.0;
+const NODE_SPACING: f64 = 120.0;
 const TOP_MARGIN: f64 = 150.0;
 const ENDPOINT_OFFSET: f64 = 200.0;
 const SECTOR_PADDING: f64 = 40.0;
@@ -212,6 +214,15 @@ pub async fn compute_topology(
         );
     }
     drop(dm);
+
+    // ── Pre-load network identities for identity-first decisions ──
+    // Loaded early so LLDP neighbor processing can check whether a MAC
+    // has an authoritative identity before creating infrastructure nodes.
+    let identities = store.get_network_identities().await?;
+    let identity_by_mac: HashMap<String, &NetworkIdentity> = identities
+        .iter()
+        .map(|id| (id.mac_address.to_uppercase(), id))
+        .collect();
 
     // 1b. LLDP/MNDP neighbors → trunk edges + inferred infrastructure
     let neighbors = store.get_neighbors(None).await?;
@@ -322,7 +333,22 @@ pub async fn compute_topology(
                 });
             }
         } else if let Some(ref platform) = nb.platform {
-            // Unregistered neighbor — create inferred infrastructure node
+            // Unregistered neighbor — create inferred infrastructure node,
+            // BUT only if network_identities doesn't override this MAC.
+            let neighbor_mac_upper = nb.mac_address.as_deref().map(|m| m.to_uppercase());
+
+            // Identity-first check: if this MAC has an authoritative identity
+            // that says it's NOT infrastructure, skip creating an infra node.
+            // Layer 2 (endpoint placement) will handle it correctly.
+            if let Some(ident) = neighbor_mac_upper
+                .as_deref()
+                .and_then(|mac| identity_by_mac.get(mac))
+            {
+                if identity_overrides_lldp(ident) {
+                    continue;
+                }
+            }
+
             let plat_lower = platform.to_lowercase();
             let is_mikrotik = plat_lower.contains("routeros")
                 || plat_lower.contains("mikrotik")
@@ -526,8 +552,8 @@ pub async fn compute_topology(
     }
 
     // ── Layer 2: Endpoint placement ─────────────────────────────
+    // (identities already loaded above for identity-first LLDP decisions)
 
-    let identities = store.get_network_identities().await?;
     let endpoint_layer = nodes
         .values()
         .filter(|n| n.is_infrastructure)
@@ -540,10 +566,18 @@ pub async fn compute_topology(
     let mut infra_macs: HashSet<String> = HashSet::new();
     for nb in &neighbors {
         if let Some(ref mac) = nb.mac_address {
+            let mac_upper = mac.to_uppercase();
             // If this neighbor MAC is associated with a registered device, skip as endpoint
             if let Some(ref ident) = nb.identity {
                 if identity_to_device.contains_key(&ident.to_lowercase()) {
-                    infra_macs.insert(mac.to_uppercase());
+                    infra_macs.insert(mac_upper);
+                    continue;
+                }
+            }
+            // Also mark as infra if the neighbor created an infra node above
+            if let Some(ref ident) = nb.identity {
+                if infra_ids.contains(ident) {
+                    infra_macs.insert(mac_upper);
                 }
             }
         }
@@ -556,6 +590,15 @@ pub async fn compute_topology(
             }
         }
     }
+    // Remove human-confirmed non-infrastructure MACs from infra_macs.
+    // This prevents Layer 2 from skipping them — identity overrides LLDP.
+    infra_macs.retain(|mac| {
+        if let Some(ident) = identity_by_mac.get(mac.as_str()) {
+            !identity_overrides_lldp(ident)
+        } else {
+            true
+        }
+    });
 
     for identity in &identities {
         let mac = identity.mac_address.to_uppercase();
@@ -644,7 +687,7 @@ pub async fn compute_topology(
     }
 
     // ── Layout computation ───────────────────────────────────────
-    compute_layout(&mut nodes, &edges);
+    let sector_geometry = compute_layout(&mut nodes, &edges);
 
     // Position WAN node to the left of the router
     if let Some(router_pos) = router_id
@@ -678,27 +721,80 @@ pub async fn compute_topology(
         }
     }
 
+    // Compute endpoint layer Y for sizing empty sectors
+    let ep_y = nodes
+        .values()
+        .filter(|n| !n.is_infrastructure)
+        .map(|n| n.y)
+        .fold(f64::INFINITY, f64::min);
+    let empty_sector_y = if ep_y.is_finite() { ep_y } else { TOP_MARGIN + LAYER_SPACING * 2.0 };
+
+    // Load human sector position overrides
+    let sector_positions = store.get_sector_positions().await.unwrap_or_default();
+    let sector_overrides: HashMap<u32, &SectorPosition> = sector_positions
+        .iter()
+        .filter(|sp| sp.source == "human")
+        .map(|sp| (sp.vlan_id, sp))
+        .collect();
+
     let mut vlan_groups: Vec<VlanGroup> = Vec::new();
-    for (&vlan_id, group_nodes) in &vlan_nodes {
-        if group_nodes.is_empty() {
+    for (&vlan_id, (center_x, width)) in &sector_geometry {
+        let group_nodes = vlan_nodes.get(&vlan_id);
+        let (name, color, subnet) = vlan_config(vlan_id);
+
+        // Check for human override
+        if let Some(sp) = sector_overrides.get(&vlan_id) {
+            let node_count = group_nodes.map(|gn| gn.len() as u32).unwrap_or(0);
+            let w = sp.width.unwrap_or(*width);
+            let h = sp.height.unwrap_or(80.0);
+            vlan_groups.push(VlanGroup {
+                vlan_id,
+                name: name.to_string(),
+                color: color.to_string(),
+                subnet: subnet.to_string(),
+                node_count,
+                bbox_x: sp.x,
+                bbox_y: sp.y,
+                bbox_w: w,
+                bbox_h: h,
+                position_source: "human".to_string(),
+            });
             continue;
         }
-        let (name, color, subnet) = vlan_config(vlan_id);
-        let min_x = group_nodes.iter().map(|n| n.x).fold(f64::INFINITY, f64::min);
-        let max_x = group_nodes.iter().map(|n| n.x).fold(f64::NEG_INFINITY, f64::max);
-        let min_y = group_nodes.iter().map(|n| n.y).fold(f64::INFINITY, f64::min);
-        let max_y = group_nodes.iter().map(|n| n.y).fold(f64::NEG_INFINITY, f64::max);
+
+        let (bbox_x, bbox_y, bbox_w, bbox_h, node_count) = if let Some(gn) = group_nodes {
+            if gn.is_empty() {
+                // Empty VLAN — use sector geometry
+                (center_x - width / 2.0, empty_sector_y - SECTOR_PADDING, *width, 80.0, 0)
+            } else {
+                let min_x = gn.iter().map(|n| n.x).fold(f64::INFINITY, f64::min);
+                let max_x = gn.iter().map(|n| n.x).fold(f64::NEG_INFINITY, f64::max);
+                let min_y = gn.iter().map(|n| n.y).fold(f64::INFINITY, f64::min);
+                let max_y = gn.iter().map(|n| n.y).fold(f64::NEG_INFINITY, f64::max);
+                (
+                    min_x - SECTOR_PADDING,
+                    min_y - SECTOR_PADDING,
+                    (max_x - min_x) + SECTOR_PADDING * 2.0,
+                    (max_y - min_y) + SECTOR_PADDING * 2.0,
+                    gn.len() as u32,
+                )
+            }
+        } else {
+            // No nodes at all for this VLAN — empty sector
+            (center_x - width / 2.0, empty_sector_y - SECTOR_PADDING, *width, 80.0, 0)
+        };
 
         vlan_groups.push(VlanGroup {
             vlan_id,
             name: name.to_string(),
             color: color.to_string(),
             subnet: subnet.to_string(),
-            node_count: group_nodes.len() as u32,
-            bbox_x: min_x - SECTOR_PADDING,
-            bbox_y: min_y - SECTOR_PADDING,
-            bbox_w: (max_x - min_x) + SECTOR_PADDING * 2.0,
-            bbox_h: (max_y - min_y) + SECTOR_PADDING * 2.0,
+            node_count,
+            bbox_x,
+            bbox_y,
+            bbox_w,
+            bbox_h,
+            position_source: "auto".to_string(),
         });
     }
 
@@ -723,23 +819,20 @@ pub async fn compute_topology(
 
 // ── Deterministic hierarchical layout ────────────────────────────
 
-fn compute_layout(nodes: &mut BTreeMap<String, TopologyNode>, edges: &[TopologyEdge]) {
+/// Returns a map of vlan_id → (center_x, width) for VLAN sector geometry.
+fn compute_layout(
+    nodes: &mut BTreeMap<String, TopologyNode>,
+    edges: &[TopologyEdge],
+) -> BTreeMap<u32, (f64, f64)> {
     // Group nodes by layer
     let mut layers: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for (id, node) in nodes.iter() {
         layers.entry(node.layer).or_default().push(id.clone());
     }
 
-    // Build VLAN → sector X mapping
-    let mut active_vlans: Vec<u32> = Vec::new();
-    for vlan_id in VLAN_ORDER {
-        let has_nodes = nodes.values().any(|n| n.vlan_id == Some(*vlan_id) && !n.is_infrastructure);
-        let served = nodes.values().any(|n| n.vlans_served.contains(vlan_id));
-        if has_nodes || served {
-            active_vlans.push(*vlan_id);
-        }
-    }
-    // Also include any VLANs not in VLAN_ORDER
+    // Build VLAN → sector X mapping — always include all configured VLANs
+    let mut active_vlans: Vec<u32> = VLAN_ORDER.to_vec();
+    // Also include any VLANs not in VLAN_ORDER that have nodes
     for node in nodes.values() {
         if let Some(vid) = node.vlan_id {
             if !active_vlans.contains(&vid) {
@@ -763,6 +856,9 @@ fn compute_layout(nodes: &mut BTreeMap<String, TopologyNode>, edges: &[TopologyE
         .iter()
         .map(|&vid| {
             let count = vlan_endpoint_counts.get(&vid).copied().unwrap_or(0);
+            if count == 0 {
+                return (vid, VLAN_SECTOR_EMPTY_W);
+            }
             let cols = (count as f64).sqrt().ceil().max(1.0) as usize;
             let needed = cols as f64 * NODE_SPACING + 2.0 * SECTOR_PADDING;
             (vid, needed.max(VLAN_SECTOR_MIN_W))
@@ -869,6 +965,15 @@ fn compute_layout(nodes: &mut BTreeMap<String, TopologyNode>, edges: &[TopologyE
             }
         }
     }
+
+    // Return sector geometry for VLAN group bounding box computation
+    let mut geometry = BTreeMap::new();
+    for &(vid, w) in &sector_widths {
+        if let Some(&cx) = vlan_center_x.get(&vid) {
+            geometry.insert(vid, (cx, w));
+        }
+    }
+    geometry
 }
 
 // ── Device type mapping ──────────────────────────────────────────
@@ -890,6 +995,41 @@ fn map_device_type(dt: Option<&str>) -> NodeKind {
         Some("gaming") | Some("iot") | Some("storage") => NodeKind::IoT,
         _ => NodeKind::Unknown,
     }
+}
+
+// ── Identity helpers ─────────────────────────────────────────────
+
+/// Returns true if the device type string represents network infrastructure.
+fn is_infrastructure_type(dt: Option<&str>) -> bool {
+    matches!(
+        dt,
+        Some("router" | "switch" | "network_equipment" | "access_point" | "wap")
+    )
+}
+
+/// Check whether a network identity should block LLDP from creating an
+/// infrastructure node for the same MAC.  Returns true when the identity
+/// data is authoritative enough to override LLDP inference.
+fn identity_overrides_lldp(ident: &NetworkIdentity) -> bool {
+    // Explicit is_infrastructure override takes absolute priority
+    match ident.is_infrastructure {
+        Some(false) => return true,  // Human says NOT infrastructure
+        Some(true) => return false,  // Human says IS infrastructure — let LLDP proceed
+        None => {}                   // Auto-detect — fall through to heuristics
+    }
+    // Human-confirmed non-infrastructure device → always wins
+    if ident.human_confirmed && !is_infrastructure_type(ident.device_type.as_deref()) {
+        return true;
+    }
+    // High-confidence auto-detection as non-infrastructure → wins over MNDP
+    if !ident.human_confirmed
+        && !is_infrastructure_type(ident.device_type.as_deref())
+        && ident.device_type.is_some()
+        && ident.device_type_confidence >= 0.8
+    {
+        return true;
+    }
+    false
 }
 
 // ── Background task ──────────────────────────────────────────────

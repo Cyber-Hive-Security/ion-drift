@@ -965,6 +965,8 @@ export interface NetworkIdentity {
   human_confirmed: boolean;
   human_label: string | null;
   disposition: DeviceDisposition;
+  is_infrastructure: boolean | null;
+  switch_binding_source: string;
 }
 
 export type DeviceDisposition = "unknown" | "my_device" | "external" | "ignored" | "flagged";
@@ -1034,6 +1036,9 @@ export interface ScanStatus {
 export interface UpdateIdentityRequest {
   device_type?: string;
   human_label?: string;
+  switch_device_id?: string;
+  switch_port?: string;
+  is_infrastructure?: boolean | null;
 }
 
 export interface StartScanRequest {
@@ -1139,6 +1144,7 @@ export interface TopologyVlanGroup {
   bbox_y: number;
   bbox_w: number;
   bbox_h: number;
+  position_source: string;
 }
 
 export interface NetworkTopologyResponse {
@@ -1156,6 +1162,16 @@ export interface TopologyPosition {
   node_id: string;
   x: number;
   y: number;
+  source: string;
+  updated_at: string;
+}
+
+export interface SectorPosition {
+  vlan_id: number;
+  x: number;
+  y: number;
+  width: number | null;
+  height: number | null;
   source: string;
   updated_at: string;
 }

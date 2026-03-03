@@ -25,6 +25,8 @@ export interface TopologyCallbacks {
   onNodeClick?: (node: TopologyNode) => void;
   onDragEnd?: (nodeId: string, x: number, y: number) => void;
   onUnpin?: (nodeId: string) => void;
+  onSectorDragEnd?: (vlanId: number, x: number, y: number, width: number, height: number) => void;
+  onSectorReset?: (vlanId: number) => void;
 }
 
 export interface TopologyMapInstance {
@@ -385,12 +387,14 @@ export function createTopologyMapInstance(
     layerVlanBg.selectAll("*").remove();
 
     groups.forEach((group) => {
-      if (group.node_count === 0) return;
       const color = group.color || VLAN_COLORS[group.vlan_id] || "#555";
 
-      const g = layerVlanBg.append("g").attr("class", `vlan-bg-${group.vlan_id}`);
+      const g = layerVlanBg.append("g")
+        .attr("class", `vlan-bg-${group.vlan_id}`)
+        .attr("data-vlan-id", group.vlan_id);
 
-      g.append("rect")
+      const rect = g.append("rect")
+        .attr("class", "sector-rect")
         .attr("x", group.bbox_x)
         .attr("y", group.bbox_y)
         .attr("width", group.bbox_w)
@@ -400,9 +404,10 @@ export function createTopologyMapInstance(
         .attr("fill-opacity", 0.07)
         .attr("stroke", color)
         .attr("stroke-opacity", 0.3)
-        .attr("stroke-width", 1);
+        .attr("stroke-width", group.position_source === "human" ? 2 : 1);
 
-      g.append("text")
+      const headerLabel = g.append("text")
+        .attr("class", "sector-header")
         .attr("x", group.bbox_x + 12)
         .attr("y", group.bbox_y + 18)
         .attr("fill", color)
@@ -410,10 +415,12 @@ export function createTopologyMapInstance(
         .attr("font-size", 12)
         .attr("font-family", "monospace")
         .attr("font-weight", "bold")
+        .attr("cursor", "grab")
         .text(`VLAN ${group.vlan_id} \u2014 ${group.name}`);
 
       if (group.subnet) {
         g.append("text")
+          .attr("class", "sector-subnet")
           .attr("x", group.bbox_x + 12)
           .attr("y", group.bbox_y + 33)
           .attr("fill", color)
@@ -424,6 +431,7 @@ export function createTopologyMapInstance(
       }
 
       g.append("text")
+        .attr("class", "sector-count")
         .attr("x", group.bbox_x + group.bbox_w - 12)
         .attr("y", group.bbox_y + 18)
         .attr("text-anchor", "end")
@@ -432,6 +440,165 @@ export function createTopologyMapInstance(
         .attr("font-size", 10)
         .attr("font-family", "monospace")
         .text(`${group.node_count} devices`);
+
+      // Pin indicator for human-positioned sectors
+      if (group.position_source === "human") {
+        g.append("text")
+          .attr("class", "sector-pin")
+          .attr("x", group.bbox_x + group.bbox_w - 30)
+          .attr("y", group.bbox_y + 18)
+          .attr("text-anchor", "end")
+          .attr("font-size", 10)
+          .attr("cursor", "pointer")
+          .text("\uD83D\uDCCC")
+          .on("click", function (event: MouseEvent) {
+            event.stopPropagation();
+            callbacks.onSectorReset?.(group.vlan_id);
+          });
+      }
+
+      // ── Sector drag (on header label) ──
+      let dragStartX = 0;
+      let dragStartY = 0;
+      let origBboxX = group.bbox_x;
+      let origBboxY = group.bbox_y;
+
+      const sectorDrag = d3.drag<SVGTextElement, unknown>()
+        .on("start", function (event) {
+          dragStartX = event.x;
+          dragStartY = event.y;
+          origBboxX = group.bbox_x;
+          origBboxY = group.bbox_y;
+          d3.select(this).attr("cursor", "grabbing");
+        })
+        .on("drag", function (event) {
+          const dx = event.x - dragStartX;
+          const dy = event.y - dragStartY;
+          const newX = origBboxX + dx;
+          const newY = origBboxY + dy;
+
+          // Move the entire sector group
+          g.select(".sector-rect")
+            .attr("x", newX).attr("y", newY);
+          g.select(".sector-header")
+            .attr("x", newX + 12).attr("y", newY + 18);
+          g.select(".sector-subnet")
+            .attr("x", newX + 12).attr("y", newY + 33);
+          g.select(".sector-count")
+            .attr("x", newX + group.bbox_w - 12).attr("y", newY + 18);
+          g.select(".sector-pin")
+            .attr("x", newX + group.bbox_w - 30).attr("y", newY + 18);
+          g.select(".resize-handle")
+            .attr("x", newX + group.bbox_w - 14).attr("y", newY + group.bbox_h - 14);
+
+          // Move contained nodes by the same delta
+          if (currentData) {
+            currentData.nodes.forEach((node) => {
+              if (node.vlan_id === group.vlan_id) {
+                const nodeG = layerNodes.select(`[data-node-id="${node.id}"]`);
+                if (!nodeG.empty()) {
+                  const nx = node.x + dx;
+                  const ny = node.y + dy;
+                  nodeG.attr("transform", `translate(${nx},${ny})`);
+                }
+              }
+            });
+          }
+        })
+        .on("end", function (event) {
+          d3.select(this).attr("cursor", "grab");
+          const dx = event.x - dragStartX;
+          const dy = event.y - dragStartY;
+          if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+
+          const newX = origBboxX + dx;
+          const newY = origBboxY + dy;
+
+          // Persist node positions for contained nodes
+          if (currentData) {
+            currentData.nodes.forEach((node) => {
+              if (node.vlan_id === group.vlan_id) {
+                node.x += dx;
+                node.y += dy;
+                // Update labels
+                layerLabels.selectAll(`[data-node-id="${node.id}"]`).each(function () {
+                  const el = d3.select(this);
+                  const curX = parseFloat(el.attr("x")) || 0;
+                  const curY = parseFloat(el.attr("y")) || 0;
+                  el.attr("x", curX + dx).attr("y", curY + dy);
+                });
+                // Update connected edges
+                layerEdges.selectAll<SVGGElement, unknown>(".edge").each(function () {
+                  const eg = d3.select(this);
+                  const srcId = eg.attr("data-source");
+                  const tgtId = eg.attr("data-target");
+                  if (srcId === node.id || tgtId === node.id) {
+                    const src = nodeMap.get(srcId || "");
+                    const tgt = nodeMap.get(tgtId || "");
+                    if (src && tgt) {
+                      eg.select("line")
+                        .attr("x1", src.x).attr("y1", src.y)
+                        .attr("x2", tgt.x).attr("y2", tgt.y);
+                    }
+                  }
+                });
+              }
+            });
+          }
+
+          // Update group data
+          group.bbox_x = newX;
+          group.bbox_y = newY;
+          group.position_source = "human";
+          callbacks.onSectorDragEnd?.(group.vlan_id, newX, newY, group.bbox_w, group.bbox_h);
+        });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      headerLabel.call(sectorDrag as any);
+
+      // ── Resize handle (bottom-right corner) ──
+      const handleSize = 12;
+      g.append("rect")
+        .attr("class", "resize-handle")
+        .attr("x", group.bbox_x + group.bbox_w - handleSize - 2)
+        .attr("y", group.bbox_y + group.bbox_h - handleSize - 2)
+        .attr("width", handleSize)
+        .attr("height", handleSize)
+        .attr("rx", 2)
+        .attr("fill", color)
+        .attr("fill-opacity", 0.2)
+        .attr("stroke", color)
+        .attr("stroke-opacity", 0.4)
+        .attr("stroke-width", 1)
+        .attr("cursor", "nwse-resize")
+        .call(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          d3.drag<SVGRectElement, unknown>()
+            .on("start", function () {
+              origBboxX = group.bbox_x;
+              origBboxY = group.bbox_y;
+            })
+            .on("drag", function (event) {
+              const newW = Math.max(100, event.x - group.bbox_x);
+              const newH = Math.max(60, event.y - group.bbox_y);
+              rect.attr("width", newW).attr("height", newH);
+              g.select(".sector-count")
+                .attr("x", group.bbox_x + newW - 12);
+              g.select(".sector-pin")
+                .attr("x", group.bbox_x + newW - 30);
+              d3.select(this)
+                .attr("x", group.bbox_x + newW - handleSize - 2)
+                .attr("y", group.bbox_y + newH - handleSize - 2);
+            })
+            .on("end", function (event) {
+              const newW = Math.max(100, event.x - group.bbox_x);
+              const newH = Math.max(60, event.y - group.bbox_y);
+              group.bbox_w = newW;
+              group.bbox_h = newH;
+              group.position_source = "human";
+              callbacks.onSectorDragEnd?.(group.vlan_id, group.bbox_x, group.bbox_y, newW, newH);
+            }) as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+        );
     });
   }
 
@@ -500,9 +667,11 @@ export function createTopologyMapInstance(
       return 0;
     });
 
+    let endpointIdx = 0;
     sorted.forEach((node) => {
       const visible = isNodeVisible(node);
       const opacity = nodeOpacity(node);
+      const epIdx = node.is_infrastructure ? -1 : endpointIdx++;
 
       const g = layerNodes
         .append("g")
@@ -647,7 +816,9 @@ export function createTopologyMapInstance(
       // Node label
       if (visible) {
         const labelX = node.is_infrastructure ? nodeRadius(node) + 8 : 0;
-        const labelY = node.is_infrastructure ? 4 : nodeRadius(node) + 14;
+        // Stagger endpoint labels: odd-index 5px higher, even-index 5px lower
+        const stagger = node.is_infrastructure ? 0 : (epIdx % 2 === 0 ? 5 : -5);
+        const labelY = node.is_infrastructure ? 4 : nodeRadius(node) + 14 + stagger;
         const anchor = node.is_infrastructure ? "start" : "middle";
         const fontSize = node.is_infrastructure ? 11 : 9;
         const maxLen = node.is_infrastructure ? INFRA_LABEL_MAX : ENDPOINT_LABEL_MAX;
@@ -727,10 +898,13 @@ export function createTopologyMapInstance(
 
   // ── Zoom-dependent label visibility ──
   function updateLabelVisibility() {
-    // Infrastructure labels: always visible
+    // Registered infrastructure labels (router, managed_switch): always visible
+    // Unregistered infrastructure labels (WAPs, unmanaged switches): scale > 0.5
     // Endpoint labels: visible at scale > 0.5
     // IP sublabels: visible at scale > 0.7
-    // Port labels (on edges): visible at scale > 0.6
+    // Port labels (on edges): visible at scale > 0.8
+    const registeredKinds = new Set(["router", "managed_switch"]);
+
     layerLabels
       .selectAll<SVGTextElement, unknown>(".node-label")
       .each(function () {
@@ -742,7 +916,7 @@ export function createTopologyMapInstance(
           el.attr("opacity", 0);
           return;
         }
-        if (node.is_infrastructure) {
+        if (node.is_infrastructure && registeredKinds.has(node.kind)) {
           el.attr("opacity", 1);
         } else {
           el.attr("opacity", currentScale > 0.5 ? 1 : 0);
@@ -763,13 +937,15 @@ export function createTopologyMapInstance(
       });
 
     layerEdges.selectAll<SVGTextElement, unknown>("text").each(function () {
-      d3.select(this).attr("opacity", currentScale > 0.6 ? 1 : 0);
+      d3.select(this).attr("opacity", currentScale > 0.8 ? 1 : 0);
     });
   }
 
   // ── Zoom-to-fit helper ──
   function zoomToFit(animate = false) {
-    if (!currentData || currentData.nodes.length === 0) return;
+    if (!currentData) return;
+    // Need at least nodes OR vlan_groups to compute a bounding box
+    if (currentData.nodes.length === 0 && currentData.vlan_groups.length === 0) return;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     currentData.nodes.forEach((n) => {
@@ -777,6 +953,13 @@ export function createTopologyMapInstance(
       if (n.y < minY) minY = n.y;
       if (n.x > maxX) maxX = n.x;
       if (n.y > maxY) maxY = n.y;
+    });
+    // Also incorporate VLAN group bounding boxes (includes empty sectors)
+    currentData.vlan_groups.forEach((g) => {
+      if (g.bbox_x < minX) minX = g.bbox_x;
+      if (g.bbox_y < minY) minY = g.bbox_y;
+      if (g.bbox_x + g.bbox_w > maxX) maxX = g.bbox_x + g.bbox_w;
+      if (g.bbox_y + g.bbox_h > maxY) maxY = g.bbox_y + g.bbox_h;
     });
     const pad = 80;
     minX -= pad; minY -= pad; maxX += pad; maxY += pad;
@@ -786,8 +969,8 @@ export function createTopologyMapInstance(
     if (svgRect.width === 0 || svgRect.height === 0) return;
     const scaleX = svgRect.width / w;
     const scaleY = svgRect.height / h;
-    // Cap at 2.0 to avoid over-zoom on tiny topologies; no floor so wide layouts fit
-    const scale = Math.min(scaleX, scaleY, 2.0);
+    // Cap at 1.0 to prevent over-zoom; no floor so wide layouts fit
+    const scale = Math.min(scaleX, scaleY, 1.0);
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     const tx = svgRect.width / 2 - cx * scale;
