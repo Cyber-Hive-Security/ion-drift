@@ -258,12 +258,19 @@ impl SnmpClient {
             let sys_uptime_oid = make_oid(OID_SYS_UPTIME)?;
 
             tracing::debug!(host = %client.host, "SNMP v3: sending authenticated GET");
-            let response = sess
-                .get_many(&[&sys_name_oid, &sys_descr_oid, &sys_uptime_oid])
-                .map_err(|e| {
+            let oids = [&sys_name_oid, &sys_descr_oid, &sys_uptime_oid];
+            let response = match sess.get_many(&oids) {
+                Ok(r) => r,
+                Err(snmp2::Error::AuthUpdated) => {
+                    tracing::debug!(host = %client.host, "SNMP v3: security context updated, retrying GET");
+                    sess.get_many(&oids)
+                        .map_err(|e| MikrotikError::Snmp(format!("get (retry): {e}")))?
+                }
+                Err(e) => {
                     tracing::debug!(host = %client.host, error = %e, "SNMP v3: GET failed");
-                    MikrotikError::Snmp(format!("get: {e}"))
-                })?;
+                    return Err(MikrotikError::Snmp(format!("get: {e}")));
+                }
+            };
             tracing::debug!(host = %client.host, "SNMP v3: GET succeeded");
 
             let mut sys_name = String::new();
