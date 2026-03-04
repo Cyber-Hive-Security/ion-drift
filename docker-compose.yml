@@ -11,7 +11,7 @@ services:
       - "3100:3000"
       - "5514:5514/udp"
     environment:
-      - RUST_LOG=info,mikrotik_core::swos_client=debug
+      - RUST_LOG=info,tower_http=warn,hyper=warn,mikrotik_core::snmp_client=debug
       - XDG_DATA_HOME=/app/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
