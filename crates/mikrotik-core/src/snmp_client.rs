@@ -367,7 +367,10 @@ impl SnmpClient {
             loop {
                 let response = match sess.getnext(&current_oid) {
                     Ok(r) => r,
-                    Err(_) => break,
+                    Err(e) => {
+                        tracing::warn!("SNMP walk error: {e}");
+                        break;
+                    }
                 };
 
                 let mut advanced = false;
@@ -428,7 +431,10 @@ impl SnmpClient {
             loop {
                 let response = match sess.getnext(&current) {
                     Ok(r) => r,
-                    Err(_) => break,
+                    Err(e) => {
+                        tracing::warn!("SNMP walk error: {e}");
+                        break;
+                    }
                 };
                 let mut advanced = false;
                 for (oid, val) in response.varbinds {
@@ -460,7 +466,10 @@ impl SnmpClient {
             loop {
                 let response = match sess.getnext(&current) {
                     Ok(r) => r,
-                    Err(_) => break,
+                    Err(e) => {
+                        tracing::warn!("SNMP walk error: {e}");
+                        break;
+                    }
                 };
                 let mut advanced = false;
                 for (oid, val) in response.varbinds {
@@ -639,7 +648,10 @@ fn walk_string_column(
     loop {
         let response = match sess.getnext(&current) {
             Ok(r) => r,
-            Err(_) => break,
+            Err(e) => {
+                tracing::warn!("SNMP walk error: {e}");
+                break;
+            }
         };
 
         let mut advanced = false;
@@ -676,7 +688,10 @@ fn walk_u64_column(
     loop {
         let response = match sess.getnext(&current) {
             Ok(r) => r,
-            Err(_) => break,
+            Err(e) => {
+                tracing::warn!("SNMP walk error: {e}");
+                break;
+            }
         };
 
         let mut advanced = false;
@@ -713,7 +728,10 @@ fn walk_raw_column(
     loop {
         let response = match sess.getnext(&current) {
             Ok(r) => r,
-            Err(_) => break,
+            Err(e) => {
+                tracing::warn!("SNMP walk error: {e}");
+                break;
+            }
         };
 
         let mut advanced = false;
@@ -753,7 +771,10 @@ fn walk_lldp_string(
     loop {
         let response = match sess.getnext(&current) {
             Ok(r) => r,
-            Err(_) => break,
+            Err(e) => {
+                tracing::warn!("SNMP walk error: {e}");
+                break;
+            }
         };
 
         let mut advanced = false;
@@ -793,7 +814,10 @@ fn walk_lldp_raw(
     loop {
         let response = match sess.getnext(&current) {
             Ok(r) => r,
-            Err(_) => break,
+            Err(e) => {
+                tracing::warn!("SNMP walk error: {e}");
+                break;
+            }
         };
 
         let mut advanced = false;
@@ -833,7 +857,10 @@ fn walk_indexed_fn(
     loop {
         let response = match sess.getnext(&current) {
             Ok(r) => r,
-            Err(_) => break,
+            Err(e) => {
+                tracing::warn!("SNMP walk error: {e}");
+                break;
+            }
         };
 
         let mut advanced = false;
@@ -867,7 +894,10 @@ fn walk_indexed_raw_fn(
     loop {
         let response = match sess.getnext(&current) {
             Ok(r) => r,
-            Err(_) => break,
+            Err(e) => {
+                tracing::warn!("SNMP walk error: {e}");
+                break;
+            }
         };
 
         let mut advanced = false;

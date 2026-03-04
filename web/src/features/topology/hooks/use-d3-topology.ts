@@ -11,6 +11,7 @@ import type {
   NetworkTopologyResponse,
 } from "@/api/types";
 import { VLAN_COLORS } from "@/constants/vlans";
+import { escHtml } from "@/lib/utils";
 
 // ─── Constants ──────────────────────────────────────────
 
@@ -300,17 +301,17 @@ export function createTopologyMapInstance(
   function showTooltip(event: MouseEvent, node: TopologyNode) {
     const tip = createTooltip();
     const lines: string[] = [];
-    lines.push(`<strong style="color:${nodeColor(node)}">${node.label}</strong>`);
-    if (node.kind) lines.push(`<span style="color:#999">Kind:</span> ${node.kind}`);
-    if (node.ip) lines.push(`<span style="color:#999">IP:</span> ${node.ip}`);
-    if (node.mac) lines.push(`<span style="color:#999">MAC:</span> ${node.mac}`);
+    lines.push(`<strong style="color:${nodeColor(node)}">${escHtml(node.label)}</strong>`);
+    if (node.kind) lines.push(`<span style="color:#999">Kind:</span> ${escHtml(node.kind)}`);
+    if (node.ip) lines.push(`<span style="color:#999">IP:</span> ${escHtml(node.ip)}`);
+    if (node.mac) lines.push(`<span style="color:#999">MAC:</span> ${escHtml(node.mac)}`);
     if (node.vlan_id != null) lines.push(`<span style="color:#999">VLAN:</span> ${node.vlan_id}`);
-    if (node.device_type) lines.push(`<span style="color:#999">Type:</span> ${node.device_type}`);
-    if (node.manufacturer) lines.push(`<span style="color:#999">Mfg:</span> ${node.manufacturer}`);
+    if (node.device_type) lines.push(`<span style="color:#999">Type:</span> ${escHtml(node.device_type)}`);
+    if (node.manufacturer) lines.push(`<span style="color:#999">Mfg:</span> ${escHtml(node.manufacturer)}`);
     if (node.switch_port) {
-      lines.push(`<span style="color:#999">Port:</span> ${node.switch_port}`);
+      lines.push(`<span style="color:#999">Port:</span> ${escHtml(node.switch_port)}`);
     } else if (node.parent_id) {
-      lines.push(`<span style="color:#999">Port:</span> <em style="color:#777">unknown — downstream of ${node.parent_id}</em>`);
+      lines.push(`<span style="color:#999">Port:</span> <em style="color:#777">unknown — downstream of ${escHtml(node.parent_id)}</em>`);
     }
     tip.innerHTML = lines.join("<br>");
     tip.style.display = "block";

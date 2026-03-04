@@ -180,13 +180,9 @@ impl SwosClient {
         let response_hash = format!("{:x}", md5::compute(&resp_input));
 
         tracing::debug!(
-            ha1_input = %ha1_input,
             ha1 = %ha1,
-            ha2_input = %ha2_input,
             ha2 = %ha2,
-            resp_input = %resp_input,
             response = %response_hash,
-            cnonce = %cnonce,
             "SwOS fetch: computed digest"
         );
 
@@ -195,7 +191,7 @@ impl SwosClient {
             self.username, realm, nonce, path, nc, cnonce, response_hash
         );
 
-        tracing::debug!(authorization = %auth_header, "SwOS fetch: sending authenticated request");
+        tracing::debug!(path = %path, "SwOS fetch: sending authenticated request");
 
         // Second request with Authorization (new connection, Connection: close)
         let resp = self

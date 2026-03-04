@@ -4,6 +4,7 @@ import * as topojson from "topojson-client";
 import type { Topology, GeometryCollection } from "topojson-specification";
 import type { GeoSummaryEntry, CitySummaryEntry } from "@/api/types";
 import { formatBytes, formatNumber } from "@/lib/format";
+import { escHtml } from "@/lib/utils";
 
 // Home location (Ogden, UT) and home country
 const HOME: [number, number] = [-111.97, 41.22];
@@ -242,8 +243,7 @@ export function WorldMap({
 
     const path = d3.geoPath(projection);
 
-    // Escape HTML to prevent XSS via GeoIP org names or MitM'd ip-api.com data
-    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const esc = escHtml;
 
     // Tooltip helpers
     const isMobile = width < 768;

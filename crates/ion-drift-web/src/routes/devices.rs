@@ -72,6 +72,43 @@ pub async fn create_device(
             .into_response()
     })?;
 
+    // Input validation
+    const VALID_DEVICE_TYPES: &[&str] = &["router", "switch", "snmp_switch", "swos_switch"];
+    if !VALID_DEVICE_TYPES.contains(&req.device.device_type.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("invalid device_type: must be one of {:?}", VALID_DEVICE_TYPES) })),
+        )
+            .into_response());
+    }
+    if req.device.id.is_empty()
+        || req.device.id.len() > 64
+        || !req.device.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid id: 1-64 chars, alphanumeric/hyphen/underscore only" })),
+        )
+            .into_response());
+    }
+    if req.device.host.is_empty()
+        || req.device.host.len() > 253
+        || req.device.host.contains(char::is_whitespace)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid host: 1-253 chars, no whitespace" })),
+        )
+            .into_response());
+    }
+    if req.device.name.len() > 128 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid name: max 128 chars" })),
+        )
+            .into_response());
+    }
+
     // Build client based on device type and test connection
     let (client, identity) = if req.device.device_type == "snmp_switch" {
         let snmp = if req.snmp_priv_password.is_some() || req.snmp_auth_protocol.is_some() {
@@ -352,6 +389,15 @@ pub async fn test_connection(
     State(state): State<AppState>,
     Json(req): Json<TestConnectionRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    // Input validation
+    if req.host.is_empty() || req.host.len() > 253 || req.host.contains(char::is_whitespace) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid host: 1-253 chars, no whitespace" })),
+        )
+            .into_response());
+    }
+
     let device_type = req.device_type.as_deref().unwrap_or("switch");
 
     if device_type == "snmp_switch" {

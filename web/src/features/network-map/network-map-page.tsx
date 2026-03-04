@@ -8,6 +8,7 @@ import { MapCanvas } from "./components/map-canvas";
 import { DetailPanel } from "./components/detail-panel";
 import { LegendPanel } from "./components/legend-panel";
 import { StatusBar } from "./components/status-bar";
+import { escHtml } from "@/lib/utils";
 import "./network-map.css";
 
 export function NetworkMapPage() {
@@ -47,28 +48,25 @@ export function NetworkMapPage() {
     const el = document.createElement("div");
     el.className = "nm-tooltip";
 
-    // Escape HTML to prevent XSS via DHCP hostnames or other device-controlled fields
-    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-    let html = `<div class="tt-name">${esc(node.hostname)}</div><div class="tt-ip">${esc(node.ip)}</div><div class="tt-role">${esc(node.role)}</div>`;
+    let html = `<div class="tt-name">${escHtml(node.hostname)}</div><div class="tt-ip">${escHtml(node.ip)}</div><div class="tt-role">${escHtml(node.role)}</div>`;
 
     // Append live status details if available
     const ls = node.liveStatus;
     if (ls) {
       const parts: string[] = [];
-      if (ls.mac) parts.push(`<span class="tt-dim">MAC</span> ${esc(ls.mac)}`);
-      if (ls.manufacturer) parts.push(`<span class="tt-dim">MFG</span> ${esc(ls.manufacturer)}`);
-      if (ls.dhcp_status) parts.push(`<span class="tt-dim">DHCP</span> ${esc(ls.dhcp_status)}`);
-      if (ls.expires_after) parts.push(`<span class="tt-dim">EXP</span> ${esc(ls.expires_after)}`);
-      if (ls.last_seen) parts.push(`<span class="tt-dim">SEEN</span> ${esc(ls.last_seen)}`);
+      if (ls.mac) parts.push(`<span class="tt-dim">MAC</span> ${escHtml(ls.mac)}`);
+      if (ls.manufacturer) parts.push(`<span class="tt-dim">MFG</span> ${escHtml(ls.manufacturer)}`);
+      if (ls.dhcp_status) parts.push(`<span class="tt-dim">DHCP</span> ${escHtml(ls.dhcp_status)}`);
+      if (ls.expires_after) parts.push(`<span class="tt-dim">EXP</span> ${escHtml(ls.expires_after)}`);
+      if (ls.last_seen) parts.push(`<span class="tt-dim">SEEN</span> ${escHtml(ls.last_seen)}`);
       parts.push(
         `<span class="tt-dim">ARP</span> <span class="${ls.in_arp ? "tt-green" : "tt-red"}">${ls.in_arp ? "active" : "offline"}</span>`,
       );
       // Hop count to internet
       if (ls.hop_count != null) {
-        parts.push(`<span class="tt-dim">HOPS</span> ${ls.hop_count} ${esc(ls.internet_path ?? "")}`);
+        parts.push(`<span class="tt-dim">HOPS</span> ${ls.hop_count} ${escHtml(ls.internet_path ?? "")}`);
       } else if (ls.internet_path) {
-        parts.push(`<span class="tt-dim">HOPS</span> <span class="tt-red">\u221e ${esc(ls.internet_path)}</span>`);
+        parts.push(`<span class="tt-dim">HOPS</span> <span class="tt-red">\u221e ${escHtml(ls.internet_path)}</span>`);
       }
       html += `<div class="tt-status">${parts.join("<br>")}</div>`;
     }
