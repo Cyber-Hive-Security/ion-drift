@@ -53,6 +53,10 @@ pub struct CreateDeviceRequest {
     pub device: NewDevice,
     pub username: String,
     pub password: String,
+    // SNMPv3 extras
+    pub snmp_auth_protocol: Option<String>,
+    pub snmp_priv_password: Option<String>,
+    pub snmp_priv_protocol: Option<String>,
 }
 
 pub async fn create_device(
@@ -70,11 +74,23 @@ pub async fn create_device(
 
     // Build client based on device type and test connection
     let (client, identity) = if req.device.device_type == "snmp_switch" {
-        let snmp = SnmpClient::new(
-            req.device.host.clone(),
-            req.device.port,
-            req.password.clone(),
-        );
+        let snmp = if req.snmp_priv_password.is_some() || req.snmp_auth_protocol.is_some() {
+            SnmpClient::new_v3(
+                req.device.host.clone(),
+                req.device.port,
+                req.username.clone(),
+                req.password.clone(),
+                req.snmp_auth_protocol.clone().unwrap_or_else(|| "SHA".into()),
+                req.snmp_priv_password.clone().unwrap_or_default(),
+                req.snmp_priv_protocol.clone().unwrap_or_else(|| "DES".into()),
+            )
+        } else {
+            SnmpClient::new_v2c(
+                req.device.host.clone(),
+                req.device.port,
+                req.password.clone(),
+            )
+        };
         let identity = snmp.test_connection().await.map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
@@ -139,6 +155,17 @@ pub async fn create_device(
         .add_device(&req.device, &req.username, &req.password)
         .await
         .map_err(|e| internal_error("add device", e))?;
+
+    // Store SNMPv3 extras if provided
+    sm_read
+        .store_snmp_v3_secrets(
+            &req.device.id,
+            req.snmp_priv_password.as_deref(),
+            req.snmp_auth_protocol.as_deref(),
+            req.snmp_priv_protocol.as_deref(),
+        )
+        .await
+        .map_err(|e| internal_error("store snmp v3 secrets", e))?;
 
     // Get the stored record back
     let record = sm_read
@@ -314,6 +341,10 @@ pub struct TestConnectionRequest {
     pub device_type: Option<String>,
     pub username: String,
     pub password: String,
+    // SNMPv3 extras
+    pub snmp_auth_protocol: Option<String>,
+    pub snmp_priv_password: Option<String>,
+    pub snmp_priv_protocol: Option<String>,
 }
 
 pub async fn test_connection(
@@ -324,11 +355,20 @@ pub async fn test_connection(
     let device_type = req.device_type.as_deref().unwrap_or("switch");
 
     if device_type == "snmp_switch" {
-        let client = SnmpClient::new(
-            req.host,
-            req.port.unwrap_or(161),
-            req.password,
-        );
+        let port = req.port.unwrap_or(161);
+        let client = if req.snmp_priv_password.is_some() || req.snmp_auth_protocol.is_some() {
+            SnmpClient::new_v3(
+                req.host,
+                port,
+                req.username,
+                req.password,
+                req.snmp_auth_protocol.unwrap_or_else(|| "SHA".into()),
+                req.snmp_priv_password.unwrap_or_default(),
+                req.snmp_priv_protocol.unwrap_or_else(|| "DES".into()),
+            )
+        } else {
+            SnmpClient::new_v2c(req.host, port, req.password)
+        };
         match client.test_connection().await {
             Ok(identity) => Ok(Json(serde_json::json!({
                 "status": "online",

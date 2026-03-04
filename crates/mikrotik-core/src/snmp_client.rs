@@ -1,12 +1,13 @@
 //! SNMP client for generic managed switches.
 //!
 //! Uses standard MIBs (IF-MIB, Q-BRIDGE-MIB, BRIDGE-MIB, LLDP-MIB, SNMPv2-MIB)
-//! to poll any SNMP-capable switch. Designed for the Netgear MS510TXP but works
-//! with any SNMPv2c-compatible managed switch.
+//! to poll any SNMP-capable switch. Supports SNMPv2c (community string) and
+//! SNMPv3 (AuthPriv with SHA/MD5 + DES/AES128).
 
 use std::collections::HashMap;
+use std::time::Duration;
 
-use snmp2::{Oid, Value};
+use snmp2::{v3, Oid, SyncSession, Value};
 
 use crate::error::MikrotikError;
 
@@ -104,25 +105,112 @@ pub struct SnmpVlanEntry {
 // ─── Client ─────────────────────────────────────────────────────
 
 /// SNMP client for generic managed switches using standard MIBs.
+/// Supports both SNMPv2c (community string) and SNMPv3 (AuthPriv).
 #[derive(Clone, Debug)]
 pub struct SnmpClient {
     pub host: String,
     pub port: u16,
-    pub community: String,
+    // v2c
+    pub community: Option<String>,
+    // v3
+    pub v3_username: Option<String>,
+    pub v3_auth_password: Option<String>,
+    pub v3_auth_protocol: Option<String>,
+    pub v3_priv_password: Option<String>,
+    pub v3_priv_protocol: Option<String>,
 }
 
 impl SnmpClient {
-    /// Create a new SNMP client. Does not make any network requests.
-    pub fn new(host: String, port: u16, community: String) -> Self {
+    /// Create a new SNMPv2c client. Does not make any network requests.
+    pub fn new_v2c(host: String, port: u16, community: String) -> Self {
         Self {
             host,
             port,
-            community,
+            community: Some(community),
+            v3_username: None,
+            v3_auth_password: None,
+            v3_auth_protocol: None,
+            v3_priv_password: None,
+            v3_priv_protocol: None,
+        }
+    }
+
+    /// Create a new SNMPv3 client with AuthPriv. Does not make any network requests.
+    pub fn new_v3(
+        host: String,
+        port: u16,
+        username: String,
+        auth_password: String,
+        auth_protocol: String,
+        priv_password: String,
+        priv_protocol: String,
+    ) -> Self {
+        Self {
+            host,
+            port,
+            community: None,
+            v3_username: Some(username),
+            v3_auth_password: Some(auth_password),
+            v3_auth_protocol: Some(auth_protocol),
+            v3_priv_password: Some(priv_password),
+            v3_priv_protocol: Some(priv_protocol),
         }
     }
 
     fn addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
+    }
+
+    /// Returns true if this client is configured for SNMPv3.
+    pub fn is_v3(&self) -> bool {
+        self.v3_username.is_some()
+    }
+
+    /// Create a new SNMP session (v2c or v3 depending on configuration).
+    fn create_session(&self) -> Result<SyncSession, MikrotikError> {
+        if let Some(ref username) = self.v3_username {
+            let auth_proto = match self.v3_auth_protocol.as_deref() {
+                Some("MD5") => v3::AuthProtocol::Md5,
+                _ => v3::AuthProtocol::Sha1,
+            };
+            let cipher = match self.v3_priv_protocol.as_deref() {
+                Some("AES128") | Some("AES") => v3::Cipher::Aes128,
+                _ => v3::Cipher::Des,
+            };
+
+            let auth_pw = self.v3_auth_password.as_deref().unwrap_or("");
+            let priv_pw = self.v3_priv_password.clone().unwrap_or_default();
+
+            let security = v3::Security::new(username.as_bytes(), auth_pw.as_bytes())
+                .with_auth_protocol(auth_proto)
+                .with_auth(v3::Auth::AuthPriv {
+                    cipher,
+                    privacy_password: priv_pw.into_bytes(),
+                });
+
+            let mut sess = SyncSession::new_v3(
+                &self.addr(),
+                Some(Duration::from_secs(5)),
+                0,
+                security,
+            )
+            .map_err(|e| MikrotikError::Snmp(format!("v3 session: {e}")))?;
+
+            // Engine ID discovery — required for v3
+            sess.init()
+                .map_err(|e| MikrotikError::Snmp(format!("v3 init: {e}")))?;
+
+            Ok(sess)
+        } else {
+            let community = self.community.as_deref().unwrap_or("public");
+            SyncSession::new_v2c(
+                &self.addr(),
+                community.as_bytes(),
+                Some(Duration::from_secs(5)),
+                0,
+            )
+            .map_err(|e| MikrotikError::Snmp(format!("v2c session: {e}")))
+        }
     }
 
     /// Test connectivity by reading sysName.
@@ -133,20 +221,18 @@ impl SnmpClient {
 
     /// Read SNMPv2-MIB system group (sysName, sysDescr, sysUpTime).
     pub async fn get_system_info(&self) -> Result<SnmpSystemInfo, MikrotikError> {
-        let addr = self.addr();
-        let community = self.community.clone();
+        let client = self.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut sess = new_session(&addr, &community)?;
+            let mut sess = client.create_session()?;
 
             let sys_name_oid = make_oid(OID_SYS_NAME)?;
             let sys_descr_oid = make_oid(OID_SYS_DESCR)?;
             let sys_uptime_oid = make_oid(OID_SYS_UPTIME)?;
 
-            // Use get_many for multiple scalar OIDs in one request
             let response = sess
                 .get_many(&[&sys_name_oid, &sys_descr_oid, &sys_uptime_oid])
-                .map_err(|e| MikrotikError::Snmp(format!("get system: {e}")))?;
+                .map_err(|e| MikrotikError::Snmp(format!("get: {e}")))?;
 
             let mut sys_name = String::new();
             let mut sys_descr = String::new();
@@ -165,7 +251,7 @@ impl SnmpClient {
 
             if sys_name.is_empty() {
                 return Err(MikrotikError::Snmp(
-                    "no sysName returned — check community string".into(),
+                    "no sysName returned — check credentials".into(),
                 ));
             }
 
@@ -181,11 +267,10 @@ impl SnmpClient {
 
     /// Read all interfaces via IF-MIB + ifXTable (64-bit counters).
     pub async fn get_interfaces(&self) -> Result<Vec<SnmpInterface>, MikrotikError> {
-        let addr = self.addr();
-        let community = self.community.clone();
+        let client = self.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut sess = new_session(&addr, &community)?;
+            let mut sess = client.create_session()?;
 
             // Walk each column of the interface tables
             let if_descr = walk_string_column(&mut sess, OID_IF_DESCR)?;
@@ -252,11 +337,10 @@ impl SnmpClient {
 
     /// Read the bridge port -> ifIndex mapping table.
     pub async fn get_bridge_port_map(&self) -> Result<HashMap<u32, u32>, MikrotikError> {
-        let addr = self.addr();
-        let community = self.community.clone();
+        let client = self.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut sess = new_session(&addr, &community)?;
+            let mut sess = client.create_session()?;
             let map = walk_u64_column(&mut sess, OID_DOT1D_BASE_PORT_IF_INDEX)?;
             Ok(map
                 .into_iter()
@@ -270,11 +354,10 @@ impl SnmpClient {
     /// Read the Q-BRIDGE-MIB MAC table (VLAN-aware).
     /// Returns entries with bridge port indices — caller must resolve to ifName.
     pub async fn get_mac_table(&self) -> Result<Vec<SnmpMacEntry>, MikrotikError> {
-        let addr = self.addr();
-        let community = self.community.clone();
+        let client = self.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut sess = new_session(&addr, &community)?;
+            let mut sess = client.create_session()?;
             let base_oid = make_oid(OID_DOT1Q_TP_FDB_PORT)?;
             let base_len = oid_components(&base_oid).len();
 
@@ -329,11 +412,10 @@ impl SnmpClient {
 
     /// Read the BRIDGE-MIB forwarding table (fallback, no VLAN info).
     pub async fn get_mac_table_bridge(&self) -> Result<Vec<SnmpMacEntry>, MikrotikError> {
-        let addr = self.addr();
-        let community = self.community.clone();
+        let client = self.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut sess = new_session(&addr, &community)?;
+            let mut sess = client.create_session()?;
 
             let addr_oid = make_oid(OID_DOT1D_TP_FDB_ADDRESS)?;
             let port_oid = make_oid(OID_DOT1D_TP_FDB_PORT)?;
@@ -421,11 +503,10 @@ impl SnmpClient {
 
     /// Read LLDP-MIB remote systems table.
     pub async fn get_lldp_neighbors(&self) -> Result<Vec<SnmpLldpNeighbor>, MikrotikError> {
-        let addr = self.addr();
-        let community = self.community.clone();
+        let client = self.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut sess = new_session(&addr, &community)?;
+            let mut sess = client.create_session()?;
 
             // LLDP OID index: {timeMark}.{localPortNum}.{remIndex}
             let sys_names = walk_lldp_string(&mut sess, OID_LLDP_REM_SYS_NAME)?;
@@ -465,11 +546,10 @@ impl SnmpClient {
 
     /// Read Q-BRIDGE-MIB VLAN static table.
     pub async fn get_vlan_membership(&self) -> Result<Vec<SnmpVlanEntry>, MikrotikError> {
-        let addr = self.addr();
-        let community = self.community.clone();
+        let client = self.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut sess = new_session(&addr, &community)?;
+            let mut sess = client.create_session()?;
 
             let names_oid = make_oid(OID_DOT1Q_VLAN_STATIC_NAME)?;
             let egress_oid = make_oid(OID_DOT1Q_VLAN_STATIC_EGRESS)?;
@@ -517,18 +597,12 @@ impl SnmpClient {
     }
 }
 
-// ─── Helpers ────────────────────────────────────────────────────
+// Note: SNMPv3 sessions may return `Error::AuthUpdated` when the remote
+// engine's boot/time counters change.  After `sess.init()` this is rare.
+// Walk functions treat it as a normal error (break early); the next poll
+// cycle will succeed since the library caches the updated engine params.
 
-/// Create a new SNMPv2c sync session with standard timeouts.
-fn new_session(addr: &str, community: &str) -> Result<snmp2::SyncSession, MikrotikError> {
-    snmp2::SyncSession::new_v2c(
-        addr,
-        community.as_bytes(),
-        Some(std::time::Duration::from_secs(5)),
-        0,
-    )
-    .map_err(|e| MikrotikError::Snmp(format!("session: {e}")))
-}
+// ─── Helpers ────────────────────────────────────────────────────
 
 /// Build an Oid from a u64 slice.
 fn make_oid(components: &[u64]) -> Result<Oid<'static>, MikrotikError> {
@@ -554,7 +628,7 @@ fn oid_suffix(oid: &Oid, base_len: usize) -> Vec<u64> {
 
 /// Walk an SNMP table column, collecting string values keyed by the first suffix component.
 fn walk_string_column(
-    sess: &mut snmp2::SyncSession,
+    sess: &mut SyncSession,
     base_oids: &[u64],
 ) -> Result<HashMap<u32, String>, MikrotikError> {
     let base = make_oid(base_oids)?;
@@ -591,7 +665,7 @@ fn walk_string_column(
 
 /// Walk an SNMP table column, collecting u64 values keyed by the first suffix component.
 fn walk_u64_column(
-    sess: &mut snmp2::SyncSession,
+    sess: &mut SyncSession,
     base_oids: &[u64],
 ) -> Result<HashMap<u32, u64>, MikrotikError> {
     let base = make_oid(base_oids)?;
@@ -628,7 +702,7 @@ fn walk_u64_column(
 
 /// Walk an SNMP table column, collecting raw bytes keyed by the first suffix component.
 fn walk_raw_column(
-    sess: &mut snmp2::SyncSession,
+    sess: &mut SyncSession,
     base_oids: &[u64],
 ) -> Result<HashMap<u32, Vec<u8>>, MikrotikError> {
     let base = make_oid(base_oids)?;
@@ -668,7 +742,7 @@ fn walk_raw_column(
 /// Walk LLDP table column. LLDP index: {timeMark}.{localPortNum}.{remIndex}
 /// Returns map of (localPortNum, remIndex) -> string value.
 fn walk_lldp_string(
-    sess: &mut snmp2::SyncSession,
+    sess: &mut SyncSession,
     base_oids: &[u64],
 ) -> Result<HashMap<(u32, u32), String>, MikrotikError> {
     let base = make_oid(base_oids)?;
@@ -708,7 +782,7 @@ fn walk_lldp_string(
 
 /// Walk LLDP table column returning raw bytes (for chassis ID).
 fn walk_lldp_raw(
-    sess: &mut snmp2::SyncSession,
+    sess: &mut SyncSession,
     base_oids: &[u64],
 ) -> Result<HashMap<(u32, u32), Vec<u8>>, MikrotikError> {
     let base = make_oid(base_oids)?;
@@ -749,7 +823,7 @@ fn walk_lldp_raw(
 
 /// Walk a table and call a closure with (suffix_components, value).
 fn walk_indexed_fn(
-    sess: &mut snmp2::SyncSession,
+    sess: &mut SyncSession,
     base: &Oid,
     mut handler: impl FnMut(&[u64], Value),
 ) -> Result<(), MikrotikError> {
@@ -783,7 +857,7 @@ fn walk_indexed_fn(
 
 /// Walk a table returning raw bytes for OctetString entries.
 fn walk_indexed_raw_fn(
-    sess: &mut snmp2::SyncSession,
+    sess: &mut SyncSession,
     base: &Oid,
     mut handler: impl FnMut(&[u64], &[u8]),
 ) -> Result<(), MikrotikError> {

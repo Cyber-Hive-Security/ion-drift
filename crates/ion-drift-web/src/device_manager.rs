@@ -104,17 +104,30 @@ impl DeviceManager {
             };
 
             let client = if record.device_type == "snmp_switch" {
-                // SNMP devices use UDP (community string stored as password)
-                let snmp = SnmpClient::new(
-                    record.host.clone(),
-                    record.port,
-                    password,
-                );
+                // Check for SNMPv3 params
+                let (priv_pw, auth_proto, priv_proto) =
+                    secrets.get_snmp_v3_params(&record.id).await?;
+                let snmp = if priv_pw.is_some() || auth_proto.is_some() {
+                    // SNMPv3 AuthPriv
+                    SnmpClient::new_v3(
+                        record.host.clone(),
+                        record.port,
+                        username,
+                        password,
+                        auth_proto.unwrap_or_else(|| "SHA".into()),
+                        priv_pw.unwrap_or_default(),
+                        priv_proto.unwrap_or_else(|| "DES".into()),
+                    )
+                } else {
+                    // SNMPv2c (backward compat)
+                    SnmpClient::new_v2c(record.host.clone(), record.port, password)
+                };
                 tracing::info!(
                     id = %record.id,
                     name = %record.name,
                     host = %record.host,
                     device_type = %record.device_type,
+                    v3 = snmp.is_v3(),
                     "SNMP client created"
                 );
                 DeviceClient::Snmp(snmp)

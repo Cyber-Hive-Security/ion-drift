@@ -17,7 +17,7 @@ import {
   useDeleteDevice,
   useTestDeviceConnection,
 } from "@/api/queries";
-import type { CreateDeviceRequest, UpdateDeviceRequest } from "@/api/types";
+import type { CreateDeviceRequest, TestConnectionRequest, UpdateDeviceRequest } from "@/api/types";
 import {
   Shield,
   Key,
@@ -78,6 +78,10 @@ function NetworkDevicesSection() {
     poll_interval_secs: "60",
     username: "",
     password: "",
+    snmp_version: "v3" as "v2c" | "v3",
+    snmp_auth_protocol: "SHA" as "SHA" | "MD5",
+    snmp_priv_password: "",
+    snmp_priv_protocol: "DES" as "DES" | "AES128",
   });
 
   const [editForm, setEditForm] = useState({
@@ -103,14 +107,20 @@ function NetworkDevicesSection() {
 
   const handleTest = async () => {
     setTestResult(null);
-    const result = await testConnection.mutateAsync({
+    const payload: TestConnectionRequest = {
       host: form.host,
       port: parseInt(form.port) || (form.device_type === "snmp_switch" ? 161 : form.device_type === "swos_switch" ? 80 : 443),
       tls: form.tls,
       device_type: form.device_type,
       username: form.username,
       password: form.password,
-    });
+      ...(form.device_type === "snmp_switch" && form.snmp_version === "v3" ? {
+        snmp_auth_protocol: form.snmp_auth_protocol,
+        snmp_priv_password: form.snmp_priv_password,
+        snmp_priv_protocol: form.snmp_priv_protocol,
+      } : {}),
+    };
+    const result = await testConnection.mutateAsync(payload);
     setTestResult(result);
   };
 
@@ -128,6 +138,11 @@ function NetworkDevicesSection() {
       username: form.username,
       password: form.password,
     };
+    if (form.device_type === "snmp_switch" && form.snmp_version === "v3") {
+      payload.snmp_auth_protocol = form.snmp_auth_protocol;
+      payload.snmp_priv_password = form.snmp_priv_password;
+      payload.snmp_priv_protocol = form.snmp_priv_protocol;
+    }
     await createDevice.mutateAsync(payload);
     setShowAddForm(false);
     setForm({
@@ -141,6 +156,10 @@ function NetworkDevicesSection() {
       poll_interval_secs: "60",
       username: "",
       password: "",
+      snmp_version: "v3",
+      snmp_auth_protocol: "SHA",
+      snmp_priv_password: "",
+      snmp_priv_protocol: "DES",
     });
     setTestResult(null);
   };
@@ -210,7 +229,7 @@ function NetworkDevicesSection() {
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{device.name}</span>
                   <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground uppercase">
-                    {device.device_type === "swos_switch" ? "SwOS" : device.device_type === "snmp_switch" ? "SNMP" : device.device_type}
+                    {device.device_type === "swos_switch" ? "SwOS" : device.device_type === "snmp_switch" ? "SNMP" : device.device_type === "switch" ? "RouterOS" : device.device_type}
                   </span>
                   {device.is_primary && (
                     <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
@@ -454,7 +473,7 @@ function NetworkDevicesSection() {
                 onChange={(e) => {
                   const dt = e.target.value as "router" | "switch" | "swos_switch" | "snmp_switch";
                   if (dt === "snmp_switch") {
-                    setForm({ ...form, device_type: dt, port: "161", tls: false });
+                    setForm({ ...form, device_type: dt, port: "161", tls: false, snmp_version: "v3" });
                   } else if (dt === "swos_switch") {
                     setForm({ ...form, device_type: dt, port: "80", tls: false });
                   } else if (form.device_type === "swos_switch" || form.device_type === "snmp_switch") {
@@ -484,14 +503,27 @@ function NetworkDevicesSection() {
                 className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
               />
             </div>
-            {form.device_type !== "snmp_switch" && (
+            {form.device_type === "snmp_switch" && (
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">SNMP Version</label>
+              <select
+                value={form.snmp_version}
+                onChange={(e) => setForm({ ...form, snmp_version: e.target.value as "v2c" | "v3" })}
+                className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+              >
+                <option value="v3">SNMPv3 (AuthPriv)</option>
+                <option value="v2c">SNMPv2c</option>
+              </select>
+            </div>
+            )}
+            {(form.device_type !== "snmp_switch" || form.snmp_version === "v3") && (
             <div>
               <label className="block text-xs text-muted-foreground mb-1">
-                Username
+                {form.device_type === "snmp_switch" ? "Security Name" : "Username"}
               </label>
               <input
                 type="text"
-                placeholder="admin"
+                placeholder={form.device_type === "snmp_switch" ? "snmpuser" : "admin"}
                 value={form.username}
                 onChange={(e) =>
                   setForm({ ...form, username: e.target.value })
@@ -502,11 +534,13 @@ function NetworkDevicesSection() {
             )}
             <div>
               <label className="block text-xs text-muted-foreground mb-1">
-                {form.device_type === "snmp_switch" ? "Community String" : "Password"}
+                {form.device_type === "snmp_switch"
+                  ? form.snmp_version === "v3" ? "Auth Password" : "Community String"
+                  : "Password"}
               </label>
               <input
                 type="password"
-                placeholder={form.device_type === "snmp_switch" ? "public" : undefined}
+                placeholder={form.device_type === "snmp_switch" && form.snmp_version === "v2c" ? "public" : undefined}
                 value={form.password}
                 onChange={(e) =>
                   setForm({ ...form, password: e.target.value })
@@ -514,6 +548,41 @@ function NetworkDevicesSection() {
                 className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
               />
             </div>
+            {form.device_type === "snmp_switch" && form.snmp_version === "v3" && (
+            <>
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Auth Protocol</label>
+                <select
+                  value={form.snmp_auth_protocol}
+                  onChange={(e) => setForm({ ...form, snmp_auth_protocol: e.target.value as "SHA" | "MD5" })}
+                  className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                >
+                  <option value="SHA">SHA</option>
+                  <option value="MD5">MD5</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Privacy Password</label>
+                <input
+                  type="password"
+                  value={form.snmp_priv_password}
+                  onChange={(e) => setForm({ ...form, snmp_priv_password: e.target.value })}
+                  className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Privacy Protocol</label>
+                <select
+                  value={form.snmp_priv_protocol}
+                  onChange={(e) => setForm({ ...form, snmp_priv_protocol: e.target.value as "DES" | "AES128" })}
+                  className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
+                >
+                  <option value="DES">DES</option>
+                  <option value="AES128">AES-128</option>
+                </select>
+              </div>
+            </>
+            )}
             <div>
               <label className="block text-xs text-muted-foreground mb-1">
                 Poll Interval (seconds)
@@ -555,7 +624,11 @@ function NetworkDevicesSection() {
             <button
               onClick={handleTest}
               disabled={
-                !form.host || !form.username || testConnection.isPending
+                !form.host ||
+                !form.password ||
+                (form.device_type !== "snmp_switch" && !form.username) ||
+                (form.device_type === "snmp_switch" && form.snmp_version === "v3" && (!form.username || !form.snmp_priv_password)) ||
+                testConnection.isPending
               }
               className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
             >
@@ -568,8 +641,9 @@ function NetworkDevicesSection() {
                 !form.id ||
                 !form.name ||
                 !form.host ||
-                !form.username ||
                 !form.password ||
+                (form.device_type !== "snmp_switch" && !form.username) ||
+                (form.device_type === "snmp_switch" && form.snmp_version === "v3" && (!form.username || !form.snmp_priv_password)) ||
                 createDevice.isPending
               }
               className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"

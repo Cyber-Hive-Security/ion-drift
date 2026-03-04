@@ -116,6 +116,10 @@ pub struct UpdateDevice {
     pub poll_interval_secs: Option<u32>,
     pub username: Option<String>,
     pub password: Option<String>,
+    // SNMPv3 extras
+    pub snmp_auth_protocol: Option<String>,
+    pub snmp_priv_password: Option<String>,
+    pub snmp_priv_protocol: Option<String>,
 }
 
 /// Manages encryption/decryption of secrets using a KEK retrieved from Keycloak.
@@ -535,6 +539,14 @@ impl SecretsManager {
             self.encrypt_secret(&format!("device:{id}:password"), password)
                 .await?;
         }
+        // Update SNMPv3 extras if provided
+        self.store_snmp_v3_secrets(
+            id,
+            update.snmp_priv_password.as_deref(),
+            update.snmp_auth_protocol.as_deref(),
+            update.snmp_priv_protocol.as_deref(),
+        )
+        .await?;
         Ok(())
     }
 
@@ -546,6 +558,9 @@ impl SecretsManager {
         // Remove encrypted credentials (ignore errors if they don't exist)
         let _ = self.delete_secret(&format!("device:{id}:username")).await;
         let _ = self.delete_secret(&format!("device:{id}:password")).await;
+        let _ = self.delete_secret(&format!("device:{id}:snmp_priv_password")).await;
+        let _ = self.delete_secret(&format!("device:{id}:snmp_auth_proto")).await;
+        let _ = self.delete_secret(&format!("device:{id}:snmp_priv_proto")).await;
         Ok(())
     }
 
@@ -564,6 +579,50 @@ impl SecretsManager {
             (Some(u), Some(p)) => Ok(Some((u.expose_secret().to_string(), p))),
             _ => Ok(None),
         }
+    }
+
+    /// Store SNMPv3 extra credentials for a device.
+    pub async fn store_snmp_v3_secrets(
+        &self,
+        device_id: &str,
+        priv_password: Option<&str>,
+        auth_proto: Option<&str>,
+        priv_proto: Option<&str>,
+    ) -> anyhow::Result<()> {
+        if let Some(pp) = priv_password {
+            self.encrypt_secret(&format!("device:{device_id}:snmp_priv_password"), pp)
+                .await?;
+        }
+        if let Some(ap) = auth_proto {
+            self.encrypt_secret(&format!("device:{device_id}:snmp_auth_proto"), ap)
+                .await?;
+        }
+        if let Some(pp) = priv_proto {
+            self.encrypt_secret(&format!("device:{device_id}:snmp_priv_proto"), pp)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Get SNMPv3 extra params: (priv_password, auth_protocol, priv_protocol).
+    pub async fn get_snmp_v3_params(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<(Option<String>, Option<String>, Option<String>)> {
+        let priv_pw = self
+            .decrypt_secret(&format!("device:{id}:snmp_priv_password"))
+            .await?;
+        let auth_proto = self
+            .decrypt_secret(&format!("device:{id}:snmp_auth_proto"))
+            .await?;
+        let priv_proto = self
+            .decrypt_secret(&format!("device:{id}:snmp_priv_proto"))
+            .await?;
+        Ok((
+            priv_pw.map(|s| s.expose_secret().to_string()),
+            auth_proto.map(|s| s.expose_secret().to_string()),
+            priv_proto.map(|s| s.expose_secret().to_string()),
+        ))
     }
 
     /// Check if the devices table has any entries.

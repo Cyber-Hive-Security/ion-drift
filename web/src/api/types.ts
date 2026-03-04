@@ -884,6 +884,10 @@ export interface CreateDeviceRequest {
   poll_interval_secs?: number;
   username: string;
   password: string;
+  // SNMPv3 extras
+  snmp_auth_protocol?: string;
+  snmp_priv_password?: string;
+  snmp_priv_protocol?: string;
 }
 
 export interface UpdateDeviceRequest {
@@ -897,6 +901,10 @@ export interface UpdateDeviceRequest {
   poll_interval_secs?: number;
   username?: string;
   password?: string;
+  // SNMPv3 extras
+  snmp_auth_protocol?: string;
+  snmp_priv_password?: string;
+  snmp_priv_protocol?: string;
 }
 
 export interface TestConnectionRequest {
@@ -907,6 +915,9 @@ export interface TestConnectionRequest {
   device_type?: string;
   username: string;
   password: string;
+  snmp_auth_protocol?: string;
+  snmp_priv_password?: string;
+  snmp_priv_protocol?: string;
 }
 
 export interface TestConnectionResponse {
