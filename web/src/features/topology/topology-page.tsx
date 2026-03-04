@@ -6,8 +6,11 @@ import {
   useResetNodePosition,
   useUpdateSectorPosition,
   useResetSectorPosition,
+  useDevices,
+  useCreateNeighborAlias,
+  useSetDisposition,
 } from "@/api/queries";
-import type { TopologyNode, NetworkTopologyResponse } from "@/api/types";
+import type { TopologyNode, NetworkTopologyResponse, NetworkDevice } from "@/api/types";
 import {
   createTopologyMapInstance,
   type TopologyMapInstance,
@@ -164,6 +167,190 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
   );
 }
 
+// ─── Node Context Menu ───────────────────────────────────
+
+interface ContextMenuState {
+  node: TopologyNode;
+  x: number;
+  y: number;
+}
+
+function NodeContextMenu({
+  menu,
+  devices,
+  onClose,
+  onAlias,
+  onHide,
+  onSetDisposition,
+  onSelect,
+}: {
+  menu: ContextMenuState;
+  devices: NetworkDevice[];
+  onClose: () => void;
+  onAlias: (matchType: "mac" | "identity", matchValue: string, targetDeviceId: string) => void;
+  onHide: (matchType: "mac" | "identity", matchValue: string) => void;
+  onSetDisposition: (mac: string, disposition: "ignored" | "flagged") => void;
+  onSelect: (node: TopologyNode) => void;
+}) {
+  const { node, x, y } = menu;
+  const [showDevicePicker, setShowDevicePicker] = useState(false);
+  const [filter, setFilter] = useState("");
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close on Escape
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  // Clamp position to viewport
+  const style: React.CSSProperties = {
+    position: "fixed",
+    left: Math.min(x, window.innerWidth - 260),
+    top: Math.min(y, window.innerHeight - 300),
+    zIndex: 50,
+  };
+
+  const matchType: "mac" | "identity" = node.mac ? "mac" : "identity";
+  const matchValue = node.mac ?? node.id;
+
+  const isUnregisteredInfra = node.is_infrastructure && node.confidence < 1.0;
+  const isEndpoint = !node.is_infrastructure;
+  const isRegisteredInfra = node.is_infrastructure && node.confidence >= 1.0;
+
+  const filteredDevices = devices.filter(
+    (d) =>
+      d.name.toLowerCase().includes(filter.toLowerCase()) ||
+      d.id.toLowerCase().includes(filter.toLowerCase()),
+  );
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+      />
+
+      {/* Menu */}
+      <div
+        ref={menuRef}
+        style={style}
+        className="min-w-[200px] rounded-lg border border-border bg-card/95 py-1 shadow-xl backdrop-blur"
+      >
+        {/* Header */}
+        <div className="border-b border-border px-3 py-1.5 text-xs font-semibold text-muted-foreground truncate">
+          {node.label}
+        </div>
+
+        {isUnregisteredInfra && !showDevicePicker && (
+          <>
+            <button
+              onClick={() => setShowDevicePicker(true)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+            >
+              <span className="text-muted-foreground">→</span>
+              This is...
+            </button>
+            <button
+              onClick={() => {
+                onHide(matchType, matchValue);
+                onClose();
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+            >
+              <span className="text-muted-foreground">×</span>
+              Hide from topology
+            </button>
+          </>
+        )}
+
+        {isUnregisteredInfra && showDevicePicker && (
+          <div className="p-2">
+            <input
+              type="text"
+              placeholder="Filter devices..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="mb-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+              autoFocus
+            />
+            <div className="max-h-40 overflow-y-auto">
+              {filteredDevices.map((d) => (
+                <button
+                  key={d.id}
+                  onClick={() => {
+                    onAlias(matchType, matchValue, d.id);
+                    onClose();
+                  }}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-foreground hover:bg-muted"
+                >
+                  <span className="font-mono text-muted-foreground">{d.id}</span>
+                  <span className="truncate">{d.name}</span>
+                </button>
+              ))}
+              {filteredDevices.length === 0 && (
+                <div className="px-2 py-1 text-xs text-muted-foreground">No devices found</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {isEndpoint && (
+          <>
+            {node.mac && (
+              <button
+                onClick={() => {
+                  onSetDisposition(node.mac!, "ignored");
+                  onClose();
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+              >
+                <span className="text-muted-foreground">×</span>
+                Hide from topology
+              </button>
+            )}
+            {node.mac && (
+              <button
+                onClick={() => {
+                  onSetDisposition(node.mac!, "flagged");
+                  onClose();
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+              >
+                <span className="text-yellow-500">⚠</span>
+                Flag device
+              </button>
+            )}
+          </>
+        )}
+
+        {isRegisteredInfra && (
+          <>
+            <button
+              onClick={() => {
+                onSelect(node);
+                onClose();
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+            >
+              <span className="text-muted-foreground">ℹ</span>
+              View device details
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 // ─── VLAN Filter Chips ──────────────────────────────────
 
 function VlanFilterBar({
@@ -211,6 +398,7 @@ export function TopologyPage() {
   const mapRef = useRef<TopologyMapInstance | null>(null);
   const prevDataRef = useRef<NetworkTopologyResponse | null>(null);
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [showEndpoints, setShowEndpoints] = useState(true);
   const [legendCollapsed, setLegendCollapsed] = useState(true);
@@ -222,6 +410,9 @@ export function TopologyPage() {
   const resetMutation = useResetNodePosition();
   const sectorPositionMutation = useUpdateSectorPosition();
   const sectorResetMutation = useResetSectorPosition();
+  const devicesList = useDevices();
+  const createAliasMutation = useCreateNeighborAlias();
+  const dispositionMutation = useSetDisposition();
 
   // Derive VLANs actually present in topology data (for filter pills)
   const dataVlans = useMemo(() => {
@@ -237,6 +428,9 @@ export function TopologyPage() {
 
     const instance = createTopologyMapInstance(svgRef.current, {
       onNodeClick: (node) => setSelectedNode(node),
+      onContextMenu: (node, screenX, screenY) => {
+        setContextMenu({ node, x: screenX, y: screenY });
+      },
       onDragEnd: (nodeId, x, y) => {
         positionMutation.mutate({ nodeId, x, y });
       },
@@ -393,6 +587,37 @@ export function TopologyPage() {
         {/* Detail Panel */}
         {selectedNode && (
           <DetailPanel node={selectedNode} onClose={handleClearSelection} />
+        )}
+
+        {/* Context Menu */}
+        {contextMenu && (
+          <NodeContextMenu
+            menu={contextMenu}
+            devices={devicesList.data ?? []}
+            onClose={() => setContextMenu(null)}
+            onAlias={(matchType, matchValue, targetDeviceId) => {
+              createAliasMutation.mutate({
+                match_type: matchType,
+                match_value: matchValue,
+                action: "alias",
+                target_device_id: targetDeviceId,
+              });
+              refreshMutation.mutate();
+            }}
+            onHide={(matchType, matchValue) => {
+              createAliasMutation.mutate({
+                match_type: matchType,
+                match_value: matchValue,
+                action: "hide",
+              });
+              refreshMutation.mutate();
+            }}
+            onSetDisposition={(mac, disposition) => {
+              dispositionMutation.mutate({ mac, disposition });
+              refreshMutation.mutate();
+            }}
+            onSelect={(node) => setSelectedNode(node)}
+          />
         )}
 
         {/* Legend */}

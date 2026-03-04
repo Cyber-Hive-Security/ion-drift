@@ -78,6 +78,8 @@ import type {
   PortViolation,
   BackboneLink,
   CreateBackboneLinkRequest,
+  NeighborAlias,
+  CreateNeighborAliasRequest,
   DeviceDisposition,
   NetworkTopologyResponse,
   TopologyPosition,
@@ -925,6 +927,7 @@ export function useSetDisposition() {
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["network", "identities"] });
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
     },
   });
 }
@@ -1334,6 +1337,46 @@ export function useDeleteBackboneLink() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["network", "backbone-links"] });
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    },
+  });
+}
+
+// ── Neighbor Aliases ────────────────────────────────────────────
+
+export function useNeighborAliases() {
+  return useQuery({
+    queryKey: ["network", "neighbor-aliases"],
+    queryFn: () => apiFetch<NeighborAlias[]>("/api/network/neighbor-aliases"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useCreateNeighborAlias() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateNeighborAliasRequest) =>
+      apiFetch<{ id: number }>("/api/network/neighbor-aliases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "neighbor-aliases"] });
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    },
+  });
+}
+
+export function useDeleteNeighborAlias() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiFetch<{ removed: boolean }>(`/api/network/neighbor-aliases/${id}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "neighbor-aliases"] });
       queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
     },
   });

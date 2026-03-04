@@ -1112,6 +1112,24 @@ export interface CreateBackboneLinkRequest {
   label?: string;
 }
 
+// ── Neighbor Aliases ───────────────────────────────────────────
+
+export interface NeighborAlias {
+  id: number;
+  match_type: "mac" | "identity";
+  match_value: string;
+  action: "alias" | "hide";
+  target_device_id: string | null;
+  created_at: string;
+}
+
+export interface CreateNeighborAliasRequest {
+  match_type: "mac" | "identity";
+  match_value: string;
+  action: "alias" | "hide";
+  target_device_id?: string;
+}
+
 // ── Network Topology ───────────────────────────────────────────
 
 export type TopologyNodeKind =

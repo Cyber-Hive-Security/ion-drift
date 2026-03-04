@@ -205,6 +205,17 @@ pub struct PortViolation {
     pub resolved_at: Option<String>,
 }
 
+/// A neighbor alias/hide rule for topology neighbor matching.
+#[derive(Debug, Clone, Serialize)]
+pub struct NeighborAlias {
+    pub id: i64,
+    pub match_type: String,       // "mac" or "identity"
+    pub match_value: String,
+    pub action: String,           // "alias" or "hide"
+    pub target_device_id: Option<String>,
+    pub created_at: String,
+}
+
 /// A manually-defined switch-to-switch backbone connection.
 #[derive(Debug, Clone, Serialize)]
 pub struct BackboneLink {
@@ -410,6 +421,16 @@ impl SwitchStore {
                 port_b TEXT,
                 label TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS neighbor_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_type TEXT NOT NULL CHECK(match_type IN ('mac', 'identity')),
+                match_value TEXT NOT NULL,
+                action TEXT NOT NULL CHECK(action IN ('alias', 'hide')),
+                target_device_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(match_type, match_value)
             );
 
             CREATE TABLE IF NOT EXISTS observed_services (
@@ -1551,6 +1572,55 @@ impl SwitchStore {
         let db = self.db.lock().await;
         let affected = db.execute(
             "DELETE FROM backbone_links WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    // ── Neighbor aliases ──────────────────────────────────────────────
+
+    /// Get all neighbor aliases.
+    pub async fn get_neighbor_aliases(&self) -> Result<Vec<NeighborAlias>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT id, match_type, match_value, action, target_device_id, created_at
+             FROM neighbor_aliases ORDER BY match_type, match_value",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(NeighborAlias {
+                id: row.get(0)?,
+                match_type: row.get(1)?,
+                match_value: row.get(2)?,
+                action: row.get(3)?,
+                target_device_id: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Create or replace a neighbor alias.
+    pub async fn create_neighbor_alias(
+        &self,
+        match_type: &str,
+        match_value: &str,
+        action: &str,
+        target_device_id: Option<&str>,
+    ) -> Result<i64, rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT OR REPLACE INTO neighbor_aliases (match_type, match_value, action, target_device_id)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![match_type, match_value, action, target_device_id],
+        )?;
+        Ok(db.last_insert_rowid())
+    }
+
+    /// Delete a neighbor alias by id.
+    pub async fn delete_neighbor_alias(&self, id: i64) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM neighbor_aliases WHERE id = ?1",
             rusqlite::params![id],
         )?;
         Ok(affected > 0)

@@ -235,9 +235,18 @@ pub async fn compute_topology(
     let mut ip_to_device: HashMap<String, String> = HashMap::new();
     let mut mac_to_device: HashMap<String, String> = HashMap::new();
     for entry in dm.all_devices() {
+        // Existing exact-match keys
         identity_to_device.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
         identity_to_device.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
         ip_to_device.insert(entry.record.host.clone(), entry.record.id.clone());
+        // NEW: actual RouterOS identity from health check (exact MNDP broadcast string)
+        if let DeviceStatus::Online { ref identity } = entry.status {
+            identity_to_device.insert(identity.to_lowercase(), entry.record.id.clone());
+            identity_to_device.insert(normalize_identity(identity), entry.record.id.clone());
+        }
+        // NEW: normalized fuzzy keys for name/id
+        identity_to_device.insert(normalize_identity(&entry.record.name), entry.record.id.clone());
+        identity_to_device.insert(normalize_identity(&entry.record.id), entry.record.id.clone());
     }
     drop(dm);
 
@@ -263,6 +272,38 @@ pub async fn compute_topology(
         }
     }
 
+    // ── Load neighbor aliases (alias → inject into maps, hide → skip set) ──
+    let aliases = store.get_neighbor_aliases().await.unwrap_or_default();
+    let mut hidden_macs: HashSet<String> = HashSet::new();
+    let mut hidden_identities: HashSet<String> = HashSet::new();
+
+    for alias in &aliases {
+        match alias.action.as_str() {
+            "alias" => {
+                if let Some(ref target) = alias.target_device_id {
+                    match alias.match_type.as_str() {
+                        "mac" => {
+                            mac_to_device.insert(alias.match_value.to_uppercase(), target.clone());
+                        }
+                        "identity" => {
+                            identity_to_device.insert(alias.match_value.to_lowercase(), target.clone());
+                            identity_to_device.insert(normalize_identity(&alias.match_value), target.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "hide" => {
+                match alias.match_type.as_str() {
+                    "mac" => { hidden_macs.insert(alias.match_value.to_uppercase()); }
+                    "identity" => { hidden_identities.insert(alias.match_value.to_lowercase()); }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
     // Track edges we've already created (both directions)
     let mut edge_set: HashSet<(String, String)> = HashSet::new();
     let mut wan_neighbor_count = 0u32;
@@ -280,17 +321,29 @@ pub async fn compute_topology(
             continue;
         }
 
+        // Skip neighbors that are explicitly hidden via neighbor aliases
+        if let Some(ref mac) = nb.mac_address {
+            if hidden_macs.contains(&mac.to_uppercase()) { continue; }
+        }
+        if let Some(ref ident) = nb.identity {
+            if hidden_identities.contains(&ident.to_lowercase()) { continue; }
+        }
+
         // Try to match neighbor to a registered device:
-        //   1. By LLDP identity name
-        //   2. By IP address
+        //   1. By LLDP identity name (exact lowercase, then fuzzy normalized)
+        //   2. By IP address (skip fe80:: link-local — useless for matching)
         //   3. By MAC address (catches routers whose LLDP identity differs from registered name)
         let remote_id = nb
             .identity
             .as_deref()
-            .and_then(|id| identity_to_device.get(&id.to_lowercase()).cloned())
+            .and_then(|id| {
+                identity_to_device.get(&id.to_lowercase()).cloned()
+                    .or_else(|| identity_to_device.get(&normalize_identity(id)).cloned())
+            })
             .or_else(|| {
                 nb.address
                     .as_deref()
+                    .filter(|addr| !addr.starts_with("fe80:"))
                     .and_then(|addr| ip_to_device.get(addr).cloned())
             })
             .or_else(|| {
@@ -1084,6 +1137,15 @@ fn identity_overrides_lldp(ident: &NetworkIdentity) -> bool {
         return true;
     }
     false
+}
+
+/// Strip punctuation/whitespace and lowercase for fuzzy identity matching.
+/// e.g. "MT-4011-R-Office" → "mt4011roffice" matches "MT4011ROffice".
+fn normalize_identity(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, '-' | '_' | '.' | ' '))
+        .collect::<String>()
+        .to_lowercase()
 }
 
 // ── Background task ──────────────────────────────────────────────

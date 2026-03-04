@@ -24,6 +24,7 @@ const ENDPOINT_LABEL_MAX = 16;
 
 export interface TopologyCallbacks {
   onNodeClick?: (node: TopologyNode) => void;
+  onContextMenu?: (node: TopologyNode, screenX: number, screenY: number) => void;
   onDragEnd?: (nodeId: string, x: number, y: number) => void;
   onUnpin?: (nodeId: string) => void;
   onSectorDragEnd?: (vlanId: number, x: number, y: number, width: number, height: number) => void;
@@ -730,6 +731,42 @@ export function createTopologyMapInstance(
           .attr("opacity", 0.6);
       }
 
+      // Unregistered infra indicator: dashed orange border + "?" badge
+      if (node.is_infrastructure && node.disposition === "unknown" && node.confidence < 1.0) {
+        g.append("rect")
+          .attr("x", -(nodeRadius(node) + 6))
+          .attr("y", -(nodeRadius(node) + 4))
+          .attr("width", (nodeRadius(node) + 6) * 2)
+          .attr("height", (nodeRadius(node) + 4) * 2)
+          .attr("rx", 4)
+          .attr("fill", "none")
+          .attr("stroke", "#f97316")
+          .attr("stroke-width", 1.5)
+          .attr("stroke-dasharray", "4,3")
+          .attr("opacity", 0.7);
+        g.append("circle")
+          .attr("cx", nodeRadius(node) + 6)
+          .attr("cy", -(nodeRadius(node) + 4))
+          .attr("r", 6)
+          .attr("fill", "#f97316")
+          .attr("stroke", "#000")
+          .attr("stroke-width", 0.5)
+          .attr("cursor", "pointer");
+        g.append("text")
+          .attr("x", nodeRadius(node) + 6)
+          .attr("y", -(nodeRadius(node) + 1))
+          .attr("text-anchor", "middle")
+          .attr("fill", "#000")
+          .attr("font-size", 8)
+          .attr("font-weight", "bold")
+          .attr("cursor", "pointer")
+          .text("?")
+          .on("click", function (event: MouseEvent) {
+            event.stopPropagation();
+            callbacks.onContextMenu?.(node, event.clientX, event.clientY);
+          });
+      }
+
       // Pin icon for human-positioned nodes — click to unpin
       if (node.position_source === "human") {
         g.append("text")
@@ -773,6 +810,11 @@ export function createTopologyMapInstance(
           // Highlight selected
           d3.select(this).attr("filter", "url(#glow-selected)");
           callbacks.onNodeClick?.(node);
+        })
+        .on("contextmenu", function (event: MouseEvent) {
+          event.preventDefault();
+          event.stopPropagation();
+          callbacks.onContextMenu?.(node, event.clientX, event.clientY);
         });
 
       // Drag behavior

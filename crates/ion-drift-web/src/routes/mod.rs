@@ -1,6 +1,7 @@
 pub mod arp;
 pub mod backbone;
 pub mod behavior;
+pub mod neighbor_aliases;
 pub mod connections;
 pub mod devices;
 pub mod firewall;
@@ -244,6 +245,9 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         // Backbone links (manual switch interconnects)
         .route("/network/backbone-links", get(backbone::list_backbone_links).post(backbone::create_backbone_link))
         .route("/network/backbone-links/{id}", delete(backbone::delete_backbone_link))
+        // Neighbor aliases (topology neighbor mapping/hiding)
+        .route("/network/neighbor-aliases", get(neighbor_aliases::list_neighbor_aliases).post(neighbor_aliases::create_neighbor_alias))
+        .route("/network/neighbor-aliases/{id}", delete(neighbor_aliases::delete_neighbor_alias))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 
