@@ -256,6 +256,7 @@ Endpoints without switch_device_id assigned to orphan layer.
 
 ### Deterministic Layout
 
+- **Center-spine model:** VLAN 2 (Network Mgmt) rendered as vertical center spine; other VLANs balanced into left/right columns using greedy assignment by device count
 - VLAN sectors sized proportionally to endpoint count per VLAN
 - Infrastructure nodes centered across their served VLAN sectors
 - Endpoints arranged in square grids within VLAN sectors below parent switch
@@ -273,8 +274,8 @@ Endpoints without switch_device_id assigned to orphan layer.
 | 30 | Trusted Wired | `#22cc88` | 10.20.30.0/24 |
 | 35 | Trusted Wireless | `#44ddaa` | 10.20.35.0/24 |
 | 40 | Guest | `#ffaa00` | 10.20.40.0/24 |
-| 90 | IoT Internet | `#666666` | 192.168.90.0/24 |
-| 99 | IoT Restricted | `#444444` | 192.168.99.0/24 |
+| 90 | IoT Internet | `#f97316` | 192.168.90.0/24 |
+| 99 | IoT Restricted | `#7FFF00` | 192.168.99.0/24 |
 
 ### Node Types
 
@@ -300,11 +301,12 @@ Endpoints without switch_device_id assigned to orphan layer.
 
 - SVG layers: grid, VLAN backgrounds, edges, nodes, labels
 - Zoom/pan (D3 zoom, scaleExtent 0.05–5x)
-- Zoom-dependent labels: infra labels always visible, endpoint labels at scale > 0.5, IP sublabels at scale > 0.7, port labels at scale > 0.6
+- Zoom-dependent labels: registered infra always visible, unregistered infra at scale > 0.5, endpoint labels at scale > 0.5, port labels at scale > 0.8, endpoint label staggering (±5px alternating Y offset)
 - Hover tooltip: label, kind, IP, MAC, VLAN, type, manufacturer, port
 - Click → detail panel (right sidebar with full node info)
 - Drag-to-reposition nodes (persists via position API)
-- Pin icon for human-positioned nodes
+- Draggable/resizable VLAN sectors (drag header label, resize bottom-right handle, persists via sector position API)
+- Pin icon for human-positioned nodes and sectors (click to reset)
 - "N" badge for newly discovered nodes (< 24h)
 - Flagged device: red dashed ring + warning icon
 - External device: blue dashed border
@@ -319,9 +321,31 @@ Endpoints without switch_device_id assigned to orphan layer.
 
 - `GET /api/network/topology` — Cached topology (30s frontend poll)
 - `POST /api/network/topology/refresh` — Force recompute
-- `GET /api/network/topology/positions` — All position records
-- `PUT /api/network/topology/positions/{nodeId}` — Human position override
-- `DELETE /api/network/topology/positions/{nodeId}` — Reset to auto layout
+- `GET /api/network/topology/positions` — All node position records
+- `PUT /api/network/topology/positions/{nodeId}` — Human node position override
+- `DELETE /api/network/topology/positions/{nodeId}` — Reset node to auto layout
+- `GET /api/network/topology/sectors` — All sector position records
+- `PUT /api/network/topology/sectors/{vlanId}` — Human sector position/size override
+- `DELETE /api/network/topology/sectors/{vlanId}` — Reset sector to auto layout
+
+### Backbone Links
+
+Manual switch-to-switch interconnect configuration for devices without LLDP support (e.g. SwOS switches). Solves the problem where non-LLDP switches claim downstream devices because their uplink ports aren't classified as trunks.
+
+**How it works:**
+1. User defines a link between two devices (with optional port names and label)
+2. Correlation engine forces linked ports to `trunk` role, overriding auto-detection
+3. Correlation engine populates trunk peer map, enabling MAC redirection from the non-LLDP switch to the correct peer
+4. Topology engine creates trunk edges from backbone links (deduplicated against LLDP-discovered edges)
+
+**Storage:** `backbone_links` table — device_a, port_a, device_b, port_b, label, created_at. Devices normalized lexicographically on insert.
+
+**APIs:**
+- `GET /api/network/backbone-links` — List all backbone links
+- `POST /api/network/backbone-links` — Create link (device_a, port_a?, device_b, port_b?, label?)
+- `DELETE /api/network/backbone-links/{id}` — Delete link
+
+**Frontend:** `/network/backbone` — Configuration table with inline add form (device selects from device registry, free-text port inputs, optional label). Delete button per row.
 
 ### Background Task
 
@@ -628,7 +652,7 @@ Output formats: `--format table|json|csv`
 | `behavior.db` | `device_profiles`, `device_observations`, `baselines`, `anomalies` | Behavioral analysis |
 | `connections.db` | `connection_history`, `port_flow_baseline`, `anomaly_links`, `snapshots` | Connection history, anomaly cross-references, snapshots |
 | `geo.db` | `geo_cache` | ip-api.com lookup cache (7-day TTL) |
-| `switch.db` | `switch_port_metrics`, `switch_mac_table`, `switch_vlan_membership`, `neighbor_discovery`, `switch_port_roles`, `network_identities`, `observed_services`, `topology_positions`, `port_mac_bindings`, `port_violations` | Switch data, correlated identities, topology, port security |
+| `switch.db` | `switch_port_metrics`, `switch_mac_table`, `switch_vlan_membership`, `neighbor_discovery`, `switch_port_roles`, `network_identities`, `observed_services`, `topology_positions`, `topology_sector_positions`, `backbone_links`, `port_mac_bindings`, `port_violations` | Switch data, correlated identities, topology, backbone links, port security |
 
 ---
 
@@ -646,6 +670,7 @@ Output formats: `--format table|json|csv`
 | `/logs` | Logs | Firewall log browser |
 | `/network-map` | Tactical Map | Hand-curated D3 force-directed topology (legacy) |
 | `/network/identities` | Identity Manager | Review queue, disposition tags, MAC bindings, services |
+| `/network/backbone` | Backbone Links | Manual switch-to-switch interconnect config for non-LLDP devices |
 | `/topology` | Network Topology | Auto-generated D3 hierarchical map, VLAN sectors, drag-to-pin |
 | `/switches/$deviceId` | Switch Detail | Per-switch port metrics, MAC table, VLANs, port roles |
 | `/settings` | Settings | Device registry, secrets, cert, syslog, GeoIP, connection stats |
