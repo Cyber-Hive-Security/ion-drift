@@ -46,6 +46,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // Load OpenSSL legacy provider so SNMPv3 DES-CBC works on OpenSSL 3.x.
+    // Some managed switches (e.g. Netgear "smart" series) only support DES for privacy.
+    // The provider handle must be kept alive for the process lifetime.
+    let _openssl_legacy = openssl::provider::Provider::load(None, "legacy")
+        .map_err(|e| tracing::warn!("failed to load OpenSSL legacy provider (DES may not work): {e}"))
+        .ok();
+
     // Parse CLI args (just --config for now)
     let config_path = parse_config_arg();
     let config_file = ServerConfig::resolve_path(config_path.as_deref());

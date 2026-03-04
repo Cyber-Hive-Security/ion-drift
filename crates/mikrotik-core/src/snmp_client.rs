@@ -174,8 +174,10 @@ impl SnmpClient {
                 _ => v3::AuthProtocol::Sha1,
             };
             let cipher = match self.v3_priv_protocol.as_deref() {
-                Some("AES128") | Some("AES") => v3::Cipher::Aes128,
-                _ => v3::Cipher::Des,
+                Some("DES") => v3::Cipher::Des,
+                // Default to AES128 — more secure than DES and universally supported.
+                // DES requires the OpenSSL legacy provider on OpenSSL 3.x.
+                _ => v3::Cipher::Aes128,
             };
 
             let auth_pw = self.v3_auth_password.as_deref().unwrap_or("");

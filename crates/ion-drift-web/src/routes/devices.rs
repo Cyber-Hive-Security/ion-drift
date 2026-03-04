@@ -119,7 +119,7 @@ pub async fn create_device(
                 req.password.clone(),
                 req.snmp_auth_protocol.clone().unwrap_or_else(|| "SHA".into()),
                 req.snmp_priv_password.clone().unwrap_or_default(),
-                req.snmp_priv_protocol.clone().unwrap_or_else(|| "DES".into()),
+                req.snmp_priv_protocol.clone().unwrap_or_else(|| "AES128".into()),
             )
         } else {
             SnmpClient::new_v2c(
@@ -410,7 +410,7 @@ pub async fn test_connection(
                 req.password,
                 req.snmp_auth_protocol.unwrap_or_else(|| "SHA".into()),
                 req.snmp_priv_password.unwrap_or_default(),
-                req.snmp_priv_protocol.unwrap_or_else(|| "DES".into()),
+                req.snmp_priv_protocol.unwrap_or_else(|| "AES128".into()),
             )
         } else {
             SnmpClient::new_v2c(req.host, port, req.password)
