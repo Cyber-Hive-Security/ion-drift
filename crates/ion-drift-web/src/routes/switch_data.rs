@@ -76,6 +76,26 @@ pub async fn device_resources(
                 "mac-address": sys.mac_address,
             })))
         }
+        DeviceClient::Snmp(c) => {
+            let client = c.clone();
+            drop(dm);
+            let sys = client.get_system_info().await.map_err(api_error)?;
+            let uptime_str = format_uptime_secs(sys.uptime_secs);
+            Ok(Json(serde_json::json!({
+                "uptime": uptime_str,
+                "version": sys.sys_descr,
+                "board-name": sys.sys_name,
+                "platform": "SNMP",
+                "cpu": "SNMP",
+                "cpu-count": 0,
+                "cpu-frequency": 0,
+                "cpu-load": 0,
+                "total-memory": 0,
+                "free-memory": 0,
+                "free-hdd-space": 0,
+                "total-hdd-space": 0,
+            })))
+        }
     }
 }
 
@@ -110,8 +130,8 @@ pub async fn device_interfaces(
     })?;
     let client = match &entry.client {
         DeviceClient::RouterOs(c) => c.clone(),
-        // SwOS has no interface concept — return empty array
-        DeviceClient::SwOs(_) => {
+        // SwOS / SNMP have no interface concept — return empty array
+        DeviceClient::SwOs(_) | DeviceClient::Snmp(_) => {
             drop(dm);
             return Ok(Json(serde_json::json!([])));
         }

@@ -16,6 +16,7 @@ mod passive_discovery;
 mod routes;
 // pub mod scanner; // Disabled — replaced by passive_discovery (connection tracking)
 mod secrets;
+mod snmp_poller;
 pub mod topology;
 mod setup;
 mod snapshots;
@@ -389,6 +390,7 @@ async fn main() -> anyhow::Result<()> {
     switch_poller::spawn_neighbor_poller(device_manager.clone(), switch_store.clone());
     switch_poller::spawn_device_health_check(device_manager.clone());
     swos_poller::spawn_swos_pollers(device_manager.clone(), switch_store.clone());
+    snmp_poller::spawn_snmp_pollers(device_manager.clone(), switch_store.clone());
     correlation_engine::spawn_correlation_engine(
         switch_store.clone(),
         app_state.oui_db.clone(),

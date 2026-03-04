@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 
-use mikrotik_core::{MikrotikClient, MikrotikConfig, SwosClient};
+use mikrotik_core::{MikrotikClient, MikrotikConfig, SnmpClient, SwosClient};
 
 use crate::device_manager::{DeviceClient, DeviceStatus, DeviceInfo};
 use crate::middleware::RequireAuth;
@@ -69,7 +69,21 @@ pub async fn create_device(
     })?;
 
     // Build client based on device type and test connection
-    let (client, identity) = if req.device.device_type == "swos_switch" {
+    let (client, identity) = if req.device.device_type == "snmp_switch" {
+        let snmp = SnmpClient::new(
+            req.device.host.clone(),
+            req.device.port,
+            req.password.clone(),
+        );
+        let identity = snmp.test_connection().await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("connection test failed: {e}") })),
+            )
+                .into_response()
+        })?;
+        (DeviceClient::Snmp(snmp), identity)
+    } else if req.device.device_type == "swos_switch" {
         let swos = SwosClient::new(
             req.device.host.clone(),
             req.device.port,
@@ -309,7 +323,23 @@ pub async fn test_connection(
 ) -> Result<Json<serde_json::Value>, Response> {
     let device_type = req.device_type.as_deref().unwrap_or("switch");
 
-    if device_type == "swos_switch" {
+    if device_type == "snmp_switch" {
+        let client = SnmpClient::new(
+            req.host,
+            req.port.unwrap_or(161),
+            req.password,
+        );
+        match client.test_connection().await {
+            Ok(identity) => Ok(Json(serde_json::json!({
+                "status": "online",
+                "identity": identity
+            }))),
+            Err(e) => Ok(Json(serde_json::json!({
+                "status": "offline",
+                "error": e.to_string()
+            }))),
+        }
+    } else if device_type == "swos_switch" {
         let client = SwosClient::new(
             req.host,
             req.port.unwrap_or(80),

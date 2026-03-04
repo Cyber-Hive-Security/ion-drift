@@ -1687,6 +1687,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "snmp2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2761,6 +2762,16 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "snmp2"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcb653539e336d2b98222b3f09d4f365f5442eb6b4bc8905e5c7f6ab296b94b8"
+dependencies = [
+ "asn1-rs",
+ "tokio",
+]
 
 [[package]]
 name = "socket2"

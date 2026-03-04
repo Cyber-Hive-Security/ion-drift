@@ -4,6 +4,7 @@ pub mod error;
 pub mod metrics;
 pub mod resources;
 pub mod switch_store;
+pub mod snmp_client;
 pub mod swos_client;
 pub mod tracker;
 pub mod vlan_flows;
@@ -11,6 +12,7 @@ mod serde_helpers;
 
 pub use behavior::BehaviorStore;
 pub use client::{MikrotikClient, MikrotikConfig};
+pub use snmp_client::SnmpClient;
 pub use swos_client::SwosClient;
 pub use error::MikrotikError;
 pub use metrics::{

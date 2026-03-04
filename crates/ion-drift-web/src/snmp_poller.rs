@@ -1,0 +1,283 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use mikrotik_core::SwitchStore;
+use mikrotik_core::snmp_client::SnmpClient;
+use mikrotik_core::switch_store::{PortMetricEntry, VlanMembershipEntry};
+use tokio::sync::RwLock;
+
+use crate::device_manager::{DeviceManager, DeviceStatus};
+
+/// Spawn SNMP pollers for all enabled SNMP switch devices.
+///
+/// Each switch gets its own tokio task with an independent polling interval
+/// from its `poll_interval_secs` configuration (default 30s).
+pub fn spawn_snmp_pollers(
+    device_manager: Arc<RwLock<DeviceManager>>,
+    switch_store: Arc<SwitchStore>,
+) {
+    let dm = device_manager.clone();
+    tokio::spawn(async move {
+        // 30-second startup delay to let the server stabilize
+        tokio::time::sleep(Duration::from_secs(30)).await;
+
+        let dm_read = dm.read().await;
+        let switches = dm_read.get_snmp_switches();
+
+        if switches.is_empty() {
+            tracing::info!("no SNMP switch devices configured, SNMP poller idle");
+            return;
+        }
+
+        for entry in switches {
+            let device_id = entry.record.id.clone();
+            let device_name = entry.record.name.clone();
+            let poll_interval = entry.record.poll_interval_secs as u64;
+            let client = entry.client.as_snmp().cloned().unwrap();
+            let store = switch_store.clone();
+            let dm_ref = device_manager.clone();
+
+            tracing::info!(
+                id = %device_id,
+                name = %device_name,
+                interval_secs = poll_interval,
+                "starting SNMP poller"
+            );
+
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(Duration::from_secs(poll_interval.max(10)));
+                let mut cycle: u32 = 0;
+
+                loop {
+                    poll_snmp_switch(&device_id, &client, &store, &dm_ref, cycle).await;
+                    cycle = cycle.wrapping_add(1);
+                    interval.tick().await;
+                }
+            });
+        }
+        drop(dm_read);
+    });
+}
+
+/// Run one poll cycle for an SNMP switch device.
+async fn poll_snmp_switch(
+    device_id: &str,
+    client: &SnmpClient,
+    store: &SwitchStore,
+    dm: &Arc<RwLock<DeviceManager>>,
+    cycle: u32,
+) {
+    // ── System info (connectivity check) ────────────────────────────
+    let sys = match client.get_system_info().await {
+        Ok(sys) => {
+            let mut dm_w = dm.write().await;
+            dm_w.set_status(
+                device_id,
+                DeviceStatus::Online {
+                    identity: sys.sys_name.clone(),
+                },
+            );
+            sys
+        }
+        Err(e) => {
+            tracing::warn!(device = %device_id, error = %e, "SNMP poll: connectivity failed");
+            let mut dm_w = dm.write().await;
+            dm_w.set_status(
+                device_id,
+                DeviceStatus::Offline {
+                    error: e.to_string(),
+                },
+            );
+            return;
+        }
+    };
+
+    // ── Interfaces (port names, counters, MAC addresses) ────────────
+    let interfaces = match client.get_interfaces().await {
+        Ok(ifaces) => ifaces,
+        Err(e) => {
+            tracing::warn!(device = %device_id, "SNMP interfaces: {e}");
+            Vec::new()
+        }
+    };
+
+    // Build ifIndex -> ifName map for resolving bridge port numbers
+    let if_name_map: HashMap<u32, String> = interfaces
+        .iter()
+        .map(|i| (i.index, i.name.clone()))
+        .collect();
+
+    // Collect interface MACs for is_local detection
+    let local_macs: Vec<String> = interfaces
+        .iter()
+        .filter_map(|i| i.mac_address.clone())
+        .collect();
+
+    // ── Bridge port -> ifIndex mapping ──────────────────────────────
+    let bridge_port_map = match client.get_bridge_port_map().await {
+        Ok(map) => map,
+        Err(e) => {
+            tracing::debug!(device = %device_id, "SNMP bridge port map: {e}");
+            HashMap::new()
+        }
+    };
+
+    // ── MAC table + LLDP neighbors (concurrent) ────────────────────
+    let (mac_res, lldp_res) = tokio::join!(client.get_mac_table(), client.get_lldp_neighbors(),);
+
+    // ── Port metrics ────────────────────────────────────────────────
+    if !interfaces.is_empty() {
+        let entries: Vec<PortMetricEntry> = interfaces
+            .iter()
+            .map(|iface| {
+                let speed = if iface.speed_mbps > 0 {
+                    Some(format!("{}Mbps", iface.speed_mbps))
+                } else {
+                    None
+                };
+                PortMetricEntry {
+                    port_name: iface.name.clone(),
+                    rx_bytes: iface.rx_bytes,
+                    tx_bytes: iface.tx_bytes,
+                    rx_packets: iface.rx_packets,
+                    tx_packets: iface.tx_packets,
+                    speed,
+                    running: iface.oper_status,
+                }
+            })
+            .collect();
+
+        if let Err(e) = store.record_port_metrics(device_id, &entries).await {
+            tracing::warn!(device = %device_id, "SNMP port metrics: {e}");
+        }
+    }
+
+    // ── MAC table entries ───────────────────────────────────────────
+    let mut mac_entries = match mac_res {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::debug!(device = %device_id, "SNMP Q-BRIDGE MAC table: {e}");
+            Vec::new()
+        }
+    };
+
+    // Fallback to BRIDGE-MIB if Q-BRIDGE returned nothing
+    if mac_entries.is_empty() {
+        match client.get_mac_table_bridge().await {
+            Ok(entries) => {
+                tracing::debug!(
+                    device = %device_id,
+                    count = entries.len(),
+                    "SNMP BRIDGE-MIB fallback MAC table"
+                );
+                mac_entries = entries;
+            }
+            Err(e) => {
+                tracing::debug!(device = %device_id, "SNMP BRIDGE-MIB MAC table: {e}");
+            }
+        }
+    }
+
+    for entry in &mac_entries {
+        // Resolve bridge port -> ifIndex -> ifName
+        let port_name = bridge_port_map
+            .get(&entry.port_index)
+            .and_then(|&if_idx| if_name_map.get(&if_idx))
+            .cloned()
+            .unwrap_or_else(|| format!("port{}", entry.port_index));
+
+        let is_local = local_macs
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(&entry.mac_address));
+
+        let vlan_id = entry.vlan_id.map(|v| v as u32);
+
+        if let Err(e) = store
+            .upsert_mac_entry(device_id, &entry.mac_address, &port_name, "snmp", vlan_id, is_local)
+            .await
+        {
+            tracing::warn!(
+                device = %device_id,
+                mac = %entry.mac_address,
+                "SNMP mac upsert: {e}"
+            );
+        }
+    }
+
+    // ── LLDP neighbors ──────────────────────────────────────────────
+    if let Ok(neighbors) = lldp_res {
+        for nb in &neighbors {
+            // Resolve local port index to interface name
+            let interface = if_name_map
+                .get(&nb.local_port_index)
+                .cloned()
+                .unwrap_or_else(|| format!("port{}", nb.local_port_index));
+
+            if let Err(e) = store
+                .upsert_neighbor(
+                    device_id,
+                    &interface,
+                    nb.remote_chassis_id.as_deref(),
+                    None, // no IP address from LLDP
+                    Some(&nb.remote_sys_name),
+                    Some(&nb.remote_port_id),
+                    nb.remote_port_desc.as_deref(),
+                    None, // no version from LLDP
+                )
+                .await
+            {
+                tracing::warn!(device = %device_id, "SNMP neighbor upsert: {e}");
+            }
+        }
+
+        tracing::debug!(
+            device = %device_id,
+            identity = %sys.sys_name,
+            macs = mac_entries.len(),
+            lldp = neighbors.len(),
+            "SNMP poll cycle complete"
+        );
+    } else if let Err(e) = lldp_res {
+        tracing::debug!(device = %device_id, "SNMP LLDP: {e}");
+    }
+
+    // ── VLAN membership (every 4th cycle to reduce load) ────────────
+    if cycle % 4 == 0 {
+        match client.get_vlan_membership().await {
+            Ok(vlans) => {
+                let mut membership_entries = Vec::new();
+
+                for vlan in &vlans {
+                    let untagged_set: std::collections::HashSet<u32> =
+                        vlan.untagged_ports.iter().copied().collect();
+
+                    for &port_idx in &vlan.egress_ports {
+                        // Resolve port index -> ifName via bridge port map
+                        let port_name = bridge_port_map
+                            .get(&port_idx)
+                            .and_then(|&if_idx| if_name_map.get(&if_idx))
+                            .cloned()
+                            .unwrap_or_else(|| format!("port{}", port_idx));
+
+                        let tagged = !untagged_set.contains(&port_idx);
+
+                        membership_entries.push(VlanMembershipEntry {
+                            port_name,
+                            vlan_id: vlan.vlan_id as u32,
+                            tagged,
+                        });
+                    }
+                }
+
+                if let Err(e) = store.set_vlan_membership(device_id, &membership_entries).await {
+                    tracing::warn!(device = %device_id, "SNMP vlan membership: {e}");
+                }
+            }
+            Err(e) => {
+                tracing::debug!(device = %device_id, "SNMP vlan membership: {e}");
+            }
+        }
+    }
+}

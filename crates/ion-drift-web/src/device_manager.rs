@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use mikrotik_core::{MikrotikClient, MikrotikConfig, SwosClient};
+use mikrotik_core::{MikrotikClient, MikrotikConfig, SnmpClient, SwosClient};
 use secrecy::ExposeSecret;
 use tokio::time::Instant;
 
@@ -24,6 +24,8 @@ pub enum DeviceClient {
     RouterOs(MikrotikClient),
     /// SwOS HTTP API client.
     SwOs(SwosClient),
+    /// SNMP client for generic managed switches.
+    Snmp(SnmpClient),
 }
 
 impl DeviceClient {
@@ -32,6 +34,7 @@ impl DeviceClient {
         match self {
             DeviceClient::RouterOs(c) => c.test_connection().await,
             DeviceClient::SwOs(c) => c.test_connection().await,
+            DeviceClient::Snmp(c) => c.test_connection().await,
         }
     }
 
@@ -47,6 +50,14 @@ impl DeviceClient {
     pub fn as_swos(&self) -> Option<&SwosClient> {
         match self {
             DeviceClient::SwOs(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Get the SNMP client, if this is an SNMP device.
+    pub fn as_snmp(&self) -> Option<&SnmpClient> {
+        match self {
+            DeviceClient::Snmp(c) => Some(c),
             _ => None,
         }
     }
@@ -92,7 +103,22 @@ impl DeviceManager {
                 }
             };
 
-            let client = if record.device_type == "swos_switch" {
+            let client = if record.device_type == "snmp_switch" {
+                // SNMP devices use UDP (community string stored as password)
+                let snmp = SnmpClient::new(
+                    record.host.clone(),
+                    record.port,
+                    password,
+                );
+                tracing::info!(
+                    id = %record.id,
+                    name = %record.name,
+                    host = %record.host,
+                    device_type = %record.device_type,
+                    "SNMP client created"
+                );
+                DeviceClient::Snmp(snmp)
+            } else if record.device_type == "swos_switch" {
                 // SwOS devices use HTTP (no TLS)
                 let swos = SwosClient::new(
                     record.host.clone(),
@@ -228,6 +254,14 @@ impl DeviceManager {
         self.devices
             .values()
             .filter(|d| d.record.device_type == "swos_switch")
+            .collect()
+    }
+
+    /// Get all SNMP switch entries.
+    pub fn get_snmp_switches(&self) -> Vec<&DeviceEntry> {
+        self.devices
+            .values()
+            .filter(|d| d.record.device_type == "snmp_switch")
             .collect()
     }
 

@@ -73,7 +73,7 @@ function NetworkDevicesSection() {
     host: "",
     port: "443",
     tls: true,
-    device_type: "switch" as "router" | "switch" | "swos_switch",
+    device_type: "switch" as "router" | "switch" | "swos_switch" | "snmp_switch",
     model: "",
     poll_interval_secs: "60",
     username: "",
@@ -105,7 +105,7 @@ function NetworkDevicesSection() {
     setTestResult(null);
     const result = await testConnection.mutateAsync({
       host: form.host,
-      port: parseInt(form.port) || (form.device_type === "swos_switch" ? 80 : 443),
+      port: parseInt(form.port) || (form.device_type === "snmp_switch" ? 161 : form.device_type === "swos_switch" ? 80 : 443),
       tls: form.tls,
       device_type: form.device_type,
       username: form.username,
@@ -115,7 +115,7 @@ function NetworkDevicesSection() {
   };
 
   const handleAdd = async () => {
-    const defaultPort = form.device_type === "swos_switch" ? 80 : 443;
+    const defaultPort = form.device_type === "snmp_switch" ? 161 : form.device_type === "swos_switch" ? 80 : 443;
     const payload: CreateDeviceRequest = {
       id: form.id,
       name: form.name,
@@ -210,7 +210,7 @@ function NetworkDevicesSection() {
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{device.name}</span>
                   <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground uppercase">
-                    {device.device_type === "swos_switch" ? "SwOS" : device.device_type}
+                    {device.device_type === "swos_switch" ? "SwOS" : device.device_type === "snmp_switch" ? "SNMP" : device.device_type}
                   </span>
                   {device.is_primary && (
                     <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
@@ -452,11 +452,13 @@ function NetworkDevicesSection() {
               <select
                 value={form.device_type}
                 onChange={(e) => {
-                  const dt = e.target.value as "router" | "switch" | "swos_switch";
-                  if (dt === "swos_switch") {
+                  const dt = e.target.value as "router" | "switch" | "swos_switch" | "snmp_switch";
+                  if (dt === "snmp_switch") {
+                    setForm({ ...form, device_type: dt, port: "161", tls: false });
+                  } else if (dt === "swos_switch") {
                     setForm({ ...form, device_type: dt, port: "80", tls: false });
-                  } else if (form.device_type === "swos_switch") {
-                    // Switching away from SwOS — restore RouterOS defaults
+                  } else if (form.device_type === "swos_switch" || form.device_type === "snmp_switch") {
+                    // Switching away from SwOS/SNMP — restore RouterOS defaults
                     setForm({ ...form, device_type: dt, port: "443", tls: true });
                   } else {
                     setForm({ ...form, device_type: dt });
@@ -467,6 +469,7 @@ function NetworkDevicesSection() {
                 <option value="switch">Switch (RouterOS)</option>
                 <option value="router">Router</option>
                 <option value="swos_switch">Switch (SwOS)</option>
+                <option value="snmp_switch">Switch (SNMP)</option>
               </select>
             </div>
             <div>
@@ -481,6 +484,7 @@ function NetworkDevicesSection() {
                 className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
               />
             </div>
+            {form.device_type !== "snmp_switch" && (
             <div>
               <label className="block text-xs text-muted-foreground mb-1">
                 Username
@@ -495,12 +499,14 @@ function NetworkDevicesSection() {
                 className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
               />
             </div>
+            )}
             <div>
               <label className="block text-xs text-muted-foreground mb-1">
-                Password
+                {form.device_type === "snmp_switch" ? "Community String" : "Password"}
               </label>
               <input
                 type="password"
+                placeholder={form.device_type === "snmp_switch" ? "public" : undefined}
                 value={form.password}
                 onChange={(e) =>
                   setForm({ ...form, password: e.target.value })
