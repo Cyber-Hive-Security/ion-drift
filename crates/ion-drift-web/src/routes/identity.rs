@@ -1,7 +1,8 @@
 //! Identity management and observed services API routes.
 
 use axum::extract::{Path, Query, State};
-use axum::response::{Json, Response};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 
 use crate::middleware::RequireAuth;
@@ -158,7 +159,11 @@ pub async fn set_disposition(
     Json(body): Json<SetDispositionRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
     if !VALID_DISPOSITIONS.contains(&body.disposition.as_str()) {
-        return Ok(Json(serde_json::json!({ "error": "invalid disposition" })));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid disposition" })),
+        )
+            .into_response());
     }
     let updated = state
         .switch_store
@@ -182,7 +187,11 @@ pub async fn bulk_disposition(
     Json(body): Json<BulkDispositionRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
     if !VALID_DISPOSITIONS.contains(&body.disposition.as_str()) {
-        return Ok(Json(serde_json::json!({ "error": "invalid disposition" })));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid disposition" })),
+        )
+            .into_response());
     }
     let mac_refs: Vec<&str> = body.macs.iter().map(|s| s.as_str()).collect();
     let count = state

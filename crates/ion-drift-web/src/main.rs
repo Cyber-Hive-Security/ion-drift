@@ -14,7 +14,6 @@ mod middleware;
 mod oui;
 mod passive_discovery;
 mod routes;
-// pub mod scanner; // Disabled — replaced by passive_discovery (connection tracking)
 mod secrets;
 mod snmp_poller;
 pub mod topology;
@@ -435,7 +434,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Build router and start server
-    let app = routes::router(app_state, web_dist);
+    let app = routes::router(app_state, web_dist)?;
     let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("ion-drift web server listening on {bind_addr}");

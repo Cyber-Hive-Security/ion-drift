@@ -104,7 +104,7 @@ async fn require_auth_layer(
 ///
 /// `web_dist` is the path to the SPA's built assets (e.g. `web/dist`).
 /// If the directory doesn't exist, the fallback serves a plain 404.
-pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
+pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<Router> {
     // SPA fallback: serve static files from web/dist/,
     // fall back to index.html for client-side routing.
     let index_html = web_dist.join("index.html");
@@ -117,13 +117,13 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .allow_origin(
             origin
                 .parse::<HeaderValue>()
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "FATAL: failed to parse CORS origin '{}' from redirect_uri: {} \
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to parse CORS origin '{}' from redirect_uri: {} \
                          — fix oidc.redirect_uri in config",
                         origin, e
-                    );
-                }),
+                    )
+                })?,
         )
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
@@ -247,7 +247,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 
-    Router::new()
+    Ok(Router::new()
         // Health check (no auth)
         .route("/health", get(health))
         // Auth routes (no RequireAuth)
@@ -279,5 +279,5 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'"),
         ))
-        .with_state(state)
+        .with_state(state))
 }

@@ -46,16 +46,6 @@ where
     }
 }
 
-/// Deserialize a string-encoded `i64`.
-#[allow(dead_code)]
-pub fn ros_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    s.parse::<i64>().map_err(serde::de::Error::custom)
-}
-
 /// Deserialize a string-encoded `u32`.
 pub fn ros_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
 where

@@ -140,7 +140,7 @@ pub async fn update_secrets(
     }
 
     if !updated.is_empty() {
-        tracing::info!(secrets = ?updated, "secrets updated via settings API");
+        tracing::info!(count = updated.len(), "secrets updated via settings API");
     }
 
     Ok(Json(UpdateSecretsResponse { updated }))
