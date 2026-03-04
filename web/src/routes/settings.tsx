@@ -562,9 +562,10 @@ function NetworkDevicesSection() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-muted-foreground mb-1">Privacy Password</label>
+                <label className="block text-xs text-muted-foreground mb-1">Privacy Password <span className="text-muted-foreground/60">(optional)</span></label>
                 <input
                   type="password"
+                  placeholder="Leave empty for authNoPriv"
                   value={form.snmp_priv_password}
                   onChange={(e) => setForm({ ...form, snmp_priv_password: e.target.value })}
                   className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
@@ -627,7 +628,7 @@ function NetworkDevicesSection() {
                 !form.host ||
                 !form.password ||
                 (form.device_type !== "snmp_switch" && !form.username) ||
-                (form.device_type === "snmp_switch" && form.snmp_version === "v3" && (!form.username || !form.snmp_priv_password)) ||
+                (form.device_type === "snmp_switch" && form.snmp_version === "v3" && !form.username) ||
                 testConnection.isPending
               }
               className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
@@ -643,7 +644,7 @@ function NetworkDevicesSection() {
                 !form.host ||
                 !form.password ||
                 (form.device_type !== "snmp_switch" && !form.username) ||
-                (form.device_type === "snmp_switch" && form.snmp_version === "v3" && (!form.username || !form.snmp_priv_password)) ||
+                (form.device_type === "snmp_switch" && form.snmp_version === "v3" && !form.username) ||
                 createDevice.isPending
               }
               className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"

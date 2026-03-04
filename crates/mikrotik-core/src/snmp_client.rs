@@ -183,6 +183,9 @@ impl SnmpClient {
             let auth_pw = self.v3_auth_password.as_deref().unwrap_or("");
             let priv_pw = self.v3_priv_password.clone().unwrap_or_default();
 
+            // Use AuthNoPriv when no privacy password is provided, AuthPriv otherwise.
+            let has_priv = !priv_pw.is_empty();
+
             tracing::debug!(
                 host = %self.host,
                 port = %self.port,
@@ -191,15 +194,22 @@ impl SnmpClient {
                 priv_protocol = ?self.v3_priv_protocol,
                 auth_pw_len = auth_pw.len(),
                 priv_pw_len = priv_pw.len(),
+                security_level = if has_priv { "authPriv" } else { "authNoPriv" },
                 "SNMP v3: creating session"
             );
 
-            let security = v3::Security::new(username.as_bytes(), auth_pw.as_bytes())
-                .with_auth_protocol(auth_proto)
-                .with_auth(v3::Auth::AuthPriv {
+            let auth = if has_priv {
+                v3::Auth::AuthPriv {
                     cipher,
                     privacy_password: priv_pw.into_bytes(),
-                });
+                }
+            } else {
+                v3::Auth::AuthNoPriv
+            };
+
+            let security = v3::Security::new(username.as_bytes(), auth_pw.as_bytes())
+                .with_auth_protocol(auth_proto)
+                .with_auth(auth);
 
             let mut sess = SyncSession::new_v3(
                 &self.addr(),
