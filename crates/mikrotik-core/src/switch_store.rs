@@ -1255,6 +1255,55 @@ impl SwitchStore {
         Ok(())
     }
 
+    /// Prune stale MAC table entries not seen within the given age (seconds).
+    /// This cleans up entries left behind when switch ports are renamed —
+    /// the old port_name row stops getting updated while the new one takes over.
+    pub async fn prune_stale_mac_entries(&self, max_age_secs: i64) -> Result<usize, rusqlite::Error> {
+        let cutoff = now_unix() - max_age_secs;
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM switch_mac_table WHERE last_seen < ?1 AND is_local = 0",
+            params![cutoff],
+        )?;
+        Ok(affected)
+    }
+
+    /// Prune stale port role entries not updated within the given age (seconds).
+    pub async fn prune_stale_port_roles(&self, max_age_secs: i64) -> Result<usize, rusqlite::Error> {
+        let cutoff = now_unix() - max_age_secs;
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM switch_port_roles WHERE updated_at < ?1",
+            params![cutoff],
+        )?;
+        Ok(affected)
+    }
+
+    /// Prune port metrics for port names that no longer appear in recent data.
+    /// When a port is renamed, old-name entries stop being inserted but linger
+    /// until the general 7-day cleanup. This removes them earlier so the switch
+    /// detail page doesn't show duplicate ports.
+    pub async fn prune_renamed_port_metrics(&self, max_age_secs: i64) -> Result<usize, rusqlite::Error> {
+        let cutoff = now_unix() - max_age_secs;
+        let db = self.db.lock().await;
+        // Delete metrics for (device_id, port_name) combos where the most recent
+        // entry for that port is older than the cutoff.
+        let affected = db.execute(
+            "DELETE FROM switch_port_metrics
+             WHERE rowid IN (
+                 SELECT m.rowid FROM switch_port_metrics m
+                 INNER JOIN (
+                     SELECT device_id, port_name, MAX(timestamp) as max_ts
+                     FROM switch_port_metrics
+                     GROUP BY device_id, port_name
+                     HAVING max_ts < ?1
+                 ) stale ON m.device_id = stale.device_id AND m.port_name = stale.port_name
+             )",
+            params![cutoff],
+        )?;
+        Ok(affected)
+    }
+
     /// Remove all data for a device (when device is deleted).
     pub async fn remove_device_data(&self, device_id: &str) -> Result<(), rusqlite::Error> {
         let db = self.db.lock().await;

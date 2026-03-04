@@ -53,6 +53,25 @@ async fn run_correlation(
     device_manager: &Arc<RwLock<DeviceManager>>,
     router_client: &MikrotikClient,
 ) -> anyhow::Result<()> {
+    // ── 0. Prune stale entries ──────────────────────────────────
+    // Entries older than 1 hour are leftovers from port renames or
+    // devices that moved. Keeps tables reflecting current state.
+    match store.prune_stale_mac_entries(3600).await {
+        Ok(n) if n > 0 => tracing::info!(count = n, "pruned stale MAC table entries"),
+        Err(e) => tracing::warn!("MAC table prune failed: {e}"),
+        _ => {}
+    }
+    match store.prune_renamed_port_metrics(3600).await {
+        Ok(n) if n > 0 => tracing::info!(count = n, "pruned renamed port metrics"),
+        Err(e) => tracing::warn!("port metrics prune failed: {e}"),
+        _ => {}
+    }
+    match store.prune_stale_port_roles(3600).await {
+        Ok(n) if n > 0 => tracing::info!(count = n, "pruned stale port roles"),
+        Err(e) => tracing::warn!("port roles prune failed: {e}"),
+        _ => {}
+    }
+
     // ── 1. Port role classification ───────────────────────────────
     let dm_read = device_manager.read().await;
     let switches = dm_read.get_switches();
@@ -267,11 +286,17 @@ async fn run_correlation(
             .entry(entry.mac_address.to_uppercase())
             .or_insert_with(IdentityBuilder::default);
 
-        // Only update switch binding if new priority >= existing
-        if new_priority >= builder.binding_priority {
+        // Only update switch binding if new priority > existing,
+        // or same priority but more recently seen (handles port renames
+        // where old and new entries coexist with the same priority).
+        let dominated = new_priority > builder.binding_priority
+            || (new_priority == builder.binding_priority
+                && entry.last_seen >= builder.binding_last_seen);
+        if dominated {
             builder.switch_device_id = Some(entry.device_id.clone());
             builder.switch_port = Some(entry.port_name.clone());
             builder.binding_priority = new_priority;
+            builder.binding_last_seen = entry.last_seen;
         }
 
         if entry.vlan_id.is_some() {
@@ -615,6 +640,9 @@ struct IdentityBuilder {
     /// Priority of the current switch binding (0=none, 1=router-trunk, 2=switch-trunk, 3=access).
     /// Higher priority bindings are not overwritten by lower ones.
     binding_priority: u8,
+    /// Timestamp of the MAC table entry that set the current binding.
+    /// Used to break ties when multiple entries have the same priority.
+    binding_last_seen: i64,
 }
 
 impl IdentityBuilder {
