@@ -42,7 +42,9 @@ async fn main() -> anyhow::Result<()> {
     // Initialize tracing (RUST_LOG env filter, default info)
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(
+                "info,tower_http=warn,hyper=warn,mikrotik_core::snmp_client=debug"
+            )),
         )
         .init();
 

@@ -183,6 +183,17 @@ impl SnmpClient {
             let auth_pw = self.v3_auth_password.as_deref().unwrap_or("");
             let priv_pw = self.v3_priv_password.clone().unwrap_or_default();
 
+            tracing::debug!(
+                host = %self.host,
+                port = %self.port,
+                username = %username,
+                auth_protocol = ?self.v3_auth_protocol,
+                priv_protocol = ?self.v3_priv_protocol,
+                auth_pw_len = auth_pw.len(),
+                priv_pw_len = priv_pw.len(),
+                "SNMP v3: creating session"
+            );
+
             let security = v3::Security::new(username.as_bytes(), auth_pw.as_bytes())
                 .with_auth_protocol(auth_proto)
                 .with_auth(v3::Auth::AuthPriv {
@@ -198,9 +209,13 @@ impl SnmpClient {
             )
             .map_err(|e| MikrotikError::Snmp(format!("v3 session: {e}")))?;
 
+            tracing::debug!("SNMP v3: session created, starting engine ID discovery");
+
             // Engine ID discovery — required for v3
             sess.init()
                 .map_err(|e| MikrotikError::Snmp(format!("v3 init: {e}")))?;
+
+            tracing::debug!("SNMP v3: init complete, authenticated");
 
             Ok(sess)
         } else {
