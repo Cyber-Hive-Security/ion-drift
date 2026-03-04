@@ -205,6 +205,18 @@ pub struct PortViolation {
     pub resolved_at: Option<String>,
 }
 
+/// A manually-defined switch-to-switch backbone connection.
+#[derive(Debug, Clone, Serialize)]
+pub struct BackboneLink {
+    pub id: i64,
+    pub device_a: String,
+    pub port_a: Option<String>,
+    pub device_b: String,
+    pub port_b: Option<String>,
+    pub label: Option<String>,
+    pub created_at: String,
+}
+
 /// A port role classification entry.
 #[derive(Debug, Clone, Serialize)]
 pub struct PortRoleEntry {
@@ -388,6 +400,16 @@ impl SwitchStore {
                 height REAL,
                 source TEXT NOT NULL DEFAULT 'auto',
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS backbone_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_a TEXT NOT NULL,
+                port_a TEXT,
+                device_b TEXT NOT NULL,
+                port_b TEXT,
+                label TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS observed_services (
@@ -1425,6 +1447,62 @@ impl SwitchStore {
         let affected = db.execute(
             "DELETE FROM topology_sector_positions WHERE vlan_id = ?1",
             rusqlite::params![vlan_id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    // ── Backbone links ──────────────────────────────────────────────
+
+    /// Get all backbone links.
+    pub async fn get_backbone_links(&self) -> Result<Vec<BackboneLink>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT id, device_a, port_a, device_b, port_b, label, created_at
+             FROM backbone_links ORDER BY device_a, device_b",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(BackboneLink {
+                id: row.get(0)?,
+                device_a: row.get(1)?,
+                port_a: row.get(2)?,
+                device_b: row.get(3)?,
+                port_b: row.get(4)?,
+                label: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Create a backbone link. Normalizes so device_a < device_b lexicographically.
+    pub async fn create_backbone_link(
+        &self,
+        device_a: &str,
+        port_a: Option<&str>,
+        device_b: &str,
+        port_b: Option<&str>,
+        label: Option<&str>,
+    ) -> Result<i64, rusqlite::Error> {
+        let (da, pa, db_dev, pb) = if device_a <= device_b {
+            (device_a, port_a, device_b, port_b)
+        } else {
+            (device_b, port_b, device_a, port_a)
+        };
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO backbone_links (device_a, port_a, device_b, port_b, label)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![da, pa, db_dev, pb, label],
+        )?;
+        Ok(db.last_insert_rowid())
+    }
+
+    /// Delete a backbone link by id.
+    pub async fn delete_backbone_link(&self, id: i64) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM backbone_links WHERE id = ?1",
+            rusqlite::params![id],
         )?;
         Ok(affected > 0)
     }

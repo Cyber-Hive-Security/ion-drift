@@ -1,4 +1,5 @@
 pub mod arp;
+pub mod backbone;
 pub mod behavior;
 pub mod connections;
 pub mod devices;
@@ -240,6 +241,9 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/network/topology/positions/{nodeId}", put(topology::update_position).delete(topology::reset_position))
         .route("/network/topology/sectors", get(topology::get_sectors))
         .route("/network/topology/sectors/{vlanId}", put(topology::update_sector).delete(topology::reset_sector))
+        // Backbone links (manual switch interconnects)
+        .route("/network/backbone-links", get(backbone::list_backbone_links).post(backbone::create_backbone_link))
+        .route("/network/backbone-links/{id}", delete(backbone::delete_backbone_link))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 

@@ -76,6 +76,8 @@ import type {
   ObservedService,
   PortMacBinding,
   PortViolation,
+  BackboneLink,
+  CreateBackboneLinkRequest,
   DeviceDisposition,
   NetworkTopologyResponse,
   TopologyPosition,
@@ -1293,6 +1295,46 @@ export function useResetSectorPosition() {
           ),
         };
       });
+    },
+  });
+}
+
+// ── Backbone Links ──────────────────────────────────────────────
+
+export function useBackboneLinks() {
+  return useQuery({
+    queryKey: ["network", "backbone-links"],
+    queryFn: () => apiFetch<BackboneLink[]>("/api/network/backbone-links"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useCreateBackboneLink() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateBackboneLinkRequest) =>
+      apiFetch<{ id: number }>("/api/network/backbone-links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "backbone-links"] });
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    },
+  });
+}
+
+export function useDeleteBackboneLink() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiFetch<{ removed: boolean }>(`/api/network/backbone-links/${id}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "backbone-links"] });
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
     },
   });
 }

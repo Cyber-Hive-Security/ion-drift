@@ -177,11 +177,25 @@ async fn run_correlation(
     // Identify trunk/uplink ports so we can deprioritise their MAC bindings.
     // MACs learned on a trunk port are *transiting*, not directly connected.
     let port_roles = store.get_port_roles(None).await.unwrap_or_default();
-    let trunk_ports: HashSet<(String, String)> = port_roles
+    let mut trunk_ports: HashSet<(String, String)> = port_roles
         .iter()
         .filter(|r| r.role == "trunk" || r.role == "uplink")
         .map(|r| (r.device_id.clone(), r.port_name.clone()))
         .collect();
+
+    // Force backbone-linked ports to trunk role (fills in what LLDP would provide
+    // for non-LLDP switches like SwOS devices).
+    let backbone_links = store.get_backbone_links().await.unwrap_or_default();
+    for link in &backbone_links {
+        if let Some(ref port) = link.port_a {
+            trunk_ports.insert((link.device_a.clone(), port.clone()));
+            let _ = store.set_port_role(&link.device_a, port, "trunk", 0, 0, false).await;
+        }
+        if let Some(ref port) = link.port_b {
+            trunk_ports.insert((link.device_b.clone(), port.clone()));
+            let _ = store.set_port_role(&link.device_b, port, "trunk", 0, 0, false).await;
+        }
+    }
 
     // Build device resolution maps for LLDP identity → device_id
     let dm_read = device_manager.read().await;
@@ -212,6 +226,18 @@ async fn run_correlation(
             // Normalize LLDP interface: "1-sfp-sfpplus,B-VLANs" → "1-sfp-sfpplus"
             let port = nb.interface.split(',').next().unwrap_or(&nb.interface);
             trunk_peer.insert((nb.device_id.clone(), port.to_string()), peer_id);
+        }
+    }
+
+    // Add backbone links as trunk peers (don't overwrite LLDP-derived peers).
+    for link in &backbone_links {
+        if let Some(ref port) = link.port_a {
+            trunk_peer.entry((link.device_a.clone(), port.clone()))
+                .or_insert_with(|| link.device_b.clone());
+        }
+        if let Some(ref port) = link.port_b {
+            trunk_peer.entry((link.device_b.clone(), port.clone()))
+                .or_insert_with(|| link.device_a.clone());
         }
     }
 

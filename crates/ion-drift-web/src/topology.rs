@@ -423,6 +423,27 @@ pub async fn compute_topology(
         }
     }
 
+    // ── Backbone links → trunk edges ─────────────────────────────
+    // Manual switch-to-switch connections for non-LLDP devices.
+    let backbone_links = store.get_backbone_links().await.unwrap_or_default();
+    for link in &backbone_links {
+        let pair = if link.device_a < link.device_b {
+            (link.device_a.clone(), link.device_b.clone())
+        } else {
+            (link.device_b.clone(), link.device_a.clone())
+        };
+        if edge_set.insert(pair) {
+            edges.push(TopologyEdge {
+                source: link.device_a.clone(),
+                target: link.device_b.clone(),
+                kind: EdgeKind::Trunk,
+                source_port: link.port_a.clone(),
+                target_port: link.port_b.clone(),
+                vlans: Vec::new(),
+            });
+        }
+    }
+
     // Create a single WAN/ISP placeholder if any WAN-facing neighbors were seen
     if wan_neighbor_count > 0 {
         if let Some(ref rid) = router_id {

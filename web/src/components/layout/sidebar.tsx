@@ -14,6 +14,7 @@ import {
   History,
   Fingerprint,
   GitBranch,
+  Cable,
 } from "lucide-react";
 
 const navItems = [
@@ -87,6 +88,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <div className="mt-1 space-y-0.5">
           {[
             { to: "/network/identities", label: "Identities", icon: Fingerprint },
+            { to: "/network/backbone", label: "Backbone", icon: Cable },
             { to: "/topology", label: "Topology", icon: GitBranch },
           ].map(({ to, label, icon: Icon }) => {
             const active = currentPath.startsWith(to);

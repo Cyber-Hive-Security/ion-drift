@@ -1081,6 +1081,26 @@ export interface PortViolation {
   resolved_at: string | null;
 }
 
+// ── Backbone Links ────────────────────────────────────────────
+
+export interface BackboneLink {
+  id: number;
+  device_a: string;
+  port_a: string | null;
+  device_b: string;
+  port_b: string | null;
+  label: string | null;
+  created_at: string;
+}
+
+export interface CreateBackboneLinkRequest {
+  device_a: string;
+  port_a?: string;
+  device_b: string;
+  port_b?: string;
+  label?: string;
+}
+
 // ── Network Topology ───────────────────────────────────────────
 
 export type TopologyNodeKind =
