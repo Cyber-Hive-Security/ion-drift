@@ -247,9 +247,14 @@ impl SnmpClient {
             let sys_descr_oid = make_oid(OID_SYS_DESCR)?;
             let sys_uptime_oid = make_oid(OID_SYS_UPTIME)?;
 
+            tracing::debug!(host = %client.host, "SNMP v3: sending authenticated GET");
             let response = sess
                 .get_many(&[&sys_name_oid, &sys_descr_oid, &sys_uptime_oid])
-                .map_err(|e| MikrotikError::Snmp(format!("get: {e}")))?;
+                .map_err(|e| {
+                    tracing::debug!(host = %client.host, error = %e, "SNMP v3: GET failed");
+                    MikrotikError::Snmp(format!("get: {e}"))
+                })?;
+            tracing::debug!(host = %client.host, "SNMP v3: GET succeeded");
 
             let mut sys_name = String::new();
             let mut sys_descr = String::new();
