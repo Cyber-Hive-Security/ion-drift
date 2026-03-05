@@ -313,18 +313,23 @@ async fn run_correlation(
         let is_trunk = trunk_ports.contains(&(entry.device_id.clone(), entry.port_name.to_lowercase()));
         let is_router = entry.device_id == router_id;
         let depth = switch_depths.get(&entry.device_id).copied().unwrap_or(0);
-        // Router always gets lowest priority — it sees every MAC via its bridge,
-        // so it should never win over a switch. Router ports aren't in trunk_ports
-        // (port classification only runs for switches), so without this guard the
-        // (false, _) arm would give router entries access-port priority (300).
-        let base_class: u32 = if is_router {
-            1 // Router: lowest (sees every MAC via bridge/ARP gateway)
+        // Priority formula:
+        //   Router:      100         — always lowest, sees every MAC via bridge
+        //   Switch trunk: 200+depth*10 — deeper trunk = closer to device (correct)
+        //   Access port:  400-depth*10 — shallower access = more trustworthy
+        //
+        // Why invert depth for access? A MAC can appear on "access" ports of
+        // multiple switches when a deeper switch's uplink is misclassified
+        // (e.g. SwOS port name doesn't match backbone link). The shallower
+        // switch's access port is more likely the genuine connection.
+        // Access always beats trunk (min 310 vs max ~240).
+        let new_priority: u32 = if is_router {
+            100
         } else if is_trunk {
-            2 // Switch trunk: medium (downstream aggregation)
+            200 + depth * 10
         } else {
-            3 // Access port: highest (directly connected)
+            400_u32.saturating_sub(depth * 10)
         };
-        let new_priority: u32 = base_class * 100 + depth * 10;
 
         let builder = identity_map
             .entry(entry.mac_address.to_uppercase())
@@ -731,8 +736,7 @@ struct IdentityBuilder {
     device_type_source: Option<String>,
     device_type_confidence: f64,
     /// Priority of the current switch binding. Higher = closer to device.
-    /// Formula: base_class * 100 + depth * 10, where base_class is
-    /// 1=router-trunk, 2=switch-trunk, 3=access and depth is BFS hops from router.
+    /// Router=100, trunk=200+depth*10, access=400-depth*10.
     binding_priority: u32,
     /// Timestamp of the MAC table entry that set the current binding.
     /// Used to break ties when multiple entries have the same priority.
