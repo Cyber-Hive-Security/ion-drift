@@ -395,15 +395,21 @@ impl SwosClient {
     /// Fetch per-port traffic statistics from `/stats.b`.
     pub async fn get_stats(&self) -> Result<Vec<SwosPortStats>, MikrotikError> {
         let raw = self.fetch("/stats.b").await?;
-        debug!(host = %self.host, "stats.b: {} bytes", raw.len());
+        debug!(host = %self.host, bytes = raw.len(), "stats.b response");
 
         if raw.trim().is_empty() || raw.trim() == "{}" {
             return Ok(Vec::new());
         }
 
         let json = transform_swos_to_json(&raw);
-        let val: serde_json::Value = serde_json::from_str(&json)
-            .map_err(|e| MikrotikError::Deserialize(format!("stats.b parse: {e}")))?;
+        let val: serde_json::Value = match serde_json::from_str(&json) {
+            Ok(v) => v,
+            Err(e) => {
+                // Some SwOS firmware (CSS106) returns non-parseable stats.b
+                debug!(host = %self.host, error = %e, "stats.b parse failed, returning empty");
+                return Ok(Vec::new());
+            }
+        };
 
         // rx/tx bytes use paired low/high 32-bit fields
         let rb = get_u64_array(&val, "rb");
@@ -444,8 +450,14 @@ impl SwosClient {
         }
 
         let json = transform_swos_to_json(&raw);
-        let entries: Vec<VlanRawEntry> = serde_json::from_str(&json)
-            .map_err(|e| MikrotikError::Deserialize(format!("vlan.b parse: {e}")))?;
+        let entries: Vec<VlanRawEntry> = match serde_json::from_str(&json) {
+            Ok(v) => v,
+            Err(e) => {
+                // Some SwOS firmware (CSS106) uses a different vlan.b format
+                debug!(host = %self.host, error = %e, "vlan.b parse failed, returning empty");
+                return Ok(Vec::new());
+            }
+        };
 
         let vlans: Vec<SwosVlanEntry> = entries
             .into_iter()
@@ -485,6 +497,7 @@ struct VlanRawEntry {
     vid: u64,
     #[serde(default)]
     nm: String,
+    #[serde(default)]
     mbr: u64,
 }
 
