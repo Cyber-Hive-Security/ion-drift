@@ -319,7 +319,7 @@ impl SwosClient {
                 .iter()
                 .filter_map(|v| v.as_str().map(decode_hex_string))
                 .collect();
-            tracing::info!(host = %self.host, port_count = port_count, prt_field = prt_field, port_names = ?decoded, "SwOS link.b port names");
+            tracing::debug!(host = %self.host, port_count = port_count, prt_field = prt_field, port_names = ?decoded, "SwOS link.b port names");
         } else {
             tracing::warn!(host = %self.host, "SwOS link.b: no 'nm' field — using fallback port names");
         }
@@ -356,10 +356,10 @@ impl SwosClient {
     /// Fetch dynamic host (MAC) table from `/!dhost.b`.
     pub async fn get_hosts(&self) -> Result<Vec<SwosHost>, MikrotikError> {
         let raw = self.fetch("/!dhost.b").await?;
-        tracing::info!(host = %self.host, bytes = raw.len(), "SwOS !dhost.b response");
+        debug!(host = %self.host, bytes = raw.len(), "SwOS !dhost.b response");
 
         if raw.trim().is_empty() || raw.trim() == "[]" {
-            tracing::info!(host = %self.host, "SwOS !dhost.b: empty response, returning 0 hosts");
+            debug!(host = %self.host, "SwOS !dhost.b: empty response, returning 0 hosts");
             return Ok(Vec::new());
         }
 
@@ -396,6 +396,10 @@ impl SwosClient {
     pub async fn get_stats(&self) -> Result<Vec<SwosPortStats>, MikrotikError> {
         let raw = self.fetch("/stats.b").await?;
         debug!(host = %self.host, "stats.b: {} bytes", raw.len());
+
+        if raw.trim().is_empty() || raw.trim() == "{}" {
+            return Ok(Vec::new());
+        }
 
         let json = transform_swos_to_json(&raw);
         let val: serde_json::Value = serde_json::from_str(&json)
@@ -446,7 +450,11 @@ impl SwosClient {
         let vlans: Vec<SwosVlanEntry> = entries
             .into_iter()
             .map(|e| {
-                let name = decode_hex_string(&e.nm);
+                let name = if e.nm.is_empty() {
+                    format!("VLAN{}", e.vid)
+                } else {
+                    decode_hex_string(&e.nm)
+                };
                 let member_ports = decode_bitmask(e.mbr as u64);
 
                 SwosVlanEntry {
@@ -475,6 +483,7 @@ struct DhostEntry {
 #[derive(Deserialize)]
 struct VlanRawEntry {
     vid: u64,
+    #[serde(default)]
     nm: String,
     mbr: u64,
 }

@@ -141,7 +141,7 @@ async fn poll_swos_switch(
 
     // ── Dynamic host (MAC) table ────────────────────────────────────
     if let Ok(hosts) = hosts_res {
-        tracing::info!(
+        tracing::debug!(
             device = %device_id,
             host_count = hosts.len(),
             link_count = links.len(),
