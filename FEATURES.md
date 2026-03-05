@@ -105,7 +105,7 @@ Background polling of each registered switch, collecting port metrics, MAC addre
 
 ## Correlation Engine
 
-Runs every 60 seconds (90s startup delay) to synthesize unified network identities from disparate data sources. Five-stage pipeline:
+Runs every 60 seconds (90s startup delay) to synthesize unified network identities from disparate data sources. Seven-stage pipeline:
 
 ### 1. Port Role Classification
 
@@ -117,6 +117,8 @@ Analyzes per-port MAC counts, VLAN counts, and LLDP neighbor presence to classif
 | `uplink` | LLDP neighbor present, or MAC count > 10 |
 | `access` | Single MAC, no LLDP |
 | `unused` | Zero MACs |
+
+Port names are **case-normalized** (`to_lowercase()`) on storage and lookup to prevent mismatches between polled data (e.g. "310-SFP+1") and backbone links (e.g. "310-sfp+1").
 
 ### 2. Switch-Local MAC Range Computation
 
@@ -135,12 +137,38 @@ Merges data from 6 sources into a single identity per MAC address:
 | PTR reverse DNS (Technitium) | Hostname for IPs without DHCP/LLDP name |
 | OUI database | Manufacturer + device_type heuristic (0.5-0.6 confidence) |
 
-### 4. VLAN Inference from IP
+### 4. Depth-Based Priority Scoring
+
+Switch binding priority uses BFS depth from the router through backbone links instead of flat tiers:
+
+```
+priority = base_class * 100 + depth * 10
+```
+
+| Base Class | Value | Description |
+|------------|-------|-------------|
+| Router trunk | 1 | Sees every MAC via ARP gateway |
+| Switch trunk | 2 | Downstream aggregation |
+| Access port | 3 | Directly connected |
+
+**Examples:** Camera MAC on rb4011 trunk (depth 0) = 100, CRS326 trunk (depth 1) = 210, CRS310 trunk (depth 2) = 220, CRS326 access port (depth 1) = 310.
+
+Equal priority → no change (eliminates flapping between same-class ports from alternating poll order). Trunk redirection uses `200 + peer_depth * 10`.
+
+### 5. WAP Attribution
+
+Devices on wireless VLANs (determined by `vlan_config.media_type`) are re-attributed from their switch to a WAP when:
+1. The device's current `switch_device_id` has exactly one WAP child in the backbone links
+2. The WAP is identified via `device_type` = `access_point` or `wap` in infrastructure identities
+
+This requires backbone links from edge switches to WAPs (configured via the Backbone Links page).
+
+### 6. VLAN Inference from IP
 
 When VLAN not set by switch port, infers from IP subnet:
 `10.2.2.x → VLAN 2`, `172.20.6.x → VLAN 6`, `10.20.25.x → VLAN 25`, `192.168.90.x → VLAN 90`, etc.
 
-### 5. Port Binding Enforcement
+### 7. Port Binding Enforcement
 
 Compares expected MACs (from `port_mac_bindings`) against actual on each port. Creates violations:
 - `device_missing` — no MAC on bound port
@@ -203,6 +231,7 @@ User-facing interface for reviewing auto-discovered identities, setting manual o
 
 ### Identity APIs
 
+- `GET /api/network/identities/infrastructure` — Infrastructure-flagged identities (WAPs, unmanaged switches, network equipment)
 - `GET /api/network/identities/stats` — Summary statistics
 - `GET /api/network/identities/review-queue` — Paginated unconfirmed identities
 - `PUT /api/network/identities/{mac}` — Update device_type, human_label
@@ -265,17 +294,23 @@ Endpoints without switch_device_id assigned to orphan layer.
 
 ### VLAN Configuration
 
-| VLAN | Name | Color | Subnet |
-|------|------|-------|--------|
-| 2 | Network Mgmt | `#00f0ff` | 10.2.2.0/24 |
-| 6 | Employer Isolated | `#888888` | 172.20.6.0/24 |
-| 10 | Cyber Hive Security | `#ff4444` | 172.20.10.0/24 |
-| 25 | Trusted Services | `#00b4d8` | 10.20.25.0/24 |
-| 30 | Trusted Wired | `#22cc88` | 10.20.30.0/24 |
-| 35 | Trusted Wireless | `#44ddaa` | 10.20.35.0/24 |
-| 40 | Guest | `#ffaa00` | 10.20.40.0/24 |
-| 90 | IoT Internet | `#f97316` | 192.168.90.0/24 |
-| 99 | IoT Restricted | `#7FFF00` | 192.168.99.0/24 |
+VLAN metadata (name, color, subnet, media type) is stored in the `vlan_config` SQLite table, editable via Settings UI and API. Seeded with defaults on first run. Topology and correlation engine read from DB; hardcoded fallback for unknown VLANs.
+
+| VLAN | Name | Media Type | Color | Subnet |
+|------|------|------------|-------|--------|
+| 2 | Network Mgmt | wired | `#00f0ff` | 10.2.2.0/24 |
+| 6 | Employer Isolated | wired | `#888888` | 172.20.6.0/24 |
+| 10 | Cyber Hive Security | wired | `#ff4444` | 172.20.10.0/24 |
+| 25 | Trusted Services | wired | `#00b4d8` | 10.20.25.0/24 |
+| 30 | Trusted Wired | wired | `#22cc88` | 10.20.30.0/24 |
+| 35 | Trusted Wireless | wireless | `#44ddaa` | 10.20.35.0/24 |
+| 40 | Guest | wireless | `#ffaa00` | — |
+| 90 | IoT Internet | wireless | `#f97316` | 192.168.90.0/24 |
+| 99 | IoT Restricted | wired | `#7FFF00` | 192.168.99.0/24 |
+
+**VLAN Config APIs:**
+- `GET /api/network/vlan-config` — List all VLAN configs
+- `PUT /api/network/vlan-config/{vlan_id}` — Upsert config (validates media_type ∈ {wired, wireless, mixed})
 
 ### Node Types
 
@@ -336,16 +371,17 @@ Manual switch-to-switch interconnect configuration for devices without LLDP supp
 1. User defines a link between two devices (with optional port names and label)
 2. Correlation engine forces linked ports to `trunk` role, overriding auto-detection
 3. Correlation engine populates trunk peer map, enabling MAC redirection from the non-LLDP switch to the correct peer
-4. Topology engine creates trunk edges from backbone links (deduplicated against LLDP-discovered edges)
+4. Correlation engine uses backbone links for BFS depth computation (deeper switches = higher priority)
+5. Topology engine creates trunk edges from backbone links (deduplicated against LLDP-discovered edges)
 
-**Storage:** `backbone_links` table — device_a, port_a, device_b, port_b, label, created_at. Devices normalized lexicographically on insert.
+**Storage:** `backbone_links` table — device_a, port_a, device_b, port_b, label, created_at. Devices normalized lexicographically on insert. Port names case-normalized to lowercase.
 
 **APIs:**
 - `GET /api/network/backbone-links` — List all backbone links
 - `POST /api/network/backbone-links` — Create link (device_a, port_a?, device_b, port_b?, label?)
 - `DELETE /api/network/backbone-links/{id}` — Delete link
 
-**Frontend:** `/network/backbone` — Configuration table with inline add form (device selects from device registry, free-text port inputs, optional label). Delete button per row.
+**Frontend:** `/network/backbone` — Configuration table with inline add form. Device selectors show two optgroups: "Managed Devices" (from device registry) and "Discovered Infrastructure" (WAPs, unmanaged switches from infrastructure identities API). Free-text port inputs, optional label. Delete button per row.
 
 ### Background Task
 
@@ -585,6 +621,7 @@ Bridges the two independent anomaly systems (port flow baselines + device behavi
 | Section | Features |
 |---------|----------|
 | Network Devices | Device registry: add/edit/delete/test, per-device credentials, polling interval |
+| VLAN Configuration | Editable table: VLAN ID, name, media type (wired/wireless/mixed dropdown), subnet, color picker. Auto-saves on change. |
 | Encrypted Secrets | Status of managed secrets, add/update interface, key fingerprint |
 | mTLS Certificate | Subject, issuer, expiry countdown, auto-renewal status |
 | Encryption Key | KEK fingerprint, source (Keycloak mTLS), secrets integrity check |
@@ -652,7 +689,7 @@ Output formats: `--format table|json|csv`
 | `behavior.db` | `device_profiles`, `device_observations`, `baselines`, `anomalies` | Behavioral analysis |
 | `connections.db` | `connection_history`, `port_flow_baseline`, `anomaly_links`, `snapshots` | Connection history, anomaly cross-references, snapshots |
 | `geo.db` | `geo_cache` | ip-api.com lookup cache (7-day TTL) |
-| `switch.db` | `switch_port_metrics`, `switch_mac_table`, `switch_vlan_membership`, `neighbor_discovery`, `switch_port_roles`, `network_identities`, `observed_services`, `topology_positions`, `topology_sector_positions`, `backbone_links`, `port_mac_bindings`, `port_violations` | Switch data, correlated identities, topology, backbone links, port security |
+| `switch.db` | `switch_port_metrics`, `switch_mac_table`, `switch_vlan_membership`, `neighbor_discovery`, `switch_port_roles`, `network_identities`, `observed_services`, `topology_positions`, `topology_sector_positions`, `backbone_links`, `vlan_config`, `port_mac_bindings`, `port_violations` | Switch data, correlated identities, topology, backbone links, VLAN config, port security |
 
 ---
 
