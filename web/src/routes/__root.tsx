@@ -10,7 +10,9 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 
 export function RootLayout() {
   const { isAuthenticated, isLoading } = useAuth();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => window.matchMedia("(min-width: 768px)").matches,
+  );
   const behaviorAlerts = useBehaviorAlerts();
 
   if (isLoading) {
@@ -27,7 +29,7 @@ export function RootLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar open={sidebarOpen} onClose={() => { if (window.innerWidth < 768) setSidebarOpen(false); }} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onMenuToggle={() => setSidebarOpen((v) => !v)} pendingAnomalies={behaviorAlerts.data?.pending_count ?? 0} />
         <ErrorBoundary>

@@ -17,7 +17,7 @@ export function Header({ onMenuToggle, pendingAnomalies = 0 }: HeaderProps) {
         <button
           type="button"
           onClick={onMenuToggle}
-          className="relative mr-1 flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:hidden"
+          className="relative mr-1 flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
           aria-label="Toggle menu"
         >
           <Menu className="h-6 w-6" />

@@ -168,18 +168,26 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
   return (
     <>
-      {/* Desktop sidebar — always visible */}
-      <aside className="hidden md:flex h-full w-56 flex-col border-r border-border bg-card">
-        {navContent}
+      {/* Desktop sidebar — collapsible via width transition */}
+      <aside
+        className={cn(
+          "hidden md:flex h-full flex-col border-r border-border bg-card transition-[width] duration-300 ease-in-out overflow-hidden",
+          open ? "w-56" : "w-0 border-r-0",
+        )}
+      >
+        <div className="flex h-full w-56 min-w-[14rem] flex-col">
+          {navContent}
+        </div>
       </aside>
 
-      {/* Mobile overlay sidebar */}
+      {/* Mobile overlay backdrop */}
       {open && (
         <div
           className="fixed inset-0 z-40 bg-black/50 md:hidden"
           onClick={onClose}
         />
       )}
+      {/* Mobile sidebar — slides in from left */}
       <aside
         className={cn(
           "fixed inset-y-0 left-0 z-50 flex w-[280px] flex-col border-r border-border bg-card transition-transform duration-300 ease-in-out md:hidden",
