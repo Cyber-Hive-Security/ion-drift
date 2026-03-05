@@ -90,8 +90,18 @@ async fn run_correlation(
 
     // ── 1. Port role classification ───────────────────────────────
     let dm_read = device_manager.read().await;
-    let switches = dm_read.get_switches();
-    let switch_ids: Vec<String> = switches.iter().map(|d| d.record.id.clone()).collect();
+    let mut switch_ids: Vec<String> = dm_read
+        .get_switches()
+        .iter()
+        .map(|d| d.record.id.clone())
+        .collect();
+    // Include SNMP and SwOS switches — they also have MAC/VLAN data to classify
+    for d in dm_read.get_snmp_switches() {
+        switch_ids.push(d.record.id.clone());
+    }
+    for d in dm_read.get_swos_switches() {
+        switch_ids.push(d.record.id.clone());
+    }
     let router_id = dm_read
         .get_router()
         .map(|r| r.record.id.clone())
