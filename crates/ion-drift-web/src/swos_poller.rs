@@ -137,8 +137,24 @@ async fn poll_swos_switch(
 
     // ── Dynamic host (MAC) table ────────────────────────────────────
     if let Ok(hosts) = hosts_res {
+        // Log link index→name mapping on first cycle for debugging
+        if cycle == 0 && !links.is_empty() {
+            let link_indices: Vec<String> = links.iter().map(|l| format!("{}={}", l.port_index, l.port_name)).collect();
+            tracing::info!(device = %device_id, link_map = ?link_indices, "SwOS port index→name map");
+        }
         for host in &hosts {
             let port_name = port_name_from_links(&links, host.port_index);
+            // Log mismatches where fallback name is used
+            if !links.is_empty() && !links.iter().any(|l| l.port_index == host.port_index) {
+                tracing::warn!(
+                    device = %device_id,
+                    mac = %host.mac_address,
+                    host_port_index = host.port_index,
+                    resolved_name = %port_name,
+                    link_count = links.len(),
+                    "SwOS port index not found in link data — using fallback name"
+                );
+            }
             // SwOS has no bridge concept — use "swos" as bridge name
             let bridge = "swos";
             let vlan_id = host.vlan_id.map(|v| v as u32);
