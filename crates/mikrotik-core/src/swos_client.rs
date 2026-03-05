@@ -306,6 +306,17 @@ impl SwosClient {
         let names = val.get("nm").and_then(|v| v.as_array());
         let speeds = val.get("spd").and_then(|v| v.as_array());
 
+        // Log raw name data for debugging port name issues
+        if let Some(nm_arr) = names {
+            let decoded: Vec<String> = nm_arr
+                .iter()
+                .filter_map(|v| v.as_str().map(decode_hex_string))
+                .collect();
+            tracing::info!(host = %self.host, port_names = ?decoded, "SwOS link.b port names");
+        } else {
+            tracing::warn!(host = %self.host, "SwOS link.b: no 'nm' field — using fallback port names");
+        }
+
         let mut links = Vec::with_capacity(port_count as usize);
 
         for i in 0..port_count {
