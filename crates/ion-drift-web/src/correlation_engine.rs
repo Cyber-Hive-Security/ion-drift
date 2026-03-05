@@ -283,10 +283,18 @@ async fn run_correlation(
         .map(|v| v.vlan_id)
         .collect();
 
-    // Compute switch depth from router via BFS over backbone adjacency graph.
+    // Compute switch depth from router via BFS over backbone + LLDP adjacency.
     // Deeper switches get higher priority scores — a MAC on a depth-2 switch
     // trunk is more specific than the same MAC on a depth-1 switch trunk.
-    let switch_depths = compute_switch_depths(&backbone_links, &router_id);
+    let switch_depths = compute_switch_depths(&backbone_links, &trunk_peer, &router_id);
+    if !switch_depths.is_empty() {
+        let depth_summary: Vec<String> = switch_depths
+            .iter()
+            .filter(|(id, _)| *id != &router_id)
+            .map(|(id, d)| format!("{}={}", id, d))
+            .collect();
+        tracing::info!(router = %router_id, depths = ?depth_summary, "switch depth map");
+    }
 
     // Build a map: MAC → best known info
     let mut identity_map: HashMap<String, IdentityBuilder> = HashMap::new();
@@ -330,10 +338,11 @@ async fn run_correlation(
         }
     }
 
-    // ── 2b. Trunk redirection ───────────────────────────────────
+    // ── 2b. Trunk redirection (downstream only) ─────────────────
     // MACs still bound to a trunk port get redirected to the peer device on
-    // that trunk. Example: router sees VM MAC on 1-sfp-sfpplus (trunk to
-    // CRS326) → redirect to CRS326 with port=None (exact port unknown).
+    // that trunk, but ONLY if the peer is deeper (downstream). Redirecting
+    // upstream (toward the router) would be wrong — a MAC on CRS326's uplink
+    // should not be attributed to the router.
     {
         let mut redirected = 0u32;
         for builder in identity_map.values_mut() {
@@ -345,17 +354,21 @@ async fn run_correlation(
                     if let Some(peer_id) =
                         trunk_peer.get(&(dev.clone(), normalized))
                     {
+                        let current_depth = switch_depths.get(&dev).copied().unwrap_or(0);
                         let peer_depth = switch_depths.get(peer_id.as_str()).copied().unwrap_or(0);
-                        builder.switch_device_id = Some(peer_id.clone());
-                        builder.switch_port = None;
-                        builder.binding_priority = 200 + peer_depth * 10;
-                        redirected += 1;
+                        // Only redirect downstream — peer must be deeper than current
+                        if peer_depth > current_depth {
+                            builder.switch_device_id = Some(peer_id.clone());
+                            builder.switch_port = None;
+                            builder.binding_priority = 200 + peer_depth * 10;
+                            redirected += 1;
+                        }
                     }
                 }
             }
         }
         if redirected > 0 {
-            tracing::info!(count = redirected, "trunk port MACs redirected to peer device");
+            tracing::info!(count = redirected, "trunk port MACs redirected to downstream peer");
         }
     }
 
@@ -987,22 +1000,39 @@ fn build_wap_children(
     children
 }
 
-/// Compute the BFS depth of each switch from the router through backbone links.
+/// Compute the BFS depth of each switch from the router through backbone links
+/// AND LLDP trunk peers. Uses both data sources to build the adjacency graph:
+/// - LLDP neighbors provide depth for managed switches automatically
+/// - Backbone links fill in for non-LLDP devices (SwOS switches, WAPs)
+///
 /// Router is depth 0, directly connected switches are depth 1, etc.
-/// Switches not reachable via backbone links get depth 0 (no bonus).
+/// Switches not reachable via either source get depth 0 (no bonus).
 fn compute_switch_depths(
     backbone_links: &[BackboneLink],
+    trunk_peer: &HashMap<(String, String), String>,
     router_id: &str,
 ) -> HashMap<String, u32> {
-    // Build undirected adjacency list from backbone links
-    let mut adj: HashMap<String, Vec<String>> = HashMap::new();
+    // Build undirected adjacency set from both sources
+    let mut adj: HashMap<String, HashSet<String>> = HashMap::new();
+
+    // From backbone links
     for link in backbone_links {
         adj.entry(link.device_a.clone())
             .or_default()
-            .push(link.device_b.clone());
+            .insert(link.device_b.clone());
         adj.entry(link.device_b.clone())
             .or_default()
-            .push(link.device_a.clone());
+            .insert(link.device_a.clone());
+    }
+
+    // From LLDP trunk peers (already resolved to device IDs)
+    for ((dev_id, _port), peer_id) in trunk_peer {
+        adj.entry(dev_id.clone())
+            .or_default()
+            .insert(peer_id.clone());
+        adj.entry(peer_id.clone())
+            .or_default()
+            .insert(dev_id.clone());
     }
 
     // BFS from router
