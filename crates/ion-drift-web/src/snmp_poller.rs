@@ -103,10 +103,18 @@ async fn poll_snmp_switch(
         }
     };
 
-    // Build ifIndex -> ifName map for resolving bridge port numbers
+    // Build ifIndex -> ifName map for resolving bridge port numbers (includes ALL interfaces)
     let if_name_map: HashMap<u32, String> = interfaces
         .iter()
         .map(|i| (i.index, i.name.clone()))
+        .collect();
+
+    // Physical port names: ifType 6 (ethernetCsmacd) + 136/161 (ieee8023adLag)
+    // Used to filter metrics and VLAN membership to real ports only
+    let physical_port_names: std::collections::HashSet<String> = interfaces
+        .iter()
+        .filter(|i| matches!(i.if_type, 6 | 136 | 161))
+        .map(|i| i.name.clone())
         .collect();
 
     // Collect interface MACs for is_local detection
@@ -130,10 +138,11 @@ async fn poll_snmp_switch(
     let mac_res = client.get_mac_table().await;
     let lldp_res = client.get_lldp_neighbors().await;
 
-    // ── Port metrics ────────────────────────────────────────────────
+    // ── Port metrics (physical ports only) ──────────────────────────
     if !interfaces.is_empty() {
         let entries: Vec<PortMetricEntry> = interfaces
             .iter()
+            .filter(|iface| physical_port_names.contains(&iface.name))
             .map(|iface| {
                 let speed = if iface.speed_mbps > 0 {
                     Some(format!("{}Mbps", iface.speed_mbps))
@@ -264,6 +273,11 @@ async fn poll_snmp_switch(
                             .and_then(|&if_idx| if_name_map.get(&if_idx))
                             .cloned()
                             .unwrap_or_else(|| format!("port{}", port_idx));
+
+                        // Skip non-physical ports (VLANs, tunnels, loopback, etc.)
+                        if !physical_port_names.contains(&port_name) {
+                            continue;
+                        }
 
                         let tagged = !untagged_set.contains(&port_idx);
 

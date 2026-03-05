@@ -1,23 +1,47 @@
 import { VLAN_CONFIG } from "@/features/network-map/data";
 import type { VlanMembershipEntry } from "@/api/types";
 
+/**
+ * Extract the numeric port index from various naming conventions.
+ * Returns null if the name doesn't match any known physical port pattern.
+ *
+ * Supported patterns:
+ *   Mikrotik:  ether1, sfp-sfpplus1
+ *   Netgear:   g1, mg5, xmg9, xg10  (GigE / Multi-Gig / 5G / 10G)
+ *   Generic:   port1, ge1, te1, xe1
+ */
+function extractPortNumber(portName: string): number | null {
+  // Mikrotik ether ports
+  const etherMatch = portName.match(/^ether(\d+)$/);
+  if (etherMatch) return parseInt(etherMatch[1]);
+
+  // Netgear multi-speed ports: xg10, xmg9, mg5, g1
+  const netgearMatch = portName.match(/^(?:xg|xmg|mg|g)(\d+)$/);
+  if (netgearMatch) return parseInt(netgearMatch[1]);
+
+  // Generic patterns: port1, ge1, te1, xe1, fa1
+  const genericMatch = portName.match(/^(?:port|ge|te|xe|fa)(\d+)$/i);
+  if (genericMatch) return parseInt(genericMatch[1]);
+
+  return null;
+}
+
 /** Map a port name to its physical grid position on the switch face. */
 export function portToGridPosition(
   portName: string,
 ): { row: "top" | "bottom"; col: number } | null {
-  const etherMatch = portName.match(/^ether(\d+)$/);
-  if (etherMatch) {
-    const num = parseInt(etherMatch[1]);
-    if (num < 1 || num > 48) return null;
-    // Mikrotik CRS: odd ports on top row, even on bottom
-    return {
-      row: num % 2 === 1 ? "top" : "bottom",
-      col: Math.ceil(num / 2) - 1,
-    };
-  }
-  if (portName === "sfp-sfpplus1") return { row: "top", col: -1 }; // SFP marker
+  // SFP/SFP+ ports get their own slot
+  if (portName === "sfp-sfpplus1") return { row: "top", col: -1 };
   if (portName === "sfp-sfpplus2") return { row: "bottom", col: -1 };
-  return null;
+
+  const num = extractPortNumber(portName);
+  if (num == null || num < 1 || num > 48) return null;
+
+  // Odd ports on top row, even on bottom — pairs in columns
+  return {
+    row: num % 2 === 1 ? "top" : "bottom",
+    col: Math.ceil(num / 2) - 1,
+  };
 }
 
 /** Abbreviate port name for display inside the port cell. */
@@ -26,15 +50,19 @@ export function portShortName(portName: string): string {
   if (etherMatch) return `e${etherMatch[1]}`;
   if (portName === "sfp-sfpplus1") return "S1";
   if (portName === "sfp-sfpplus2") return "S2";
+  // Netgear: keep as-is since names are already short (g1, mg5, xg10)
+  if (/^(?:xg|xmg|mg|g)\d+$/.test(portName)) return portName;
+  // Generic: ge1, te1, etc.
+  if (/^(?:ge|te|xe|fa)\d+$/i.test(portName)) return portName;
   return portName.slice(0, 4);
 }
 
 /** Numeric sort key for natural port ordering. */
 export function portSortKey(portName: string): number {
-  const etherMatch = portName.match(/^ether(\d+)$/);
-  if (etherMatch) return parseInt(etherMatch[1]);
   if (portName === "sfp-sfpplus1") return 100;
   if (portName === "sfp-sfpplus2") return 101;
+  const num = extractPortNumber(portName);
+  if (num != null) return num;
   return 200;
 }
 

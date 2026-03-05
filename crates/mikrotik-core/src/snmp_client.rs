@@ -42,6 +42,7 @@ const OID_SYS_NAME: &[u64] = &[1, 3, 6, 1, 2, 1, 1, 5, 0];
 const OID_SYS_UPTIME: &[u64] = &[1, 3, 6, 1, 2, 1, 1, 3, 0];
 
 // IF-MIB — interface table
+const OID_IF_TYPE: &[u64] = &[1, 3, 6, 1, 2, 1, 2, 2, 1, 3];
 const OID_IF_DESCR: &[u64] = &[1, 3, 6, 1, 2, 1, 2, 2, 1, 2];
 const OID_IF_ADMIN_STATUS: &[u64] = &[1, 3, 6, 1, 2, 1, 2, 2, 1, 7];
 const OID_IF_OPER_STATUS: &[u64] = &[1, 3, 6, 1, 2, 1, 2, 2, 1, 8];
@@ -91,6 +92,9 @@ pub struct SnmpInterface {
     pub index: u32,
     pub name: String,
     pub descr: String,
+    /// IANA ifType: 6=ethernetCsmacd, 24=softwareLoopback, 131=tunnel,
+    /// 135=l2vlan, 136=ieee8023adLag, 209=bridge, etc.
+    pub if_type: u32,
     pub oper_status: bool,
     pub admin_status: bool,
     pub speed_mbps: u64,
@@ -335,6 +339,7 @@ impl SnmpClient {
             let mut sess = client.create_session()?;
 
             // Walk each column of the interface tables
+            let if_type = walk_u64_column(&mut sess, OID_IF_TYPE)?;
             let if_descr = walk_string_column(&mut sess, OID_IF_DESCR)?;
             let if_admin = walk_u64_column(&mut sess, OID_IF_ADMIN_STATUS)?;
             let if_oper = walk_u64_column(&mut sess, OID_IF_OPER_STATUS)?;
@@ -380,6 +385,7 @@ impl SnmpClient {
                     index: idx,
                     name,
                     descr,
+                    if_type: if_type.get(&idx).copied().unwrap_or(0) as u32,
                     admin_status: if_admin.get(&idx).copied().unwrap_or(0) == 1,
                     oper_status: if_oper.get(&idx).copied().unwrap_or(0) == 1,
                     speed_mbps,
