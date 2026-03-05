@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { useBackboneLinks, useCreateBackboneLink, useDeleteBackboneLink, useDevices, useInfrastructureIdentities } from "@/api/queries";
-import type { NetworkDevice, NetworkIdentity } from "@/api/types";
+import { useBackboneLinks, useCreateBackboneLink, useDeleteBackboneLink, useDevices, useInfrastructureIdentities, useDevicePortRoles } from "@/api/queries";
+import type { NetworkDevice, NetworkIdentity, PortRoleEntry } from "@/api/types";
 import { Cable, Trash2, Plus } from "lucide-react";
 
 export function BackboneLinksPage() {
@@ -18,6 +18,10 @@ export function BackboneLinksPage() {
 
   const managedDevices = devices.data ?? [];
   const managedIds = useMemo(() => new Set(managedDevices.map((d) => d.id)), [managedDevices]);
+
+  // Fetch port roles when a managed device is selected
+  const portRolesA = useDevicePortRoles(managedIds.has(deviceA) ? deviceA : undefined);
+  const portRolesB = useDevicePortRoles(managedIds.has(deviceB) ? deviceB : undefined);
 
   // Build a combined name lookup: managed devices + infrastructure identities
   const nameMap = useMemo(() => {
@@ -102,30 +106,30 @@ export function BackboneLinksPage() {
             {/* Add form row */}
             <tr className="border-b border-border bg-card">
               <td className="px-3 py-2">
-                <DeviceSelect value={deviceA} onChange={setDeviceA} managed={managedDevices} infra={discoveredInfra} />
+                <DeviceSelect value={deviceA} onChange={(v) => { setDeviceA(v); setPortA(""); }} managed={managedDevices} infra={discoveredInfra} />
               </td>
               <td className="px-3 py-2">
-                <input
-                  type="text"
+                <PortInput
                   value={portA}
-                  onChange={(e) => setPortA(e.target.value)}
-                  placeholder="e.g. sfp-sfpplus1"
-                  className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground"
+                  onChange={setPortA}
+                  portRoles={portRolesA.data}
+                  isManaged={managedIds.has(deviceA)}
+                  hasDevice={!!deviceA}
                 />
               </td>
               <td className="px-3 py-2 text-center text-muted-foreground">
                 <Cable className="mx-auto h-4 w-4" />
               </td>
               <td className="px-3 py-2">
-                <DeviceSelect value={deviceB} onChange={setDeviceB} managed={managedDevices} infra={discoveredInfra} />
+                <DeviceSelect value={deviceB} onChange={(v) => { setDeviceB(v); setPortB(""); }} managed={managedDevices} infra={discoveredInfra} />
               </td>
               <td className="px-3 py-2">
-                <input
-                  type="text"
+                <PortInput
                   value={portB}
-                  onChange={(e) => setPortB(e.target.value)}
-                  placeholder="e.g. port5"
-                  className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground"
+                  onChange={setPortB}
+                  portRoles={portRolesB.data}
+                  isManaged={managedIds.has(deviceB)}
+                  hasDevice={!!deviceB}
                 />
               </td>
               <td className="px-3 py-2">
@@ -188,6 +192,63 @@ export function BackboneLinksPage() {
       {/* Validation hint */}
       {deviceA && deviceB && deviceA === deviceB && (
         <p className="text-xs text-destructive">Device A and Device B must be different.</p>
+      )}
+    </div>
+  );
+}
+
+/** Port selector: dropdown when port data is available, text input fallback otherwise. */
+function PortInput({
+  value,
+  onChange,
+  portRoles,
+  isManaged,
+  hasDevice,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  portRoles: PortRoleEntry[] | undefined;
+  isManaged: boolean;
+  hasDevice: boolean;
+}) {
+  // Sort ports by natural order (alphabetical, but numbers sort numerically within)
+  const sortedPorts = useMemo(() => {
+    if (!portRoles) return [];
+    return [...portRoles].sort((a, b) =>
+      a.port_name.localeCompare(b.port_name, undefined, { numeric: true }),
+    );
+  }, [portRoles]);
+
+  // Show dropdown if this is a managed device with port data
+  if (isManaged && sortedPorts.length > 0) {
+    return (
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+      >
+        <option value="">-- Select port --</option>
+        {sortedPorts.map((p) => (
+          <option key={p.port_name} value={p.port_name}>
+            {p.port_name} ({p.role}, {p.mac_count} MACs)
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  // Text input fallback for discovered infrastructure or managed devices without port data
+  return (
+    <div>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={hasDevice && !isManaged ? "Type port name" : "e.g. sfp-sfpplus1"}
+        className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground"
+      />
+      {hasDevice && !isManaged && (
+        <span className="text-[10px] text-muted-foreground">No port data — type manually</span>
       )}
     </div>
   );

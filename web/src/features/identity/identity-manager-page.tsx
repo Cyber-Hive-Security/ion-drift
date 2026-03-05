@@ -7,6 +7,7 @@ import {
   Check,
   X,
   Filter,
+  RotateCcw,
 } from "lucide-react";
 import { PageShell } from "@/components/layout/page-shell";
 import { StatCard } from "@/components/stat-card";
@@ -17,6 +18,7 @@ import {
   useIdentityStats,
   useUpdateIdentity,
   useBulkConfirmIdentities,
+  useResetIdentityField,
   useObservedServices,
   useSetDisposition,
   useBulkDisposition,
@@ -111,27 +113,59 @@ function statusDot(identity: NetworkIdentity): string {
   return "bg-muted-foreground/30"; // no type
 }
 
+// ── Reset button ────────────────────────────────────────────────
+
+function ResetButton({
+  mac,
+  field,
+  resetField,
+}: {
+  mac: string;
+  field: string;
+  resetField: ReturnType<typeof useResetIdentityField>;
+}) {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        resetField.mutate({ mac, field });
+      }}
+      disabled={resetField.isPending}
+      className="ml-1 inline-flex rounded p-0.5 text-muted-foreground hover:bg-amber-500/20 hover:text-amber-400"
+      title="Reset to auto-detected"
+    >
+      <RotateCcw className="h-3 w-3" />
+    </button>
+  );
+}
+
 // ── Inline edit components ──────────────────────────────────────
 
 function DeviceTypeCell({
   identity,
   onSave,
+  resetField,
 }: {
   identity: NetworkIdentity;
   onSave: (type: string) => void;
+  resetField: ReturnType<typeof useResetIdentityField>;
 }) {
   const [editing, setEditing] = useState(false);
+  const isHuman = identity.device_type_source === "human";
 
   if (!editing) {
     return (
-      <button
-        onClick={() => setEditing(true)}
-        className="rounded px-1.5 py-0.5 text-left hover:bg-muted/50"
-      >
-        {identity.device_type
-          ? DEVICE_TYPE_LABELS[identity.device_type] || identity.device_type
-          : "—"}
-      </button>
+      <span className="inline-flex items-center">
+        <button
+          onClick={() => setEditing(true)}
+          className="rounded px-1.5 py-0.5 text-left hover:bg-muted/50"
+        >
+          {identity.device_type
+            ? DEVICE_TYPE_LABELS[identity.device_type] || identity.device_type
+            : "—"}
+        </button>
+        {isHuman && <ResetButton mac={identity.mac_address} field="device_type" resetField={resetField} />}
+      </span>
     );
   }
 
@@ -159,24 +193,30 @@ function DeviceTypeCell({
 function LabelCell({
   identity,
   onSave,
+  resetField,
 }: {
   identity: NetworkIdentity;
   onSave: (label: string) => void;
+  resetField: ReturnType<typeof useResetIdentityField>;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(identity.human_label || "");
+  const hasLabel = identity.human_label != null && identity.human_label !== "";
 
   if (!editing) {
     return (
-      <button
-        onClick={() => {
-          setValue(identity.human_label || "");
-          setEditing(true);
-        }}
-        className="rounded px-1.5 py-0.5 text-left hover:bg-muted/50"
-      >
-        {identity.human_label || "—"}
-      </button>
+      <span className="inline-flex items-center">
+        <button
+          onClick={() => {
+            setValue(identity.human_label || "");
+            setEditing(true);
+          }}
+          className="rounded px-1.5 py-0.5 text-left hover:bg-muted/50"
+        >
+          {identity.human_label || "—"}
+        </button>
+        {hasLabel && <ResetButton mac={identity.mac_address} field="human_label" resetField={resetField} />}
+      </span>
     );
   }
 
@@ -255,10 +295,12 @@ function SwitchBindingCell({
   identity,
   devices,
   onSave,
+  resetField,
 }: {
   identity: NetworkIdentity;
   devices: { id: string; name: string }[];
   onSave: (switchId: string, port: string) => void;
+  resetField: ReturnType<typeof useResetIdentityField>;
 }) {
   const [editing, setEditing] = useState(false);
   const [switchId, setSwitchId] = useState(identity.switch_device_id || "");
@@ -268,17 +310,20 @@ function SwitchBindingCell({
   if (!editing) {
     const deviceName = devices.find((d) => d.id === identity.switch_device_id)?.name;
     return (
-      <button
-        onClick={() => {
-          setSwitchId(identity.switch_device_id || "");
-          setPort(identity.switch_port || "");
-          setEditing(true);
-        }}
-        className={cn("rounded px-1.5 py-0.5 text-left text-xs hover:bg-muted/50", isHuman && "text-green-400")}
-        title={isHuman ? "Human override" : "Auto-detected"}
-      >
-        {deviceName || identity.switch_device_id || "—"}
-      </button>
+      <span className="inline-flex items-center">
+        <button
+          onClick={() => {
+            setSwitchId(identity.switch_device_id || "");
+            setPort(identity.switch_port || "");
+            setEditing(true);
+          }}
+          className={cn("rounded px-1.5 py-0.5 text-left text-xs hover:bg-muted/50", isHuman && "text-green-400")}
+          title={isHuman ? "Human override" : "Auto-detected"}
+        >
+          {deviceName || identity.switch_device_id || "—"}
+        </button>
+        {isHuman && <ResetButton mac={identity.mac_address} field="switch_binding" resetField={resetField} />}
+      </span>
     );
   }
 
@@ -327,9 +372,11 @@ function SwitchBindingCell({
 function InfrastructureCell({
   identity,
   onSave,
+  resetField,
 }: {
   identity: NetworkIdentity;
   onSave: (value: boolean | null) => void;
+  resetField: ReturnType<typeof useResetIdentityField>;
 }) {
   const val = identity.is_infrastructure;
   // Cycle: null (Auto) → true (Yes) → false (No) → null
@@ -342,13 +389,16 @@ function InfrastructureCell({
       : "bg-muted/50 text-muted-foreground/50 border-border/50";
 
   return (
-    <button
-      onClick={() => onSave(next)}
-      className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", color)}
-      title={`Is infrastructure: ${label}. Click to change.`}
-    >
-      {label}
-    </button>
+    <span className="inline-flex items-center">
+      <button
+        onClick={() => onSave(next)}
+        className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", color)}
+        title={`Is infrastructure: ${label}. Click to change.`}
+      >
+        {label}
+      </button>
+      {val === true && <ResetButton mac={identity.mac_address} field="is_infrastructure" resetField={resetField} />}
+    </span>
   );
 }
 
@@ -359,6 +409,7 @@ export default function IdentityManagerPage() {
   const { data: stats } = useIdentityStats();
   const { data: allServices = [] } = useObservedServices();
   const updateIdentity = useUpdateIdentity();
+  const resetField = useResetIdentityField();
   const bulkConfirm = useBulkConfirmIdentities();
   const setDisposition = useSetDisposition();
   const bulkDisposition = useBulkDisposition();
@@ -565,6 +616,7 @@ export default function IdentityManagerPage() {
         <DeviceTypeCell
           identity={row}
           onSave={(type) => handleSaveType(row.mac_address, type)}
+          resetField={resetField}
         />
       ),
       sortValue: (row) => row.device_type || "zzz",
@@ -612,6 +664,7 @@ export default function IdentityManagerPage() {
         <LabelCell
           identity={row}
           onSave={(label) => handleSaveLabel(row.mac_address, label)}
+          resetField={resetField}
         />
       ),
       sortValue: (row) => row.human_label || "",
@@ -642,6 +695,7 @@ export default function IdentityManagerPage() {
           identity={row}
           devices={devices}
           onSave={(switchId, port) => handleSaveSwitch(row.mac_address, switchId, port)}
+          resetField={resetField}
         />
       ),
       sortValue: (row) => row.switch_device_id || "",
@@ -666,6 +720,7 @@ export default function IdentityManagerPage() {
         <InfrastructureCell
           identity={row}
           onSave={(val) => handleSetInfrastructure(row.mac_address, val)}
+          resetField={resetField}
         />
       ),
       sortValue: (row) => row.is_infrastructure === null ? 1 : row.is_infrastructure ? 2 : 0,

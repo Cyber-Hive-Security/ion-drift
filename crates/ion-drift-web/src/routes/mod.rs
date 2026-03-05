@@ -223,6 +223,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/network/identities/infrastructure", get(identity::list_infrastructure_identities))
         .route("/network/identities/stats", get(identity::identity_stats))
         .route("/network/identities/review-queue", get(identity::review_queue))
+        .route("/network/identities/{mac}/fields/{field}", delete(identity::reset_identity_field))
         .route("/network/identities/{mac}", put(identity::update_identity))
         .route("/network/identities/{mac}/disposition", put(identity::set_disposition))
         .route("/network/identities/bulk-confirm", post(identity::bulk_confirm))

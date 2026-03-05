@@ -110,6 +110,38 @@ pub async fn update_identity(
     Ok(Json(serde_json::json!({ "updated": updated })))
 }
 
+// ── Per-field reset ───────────────────────────────────────────
+
+const RESETTABLE_FIELDS: &[&str] = &["device_type", "human_label", "switch_binding", "is_infrastructure"];
+
+/// DELETE /api/network/identities/{mac}/fields/{field}
+pub async fn reset_identity_field(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path((mac, field)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, Response> {
+    if !RESETTABLE_FIELDS.contains(&field.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("unknown field: {field}") })),
+        )
+            .into_response());
+    }
+    let updated = state
+        .switch_store
+        .reset_identity_field(&mac, &field)
+        .await
+        .map_err(|e| internal_error("reset identity field", e))?;
+    if !updated {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "MAC not found" })),
+        )
+            .into_response());
+    }
+    Ok(Json(serde_json::json!({ "reset": true })))
+}
+
 /// Request body for bulk confirm.
 #[derive(Deserialize)]
 pub struct BulkConfirmRequest {

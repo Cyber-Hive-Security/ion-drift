@@ -1002,6 +1002,40 @@ impl SwitchStore {
         Ok(count)
     }
 
+    /// Reset a single identity field back to auto-detected state.
+    /// `field` must be one of: `device_type`, `human_label`, `switch_binding`, `is_infrastructure`.
+    /// Returns `Ok(true)` if a row was modified, `Ok(false)` if MAC not found.
+    /// Panics if `field` is not one of the valid values — caller must validate.
+    pub async fn reset_identity_field(&self, mac: &str, field: &str) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let sql = match field {
+            "device_type" => {
+                "UPDATE network_identities \
+                 SET device_type = NULL, device_type_source = 'auto', \
+                     device_type_confidence = 0.0, human_confirmed = 0 \
+                 WHERE mac_address = ?1"
+            }
+            "human_label" => {
+                "UPDATE network_identities \
+                 SET human_label = NULL, human_confirmed = 0 \
+                 WHERE mac_address = ?1"
+            }
+            "switch_binding" => {
+                "UPDATE network_identities \
+                 SET switch_binding_source = 'auto' \
+                 WHERE mac_address = ?1"
+            }
+            "is_infrastructure" => {
+                "UPDATE network_identities \
+                 SET is_infrastructure = NULL \
+                 WHERE mac_address = ?1"
+            }
+            _ => unreachable!("caller must validate field name"),
+        };
+        let rows = db.execute(sql, params![mac])?;
+        Ok(rows > 0)
+    }
+
     // ── Nmap scans ──────────────────────────────────────────────
 
     /// Insert a new nmap scan record.

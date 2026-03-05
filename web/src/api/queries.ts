@@ -905,6 +905,20 @@ export function useBulkConfirmIdentities() {
   });
 }
 
+export function useResetIdentityField() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ mac, field }: { mac: string; field: string }) =>
+      apiFetch<{ reset: boolean }>(
+        `/api/network/identities/${encodeURIComponent(mac)}/fields/${encodeURIComponent(field)}`,
+        { method: "DELETE" }
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "identities"] });
+    },
+  });
+}
+
 // ── Observed services (passive discovery) ───────────────────────
 
 export function useObservedServices(ip?: string) {
