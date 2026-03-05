@@ -11,6 +11,29 @@ use snmp2::{v3, Oid, SyncSession, Value};
 
 use crate::error::MikrotikError;
 
+// ─── GETNEXT with AuthUpdated retry ─────────────────────────────
+
+/// GETNEXT with one retry on `AuthUpdated`.
+///
+/// SNMPv3 sessions may return `AuthUpdated` when the remote engine's
+/// boot/time counters change. After the first occurrence the library
+/// caches the new params, so a single retry is sufficient.
+///
+/// This is a macro (not a function) because `Pdu<'_>` borrows the session,
+/// preventing a generic wrapper from doing `sess.getnext()` twice.
+macro_rules! getnext_retry {
+    ($sess:expr, $oid:expr) => {
+        match $sess.getnext($oid) {
+            Ok(r) => Ok(r),
+            Err(snmp2::Error::AuthUpdated) => {
+                tracing::debug!("SNMP getnext: security context updated, retrying");
+                $sess.getnext($oid)
+            }
+            Err(e) => Err(e),
+        }
+    };
+}
+
 // ─── OID Constants (u64 for Oid::from) ──────────────────────────
 
 // SNMPv2-MIB — system info
@@ -404,10 +427,10 @@ impl SnmpClient {
             let mut current_oid = base_oid.clone();
 
             loop {
-                let response = match sess.getnext(&current_oid) {
+                let response = match getnext_retry!(sess, &current_oid) {
                     Ok(r) => r,
                     Err(e) => {
-                        tracing::warn!("SNMP walk error: {e}");
+                        tracing::warn!(host = %client.host, oid = "Q-BRIDGE FDB", "SNMP walk error: {e}");
                         break;
                     }
                 };
@@ -468,10 +491,10 @@ impl SnmpClient {
             let mut mac_by_suffix: HashMap<String, String> = HashMap::new();
             let mut current = addr_oid.clone();
             loop {
-                let response = match sess.getnext(&current) {
+                let response = match getnext_retry!(sess, &current) {
                     Ok(r) => r,
                     Err(e) => {
-                        tracing::warn!("SNMP walk error: {e}");
+                        tracing::warn!(host = %client.host, oid = "BRIDGE FDB addr", "SNMP walk error: {e}");
                         break;
                     }
                 };
@@ -503,10 +526,10 @@ impl SnmpClient {
             let mut port_by_suffix: HashMap<String, u32> = HashMap::new();
             let mut current = port_oid.clone();
             loop {
-                let response = match sess.getnext(&current) {
+                let response = match getnext_retry!(sess, &current) {
                     Ok(r) => r,
                     Err(e) => {
-                        tracing::warn!("SNMP walk error: {e}");
+                        tracing::warn!(host = %client.host, oid = "BRIDGE FDB port", "SNMP walk error: {e}");
                         break;
                     }
                 };
@@ -685,7 +708,7 @@ fn walk_string_column(
     let mut current = base.clone();
 
     loop {
-        let response = match sess.getnext(&current) {
+        let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("SNMP walk error: {e}");
@@ -725,7 +748,7 @@ fn walk_u64_column(
     let mut current = base.clone();
 
     loop {
-        let response = match sess.getnext(&current) {
+        let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("SNMP walk error: {e}");
@@ -765,7 +788,7 @@ fn walk_raw_column(
     let mut current = base.clone();
 
     loop {
-        let response = match sess.getnext(&current) {
+        let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("SNMP walk error: {e}");
@@ -808,7 +831,7 @@ fn walk_lldp_string(
     let mut current = base.clone();
 
     loop {
-        let response = match sess.getnext(&current) {
+        let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("SNMP walk error: {e}");
@@ -851,7 +874,7 @@ fn walk_lldp_raw(
     let mut current = base.clone();
 
     loop {
-        let response = match sess.getnext(&current) {
+        let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("SNMP walk error: {e}");
@@ -894,7 +917,7 @@ fn walk_indexed_fn(
     let mut current = base.clone();
 
     loop {
-        let response = match sess.getnext(&current) {
+        let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("SNMP walk error: {e}");
@@ -931,7 +954,7 @@ fn walk_indexed_raw_fn(
     let mut current = base.clone();
 
     loop {
-        let response = match sess.getnext(&current) {
+        let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("SNMP walk error: {e}");

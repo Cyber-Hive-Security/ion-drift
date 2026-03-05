@@ -141,8 +141,15 @@ async fn poll_swos_switch(
 
     // ── Dynamic host (MAC) table ────────────────────────────────────
     if let Ok(hosts) = hosts_res {
-        // Log link index→name mapping on first cycle for debugging
-        if cycle == 0 && !links.is_empty() {
+        tracing::info!(
+            device = %device_id,
+            host_count = hosts.len(),
+            link_count = links.len(),
+            cycle = cycle,
+            "SwOS host table result"
+        );
+        // Log link index→name mapping periodically for debugging
+        if cycle % 10 == 0 && !links.is_empty() {
             let link_indices: Vec<String> = links.iter().map(|l| format!("{}={}", l.port_index, l.port_name)).collect();
             tracing::info!(device = %device_id, link_map = ?link_indices, "SwOS port index→name map");
         }

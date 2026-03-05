@@ -124,8 +124,11 @@ async fn poll_snmp_switch(
         }
     };
 
-    // ── MAC table + LLDP neighbors (concurrent) ────────────────────
-    let (mac_res, lldp_res) = tokio::join!(client.get_mac_table(), client.get_lldp_neighbors(),);
+    // ── MAC table + LLDP neighbors (sequential to reduce load) ─────
+    // Each method creates a new SNMPv3 session — running them concurrently
+    // overwhelms low-end switches (Netgear) with dual engine discovery.
+    let mac_res = client.get_mac_table().await;
+    let lldp_res = client.get_lldp_neighbors().await;
 
     // ── Port metrics ────────────────────────────────────────────────
     if !interfaces.is_empty() {
@@ -232,15 +235,16 @@ async fn poll_snmp_switch(
             }
         }
 
-        tracing::debug!(
+        tracing::info!(
             device = %device_id,
             identity = %sys.sys_name,
+            interfaces = interfaces.len(),
             macs = mac_entries.len(),
             lldp = neighbors.len(),
             "SNMP poll cycle complete"
         );
     } else if let Err(e) = lldp_res {
-        tracing::debug!(device = %device_id, "SNMP LLDP: {e}");
+        tracing::warn!(device = %device_id, "SNMP LLDP: {e}");
     }
 
     // ── VLAN membership (every 4th cycle to reduce load) ────────────

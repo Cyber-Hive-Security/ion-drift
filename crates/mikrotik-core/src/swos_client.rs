@@ -349,15 +349,24 @@ impl SwosClient {
     /// Fetch dynamic host (MAC) table from `/!dhost.b`.
     pub async fn get_hosts(&self) -> Result<Vec<SwosHost>, MikrotikError> {
         let raw = self.fetch("/!dhost.b").await?;
-        debug!(host = %self.host, "!dhost.b: {} bytes", raw.len());
+        tracing::info!(host = %self.host, bytes = raw.len(), "SwOS !dhost.b response");
 
         if raw.trim().is_empty() || raw.trim() == "[]" {
+            tracing::info!(host = %self.host, "SwOS !dhost.b: empty response, returning 0 hosts");
             return Ok(Vec::new());
         }
 
+        // Log first 300 chars of raw response for debugging parse issues
+        let preview: &str = if raw.len() > 300 { &raw[..300] } else { &raw };
+        tracing::debug!(host = %self.host, preview = %preview, "SwOS !dhost.b raw content");
+
         let json = transform_swos_to_json(&raw);
         let entries: Vec<DhostEntry> = serde_json::from_str(&json)
-            .map_err(|e| MikrotikError::Deserialize(format!("!dhost.b parse: {e}")))?;
+            .map_err(|e| {
+                let json_preview: &str = if json.len() > 300 { &json[..300] } else { &json };
+                tracing::warn!(host = %self.host, json = %json_preview, error = %e, "SwOS !dhost.b parse failed");
+                MikrotikError::Deserialize(format!("!dhost.b parse: {e}"))
+            })?;
 
         let hosts: Vec<SwosHost> = entries
             .into_iter()
