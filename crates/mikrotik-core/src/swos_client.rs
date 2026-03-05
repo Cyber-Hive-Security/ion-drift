@@ -299,20 +299,27 @@ impl SwosClient {
         let val: serde_json::Value = serde_json::from_str(&json)
             .map_err(|e| MikrotikError::Deserialize(format!("link.b parse: {e}")))?;
 
-        let port_count = val.get("prt").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-        let enabled_mask = val.get("en").and_then(|v| v.as_u64()).unwrap_or(0);
-        let link_mask = val.get("lnk").and_then(|v| v.as_u64()).unwrap_or(0);
-
         let names = val.get("nm").and_then(|v| v.as_array());
         let speeds = val.get("spd").and_then(|v| v.as_array());
 
-        // Log raw name data for debugging port name issues
+        // Determine port count: prefer `prt` field, fall back to `nm` array length.
+        // Some SwOS firmware (CSS106) omits `prt` but includes per-port arrays.
+        let prt_field = val.get("prt").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+        let port_count = if prt_field > 0 {
+            prt_field
+        } else {
+            names.map(|arr| arr.len() as u8).unwrap_or(0)
+        };
+        let enabled_mask = val.get("en").and_then(|v| v.as_u64()).unwrap_or(0);
+        let link_mask = val.get("lnk").and_then(|v| v.as_u64()).unwrap_or(0);
+
+        // Log port name data for debugging
         if let Some(nm_arr) = names {
             let decoded: Vec<String> = nm_arr
                 .iter()
                 .filter_map(|v| v.as_str().map(decode_hex_string))
                 .collect();
-            tracing::info!(host = %self.host, port_names = ?decoded, "SwOS link.b port names");
+            tracing::info!(host = %self.host, port_count = port_count, prt_field = prt_field, port_names = ?decoded, "SwOS link.b port names");
         } else {
             tracing::warn!(host = %self.host, "SwOS link.b: no 'nm' field — using fallback port names");
         }
