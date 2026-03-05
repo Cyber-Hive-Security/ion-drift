@@ -503,23 +503,18 @@ impl SwitchStore {
             let _ = conn.execute(alter, []);
         }
 
-        // Seed default VLAN configs if table is empty
-        let vlan_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM vlan_config", [], |row| row.get(0))
-            .unwrap_or(0);
-        if vlan_count == 0 {
-            conn.execute_batch(
-                "INSERT INTO vlan_config (vlan_id, name, media_type, subnet, color) VALUES
-                 (2,  'Network Mgmt',         'wired',    '10.2.2.0/24',      '#00f0ff'),
-                 (6,  'Employer Isolated',     'wired',    '172.20.6.0/24',    '#888888'),
-                 (10, 'Cyber Hive Security',   'wired',    '172.20.10.0/24',   '#ff4444'),
-                 (25, 'Trusted Services',      'wired',    '10.20.25.0/24',    '#00b4d8'),
-                 (30, 'Trusted Wired',         'wired',    '10.20.30.0/24',    '#22cc88'),
-                 (35, 'Trusted Wireless',      'wireless', '10.20.35.0/24',    '#44ddaa'),
-                 (40, 'Guest',                 'wireless', '',                  '#ffaa00'),
-                 (90, 'IoT Internet',          'wireless', '192.168.90.0/24',  '#f97316'),
-                 (99, 'IoT Restricted',        'wired',    '192.168.99.0/24',  '#7FFF00')"
-            )?;
+        // One-time migration: clear hardcoded VLAN config seeds so router sync
+        // can repopulate with actual data. Detects the old seed by checking if
+        // VLAN 40 has an empty subnet (the hardcoded seed used '' for Guest).
+        let has_hardcoded_seed: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vlan_config WHERE vlan_id = 40 AND (subnet = '' OR subnet IS NULL)",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0) > 0;
+        if has_hardcoded_seed {
+            let _ = conn.execute("DELETE FROM vlan_config", []);
         }
 
         // One-time migration: lowercase existing backbone_links port names
@@ -1687,6 +1682,24 @@ impl SwitchStore {
             ],
         )?;
         Ok(())
+    }
+
+    /// Insert a VLAN config only if the vlan_id doesn't already exist.
+    /// Returns true if a new row was inserted, false if it already existed.
+    pub async fn insert_vlan_config_if_missing(&self, config: &VlanConfig) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "INSERT OR IGNORE INTO vlan_config (vlan_id, name, media_type, subnet, color)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                config.vlan_id as i64,
+                config.name,
+                config.media_type,
+                config.subnet,
+                config.color,
+            ],
+        )?;
+        Ok(affected > 0)
     }
 
     // ── Neighbor aliases ──────────────────────────────────────────────

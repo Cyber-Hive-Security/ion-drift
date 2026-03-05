@@ -72,6 +72,22 @@ async fn run_correlation(
         _ => {}
     }
 
+    // ── 0b. Sync VLAN config from router ─────────────────────────
+    // Discovers VLANs from the router's VLAN interfaces and IP addresses.
+    // Only inserts new VLANs — never overwrites human edits.
+    if let Err(e) = sync_vlan_config_from_router(store, router_client).await {
+        tracing::warn!("VLAN config sync: {e}");
+    }
+
+    // Load VLAN configs for use throughout correlation (subnet matching, wireless detection)
+    let vlan_configs = store.get_vlan_configs().await.unwrap_or_default();
+
+    // Build subnet list for VLAN-from-IP inference
+    let vlan_subnets: Vec<(u32, String)> = vlan_configs
+        .iter()
+        .filter_map(|c| c.subnet.as_ref().filter(|s| !s.is_empty()).map(|s| (c.vlan_id, s.clone())))
+        .collect();
+
     // ── 1. Port role classification ───────────────────────────────
     let dm_read = device_manager.read().await;
     let switches = dm_read.get_switches();
@@ -260,8 +276,7 @@ async fn run_correlation(
         }
     }
 
-    // Load wireless VLANs for WAP attribution (Step 5).
-    let vlan_configs = store.get_vlan_configs().await.unwrap_or_default();
+    // Build wireless VLAN set for WAP attribution.
     let wireless_vlans: HashSet<u32> = vlan_configs
         .iter()
         .filter(|v| v.media_type == "wireless" || v.media_type == "mixed")
@@ -523,7 +538,7 @@ async fn run_correlation(
     for builder in identity_map.values_mut() {
         if builder.vlan_id.is_none() {
             if let Some(ref ip) = builder.best_ip {
-                if let Some(vlan) = vlan_from_ip(ip) {
+                if let Some(vlan) = vlan_from_ip(ip, &vlan_subnets) {
                     builder.vlan_id = Some(vlan);
                 }
             }
@@ -719,24 +734,28 @@ impl IdentityBuilder {
     }
 }
 
-/// Infer VLAN ID from an IP address based on the network's addressing scheme.
-/// The third octet of the IP maps to the VLAN:
-///   10.2.2.0/24    → VLAN 2
-///   172.20.6.0/24  → VLAN 6
-///   172.20.10.0/24 → VLAN 10
-///   10.20.25.0/24  → VLAN 25
-///   10.20.30.0/24  → VLAN 30
-///   10.20.35.0/24  → VLAN 35
-///   192.168.90.0/24 → VLAN 90
-///   192.168.99.0/24 → VLAN 99
-fn vlan_from_ip(ip: &str) -> Option<u32> {
+/// Infer VLAN ID from an IP address using the vlan_config subnet data.
+/// Falls back to third-octet heuristic for VLANs not yet in the DB.
+fn vlan_from_ip(ip: &str, vlan_subnets: &[(u32, String)]) -> Option<u32> {
+    let ip_addr: std::net::Ipv4Addr = ip.parse().ok()?;
+    let ip_u32 = u32::from(ip_addr);
+
+    // Try DB-sourced subnets first (exact CIDR match)
+    for (vlan_id, cidr) in vlan_subnets {
+        if let Some((net, mask_bits)) = parse_cidr(cidr) {
+            let mask = if mask_bits == 0 { 0 } else { !0u32 << (32 - mask_bits) };
+            if (ip_u32 & mask) == (net & mask) {
+                return Some(*vlan_id);
+            }
+        }
+    }
+
+    // Fallback: third-octet heuristic for any VLANs not in DB yet
     let octets: Vec<&str> = ip.split('.').collect();
     if octets.len() != 4 {
         return None;
     }
     let third: u32 = octets[2].parse().ok()?;
-
-    // Known VLAN subnets mapped by third octet
     match (octets[0], octets[1], third) {
         ("10", "2", 2) => Some(2),
         ("172", "20", 6) => Some(6),
@@ -744,11 +763,22 @@ fn vlan_from_ip(ip: &str) -> Option<u32> {
         ("10", "20", 25) => Some(25),
         ("10", "20", 30) => Some(30),
         ("10", "20", 35) => Some(35),
+        ("172", "20", 40) => Some(40),
         ("192", "168", 90) => Some(90),
         ("192", "168", 99) => Some(99),
-        // VLAN 40 (Guest) — no known subnet documented
         _ => None,
     }
+}
+
+/// Parse a CIDR string like "10.20.25.0/24" into (network_u32, mask_bits).
+fn parse_cidr(cidr: &str) -> Option<(u32, u32)> {
+    let parts: Vec<&str> = cidr.split('/').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let addr: std::net::Ipv4Addr = parts[0].parse().ok()?;
+    let bits: u32 = parts[1].parse().ok()?;
+    Some((u32::from(addr), bits))
 }
 
 /// Parse a MAC address (colon or hyphen separated) into a u64 for range arithmetic.
@@ -846,6 +876,97 @@ fn is_switch_local_mac(mac: &str, local_set: &HashSet<u64>) -> bool {
         Some(val) => local_set.contains(&val),
         None => false,
     }
+}
+
+/// Sync VLAN config from router VLAN interfaces + IP addresses.
+/// Discovers VLANs, their names, subnets, and infers media type from naming conventions.
+/// Only inserts missing VLANs — existing entries (including human edits) are preserved.
+async fn sync_vlan_config_from_router(
+    store: &SwitchStore,
+    router_client: &MikrotikClient,
+) -> anyhow::Result<()> {
+    use mikrotik_core::switch_store::VlanConfig;
+
+    let vlan_ifaces = router_client.vlan_interfaces().await?;
+    let ip_addrs = router_client.ip_addresses().await?;
+
+    // Build map: interface name → subnet CIDR
+    let mut iface_subnet: HashMap<String, String> = HashMap::new();
+    for addr in &ip_addrs {
+        if !addr.disabled {
+            // addr.address is "10.20.25.1/24", addr.network is "10.20.25.0"
+            // Combine network + mask from address for proper CIDR
+            if let Some(mask) = addr.address.split('/').nth(1) {
+                iface_subnet.insert(
+                    addr.interface.clone(),
+                    format!("{}/{}", addr.network, mask),
+                );
+            }
+        }
+    }
+
+    // Auto-assign colors by VLAN ID for a reasonable default palette
+    fn auto_color(vlan_id: u32) -> &'static str {
+        match vlan_id {
+            2 => "#00f0ff",
+            6 => "#888888",
+            10 => "#ff4444",
+            25 => "#00b4d8",
+            30 => "#22cc88",
+            35 => "#44ddaa",
+            40 => "#ffaa00",
+            90 => "#f97316",
+            99 => "#7FFF00",
+            _ => "#6b7280",
+        }
+    }
+
+    let mut synced = 0u32;
+    for vlan in &vlan_ifaces {
+        if vlan.disabled {
+            continue;
+        }
+
+        // Extract a human-friendly name from the interface name.
+        // RouterOS names like "V-35-T-WiFi" → "T-WiFi", "V-6-Cambia" → "Cambia"
+        // Pattern: "V-{id}-{rest}" — strip the "V-{id}-" prefix.
+        let raw_name = &vlan.name;
+        let friendly_name = raw_name
+            .strip_prefix(&format!("V-{}-", vlan.vlan_id))
+            .or_else(|| raw_name.strip_prefix(&format!("V-X-{}-", vlan.vlan_id)))
+            .unwrap_or(raw_name)
+            .to_string();
+
+        // Infer media type from interface name keywords
+        let name_lower = raw_name.to_lowercase();
+        let media_type = if name_lower.contains("wifi") || name_lower.contains("wireless") {
+            "wireless"
+        } else {
+            "wired"
+        };
+
+        let subnet = iface_subnet.get(raw_name).cloned();
+
+        let config = VlanConfig {
+            vlan_id: vlan.vlan_id,
+            name: friendly_name,
+            media_type: media_type.to_string(),
+            subnet,
+            color: Some(auto_color(vlan.vlan_id).to_string()),
+        };
+
+        match store.insert_vlan_config_if_missing(&config).await {
+            Ok(true) => synced += 1,
+            Ok(false) => {} // already exists
+            Err(e) => tracing::warn!(vlan = vlan.vlan_id, "vlan config insert: {e}"),
+        }
+    }
+
+    if synced > 0 {
+        tracing::info!(count = synced, "VLAN configs synced from router");
+    }
+
+    Ok(())
 }
 
 /// Build a map of switch_id → list of WAP identifiers that are direct backbone children.
