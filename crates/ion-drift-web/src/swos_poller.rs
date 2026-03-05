@@ -103,8 +103,12 @@ async fn poll_swos_switch(
         }
     };
 
-    // Collect hosts and stats concurrently
-    let (hosts_res, stats_res) = tokio::join!(client.get_hosts(), client.get_stats(),);
+    // Collect hosts and stats sequentially — SwOS is a tiny embedded HTTP/1.0
+    // server that cannot handle concurrent connections reliably. Parallel
+    // requests cause intermittent failures (empty responses, connection resets),
+    // especially on lower-end models like CSS106.
+    let hosts_res = client.get_hosts().await;
+    let stats_res = client.get_stats().await;
 
     // ── Port metrics (from stats + link status) ─────────────────────
     if let Ok(stats) = stats_res {
