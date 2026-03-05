@@ -313,10 +313,16 @@ async fn run_correlation(
         let is_trunk = trunk_ports.contains(&(entry.device_id.clone(), entry.port_name.to_lowercase()));
         let is_router = entry.device_id == router_id;
         let depth = switch_depths.get(&entry.device_id).copied().unwrap_or(0);
-        let base_class: u32 = match (is_trunk, is_router) {
-            (true, true)  => 1, // Router trunk: lowest (sees every MAC via ARP)
-            (true, false) => 2, // Switch trunk: medium (downstream aggregation)
-            (false, _)    => 3, // Access port: highest (directly connected)
+        // Router always gets lowest priority — it sees every MAC via its bridge,
+        // so it should never win over a switch. Router ports aren't in trunk_ports
+        // (port classification only runs for switches), so without this guard the
+        // (false, _) arm would give router entries access-port priority (300).
+        let base_class: u32 = if is_router {
+            1 // Router: lowest (sees every MAC via bridge/ARP gateway)
+        } else if is_trunk {
+            2 // Switch trunk: medium (downstream aggregation)
+        } else {
+            3 // Access port: highest (directly connected)
         };
         let new_priority: u32 = base_class * 100 + depth * 10;
 
