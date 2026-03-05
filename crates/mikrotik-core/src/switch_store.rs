@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 // ── Data types ──────────────────────────────────────────────────
@@ -240,6 +240,16 @@ pub struct PortRoleEntry {
     pub updated_at: i64,
 }
 
+/// VLAN configuration metadata (media type, color, subnet).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VlanConfig {
+    pub vlan_id: u32,
+    pub name: String,
+    pub media_type: String,
+    pub subnet: Option<String>,
+    pub color: Option<String>,
+}
+
 // ── Store ───────────────────────────────────────────────────────
 
 /// Persistent switch data store backed by SQLite.
@@ -468,6 +478,14 @@ impl SwitchStore {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_pv_unique
                 ON port_violations (device_id, port_name, expected_mac, actual_mac);
 
+            CREATE TABLE IF NOT EXISTS vlan_config (
+                vlan_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                media_type TEXT NOT NULL DEFAULT 'wired' CHECK(media_type IN ('wired', 'wireless', 'mixed')),
+                subnet TEXT,
+                color TEXT
+            );
+
             PRAGMA journal_mode=WAL;",
         )?;
 
@@ -484,6 +502,35 @@ impl SwitchStore {
         ] {
             let _ = conn.execute(alter, []);
         }
+
+        // Seed default VLAN configs if table is empty
+        let vlan_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vlan_config", [], |row| row.get(0))
+            .unwrap_or(0);
+        if vlan_count == 0 {
+            conn.execute_batch(
+                "INSERT INTO vlan_config (vlan_id, name, media_type, subnet, color) VALUES
+                 (2,  'Network Mgmt',         'wired',    '10.2.2.0/24',      '#00f0ff'),
+                 (6,  'Employer Isolated',     'wired',    '172.20.6.0/24',    '#888888'),
+                 (10, 'Cyber Hive Security',   'wired',    '172.20.10.0/24',   '#ff4444'),
+                 (25, 'Trusted Services',      'wired',    '10.20.25.0/24',    '#00b4d8'),
+                 (30, 'Trusted Wired',         'wired',    '10.20.30.0/24',    '#22cc88'),
+                 (35, 'Trusted Wireless',      'wireless', '10.20.35.0/24',    '#44ddaa'),
+                 (40, 'Guest',                 'wireless', '',                  '#ffaa00'),
+                 (90, 'IoT Internet',          'wireless', '192.168.90.0/24',  '#f97316'),
+                 (99, 'IoT Restricted',        'wired',    '192.168.99.0/24',  '#7FFF00')"
+            )?;
+        }
+
+        // One-time migration: lowercase existing backbone_links port names
+        let _ = conn.execute(
+            "UPDATE backbone_links SET port_a = LOWER(port_a) WHERE port_a IS NOT NULL AND port_a != LOWER(port_a)",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE backbone_links SET port_b = LOWER(port_b) WHERE port_b IS NOT NULL AND port_b != LOWER(port_b)",
+            [],
+        );
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -562,6 +609,7 @@ impl SwitchStore {
         is_local: bool,
     ) -> Result<(), rusqlite::Error> {
         let now = now_unix();
+        let port_lower = port_name.to_lowercase();
         let db = self.db.lock().await;
         db.execute(
             "INSERT INTO switch_mac_table
@@ -575,7 +623,7 @@ impl SwitchStore {
             params![
                 device_id,
                 mac_address,
-                port_name,
+                &port_lower,
                 bridge,
                 vlan_id.map(|v| v as i64),
                 is_local as i32,
@@ -787,6 +835,25 @@ impl SwitchStore {
                     human_confirmed, human_label, disposition,
                     is_infrastructure, switch_binding_source
              FROM network_identities ORDER BY last_seen DESC",
+        )?;
+        let rows = stmt.query_map([], map_identity_row)?;
+        rows.collect()
+    }
+
+    /// Get infrastructure-flagged identities (WAPs, unmanaged switches, etc.).
+    pub async fn get_infrastructure_identities(&self) -> Result<Vec<NetworkIdentity>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT mac_address, best_ip, hostname, manufacturer, switch_device_id, switch_port,
+                    vlan_id, discovery_protocol, remote_identity, remote_platform,
+                    first_seen, last_seen, confidence,
+                    device_type, device_type_source, device_type_confidence,
+                    human_confirmed, human_label, disposition,
+                    is_infrastructure, switch_binding_source
+             FROM network_identities
+             WHERE is_infrastructure = 1
+                OR device_type IN ('access_point', 'switch', 'network_equipment')
+             ORDER BY hostname, mac_address",
         )?;
         let rows = stmt.query_map([], map_identity_row)?;
         rows.collect()
@@ -1212,6 +1279,7 @@ impl SwitchStore {
         has_lldp_neighbor: bool,
     ) -> Result<(), rusqlite::Error> {
         let now = now_unix();
+        let port_lower = port_name.to_lowercase();
         let db = self.db.lock().await;
         db.execute(
             "INSERT INTO switch_port_roles
@@ -1225,7 +1293,7 @@ impl SwitchStore {
                  updated_at = excluded.updated_at",
             params![
                 device_id,
-                port_name,
+                &port_lower,
                 role,
                 vlan_count as i64,
                 mac_count as i64,
@@ -1553,10 +1621,12 @@ impl SwitchStore {
         port_b: Option<&str>,
         label: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
+        let pa_lower = port_a.map(|p| p.to_lowercase());
+        let pb_lower = port_b.map(|p| p.to_lowercase());
         let (da, pa, db_dev, pb) = if device_a <= device_b {
-            (device_a, port_a, device_b, port_b)
+            (device_a, pa_lower.as_deref(), device_b, pb_lower.as_deref())
         } else {
-            (device_b, port_b, device_a, port_a)
+            (device_b, pb_lower.as_deref(), device_a, pa_lower.as_deref())
         };
         let db = self.db.lock().await;
         db.execute(
@@ -1575,6 +1645,48 @@ impl SwitchStore {
             rusqlite::params![id],
         )?;
         Ok(affected > 0)
+    }
+
+    // ── VLAN config ───────────────────────────────────────────────────
+
+    /// Get all VLAN configs, ordered by vlan_id.
+    pub async fn get_vlan_configs(&self) -> Result<Vec<VlanConfig>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT vlan_id, name, media_type, subnet, color FROM vlan_config ORDER BY vlan_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(VlanConfig {
+                vlan_id: row.get::<_, i64>(0)? as u32,
+                name: row.get(1)?,
+                media_type: row.get(2)?,
+                subnet: row.get(3)?,
+                color: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Upsert a VLAN config entry.
+    pub async fn upsert_vlan_config(&self, config: &VlanConfig) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO vlan_config (vlan_id, name, media_type, subnet, color)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(vlan_id) DO UPDATE SET
+                 name = excluded.name,
+                 media_type = excluded.media_type,
+                 subnet = excluded.subnet,
+                 color = excluded.color",
+            params![
+                config.vlan_id as i64,
+                config.name,
+                config.media_type,
+                config.subnet,
+                config.color,
+            ],
+        )?;
+        Ok(())
     }
 
     // ── Neighbor aliases ──────────────────────────────────────────────

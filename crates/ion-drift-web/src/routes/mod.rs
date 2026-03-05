@@ -19,6 +19,7 @@ pub mod topology;
 pub mod traffic;
 pub mod vlan_activity;
 pub mod vlan_flows;
+pub mod vlans;
 
 use axum::Router;
 use axum::extract::State;
@@ -219,6 +220,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/network/neighbors", get(switch_data::network_neighbors))
         .route("/network/port-roles", get(switch_data::network_port_roles))
         // Identity management
+        .route("/network/identities/infrastructure", get(identity::list_infrastructure_identities))
         .route("/network/identities/stats", get(identity::identity_stats))
         .route("/network/identities/review-queue", get(identity::review_queue))
         .route("/network/identities/{mac}", put(identity::update_identity))
@@ -242,6 +244,9 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/network/topology/positions/{nodeId}", put(topology::update_position).delete(topology::reset_position))
         .route("/network/topology/sectors", get(topology::get_sectors))
         .route("/network/topology/sectors/{vlanId}", put(topology::update_sector).delete(topology::reset_sector))
+        // VLAN config
+        .route("/network/vlan-config", get(vlans::list_vlan_configs))
+        .route("/network/vlan-config/{vlan_id}", put(vlans::upsert_vlan_config))
         // Backbone links (manual switch interconnects)
         .route("/network/backbone-links", get(backbone::list_backbone_links).post(backbone::create_backbone_link))
         .route("/network/backbone-links/{id}", delete(backbone::delete_backbone_link))

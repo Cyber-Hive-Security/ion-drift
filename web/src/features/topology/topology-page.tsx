@@ -595,8 +595,8 @@ export function TopologyPage() {
             menu={contextMenu}
             devices={devicesList.data ?? []}
             onClose={() => setContextMenu(null)}
-            onAlias={(matchType, matchValue, targetDeviceId) => {
-              createAliasMutation.mutate({
+            onAlias={async (matchType, matchValue, targetDeviceId) => {
+              await createAliasMutation.mutateAsync({
                 match_type: matchType,
                 match_value: matchValue,
                 action: "alias",
@@ -604,16 +604,16 @@ export function TopologyPage() {
               });
               refreshMutation.mutate();
             }}
-            onHide={(matchType, matchValue) => {
-              createAliasMutation.mutate({
+            onHide={async (matchType, matchValue) => {
+              await createAliasMutation.mutateAsync({
                 match_type: matchType,
                 match_value: matchValue,
                 action: "hide",
               });
               refreshMutation.mutate();
             }}
-            onSetDisposition={(mac, disposition) => {
-              dispositionMutation.mutate({ mac, disposition });
+            onSetDisposition={async (mac, disposition) => {
+              await dispositionMutation.mutateAsync({ mac, disposition });
               refreshMutation.mutate();
             }}
             onSelect={(node) => setSelectedNode(node)}

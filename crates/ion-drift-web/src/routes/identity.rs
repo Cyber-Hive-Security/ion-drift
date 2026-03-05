@@ -12,6 +12,19 @@ use super::internal_error;
 
 // ── Identity endpoints ──────────────────────────────────────────
 
+/// GET /api/network/identities/infrastructure — infrastructure-flagged identities.
+pub async fn list_infrastructure_identities(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let identities = state
+        .switch_store
+        .get_infrastructure_identities()
+        .await
+        .map_err(|e| internal_error("infrastructure identities", e))?;
+    Ok(Json(serde_json::to_value(identities).unwrap()))
+}
+
 /// GET /api/network/identities/stats
 pub async fn identity_stats(
     RequireAuth(_session): RequireAuth,

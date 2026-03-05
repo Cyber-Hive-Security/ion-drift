@@ -84,6 +84,7 @@ import type {
   NetworkTopologyResponse,
   TopologyPosition,
   SectorPosition,
+  VlanConfig,
 } from "./types";
 
 // Auth
@@ -1377,6 +1378,42 @@ export function useDeleteNeighborAlias() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["network", "neighbor-aliases"] });
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    },
+  });
+}
+
+// ── VLAN Config ─────────────────────────────────────────────────
+
+export function useVlanConfigs() {
+  return useQuery({
+    queryKey: ["network", "vlan-config"],
+    queryFn: () => apiFetch<VlanConfig[]>("/api/network/vlan-config"),
+    refetchInterval: 60_000,
+  });
+}
+
+// ── Infrastructure Identities ───────────────────────────────────
+
+export function useInfrastructureIdentities() {
+  return useQuery({
+    queryKey: ["network", "identities", "infrastructure"],
+    queryFn: () => apiFetch<NetworkIdentity[]>("/api/network/identities/infrastructure"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useUpdateVlanConfig() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (config: VlanConfig) =>
+      apiFetch<{ ok: boolean }>(`/api/network/vlan-config/${config.vlan_id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "vlan-config"] });
       queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
     },
   });

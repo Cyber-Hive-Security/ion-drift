@@ -112,9 +112,10 @@ pub struct NetworkTopology {
     pub endpoint_count: usize,
 }
 
-// ── VLAN config (matches frontend VLAN_CONFIG) ───────────────────
+// ── VLAN config ─────────────────────────────────────────────────
 
-fn vlan_config(id: u32) -> (&'static str, &'static str, &'static str) {
+/// Hardcoded fallback when DB has no entry for a VLAN.
+fn vlan_config_fallback(id: u32) -> (&'static str, &'static str, &'static str) {
     match id {
         2 => ("Network Mgmt", "#00f0ff", "10.2.2.0/24"),
         6 => ("Employer Isolated", "#888888", "172.20.6.0/24"),
@@ -126,6 +127,25 @@ fn vlan_config(id: u32) -> (&'static str, &'static str, &'static str) {
         90 => ("IoT Internet", "#f97316", "192.168.90.0/24"),
         99 => ("IoT Restricted", "#7FFF00", "192.168.99.0/24"),
         _ => ("Unknown", "#888888", ""),
+    }
+}
+
+use mikrotik_core::switch_store::VlanConfig;
+
+/// Resolve VLAN metadata from DB config map, falling back to hardcoded defaults.
+fn resolve_vlan_config(
+    id: u32,
+    db_configs: &HashMap<u32, VlanConfig>,
+) -> (String, String, String) {
+    if let Some(cfg) = db_configs.get(&id) {
+        (
+            cfg.name.clone(),
+            cfg.color.clone().unwrap_or_else(|| "#888888".to_string()),
+            cfg.subnet.clone().unwrap_or_default(),
+        )
+    } else {
+        let (n, c, s) = vlan_config_fallback(id);
+        (n.to_string(), c.to_string(), s.to_string())
     }
 }
 
@@ -157,6 +177,13 @@ pub async fn compute_topology(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
+
+    // Load DB-backed VLAN configs for name/color/subnet resolution
+    let vlan_config_list = store.get_vlan_configs().await.unwrap_or_default();
+    let vlan_config_map: HashMap<u32, VlanConfig> = vlan_config_list
+        .into_iter()
+        .map(|c| (c.vlan_id, c))
+        .collect();
 
     let mut nodes: BTreeMap<String, TopologyNode> = BTreeMap::new();
     let mut edges: Vec<TopologyEdge> = Vec::new();
@@ -807,7 +834,7 @@ pub async fn compute_topology(
     let mut vlan_groups: Vec<VlanGroup> = Vec::new();
     for (&vlan_id, &(left_x, top_y, width, height)) in &sector_geometry {
         let group_nodes = vlan_nodes.get(&vlan_id);
-        let (name, color, subnet) = vlan_config(vlan_id);
+        let (name, color, subnet) = resolve_vlan_config(vlan_id, &vlan_config_map);
 
         // Check for human override
         if let Some(sp) = sector_overrides.get(&vlan_id) {
@@ -816,9 +843,9 @@ pub async fn compute_topology(
             let h = sp.height.unwrap_or(height);
             vlan_groups.push(VlanGroup {
                 vlan_id,
-                name: name.to_string(),
-                color: color.to_string(),
-                subnet: subnet.to_string(),
+                name,
+                color,
+                subnet,
                 node_count,
                 bbox_x: sp.x,
                 bbox_y: sp.y,
@@ -833,9 +860,9 @@ pub async fn compute_topology(
 
         vlan_groups.push(VlanGroup {
             vlan_id,
-            name: name.to_string(),
-            color: color.to_string(),
-            subnet: subnet.to_string(),
+            name,
+            color,
+            subnet,
             node_count,
             bbox_x: left_x,
             bbox_y: top_y,

@@ -1224,3 +1224,12 @@ export interface SectorPosition {
   source: string;
   updated_at: string;
 }
+
+// ── VLAN Config ─────────────────────────────────────────────────
+export interface VlanConfig {
+  vlan_id: number;
+  name: string;
+  media_type: "wired" | "wireless" | "mixed";
+  subnet: string | null;
+  color: string | null;
+}

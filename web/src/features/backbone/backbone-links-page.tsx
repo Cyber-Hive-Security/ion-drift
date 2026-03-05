@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { useBackboneLinks, useCreateBackboneLink, useDeleteBackboneLink, useDevices } from "@/api/queries";
-import type { NetworkDevice } from "@/api/types";
+import { useMemo, useState } from "react";
+import { useBackboneLinks, useCreateBackboneLink, useDeleteBackboneLink, useDevices, useInfrastructureIdentities } from "@/api/queries";
+import type { NetworkDevice, NetworkIdentity } from "@/api/types";
 import { Cable, Trash2, Plus } from "lucide-react";
 
 export function BackboneLinksPage() {
   const links = useBackboneLinks();
   const devices = useDevices();
+  const infraIdentities = useInfrastructureIdentities();
   const createMutation = useCreateBackboneLink();
   const deleteMutation = useDeleteBackboneLink();
 
@@ -15,10 +16,30 @@ export function BackboneLinksPage() {
   const [portB, setPortB] = useState("");
   const [label, setLabel] = useState("");
 
-  const deviceMap = new Map<string, NetworkDevice>();
-  for (const d of devices.data ?? []) {
-    deviceMap.set(d.id, d);
-  }
+  const managedDevices = devices.data ?? [];
+  const managedIds = useMemo(() => new Set(managedDevices.map((d) => d.id)), [managedDevices]);
+
+  // Build a combined name lookup: managed devices + infrastructure identities
+  const nameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of managedDevices) {
+      map.set(d.id, d.name);
+    }
+    for (const ident of infraIdentities.data ?? []) {
+      const key = ident.hostname ?? ident.mac_address;
+      if (!map.has(key)) {
+        map.set(key, ident.hostname ?? ident.mac_address);
+      }
+    }
+    return map;
+  }, [managedDevices, infraIdentities.data]);
+
+  // Infrastructure identities not already in managed devices
+  const discoveredInfra = useMemo(() => {
+    return (infraIdentities.data ?? []).filter(
+      (ident) => !managedIds.has(ident.hostname ?? ident.mac_address),
+    );
+  }, [infraIdentities.data, managedIds]);
 
   const canSubmit = deviceA && deviceB && deviceA !== deviceB && !createMutation.isPending;
 
@@ -45,10 +66,8 @@ export function BackboneLinksPage() {
   }
 
   function resolveName(id: string) {
-    return deviceMap.get(id)?.name ?? id;
+    return nameMap.get(id) ?? id;
   }
-
-  const allDevices = devices.data ?? [];
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -83,18 +102,7 @@ export function BackboneLinksPage() {
             {/* Add form row */}
             <tr className="border-b border-border bg-card">
               <td className="px-3 py-2">
-                <select
-                  value={deviceA}
-                  onChange={(e) => setDeviceA(e.target.value)}
-                  className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                >
-                  <option value="">Select device...</option>
-                  {allDevices.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
+                <DeviceSelect value={deviceA} onChange={setDeviceA} managed={managedDevices} infra={discoveredInfra} />
               </td>
               <td className="px-3 py-2">
                 <input
@@ -109,18 +117,7 @@ export function BackboneLinksPage() {
                 <Cable className="mx-auto h-4 w-4" />
               </td>
               <td className="px-3 py-2">
-                <select
-                  value={deviceB}
-                  onChange={(e) => setDeviceB(e.target.value)}
-                  className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                >
-                  <option value="">Select device...</option>
-                  {allDevices.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
+                <DeviceSelect value={deviceB} onChange={setDeviceB} managed={managedDevices} infra={discoveredInfra} />
               </td>
               <td className="px-3 py-2">
                 <input
@@ -193,6 +190,47 @@ export function BackboneLinksPage() {
         <p className="text-xs text-destructive">Device A and Device B must be different.</p>
       )}
     </div>
+  );
+}
+
+function DeviceSelect({
+  value,
+  onChange,
+  managed,
+  infra,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  managed: NetworkDevice[];
+  infra: NetworkIdentity[];
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+    >
+      <option value="">Select device...</option>
+      <optgroup label="Managed Devices">
+        {managed.map((d) => (
+          <option key={d.id} value={d.id}>
+            {d.name}
+          </option>
+        ))}
+      </optgroup>
+      {infra.length > 0 && (
+        <optgroup label="Discovered Infrastructure">
+          {infra.map((d) => {
+            const key = d.hostname ?? d.mac_address;
+            return (
+              <option key={key} value={key}>
+                {d.hostname ?? d.mac_address} ({d.device_type ?? "unknown"})
+              </option>
+            );
+          })}
+        </optgroup>
+      )}
+    </select>
   );
 }
 

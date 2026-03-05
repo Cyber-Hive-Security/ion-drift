@@ -7,7 +7,7 @@ use hickory_resolver::Resolver;
 use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use mikrotik_core::{MikrotikClient, SwitchStore};
-use mikrotik_core::switch_store::MacTableEntry;
+use mikrotik_core::switch_store::{BackboneLink, MacTableEntry};
 use tokio::sync::RwLock;
 
 use crate::device_manager::DeviceManager;
@@ -199,7 +199,7 @@ async fn run_correlation(
     let mut trunk_ports: HashSet<(String, String)> = port_roles
         .iter()
         .filter(|r| r.role == "trunk" || r.role == "uplink")
-        .map(|r| (r.device_id.clone(), r.port_name.clone()))
+        .map(|r| (r.device_id.clone(), r.port_name.to_lowercase()))
         .collect();
 
     // Force backbone-linked ports to trunk role (fills in what LLDP would provide
@@ -207,11 +207,11 @@ async fn run_correlation(
     let backbone_links = store.get_backbone_links().await.unwrap_or_default();
     for link in &backbone_links {
         if let Some(ref port) = link.port_a {
-            trunk_ports.insert((link.device_a.clone(), port.clone()));
+            trunk_ports.insert((link.device_a.clone(), port.to_lowercase()));
             let _ = store.set_port_role(&link.device_a, port, "trunk", 0, 0, false).await;
         }
         if let Some(ref port) = link.port_b {
-            trunk_ports.insert((link.device_b.clone(), port.clone()));
+            trunk_ports.insert((link.device_b.clone(), port.to_lowercase()));
             let _ = store.set_port_role(&link.device_b, port, "trunk", 0, 0, false).await;
         }
     }
@@ -244,21 +244,34 @@ async fn run_correlation(
         if let Some(peer_id) = resolved {
             // Normalize LLDP interface: "1-sfp-sfpplus,B-VLANs" → "1-sfp-sfpplus"
             let port = nb.interface.split(',').next().unwrap_or(&nb.interface);
-            trunk_peer.insert((nb.device_id.clone(), port.to_string()), peer_id);
+            trunk_peer.insert((nb.device_id.clone(), port.to_lowercase()), peer_id);
         }
     }
 
     // Add backbone links as trunk peers (don't overwrite LLDP-derived peers).
     for link in &backbone_links {
         if let Some(ref port) = link.port_a {
-            trunk_peer.entry((link.device_a.clone(), port.clone()))
+            trunk_peer.entry((link.device_a.clone(), port.to_lowercase()))
                 .or_insert_with(|| link.device_b.clone());
         }
         if let Some(ref port) = link.port_b {
-            trunk_peer.entry((link.device_b.clone(), port.clone()))
+            trunk_peer.entry((link.device_b.clone(), port.to_lowercase()))
                 .or_insert_with(|| link.device_a.clone());
         }
     }
+
+    // Load wireless VLANs for WAP attribution (Step 5).
+    let vlan_configs = store.get_vlan_configs().await.unwrap_or_default();
+    let wireless_vlans: HashSet<u32> = vlan_configs
+        .iter()
+        .filter(|v| v.media_type == "wireless" || v.media_type == "mixed")
+        .map(|v| v.vlan_id)
+        .collect();
+
+    // Compute switch depth from router via BFS over backbone adjacency graph.
+    // Deeper switches get higher priority scores — a MAC on a depth-2 switch
+    // trunk is more specific than the same MAC on a depth-1 switch trunk.
+    let switch_depths = compute_switch_depths(&backbone_links, &router_id);
 
     // Build a map: MAC → best known info
     let mut identity_map: HashMap<String, IdentityBuilder> = HashMap::new();
@@ -274,25 +287,23 @@ async fn run_correlation(
             continue;
         }
 
-        let is_trunk = trunk_ports.contains(&(entry.device_id.clone(), entry.port_name.clone()));
+        let is_trunk = trunk_ports.contains(&(entry.device_id.clone(), entry.port_name.to_lowercase()));
         let is_router = entry.device_id == router_id;
-        let new_priority: u8 = match (is_trunk, is_router) {
-            (true, true) => 1,  // Router trunk: lowest (sees every MAC via ARP)
+        let depth = switch_depths.get(&entry.device_id).copied().unwrap_or(0);
+        let base_class: u32 = match (is_trunk, is_router) {
+            (true, true)  => 1, // Router trunk: lowest (sees every MAC via ARP)
             (true, false) => 2, // Switch trunk: medium (downstream aggregation)
-            (false, _) => 3,    // Access port: highest (directly connected)
+            (false, _)    => 3, // Access port: highest (directly connected)
         };
+        let new_priority: u32 = base_class * 100 + depth * 10;
 
         let builder = identity_map
             .entry(entry.mac_address.to_uppercase())
             .or_insert_with(IdentityBuilder::default);
 
-        // Only update switch binding if new priority > existing,
-        // or same priority but more recently seen (handles port renames
-        // where old and new entries coexist with the same priority).
-        let dominated = new_priority > builder.binding_priority
-            || (new_priority == builder.binding_priority
-                && entry.last_seen >= builder.binding_last_seen);
-        if dominated {
+        // Only update switch binding if new priority strictly dominates.
+        // Equal priority → no change (eliminates flapping between same-class ports).
+        if new_priority > builder.binding_priority {
             builder.switch_device_id = Some(entry.device_id.clone());
             builder.switch_port = Some(entry.port_name.clone());
             builder.binding_priority = new_priority;
@@ -314,14 +325,15 @@ async fn run_correlation(
             let dev = builder.switch_device_id.clone();
             let port = builder.switch_port.clone();
             if let (Some(dev), Some(port)) = (dev, port) {
-                if trunk_ports.contains(&(dev.clone(), port.clone())) {
-                    let normalized = port.split(',').next().unwrap_or(&port);
+                if trunk_ports.contains(&(dev.clone(), port.to_lowercase())) {
+                    let normalized = port.split(',').next().unwrap_or(&port).to_lowercase();
                     if let Some(peer_id) =
-                        trunk_peer.get(&(dev.clone(), normalized.to_string()))
+                        trunk_peer.get(&(dev.clone(), normalized))
                     {
+                        let peer_depth = switch_depths.get(peer_id.as_str()).copied().unwrap_or(0);
                         builder.switch_device_id = Some(peer_id.clone());
                         builder.switch_port = None;
-                        builder.binding_priority = 2; // lower than access
+                        builder.binding_priority = 200 + peer_depth * 10;
                         redirected += 1;
                     }
                 }
@@ -329,6 +341,53 @@ async fn run_correlation(
         }
         if redirected > 0 {
             tracing::info!(count = redirected, "trunk port MACs redirected to peer device");
+        }
+    }
+
+    // ── 2c. WAP attribution for wireless devices ──────────────────
+    // Devices on wireless VLANs are attributed to WAPs instead of switches
+    // when the switch has exactly one WAP child in the backbone links.
+    {
+        // Build WAP child map: switch_id → list of WAP identifiers
+        let infra_identities = store.get_infrastructure_identities().await.unwrap_or_default();
+        let wap_identifiers: HashSet<String> = infra_identities
+            .iter()
+            .filter(|i| {
+                matches!(
+                    i.device_type.as_deref(),
+                    Some("access_point") | Some("wap")
+                )
+            })
+            .filter_map(|i| i.hostname.clone().or(Some(i.mac_address.clone())))
+            .collect();
+
+        let wap_children = build_wap_children(&backbone_links, &wap_identifiers);
+        let mut wap_attributed = 0u32;
+
+        for builder in identity_map.values_mut() {
+            // Only consider devices on wireless VLANs
+            match builder.vlan_id {
+                Some(v) if wireless_vlans.contains(&v) => {}
+                _ => continue,
+            };
+
+            let switch_id = match &builder.switch_device_id {
+                Some(id) => id.clone(),
+                None => continue,
+            };
+
+            // If this switch has exactly one WAP child, attribute to that WAP
+            if let Some(waps) = wap_children.get(&switch_id) {
+                if waps.len() == 1 {
+                    builder.switch_device_id = Some(waps[0].clone());
+                    builder.switch_port = None;
+                    wap_attributed += 1;
+                }
+            }
+        }
+
+        if wap_attributed > 0 {
+            tracing::info!(count = wap_attributed, "wireless devices attributed to WAPs");
         }
     }
 
@@ -637,9 +696,10 @@ struct IdentityBuilder {
     device_type: Option<String>,
     device_type_source: Option<String>,
     device_type_confidence: f64,
-    /// Priority of the current switch binding (0=none, 1=router-trunk, 2=switch-trunk, 3=access).
-    /// Higher priority bindings are not overwritten by lower ones.
-    binding_priority: u8,
+    /// Priority of the current switch binding. Higher = closer to device.
+    /// Formula: base_class * 100 + depth * 10, where base_class is
+    /// 1=router-trunk, 2=switch-trunk, 3=access and depth is BFS hops from router.
+    binding_priority: u32,
     /// Timestamp of the MAC table entry that set the current binding.
     /// Used to break ties when multiple entries have the same priority.
     binding_last_seen: i64,
@@ -786,6 +846,63 @@ fn is_switch_local_mac(mac: &str, local_set: &HashSet<u64>) -> bool {
         Some(val) => local_set.contains(&val),
         None => false,
     }
+}
+
+/// Build a map of switch_id → list of WAP identifiers that are direct backbone children.
+fn build_wap_children(
+    backbone_links: &[BackboneLink],
+    wap_identifiers: &HashSet<String>,
+) -> HashMap<String, Vec<String>> {
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for link in backbone_links {
+        // Check if device_a or device_b is a WAP
+        if wap_identifiers.contains(&link.device_a) {
+            children.entry(link.device_b.clone()).or_default().push(link.device_a.clone());
+        }
+        if wap_identifiers.contains(&link.device_b) {
+            children.entry(link.device_a.clone()).or_default().push(link.device_b.clone());
+        }
+    }
+    children
+}
+
+/// Compute the BFS depth of each switch from the router through backbone links.
+/// Router is depth 0, directly connected switches are depth 1, etc.
+/// Switches not reachable via backbone links get depth 0 (no bonus).
+fn compute_switch_depths(
+    backbone_links: &[BackboneLink],
+    router_id: &str,
+) -> HashMap<String, u32> {
+    // Build undirected adjacency list from backbone links
+    let mut adj: HashMap<String, Vec<String>> = HashMap::new();
+    for link in backbone_links {
+        adj.entry(link.device_a.clone())
+            .or_default()
+            .push(link.device_b.clone());
+        adj.entry(link.device_b.clone())
+            .or_default()
+            .push(link.device_a.clone());
+    }
+
+    // BFS from router
+    let mut depths: HashMap<String, u32> = HashMap::new();
+    depths.insert(router_id.to_string(), 0);
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(router_id.to_string());
+
+    while let Some(current) = queue.pop_front() {
+        let current_depth = depths[&current];
+        if let Some(neighbors) = adj.get(&current) {
+            for neighbor in neighbors {
+                if !depths.contains_key(neighbor) {
+                    depths.insert(neighbor.clone(), current_depth + 1);
+                    queue.push_back(neighbor.clone());
+                }
+            }
+        }
+    }
+
+    depths
 }
 
 /// Build an async DNS resolver pointing at Technitium for PTR lookups.
