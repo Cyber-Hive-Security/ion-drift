@@ -16,6 +16,7 @@ import {
   type TopologyMapInstance,
 } from "./hooks/use-d3-topology";
 import { VLAN_COLORS, VLAN_NAMES } from "@/constants/vlans";
+import "../topology/topology-map.css";
 import {
   RefreshCw,
   Search,
@@ -111,20 +112,47 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
           <div className="space-y-1">
             <div className="font-semibold text-foreground">Nodes</div>
             <div className="flex items-center gap-2">
-              <span className="inline-block h-3 w-5 rounded border border-yellow-500 bg-yellow-500/15" />
+              <svg width="16" height="14" viewBox="-8 -7 16 14">
+                <polygon points="6.93,4 0,8 -6.93,4 -6.93,-4 0,-8 6.93,-4" fill="rgba(255,215,0,0.15)" stroke="#ffd700" strokeWidth="1" />
+              </svg>
               Router
             </div>
             <div className="flex items-center gap-2">
-              <span className="inline-block h-3 w-4 rounded-sm border border-cyan-400 bg-cyan-400/15" />
+              <svg width="16" height="14" viewBox="-8 -7 16 14">
+                <polygon points="6.93,4 0,8 -6.93,4 -6.93,-4 0,-8 6.93,-4" fill="rgba(0,229,255,0.15)" stroke="#00e5ff" strokeWidth="1" />
+              </svg>
               Switch
             </div>
             <div className="flex items-center gap-2">
-              <span className="inline-block h-2.5 w-2.5 rounded-full border border-cyan-400 bg-cyan-400/15" />
+              <svg width="16" height="14" viewBox="-8 -7 16 14">
+                <polygon points="6.93,4 0,8 -6.93,4 -6.93,-4 0,-8 6.93,-4" fill="rgba(0,200,83,0.15)" stroke="#00c853" strokeWidth="1" />
+              </svg>
               Access Point
             </div>
             <div className="flex items-center gap-2">
-              <span className="inline-block h-2 w-2 rounded-full border border-gray-400 bg-gray-400/15" />
+              <svg width="12" height="10" viewBox="-6 -5 12 10">
+                <polygon points="4.2,2.4 0,4.8 -4.2,2.4 -4.2,-2.4 0,-4.8 4.2,-2.4" fill="rgba(144,164,174,0.15)" stroke="#90a4ae" strokeWidth="1" />
+              </svg>
               Endpoint
+            </div>
+          </div>
+          <div className="mt-2 space-y-1">
+            <div className="font-semibold text-foreground">Speed Tiers</div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-0 w-5" style={{ borderTop: "3.5px solid #ffd700" }} />
+              10G
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-0 w-5" style={{ borderTop: "2.5px solid #ff9100" }} />
+              5G
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-0 w-5" style={{ borderTop: "2px solid #00e5ff" }} />
+              2.5G
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-0 w-5" style={{ borderTop: "1.2px solid #00bcd4" }} />
+              1G
             </div>
           </div>
           <div className="mt-2 space-y-1">
@@ -580,7 +608,7 @@ export function TopologyPage() {
       <div className="relative flex-1">
         <svg
           ref={svgRef}
-          className="h-full w-full"
+          className="topology-root h-full w-full"
           style={{ background: "#0d0d24" }}
         />
 

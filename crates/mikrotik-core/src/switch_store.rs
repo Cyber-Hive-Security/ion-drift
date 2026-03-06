@@ -4,6 +4,7 @@
 //! network identities, VLAN membership, and port role classifications
 //! in a dedicated SQLite database.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -225,6 +226,7 @@ pub struct BackboneLink {
     pub device_b: String,
     pub port_b: Option<String>,
     pub label: Option<String>,
+    pub speed_mbps: Option<u32>,
     pub created_at: String,
 }
 
@@ -527,6 +529,12 @@ impl SwitchStore {
             [],
         );
 
+        // Migration: add speed_mbps column to backbone_links
+        let _ = conn.execute(
+            "ALTER TABLE backbone_links ADD COLUMN speed_mbps INTEGER",
+            [],
+        );
+
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
         })
@@ -561,6 +569,41 @@ impl SwitchStore {
             ])?;
         }
         Ok(())
+    }
+
+    /// Get the latest port link speed for every port on a device.
+    /// Returns a map of port_name → speed in Mbps (e.g. 1000, 2500, 10000).
+    pub async fn get_port_speeds(
+        &self,
+        device_id: &str,
+    ) -> Result<HashMap<String, u32>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT port_name, speed FROM switch_port_metrics
+             WHERE device_id = ?1 AND speed IS NOT NULL
+               AND id IN (
+                 SELECT MAX(id) FROM switch_port_metrics
+                 WHERE device_id = ?1
+                 GROUP BY port_name
+               )",
+        )?;
+        let rows = stmt.query_map(params![device_id], |row| {
+            let port: String = row.get(0)?;
+            let speed_str: String = row.get(1)?;
+            Ok((port, speed_str))
+        })?;
+
+        let mut map = HashMap::new();
+        for row in rows {
+            let (port, speed_str) = row?;
+            // Parse "1000Mbps" → 1000, "10000Mbps" → 10000
+            if let Some(num_str) = speed_str.strip_suffix("Mbps") {
+                if let Ok(mbps) = num_str.parse::<u32>() {
+                    map.insert(port, mbps);
+                }
+            }
+        }
+        Ok(map)
     }
 
     /// Get recent port metrics for a device.
@@ -1005,7 +1048,7 @@ impl SwitchStore {
     /// Reset a single identity field back to auto-detected state.
     /// `field` must be one of: `device_type`, `human_label`, `switch_binding`, `is_infrastructure`.
     /// Returns `Ok(true)` if a row was modified, `Ok(false)` if MAC not found.
-    /// Panics if `field` is not one of the valid values — caller must validate.
+    /// Returns an error if `field` is not one of the valid reset targets.
     pub async fn reset_identity_field(&self, mac: &str, field: &str) -> Result<bool, rusqlite::Error> {
         let db = self.db.lock().await;
         let sql = match field {
@@ -1030,7 +1073,11 @@ impl SwitchStore {
                  SET is_infrastructure = NULL \
                  WHERE mac_address = ?1"
             }
-            _ => unreachable!("caller must validate field name"),
+            _ => {
+                return Err(rusqlite::Error::InvalidParameterName(format!(
+                    "unknown field: {field}"
+                )));
+            }
         };
         let rows = db.execute(sql, params![mac])?;
         Ok(rows > 0)
@@ -1624,7 +1671,7 @@ impl SwitchStore {
     pub async fn get_backbone_links(&self) -> Result<Vec<BackboneLink>, rusqlite::Error> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT id, device_a, port_a, device_b, port_b, label, created_at
+            "SELECT id, device_a, port_a, device_b, port_b, label, speed_mbps, created_at
              FROM backbone_links ORDER BY device_a, device_b",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1635,7 +1682,8 @@ impl SwitchStore {
                 device_b: row.get(3)?,
                 port_b: row.get(4)?,
                 label: row.get(5)?,
-                created_at: row.get(6)?,
+                speed_mbps: row.get::<_, Option<u32>>(6)?,
+                created_at: row.get(7)?,
             })
         })?;
         rows.collect()

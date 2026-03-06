@@ -1,6 +1,7 @@
 // ============================================================
 //  D3 Rendering Engine for Auto-Generated Network Topology
 //  D3 owns the SVG canvas; React owns the UI chrome.
+//  Enhanced: hexagonal nodes, icons, stars, particles, speed tiers
 // ============================================================
 
 import * as d3 from "d3";
@@ -17,8 +18,73 @@ import { escHtml } from "@/lib/utils";
 
 const MAP_WIDTH = 4000;
 const MAP_HEIGHT = 3000;
+const HEX_RADIUS = 22;
+const HEX_RADIUS_SM = 12; // Endpoints
 const INFRA_LABEL_MAX = 24;
 const ENDPOINT_LABEL_MAX = 16;
+const STAR_COUNT = 200;
+
+// ─── Icon Paths (24x24 viewBox) ─────────────────────────
+
+const ICON_PATHS: Record<string, string> = {
+  router:
+    "M12,2C6.48,2,2,6.48,2,12s4.48,10,10,10,10-4.48,10-10S17.52,2,12,2Zm-1,17.93c-3.94-.49-7-3.85-7-7.93,0-.62.08-1.22.21-1.79L9,15v1a2,2,0,0,0,2,2Zm6.9-2.54A2,2,0,0,0,17,16H16V13a1,1,0,0,0-1-1H9V10h2a1,1,0,0,0,1-1V7h2a2,2,0,0,0,2-2v-.41A8,8,0,0,1,20,12,7.88,7.88,0,0,1,18.9,17.39Z",
+  switch:
+    "M20,3H4A2,2,0,0,0,2,5V19a2,2,0,0,0,2,2H20a2,2,0,0,0,2-2V5A2,2,0,0,0,20,3ZM10,17H6V15h4Zm0-4H6V11h4Zm0-4H6V7h4Zm8,8H12V15h6Zm0-4H12V11h6Zm0-4H12V7h6Z",
+  ap: "M12,21L15.6,16.2C14.6,15.45,13.35,15,12,15C10.65,15,9.4,15.45,8.4,16.2L12,21M12,3C7.95,3,4.21,4.34,1.2,6.6L3,9C5.5,7.12,8.62,6,12,6C15.38,6,18.5,7.12,21,9L22.8,6.6C19.79,4.34,16.05,3,12,3M12,9C9.3,9,6.81,9.89,4.8,11.4L6.6,13.8C8.1,12.67,9.97,12,12,12C14.03,12,15.9,12.67,17.4,13.8L19.2,11.4C17.19,9.89,14.7,9,12,9Z",
+  server:
+    "M4,1H20A1,1,0,0,1,21,2V22A1,1,0,0,1,20,23H4A1,1,0,0,1,3,22V2A1,1,0,0,1,4,1M5,3V21H19V3H5M12,17A1.5,1.5,0,1,1,13.5,15.5,1.5,1.5,0,0,1,12,17M8,7H16V13H8V7Z",
+  workstation:
+    "M21,16H3V4H21M21,2H3C1.89,2,1,2.89,1,4V16A2,2,0,0,0,3,18H10V20H8V22H16V20H14V18H21A2,2,0,0,0,23,16V4C23,2.89,22.1,2,21,2Z",
+  camera:
+    "M9,3V4H5V7H4V3H9M15,3H20V7H19V4H15V3M4,17V21H9V20H5V17H4M19,17V20H15V21H20V17H19M7,7H17V17H7V7M9,9V15H15V9H9Z",
+  phone:
+    "M6.62,10.79C8.06,13.62 10.38,15.94 13.21,17.38L15.41,15.18C15.69,14.9 16.08,14.82 16.43,14.93C17.55,15.3 18.75,15.5 20,15.5A1,1 0,0,1,21,16.5V20A1,1,0,0,1,20,21A17,17,0,0,1,3,4A1,1,0,0,1,4,3H7.5A1,1,0,0,1,8.5,4C8.5,5.25,8.7,6.45,9.07,7.57C9.18,7.92,9.1,8.31,8.82,8.59L6.62,10.79Z",
+  iot: "M9,3V4H5V7H4V3H9M15,3H20V7H19V4H15V3M4,17V21H9V20H5V17H4M19,17V20H15V21H20V17H19M7,7H17V17H7V7M9,9V15H15V9H9Z",
+  printer:
+    "M18,3H6V7H18M19,12A1,1,0,0,1,18,11A1,1,0,0,1,19,10A1,1,0,0,1,20,11A1,1,0,0,1,19,12M16,19H8V14H16M19,8H5A3,3,0,0,0,2,11V17H6V21H18V17H22V11A3,3,0,0,0,19,8Z",
+  smarthome:
+    "M12,3L2,12H5V20H19V12H22M12,18A2,2,0,0,1,10,16A2,2,0,0,1,12,14A2,2,0,0,1,14,16A2,2,0,0,1,12,18M14.5,10H9.5L12,7L14.5,10Z",
+  media: "M8,5.14V19.14L19,12.14L8,5.14Z",
+  unknown:
+    "M11,18H13V16H11V18M12,2A10,10,0,0,0,2,12A10,10,0,0,0,12,22A10,10,0,0,0,22,12A10,10,0,0,0,12,2M12,20C7.59,20,4,16.41,4,12C4,7.59,7.59,4,12,4C16.41,4,20,7.59,20,12C20,16.41,16.41,20,12,20M12,6A4,4,0,0,0,8,10H10A2,2,0,0,1,12,8A2,2,0,0,1,14,10C14,12,11,11.75,11,14H13C13,12.5,16,12.25,16,10A4,4,0,0,0,12,6Z",
+};
+
+// Map TopologyNodeKind → icon key
+function kindToIcon(kind: string): string {
+  switch (kind) {
+    case "router": return "router";
+    case "managed_switch":
+    case "unmanaged_switch": return "switch";
+    case "access_point": return "ap";
+    case "server": return "server";
+    case "workstation": return "workstation";
+    case "camera": return "camera";
+    case "phone": return "phone";
+    case "iot": return "iot";
+    case "printer": return "printer";
+    case "smart_home": return "smarthome";
+    case "media_player": return "media";
+    default: return "unknown";
+  }
+}
+
+// ─── Speed Tier Styling ─────────────────────────────────
+
+interface SpeedStyle {
+  color: string;
+  width: number;
+  label: string;
+}
+
+function speedStyle(mbps: number | null): SpeedStyle {
+  if (mbps == null) return { color: "#00f0ff", width: 1.2, label: "" };
+  if (mbps >= 10000) return { color: "#ffd700", width: 3.5, label: "10G" };
+  if (mbps >= 5000) return { color: "#ff8c00", width: 2.5, label: "5G" };
+  if (mbps >= 2500) return { color: "#00e5ff", width: 2.0, label: "2.5G" };
+  if (mbps >= 1000) return { color: "#00f0ff", width: 1.2, label: "1G" };
+  return { color: "#666666", width: 0.8, label: `${mbps}M` };
+}
 
 // ─── Public Types ───────────────────────────────────────
 
@@ -50,6 +116,15 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
 }
 
+function hexPath(r: number): string {
+  const pts: [number, number][] = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i - Math.PI / 6;
+    pts.push([r * Math.cos(angle), r * Math.sin(angle)]);
+  }
+  return "M" + pts.map((p) => p.join(",")).join("L") + "Z";
+}
+
 // ─── Factory ────────────────────────────────────────────
 
 export function createTopologyMapInstance(
@@ -60,84 +135,31 @@ export function createTopologyMapInstance(
 
   function nodeColor(node: TopologyNode): string {
     if (node.kind === "router") return "#ffd700";
+    if (node.kind === "managed_switch") return "#00e5ff";
+    if (node.kind === "unmanaged_switch") return "#00b4d8";
+    if (node.kind === "access_point") return "#00f0ff";
+    if (node.kind === "server") return "#0088cc";
+    if (node.kind === "camera") return "#666666";
+    if (node.kind === "media_player") return "#ff8c00";
     if (node.vlan_id != null && VLAN_COLORS[node.vlan_id]) return VLAN_COLORS[node.vlan_id];
     if (node.is_infrastructure) return "#00e5ff";
     return "#aaaaaa";
   }
 
-  function nodeRadius(node: TopologyNode): number {
-    switch (node.kind) {
-      case "router": return 20;
-      case "managed_switch":
-      case "unmanaged_switch": return 16;
-      case "access_point": return 14;
-      case "server": return 10;
-      case "camera":
-      case "iot": return 7;
-      default:
-        return node.is_infrastructure ? 14 : 8;
-    }
+  function hexRadius(node: TopologyNode): number {
+    if (node.kind === "router") return HEX_RADIUS + 4;
+    if (node.kind === "managed_switch" || node.kind === "unmanaged_switch") return HEX_RADIUS;
+    if (node.kind === "access_point") return HEX_RADIUS - 2;
+    if (node.is_infrastructure) return HEX_RADIUS - 4;
+    return HEX_RADIUS_SM;
   }
 
-  function nodeShape(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    g: d3.Selection<SVGGElement, any, any, any>,
-    node: TopologyNode,
-  ): void {
-    const r = nodeRadius(node);
-    const color = nodeColor(node);
-
-    if (node.kind === "router") {
-      g.append("rect")
-        .attr("x", -20)
-        .attr("y", -15)
-        .attr("width", 40)
-        .attr("height", 30)
-        .attr("rx", 6)
-        .attr("fill", color)
-        .attr("fill-opacity", 0.3)
-        .attr("stroke", color)
-        .attr("stroke-width", 2.5);
-    } else if (node.kind === "managed_switch" || node.kind === "unmanaged_switch") {
-      g.append("rect")
-        .attr("x", -18)
-        .attr("y", -12)
-        .attr("width", 36)
-        .attr("height", 24)
-        .attr("rx", 3)
-        .attr("fill", color)
-        .attr("fill-opacity", 0.25)
-        .attr("stroke", color)
-        .attr("stroke-width", 2);
-    } else if (node.kind === "access_point") {
-      g.append("circle")
-        .attr("r", r)
-        .attr("fill", color)
-        .attr("fill-opacity", 0.25)
-        .attr("stroke", color)
-        .attr("stroke-width", 2);
-      for (let i = 1; i <= 2; i++) {
-        g.append("path")
-          .attr("d", d3.arc()({
-            innerRadius: r + i * 4,
-            outerRadius: r + i * 4 + 1,
-            startAngle: -Math.PI / 3,
-            endAngle: Math.PI / 3,
-          })!)
-          .attr("fill", color)
-          .attr("opacity", 0.6);
-      }
-    } else {
-      g.append("circle")
-        .attr("r", r)
-        .attr("fill", color)
-        .attr("fill-opacity", node.is_infrastructure ? 0.3 : 0.2)
-        .attr("stroke", color)
-        .attr("stroke-width", node.is_infrastructure ? 2 : 1.5);
-    }
+  function isHub(node: TopologyNode): boolean {
+    return node.kind === "router" || node.kind === "managed_switch";
   }
 
   function edgeWidth(edge: TopologyEdge): number {
+    if (edge.speed_mbps != null) return speedStyle(edge.speed_mbps).width;
     switch (edge.kind) {
       case "trunk": return 2.5;
       case "uplink": return 2;
@@ -149,16 +171,21 @@ export function createTopologyMapInstance(
 
   function edgeDash(edge: TopologyEdge): string {
     if (edge.kind === "wireless") return "4,3";
-    // Inferred access edge: device is downstream but exact port unknown
     if (edge.kind === "access" && !edge.source_port) return "3,3";
     return "none";
   }
 
   function edgeColor(edge: TopologyEdge): string {
+    if (edge.speed_mbps != null) return speedStyle(edge.speed_mbps).color;
     if (edge.kind === "uplink") return "#ffd700";
     if (edge.kind === "trunk") return "#00e5ff";
     if (edge.vlans.length === 1 && VLAN_COLORS[edge.vlans[0]]) return VLAN_COLORS[edge.vlans[0]];
     return "#666666";
+  }
+
+  function edgeSpeedLabel(edge: TopologyEdge): string {
+    if (edge.speed_mbps != null) return speedStyle(edge.speed_mbps).label;
+    return "";
   }
 
   function matchesSearch(node: TopologyNode, term: string): boolean {
@@ -190,7 +217,7 @@ export function createTopologyMapInstance(
   let tooltip: HTMLDivElement | null = null;
   let hasInitialFit = false;
   let currentScale = 1;
-  // Positions set by drag — survives re-renders until backend confirms
+  let destroyed = false;
   const draggedPositions: Map<string, { x: number; y: number }> = new Map();
 
   // ── SVG setup ──
@@ -232,7 +259,7 @@ export function createTopologyMapInstance(
   addGlowFilter("glow-anomaly", "#ffaa00", 0.5, 5);
   addGlowFilter("glow-selected", "#ffffff", 0.6, 6);
 
-  // Soft glow for general node hover
+  // Soft glow for general hex nodes
   const fSoft = defs
     .append("filter")
     .attr("id", "glow-soft")
@@ -244,6 +271,19 @@ export function createTopologyMapInstance(
   const mSoft = fSoft.append("feMerge");
   mSoft.append("feMergeNode").attr("in", "blur");
   mSoft.append("feMergeNode").attr("in", "SourceGraphic");
+
+  // Line glow for connections
+  const lineGlow = defs
+    .append("filter")
+    .attr("id", "line-glow")
+    .attr("x", "-20%")
+    .attr("y", "-20%")
+    .attr("width", "140%")
+    .attr("height", "140%");
+  lineGlow.append("feGaussianBlur").attr("stdDeviation", 2).attr("result", "blur");
+  const lm = lineGlow.append("feMerge");
+  lm.append("feMergeNode").attr("in", "blur");
+  lm.append("feMergeNode").attr("in", "SourceGraphic");
 
   // Zoom & pan
   const zoomGroup = svg.append("g").attr("id", "topo-zoom-group");
@@ -258,11 +298,30 @@ export function createTopologyMapInstance(
   svg.call(zoomBehavior);
 
   // SVG layers (bottom to top)
+  const layerStars = zoomGroup.append("g").attr("class", "layer-stars");
   const layerGrid = zoomGroup.append("g").attr("class", "layer-grid");
   const layerVlanBg = zoomGroup.append("g").attr("class", "layer-vlan-bg");
   const layerEdges = zoomGroup.append("g").attr("class", "layer-edges");
+  const layerParticles = zoomGroup.append("g").attr("class", "layer-particles");
   const layerNodes = zoomGroup.append("g").attr("class", "layer-nodes");
   const layerLabels = zoomGroup.append("g").attr("class", "layer-labels");
+
+  // ── Stars ──
+  function renderStars() {
+    layerStars.selectAll("*").remove();
+    for (let i = 0; i < STAR_COUNT; i++) {
+      layerStars
+        .append("circle")
+        .attr("class", "topo-star")
+        .attr("cx", Math.random() * MAP_WIDTH)
+        .attr("cy", Math.random() * MAP_HEIGHT)
+        .attr("r", Math.random() * 1.2 + 0.3)
+        .style("fill", "#fff")
+        .style("opacity", 0)
+        .style("--dur", Math.random() * 4 + 2 + "s")
+        .style("--delay", Math.random() * 5 + "s");
+    }
+  }
 
   // ── Grid ──
   function renderGrid() {
@@ -271,17 +330,19 @@ export function createTopologyMapInstance(
     for (let x = 0; x <= MAP_WIDTH; x += gridSpacing) {
       layerGrid
         .append("line")
+        .attr("class", "topo-grid-line")
         .attr("x1", x).attr("y1", 0)
         .attr("x2", x).attr("y2", MAP_HEIGHT)
-        .attr("stroke", "#1e1e3a")
+        .attr("stroke", "rgba(0, 240, 255, 0.04)")
         .attr("stroke-width", 0.5);
     }
     for (let y = 0; y <= MAP_HEIGHT; y += gridSpacing) {
       layerGrid
         .append("line")
+        .attr("class", "topo-grid-line")
         .attr("x1", 0).attr("y1", y)
         .attr("x2", MAP_WIDTH).attr("y2", y)
-        .attr("stroke", "#1e1e3a")
+        .attr("stroke", "rgba(0, 240, 255, 0.04)")
         .attr("stroke-width", 0.5);
     }
   }
@@ -291,9 +352,10 @@ export function createTopologyMapInstance(
     if (tooltip) return tooltip;
     const div = document.createElement("div");
     div.style.cssText =
-      "position:fixed;pointer-events:none;z-index:9999;background:rgba(10,10,30,0.95);" +
+      "position:fixed;pointer-events:none;z-index:9999;background:rgba(8,16,32,0.95);" +
       "border:1px solid rgba(0,240,255,0.4);border-radius:6px;padding:8px 12px;" +
-      "font-size:12px;color:#e0e0e0;max-width:300px;display:none;font-family:monospace;";
+      "font-size:12px;color:#e0e0e0;max-width:300px;display:none;" +
+      "font-family:'Share Tech Mono',monospace;box-shadow:0 4px 20px rgba(0,0,0,0.5);backdrop-filter:blur(8px);";
     document.body.appendChild(div);
     tooltip = div;
     return div;
@@ -303,16 +365,34 @@ export function createTopologyMapInstance(
     const tip = createTooltip();
     const lines: string[] = [];
     lines.push(`<strong style="color:${nodeColor(node)}">${escHtml(node.label)}</strong>`);
-    if (node.kind) lines.push(`<span style="color:#999">Kind:</span> ${escHtml(node.kind)}`);
-    if (node.ip) lines.push(`<span style="color:#999">IP:</span> ${escHtml(node.ip)}`);
-    if (node.mac) lines.push(`<span style="color:#999">MAC:</span> ${escHtml(node.mac)}`);
-    if (node.vlan_id != null) lines.push(`<span style="color:#999">VLAN:</span> ${node.vlan_id}`);
-    if (node.device_type) lines.push(`<span style="color:#999">Type:</span> ${escHtml(node.device_type)}`);
-    if (node.manufacturer) lines.push(`<span style="color:#999">Mfg:</span> ${escHtml(node.manufacturer)}`);
+    if (node.kind) lines.push(`<span style="color:#5a7080">Kind:</span> ${escHtml(node.kind)}`);
+    if (node.ip) lines.push(`<span style="color:#5a7080">IP:</span> ${escHtml(node.ip)}`);
+    if (node.mac) lines.push(`<span style="color:#5a7080">MAC:</span> ${escHtml(node.mac)}`);
+    if (node.vlan_id != null) lines.push(`<span style="color:#5a7080">VLAN:</span> ${node.vlan_id}`);
+    if (node.device_type) lines.push(`<span style="color:#5a7080">Type:</span> ${escHtml(node.device_type)}`);
+    if (node.manufacturer) lines.push(`<span style="color:#5a7080">Mfg:</span> ${escHtml(node.manufacturer)}`);
     if (node.switch_port) {
-      lines.push(`<span style="color:#999">Port:</span> ${escHtml(node.switch_port)}`);
+      lines.push(`<span style="color:#5a7080">Port:</span> ${escHtml(node.switch_port)}`);
     } else if (node.parent_id) {
-      lines.push(`<span style="color:#999">Port:</span> <em style="color:#777">unknown — downstream of ${escHtml(node.parent_id)}</em>`);
+      lines.push(`<span style="color:#5a7080">Port:</span> <em style="color:#444">downstream of ${escHtml(node.parent_id)}</em>`);
+    }
+    tip.innerHTML = lines.join("<br>");
+    tip.style.display = "block";
+    tip.style.left = `${event.clientX + 12}px`;
+    tip.style.top = `${event.clientY - 10}px`;
+  }
+
+  function showEdgeTooltip(event: MouseEvent, edge: TopologyEdge) {
+    const tip = createTooltip();
+    const src = nodeMap.get(edge.source);
+    const tgt = nodeMap.get(edge.target);
+    const speedLbl = edgeSpeedLabel(edge);
+    const lines: string[] = [];
+    lines.push(`<span style="color:#00f0ff;font-weight:600">${escHtml(edge.kind)}</span>`);
+    lines.push(`<span style="color:#5a7080">${escHtml(src?.label || edge.source)} &harr; ${escHtml(tgt?.label || edge.target)}</span>`);
+    if (speedLbl) lines.push(`<span style="color:#ffd700">${escHtml(speedLbl)}</span>`);
+    if (edge.source_port || edge.target_port) {
+      lines.push(`<span style="color:#5a7080">${escHtml(edge.source_port || "?")} → ${escHtml(edge.target_port || "?")}</span>`);
     }
     tip.innerHTML = lines.join("<br>");
     tip.style.display = "block";
@@ -351,7 +431,32 @@ export function createTopologyMapInstance(
     if (selectedNodeId === node.id) return "url(#glow-selected)";
     if (node.status === "online") return "url(#glow-active)";
     if (node.status === "offline") return "url(#glow-inactive)";
-    return "";
+    return "url(#glow-soft)";
+  }
+
+  // ── Particle animation ──
+  function animateParticle(
+    p: d3.Selection<SVGCircleElement, unknown, null, undefined>,
+    edge: TopologyEdge,
+  ) {
+    if (destroyed) return;
+    const src = nodeMap.get(edge.source);
+    const tgt = nodeMap.get(edge.target);
+    if (!src || !tgt) return;
+
+    const speed = edge.speed_mbps ?? 1000;
+    const dur = Math.max(600, Math.min(4000, 5000 - Math.log10(speed + 1) * 1000));
+
+    const fwd = Math.random() > 0.5;
+    p.attr("cx", fwd ? src.x : tgt.x)
+      .attr("cy", fwd ? src.y : tgt.y)
+      .attr("opacity", 0.8)
+      .transition()
+      .duration(dur)
+      .ease(d3.easeLinear)
+      .attr("cx", fwd ? tgt.x : src.x)
+      .attr("cy", fwd ? tgt.y : src.y)
+      .on("end", () => animateParticle(p, edge));
   }
 
   // ── Main render ──
@@ -360,16 +465,12 @@ export function createTopologyMapInstance(
     nodeMap.clear();
 
     // Merge locally-dragged positions to prevent snap-back from stale refetches.
-    // The backend topology cache only updates on recompute (120s), so refetches
-    // after a position save return stale auto-computed positions.
     data.nodes.forEach((n) => {
       const dragged = draggedPositions.get(n.id);
       if (dragged) {
         if (n.position_source === "human") {
-          // Backend confirmed the save — clear local override
           draggedPositions.delete(n.id);
         } else {
-          // Override with local position until backend catches up
           n.x = dragged.x;
           n.y = dragged.y;
           n.position_source = "human";
@@ -378,6 +479,7 @@ export function createTopologyMapInstance(
       nodeMap.set(n.id, n);
     });
 
+    renderStars();
     renderGrid();
     renderVlanBackgrounds(data.vlan_groups);
     renderEdges(data.edges);
@@ -403,22 +505,24 @@ export function createTopologyMapInstance(
         .attr("height", group.bbox_h)
         .attr("rx", 12)
         .attr("fill", color)
-        .attr("fill-opacity", 0.07)
+        .attr("fill-opacity", 0.05)
         .attr("stroke", color)
-        .attr("stroke-opacity", 0.3)
-        .attr("stroke-width", group.position_source === "human" ? 2 : 1);
+        .attr("stroke-opacity", 0.25)
+        .attr("stroke-width", group.position_source === "human" ? 2 : 1)
+        .attr("stroke-dasharray", "8,4");
 
       const headerLabel = g.append("text")
         .attr("class", "sector-header")
         .attr("x", group.bbox_x + 12)
         .attr("y", group.bbox_y + 18)
         .attr("fill", color)
-        .attr("fill-opacity", 0.8)
-        .attr("font-size", 12)
-        .attr("font-family", "monospace")
+        .attr("fill-opacity", 0.6)
+        .attr("font-size", 11)
+        .attr("font-family", "'Orbitron', monospace")
         .attr("font-weight", "bold")
+        .attr("letter-spacing", "2px")
         .attr("cursor", "grab")
-        .text(`VLAN ${group.vlan_id} \u2014 ${group.name}`);
+        .text(`SECTOR-${group.vlan_id} \u2014 ${group.name}`);
 
       if (group.subnet) {
         g.append("text")
@@ -426,9 +530,9 @@ export function createTopologyMapInstance(
           .attr("x", group.bbox_x + 12)
           .attr("y", group.bbox_y + 33)
           .attr("fill", color)
-          .attr("fill-opacity", 0.5)
-          .attr("font-size", 10)
-          .attr("font-family", "monospace")
+          .attr("fill-opacity", 0.35)
+          .attr("font-size", 9)
+          .attr("font-family", "'Share Tech Mono', monospace")
           .text(group.subnet);
       }
 
@@ -438,12 +542,12 @@ export function createTopologyMapInstance(
         .attr("y", group.bbox_y + 18)
         .attr("text-anchor", "end")
         .attr("fill", color)
-        .attr("fill-opacity", 0.5)
+        .attr("fill-opacity", 0.4)
         .attr("font-size", 10)
-        .attr("font-family", "monospace")
+        .attr("font-family", "'Share Tech Mono', monospace")
         .text(`${group.node_count} devices`);
 
-      // Pin indicator for human-positioned sectors
+      // Pin indicator
       if (group.position_source === "human") {
         g.append("text")
           .attr("class", "sector-pin")
@@ -458,6 +562,23 @@ export function createTopologyMapInstance(
             callbacks.onSectorReset?.(group.vlan_id);
           });
       }
+
+      // Corner marks
+      const sz = 12;
+      const corners: [number, number, number, number][] = [
+        [group.bbox_x, group.bbox_y, 1, 1],
+        [group.bbox_x + group.bbox_w, group.bbox_y, -1, 1],
+        [group.bbox_x, group.bbox_y + group.bbox_h, 1, -1],
+        [group.bbox_x + group.bbox_w, group.bbox_y + group.bbox_h, -1, -1],
+      ];
+      corners.forEach(([cx, cy, dx, dy]) => {
+        g.append("path")
+          .attr("d", `M${cx},${cy + dy * sz} L${cx},${cy} L${cx + dx * sz},${cy}`)
+          .attr("fill", "none")
+          .attr("stroke", color)
+          .attr("stroke-width", 2)
+          .attr("stroke-opacity", 0.35);
+      });
 
       // ── Sector drag (on header label) ──
       let dragStartX = 0;
@@ -479,7 +600,6 @@ export function createTopologyMapInstance(
           const newX = origBboxX + dx;
           const newY = origBboxY + dy;
 
-          // Move the entire sector group
           g.select(".sector-rect")
             .attr("x", newX).attr("y", newY);
           g.select(".sector-header")
@@ -493,15 +613,12 @@ export function createTopologyMapInstance(
           g.select(".resize-handle")
             .attr("x", newX + group.bbox_w - 14).attr("y", newY + group.bbox_h - 14);
 
-          // Move contained nodes by the same delta
           if (currentData) {
             currentData.nodes.forEach((node) => {
               if (node.vlan_id === group.vlan_id) {
-                const nodeG = layerNodes.select(`[data-node-id="${node.id}"]`);
+                const nodeG = layerNodes.select(`[data-node-id="${CSS.escape(node.id)}"]`);
                 if (!nodeG.empty()) {
-                  const nx = node.x + dx;
-                  const ny = node.y + dy;
-                  nodeG.attr("transform", `translate(${nx},${ny})`);
+                  nodeG.attr("transform", `translate(${node.x + dx},${node.y + dy})`);
                 }
               }
             });
@@ -516,20 +633,17 @@ export function createTopologyMapInstance(
           const newX = origBboxX + dx;
           const newY = origBboxY + dy;
 
-          // Persist node positions for contained nodes
           if (currentData) {
             currentData.nodes.forEach((node) => {
               if (node.vlan_id === group.vlan_id) {
                 node.x += dx;
                 node.y += dy;
-                // Update labels
-                layerLabels.selectAll(`[data-node-id="${node.id}"]`).each(function () {
+                layerLabels.selectAll(`[data-node-id="${CSS.escape(node.id)}"]`).each(function () {
                   const el = d3.select(this);
                   const curX = parseFloat(el.attr("x")) || 0;
                   const curY = parseFloat(el.attr("y")) || 0;
                   el.attr("x", curX + dx).attr("y", curY + dy);
                 });
-                // Update connected edges
                 layerEdges.selectAll<SVGGElement, unknown>(".edge").each(function () {
                   const eg = d3.select(this);
                   const srcId = eg.attr("data-source");
@@ -548,7 +662,6 @@ export function createTopologyMapInstance(
             });
           }
 
-          // Update group data
           group.bbox_x = newX;
           group.bbox_y = newY;
           group.position_source = "human";
@@ -558,7 +671,7 @@ export function createTopologyMapInstance(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       headerLabel.call(sectorDrag as any);
 
-      // ── Resize handle (bottom-right corner) ──
+      // ── Resize handle ──
       const handleSize = 12;
       g.append("rect")
         .attr("class", "resize-handle")
@@ -607,6 +720,7 @@ export function createTopologyMapInstance(
   // ── Edges ──
   function renderEdges(edges: TopologyEdge[]) {
     layerEdges.selectAll("*").remove();
+    layerParticles.selectAll("*").remove();
 
     edges.forEach((edge) => {
       const src = nodeMap.get(edge.source);
@@ -620,15 +734,31 @@ export function createTopologyMapInstance(
         .attr("data-target", edge.target)
         .attr("opacity", visible ? 1 : 0.05);
 
-      g.append("line")
+      const line = g.append("line")
         .attr("x1", src.x).attr("y1", src.y)
         .attr("x2", tgt.x).attr("y2", tgt.y)
         .attr("stroke", edgeColor(edge))
         .attr("stroke-width", edgeWidth(edge))
         .attr("stroke-dasharray", edgeDash(edge))
-        .attr("stroke-opacity", edge.kind === "access" ? 0.5 : 0.85);
+        .attr("stroke-opacity", edge.kind === "access" ? 0.4 : 0.7)
+        .attr("filter", edge.kind === "trunk" || edge.kind === "uplink" ? "url(#line-glow)" : "");
 
-      // Port labels for trunk/uplink: place near each end instead of midpoint
+      // Edge hover tooltip
+      line
+        .on("mouseenter", function (event: MouseEvent) {
+          showEdgeTooltip(event, edge);
+        })
+        .on("mousemove", function (event: MouseEvent) {
+          if (tooltip) {
+            tooltip.style.left = `${event.clientX + 12}px`;
+            tooltip.style.top = `${event.clientY - 10}px`;
+          }
+        })
+        .on("mouseleave", function () {
+          hideTooltip();
+        });
+
+      // Port labels for trunk/uplink
       if ((edge.kind === "trunk" || edge.kind === "uplink") && (edge.source_port || edge.target_port)) {
         const dx = tgt.x - src.x;
         const dy = tgt.y - src.y;
@@ -638,9 +768,9 @@ export function createTopologyMapInstance(
             .attr("x", src.x + dx * 0.15)
             .attr("y", src.y + dy * 0.15 - 6)
             .attr("text-anchor", "middle")
-            .attr("fill", "#888")
+            .attr("fill", "#5a7080")
             .attr("font-size", 8)
-            .attr("font-family", "monospace")
+            .attr("font-family", "'Share Tech Mono', monospace")
             .text(edge.source_port);
         }
         if (edge.target_port) {
@@ -648,11 +778,39 @@ export function createTopologyMapInstance(
             .attr("x", src.x + dx * 0.85)
             .attr("y", src.y + dy * 0.85 - 6)
             .attr("text-anchor", "middle")
-            .attr("fill", "#888")
+            .attr("fill", "#5a7080")
             .attr("font-size", 8)
-            .attr("font-family", "monospace")
+            .attr("font-family", "'Share Tech Mono', monospace")
             .text(edge.target_port);
         }
+
+        // Speed label at midpoint
+        const spdLabel = edgeSpeedLabel(edge);
+        if (spdLabel) {
+          g.append("text")
+            .attr("x", src.x + dx * 0.5)
+            .attr("y", src.y + dy * 0.5 - 8)
+            .attr("text-anchor", "middle")
+            .attr("fill", edgeColor(edge))
+            .attr("font-size", 9)
+            .attr("font-family", "'Share Tech Mono', monospace")
+            .attr("font-weight", "bold")
+            .attr("opacity", 0.7)
+            .text(spdLabel);
+        }
+      }
+
+      // Animated particles for trunk/uplink edges
+      if (edge.kind === "trunk" || edge.kind === "uplink") {
+        const particleColor = edgeColor(edge);
+        const particleR = edge.speed_mbps != null && edge.speed_mbps >= 10000 ? 2.5 : 1.5;
+        const p = layerParticles
+          .append("circle")
+          .attr("class", "topo-particle")
+          .attr("r", particleR)
+          .attr("fill", particleColor)
+          .attr("filter", "url(#glow-soft)");
+        animateParticle(p, edge);
       }
     });
   }
@@ -662,7 +820,7 @@ export function createTopologyMapInstance(
     layerNodes.selectAll("*").remove();
     layerLabels.selectAll("*").remove();
 
-    // Sort: infrastructure first (so endpoints render on top of z-stack)
+    // Sort: infrastructure first
     const sorted = [...nodes].sort((a, b) => {
       if (a.is_infrastructure && !b.is_infrastructure) return -1;
       if (!a.is_infrastructure && b.is_infrastructure) return 1;
@@ -674,6 +832,8 @@ export function createTopologyMapInstance(
       const visible = isNodeVisible(node);
       const opacity = nodeOpacity(node);
       const epIdx = node.is_infrastructure ? -1 : endpointIdx++;
+      const r = hexRadius(node);
+      const color = nodeColor(node);
 
       const g = layerNodes
         .append("g")
@@ -684,20 +844,60 @@ export function createTopologyMapInstance(
         .attr("cursor", "pointer")
         .attr("filter", statusFilter(node));
 
-      nodeShape(g, node);
+      // Hub pulse rings for routers and managed switches
+      if (isHub(node)) {
+        g.append("circle")
+          .attr("class", "topo-hub-pulse")
+          .attr("cx", 0).attr("cy", 0)
+          .attr("r", r)
+          .attr("stroke", color)
+          .attr("fill", "none")
+          .attr("stroke-width", 1);
+        g.append("circle")
+          .attr("class", "topo-hub-pulse")
+          .attr("cx", 0).attr("cy", 0)
+          .attr("r", r)
+          .attr("stroke", color)
+          .attr("fill", "none")
+          .attr("stroke-width", 1)
+          .style("animation-delay", "1.5s");
+      }
 
-      // "NEW" badge for recently discovered
+      // Hexagonal shape
+      g.append("path")
+        .attr("class", "topo-hex")
+        .attr("d", hexPath(r))
+        .attr("fill", color)
+        .attr("fill-opacity", node.is_infrastructure ? 0.1 : 0.06)
+        .attr("stroke", color)
+        .attr("stroke-width", node.is_infrastructure ? 1.5 : 1);
+
+      // Icon inside hexagon (infrastructure nodes only — endpoints are too small)
+      if (node.is_infrastructure || r >= HEX_RADIUS_SM + 2) {
+        const iconKey = kindToIcon(node.kind);
+        const iconPath = ICON_PATHS[iconKey] || ICON_PATHS.unknown;
+        const iconScale = (r / HEX_RADIUS) * 0.75;
+        g.append("g")
+          .attr("class", "topo-node-icon")
+          .attr("transform", `translate(${-12 * iconScale}, ${-12 * iconScale}) scale(${iconScale})`)
+          .append("path")
+          .attr("d", iconPath)
+          .attr("fill", color)
+          .attr("opacity", 0.85);
+      }
+
+      // "NEW" badge
       if (isNew(node)) {
         g.append("circle")
-          .attr("cx", nodeRadius(node) + 4)
-          .attr("cy", -(nodeRadius(node) + 4))
+          .attr("cx", r + 4)
+          .attr("cy", -(r + 4))
           .attr("r", 5)
           .attr("fill", "#ffaa00")
           .attr("stroke", "#000")
           .attr("stroke-width", 0.5);
         g.append("text")
-          .attr("x", nodeRadius(node) + 4)
-          .attr("y", -(nodeRadius(node) + 1))
+          .attr("x", r + 4)
+          .attr("y", -(r + 1))
           .attr("text-anchor", "middle")
           .attr("fill", "#000")
           .attr("font-size", 5)
@@ -707,23 +907,23 @@ export function createTopologyMapInstance(
 
       // Flagged device red ring
       if (node.disposition === "flagged") {
-        g.append("circle")
-          .attr("r", nodeRadius(node) + 4)
+        g.append("path")
+          .attr("d", hexPath(r + 4))
           .attr("fill", "none")
           .attr("stroke", "#ef4444")
           .attr("stroke-width", 2)
           .attr("stroke-dasharray", "4,2");
         g.append("text")
-          .attr("x", nodeRadius(node) + 8)
-          .attr("y", nodeRadius(node) + 2)
+          .attr("x", r + 8)
+          .attr("y", r + 2)
           .attr("font-size", 10)
           .text("\u26A0");
       }
 
       // External device dashed border
       if (node.disposition === "external") {
-        g.append("circle")
-          .attr("r", nodeRadius(node) + 3)
+        g.append("path")
+          .attr("d", hexPath(r + 3))
           .attr("fill", "none")
           .attr("stroke", "#3b82f6")
           .attr("stroke-width", 1)
@@ -731,30 +931,26 @@ export function createTopologyMapInstance(
           .attr("opacity", 0.6);
       }
 
-      // Unregistered infra indicator: dashed orange border + "?" badge
+      // Unregistered infra indicator
       if (node.is_infrastructure && node.disposition === "unknown" && node.confidence < 1.0) {
-        g.append("rect")
-          .attr("x", -(nodeRadius(node) + 6))
-          .attr("y", -(nodeRadius(node) + 4))
-          .attr("width", (nodeRadius(node) + 6) * 2)
-          .attr("height", (nodeRadius(node) + 4) * 2)
-          .attr("rx", 4)
+        g.append("path")
+          .attr("d", hexPath(r + 5))
           .attr("fill", "none")
           .attr("stroke", "#f97316")
           .attr("stroke-width", 1.5)
           .attr("stroke-dasharray", "4,3")
           .attr("opacity", 0.7);
         g.append("circle")
-          .attr("cx", nodeRadius(node) + 6)
-          .attr("cy", -(nodeRadius(node) + 4))
+          .attr("cx", r + 6)
+          .attr("cy", -(r + 4))
           .attr("r", 6)
           .attr("fill", "#f97316")
           .attr("stroke", "#000")
           .attr("stroke-width", 0.5)
           .attr("cursor", "pointer");
         g.append("text")
-          .attr("x", nodeRadius(node) + 6)
-          .attr("y", -(nodeRadius(node) + 1))
+          .attr("x", r + 6)
+          .attr("y", -(r + 1))
           .attr("text-anchor", "middle")
           .attr("fill", "#000")
           .attr("font-size", 8)
@@ -767,12 +963,12 @@ export function createTopologyMapInstance(
           });
       }
 
-      // Pin icon for human-positioned nodes — click to unpin
+      // Pin icon
       if (node.position_source === "human") {
         g.append("text")
           .attr("class", "pin-icon")
-          .attr("x", -(nodeRadius(node) + 6))
-          .attr("y", -(nodeRadius(node) + 2))
+          .attr("x", -(r + 6))
+          .attr("y", -(r + 2))
           .attr("font-size", 10)
           .attr("text-anchor", "middle")
           .attr("cursor", "pointer")
@@ -785,7 +981,7 @@ export function createTopologyMapInstance(
 
       // Hover
       g.on("mouseover", function (event) {
-        d3.select(this).attr("filter", "url(#glow-soft)");
+        d3.select(this).attr("filter", "url(#glow-selected)");
         showTooltip(event, node);
       })
         .on("mousemove", function (event) {
@@ -800,14 +996,12 @@ export function createTopologyMapInstance(
         })
         .on("click", function () {
           selectedNodeId = node.id;
-          // Clear previous selection highlight
           layerNodes.selectAll(".topo-node").each(function () {
             const el = d3.select(this);
             const nid = el.attr("data-node-id");
             const n = nodeMap.get(nid || "");
             if (n) el.attr("filter", statusFilter(n));
           });
-          // Highlight selected
           d3.select(this).attr("filter", "url(#glow-selected)");
           callbacks.onNodeClick?.(node);
         })
@@ -823,7 +1017,6 @@ export function createTopologyMapInstance(
           d3.select(this).attr("transform", `translate(${event.x},${event.y})`);
           node.x = event.x;
           node.y = event.y;
-          // Update connected edges
           layerEdges.selectAll<SVGGElement, unknown>(".edge").each(function () {
             const eg = d3.select(this);
             const srcId = eg.attr("data-source");
@@ -838,12 +1031,11 @@ export function createTopologyMapInstance(
               }
             }
           });
-          // Update label position
-          layerLabels.selectAll<SVGTextElement, unknown>(`[data-node-id="${node.id}"]`).each(function () {
+          layerLabels.selectAll<SVGTextElement, unknown>(`[data-node-id="${CSS.escape(node.id)}"]`).each(function () {
             const el = d3.select(this);
             const isSubLabel = el.classed("node-sublabel");
-            const labelX = node.is_infrastructure ? nodeRadius(node) + 8 : 0;
-            const labelY = node.is_infrastructure ? 4 : nodeRadius(node) + 14;
+            const labelX = node.is_infrastructure ? r + 8 : 0;
+            const labelY = node.is_infrastructure ? 4 : r + 14;
             el.attr("x", event.x + labelX);
             el.attr("y", event.y + labelY + (isSubLabel ? 13 : 0));
           });
@@ -858,45 +1050,44 @@ export function createTopologyMapInstance(
 
       // Node label
       if (visible) {
-        const labelX = node.is_infrastructure ? nodeRadius(node) + 8 : 0;
-        // Stagger endpoint labels: odd-index 5px higher, even-index 5px lower
+        const labelX = node.is_infrastructure ? r + 8 : 0;
         const stagger = node.is_infrastructure ? 0 : (epIdx % 2 === 0 ? 5 : -5);
-        const labelY = node.is_infrastructure ? 4 : nodeRadius(node) + 14 + stagger;
+        const labelY = node.is_infrastructure ? 4 : r + 14 + stagger;
         const anchor = node.is_infrastructure ? "start" : "middle";
         const fontSize = node.is_infrastructure ? 11 : 9;
         const maxLen = node.is_infrastructure ? INFRA_LABEL_MAX : ENDPOINT_LABEL_MAX;
 
         layerLabels.append("text")
-          .attr("class", "node-label")
+          .attr("class", "node-label topo-node-hostname")
           .attr("data-node-id", node.id)
           .attr("x", node.x + labelX)
           .attr("y", node.y + labelY)
           .attr("text-anchor", anchor)
-          .attr("fill", nodeColor(node))
+          .attr("fill", color)
           .attr("fill-opacity", 1)
           .attr("font-size", fontSize)
-          .attr("font-family", "monospace")
-          .attr("font-weight", node.is_infrastructure ? "bold" : "normal")
+          .attr("font-family", "'Rajdhani', sans-serif")
+          .attr("font-weight", node.is_infrastructure ? "700" : "600")
           .text(truncate(node.label, maxLen));
 
         // IP sublabel for infrastructure
         if (node.is_infrastructure && node.ip) {
           layerLabels.append("text")
-            .attr("class", "node-sublabel")
+            .attr("class", "node-sublabel topo-node-ip")
             .attr("data-node-id", node.id)
             .attr("x", node.x + labelX)
             .attr("y", node.y + labelY + 13)
             .attr("text-anchor", anchor)
-            .attr("fill", "#888")
+            .attr("fill", "#5a7080")
             .attr("font-size", 9)
-            .attr("font-family", "monospace")
+            .attr("font-family", "'Share Tech Mono', monospace")
             .text(node.ip);
         }
       }
     });
   }
 
-  // ── Filter update (re-renders visibility without full rebuild) ──
+  // ── Filter update ──
   function updateVisibility() {
     if (!currentData) return;
 
@@ -941,11 +1132,6 @@ export function createTopologyMapInstance(
 
   // ── Zoom-dependent label visibility ──
   function updateLabelVisibility() {
-    // Registered infrastructure labels (router, managed_switch): always visible
-    // Unregistered infrastructure labels (WAPs, unmanaged switches): scale > 0.5
-    // Endpoint labels: visible at scale > 0.5
-    // IP sublabels: visible at scale > 0.7
-    // Port labels (on edges): visible at scale > 0.8
     const registeredKinds = new Set(["router", "managed_switch"]);
 
     layerLabels
@@ -987,7 +1173,6 @@ export function createTopologyMapInstance(
   // ── Zoom-to-fit helper ──
   function zoomToFit(animate = false) {
     if (!currentData) return;
-    // Need at least nodes OR vlan_groups to compute a bounding box
     if (currentData.nodes.length === 0 && currentData.vlan_groups.length === 0) return;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -997,7 +1182,6 @@ export function createTopologyMapInstance(
       if (n.x > maxX) maxX = n.x;
       if (n.y > maxY) maxY = n.y;
     });
-    // Also incorporate VLAN group bounding boxes (includes empty sectors)
     currentData.vlan_groups.forEach((g) => {
       if (g.bbox_x < minX) minX = g.bbox_x;
       if (g.bbox_y < minY) minY = g.bbox_y;
@@ -1012,7 +1196,6 @@ export function createTopologyMapInstance(
     if (svgRect.width === 0 || svgRect.height === 0) return;
     const scaleX = svgRect.width / w;
     const scaleY = svgRect.height / h;
-    // Cap at 1.0 to prevent over-zoom; no floor so wide layouts fit
     const scale = Math.min(scaleX, scaleY, 1.0);
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
@@ -1027,12 +1210,15 @@ export function createTopologyMapInstance(
     }
   }
 
-  // ── Initial grid render ──
+  // ── Initial render ──
+  renderStars();
   renderGrid();
 
   // ── Public API ──
   return {
     destroy() {
+      destroyed = true;
+      svg.selectAll("*").interrupt();
       svg.selectAll("*").remove();
       svg.on(".zoom", null);
       if (tooltip) {
@@ -1043,13 +1229,10 @@ export function createTopologyMapInstance(
 
     render(data: NetworkTopologyResponse) {
       renderAll(data);
-      // Only auto-fit on the FIRST render. Subsequent data refreshes
-      // preserve the user's current zoom/pan position.
       if (!hasInitialFit) {
         hasInitialFit = true;
         zoomToFit(false);
       }
-      // Ensure labels respect current zoom level after re-render
       updateLabelVisibility();
     },
 
