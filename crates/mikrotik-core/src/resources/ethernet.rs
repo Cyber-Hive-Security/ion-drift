@@ -43,11 +43,34 @@ pub struct EthernetInterface {
     pub switch: Option<String>,
 }
 
+/// Real-time monitor entry from `/interface/ethernet/monitor`.
+/// Contains actual negotiated link speed (vs. configured speed).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct EthernetMonitorEntry {
+    pub name: String,
+    #[serde(default)]
+    pub rate: Option<String>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub full_duplex: Option<bool>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
 // ── Client methods ─────────────────────────────────────────────
 
 impl MikrotikClient {
     /// List ethernet interfaces with hardware details.
     pub async fn ethernet_interfaces(&self) -> Result<Vec<EthernetInterface>, MikrotikError> {
         self.get("interface/ethernet").await
+    }
+
+    /// Monitor all ethernet interfaces (single snapshot).
+    /// Returns actual negotiated link speed in the `rate` field.
+    pub async fn monitor_ethernet(&self) -> Result<Vec<EthernetMonitorEntry>, MikrotikError> {
+        self.post("interface/ethernet/monitor", &serde_json::json!({
+            ".id": "*",
+            "once": ""
+        })).await
     }
 }

@@ -90,9 +90,10 @@ async fn poll_switch(
     }
 
     // Collect data concurrently
-    let (ethernet_res, bridge_hosts_res, bridge_ports_res, bridge_vlans_res, neighbors_res) =
+    let (ethernet_res, monitor_res, bridge_hosts_res, bridge_ports_res, bridge_vlans_res, neighbors_res) =
         tokio::join!(
             client.ethernet_interfaces(),
+            client.monitor_ethernet(),
             client.bridge_hosts(),
             client.bridge_ports(),
             client.bridge_vlans(),
@@ -100,17 +101,36 @@ async fn poll_switch(
         );
 
     // ── Ethernet / port metrics ───────────────────────────────────
+    // Build a map of actual negotiated speeds from monitor endpoint
+    let monitor_speeds: std::collections::HashMap<String, String> = match &monitor_res {
+        Ok(entries) => entries
+            .iter()
+            .filter_map(|m| m.rate.clone().map(|r| (m.name.clone(), r)))
+            .collect(),
+        Err(e) => {
+            tracing::debug!(device = %device_id, "ethernet monitor: {e} (falling back to static speed)");
+            std::collections::HashMap::new()
+        }
+    };
+
     if let Ok(interfaces) = ethernet_res {
         let entries: Vec<PortMetricEntry> = interfaces
             .iter()
-            .map(|iface| PortMetricEntry {
-                port_name: iface.name.clone(),
-                rx_bytes: iface.rx_byte.unwrap_or(0),
-                tx_bytes: iface.tx_byte.unwrap_or(0),
-                rx_packets: iface.rx_packet.unwrap_or(0),
-                tx_packets: iface.tx_packet.unwrap_or(0),
-                speed: iface.speed.clone(),
-                running: iface.running,
+            .map(|iface| {
+                // Prefer actual negotiated speed from monitor, fall back to static
+                let speed = monitor_speeds
+                    .get(&iface.name)
+                    .cloned()
+                    .or_else(|| iface.speed.clone());
+                PortMetricEntry {
+                    port_name: iface.name.clone(),
+                    rx_bytes: iface.rx_byte.unwrap_or(0),
+                    tx_bytes: iface.tx_byte.unwrap_or(0),
+                    rx_packets: iface.rx_packet.unwrap_or(0),
+                    tx_packets: iface.tx_packet.unwrap_or(0),
+                    speed,
+                    running: iface.running,
+                }
             })
             .collect();
         if let Err(e) = store.record_port_metrics(device_id, &entries).await {
