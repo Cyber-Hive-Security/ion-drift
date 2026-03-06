@@ -133,23 +133,67 @@ function LegendSection({ title, children }: { title: string; children: React.Rea
 }
 
 function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ startX: number; startY: number; origLeft: number; origTop: number } | null>(null);
+  const didDragRef = useRef(false);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    const el = containerRef.current;
+    if (!el) return;
+    didDragRef.current = false;
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: el.offsetLeft,
+      origTop: el.offsetTop,
+    };
+    el.setPointerCapture(e.pointerId);
+  }, []);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    const d = dragRef.current;
+    const el = containerRef.current;
+    if (!d || !el) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDragRef.current = true;
+    el.style.left = `${d.origLeft + dx}px`;
+    el.style.top = `${d.origTop + dy}px`;
+  }, []);
+
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    containerRef.current?.releasePointerCapture(e.pointerId);
+    dragRef.current = null;
+  }, []);
+
+  const handleToggleClick = useCallback(() => {
+    if (!didDragRef.current) onToggle();
+  }, [onToggle]);
+
   return (
     <div
-      className="absolute bottom-12 left-3 z-20 w-[200px] overflow-y-auto rounded-lg border backdrop-blur"
+      ref={containerRef}
+      className={`absolute z-20 overflow-y-auto rounded-lg border backdrop-blur ${collapsed ? "w-auto" : "w-[200px]"}`}
       style={{
+        bottom: 48,
+        left: 12,
         background: "rgba(8, 16, 32, 0.92)",
-        borderColor: "rgba(0, 240, 255, 0.12)",
+        borderColor: collapsed ? "rgba(255, 215, 0, 0.3)" : "rgba(0, 240, 255, 0.12)",
         maxHeight: "calc(100% - 80px)",
       }}
     >
-      <button
-        onClick={onToggle}
-        className="flex w-full items-center justify-between px-3 py-1.5 text-xs font-semibold hover:text-foreground"
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onClick={handleToggleClick}
+        className="flex w-full cursor-grab items-center justify-between gap-2 px-3 py-1.5 text-xs font-semibold select-none hover:text-foreground active:cursor-grabbing"
         style={{ color: "#ffd700", fontFamily: "'Orbitron', monospace", fontSize: "10px", letterSpacing: "2px" }}
       >
         LEGEND
         {collapsed ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-      </button>
+      </div>
       {!collapsed && (
         <div className="border-t px-3 py-2 text-[10px]" style={{ borderColor: "rgba(0, 240, 255, 0.08)", color: "#c0d0e0" }}>
           {/* Nodes */}
