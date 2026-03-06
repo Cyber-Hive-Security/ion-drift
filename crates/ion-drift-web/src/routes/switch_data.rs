@@ -159,6 +159,21 @@ pub async fn device_ports(
     Ok(Json(serde_json::to_value(data).unwrap()))
 }
 
+// ── GET /api/devices/{id}/port-list ──────────────────────────────
+
+pub async fn device_port_list(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let data = state
+        .switch_store
+        .get_device_port_list(&id)
+        .await
+        .map_err(|e| internal_error("port list", e))?;
+    Ok(Json(serde_json::to_value(data).unwrap()))
+}
+
 // ── GET /api/devices/{id}/mac-table ──────────────────────────────
 
 pub async fn device_mac_table(

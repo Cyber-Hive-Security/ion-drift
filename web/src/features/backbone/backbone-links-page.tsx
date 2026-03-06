@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { useBackboneLinks, useCreateBackboneLink, useDeleteBackboneLink, useDevices, useInfrastructureIdentities, useDevicePortRoles } from "@/api/queries";
-import type { NetworkDevice, NetworkIdentity, PortRoleEntry } from "@/api/types";
+import { useBackboneLinks, useCreateBackboneLink, useDeleteBackboneLink, useDevices, useInfrastructureIdentities, useDevicePortList } from "@/api/queries";
+import type { NetworkDevice, NetworkIdentity, DevicePort } from "@/api/types";
 import { Cable, Trash2, Plus } from "lucide-react";
 
 export function BackboneLinksPage() {
@@ -19,9 +19,9 @@ export function BackboneLinksPage() {
   const managedDevices = devices.data ?? [];
   const managedIds = useMemo(() => new Set(managedDevices.map((d) => d.id)), [managedDevices]);
 
-  // Fetch port roles when a managed device is selected
-  const portRolesA = useDevicePortRoles(managedIds.has(deviceA) ? deviceA : undefined);
-  const portRolesB = useDevicePortRoles(managedIds.has(deviceB) ? deviceB : undefined);
+  // Fetch port list when a managed device is selected
+  const portListA = useDevicePortList(managedIds.has(deviceA) ? deviceA : undefined);
+  const portListB = useDevicePortList(managedIds.has(deviceB) ? deviceB : undefined);
 
   // Build a combined name lookup: managed devices + infrastructure identities
   const nameMap = useMemo(() => {
@@ -112,7 +112,7 @@ export function BackboneLinksPage() {
                 <PortInput
                   value={portA}
                   onChange={setPortA}
-                  portRoles={portRolesA.data}
+                  ports={portListA.data}
                   isManaged={managedIds.has(deviceA)}
                   hasDevice={!!deviceA}
                 />
@@ -127,7 +127,7 @@ export function BackboneLinksPage() {
                 <PortInput
                   value={portB}
                   onChange={setPortB}
-                  portRoles={portRolesB.data}
+                  ports={portListB.data}
                   isManaged={managedIds.has(deviceB)}
                   hasDevice={!!deviceB}
                 />
@@ -201,23 +201,23 @@ export function BackboneLinksPage() {
 function PortInput({
   value,
   onChange,
-  portRoles,
+  ports,
   isManaged,
   hasDevice,
 }: {
   value: string;
   onChange: (v: string) => void;
-  portRoles: PortRoleEntry[] | undefined;
+  ports: DevicePort[] | undefined;
   isManaged: boolean;
   hasDevice: boolean;
 }) {
   // Sort ports by natural order (alphabetical, but numbers sort numerically within)
   const sortedPorts = useMemo(() => {
-    if (!portRoles) return [];
-    return [...portRoles].sort((a, b) =>
+    if (!ports) return [];
+    return [...ports].sort((a, b) =>
       a.port_name.localeCompare(b.port_name, undefined, { numeric: true }),
     );
-  }, [portRoles]);
+  }, [ports]);
 
   // Show dropdown if this is a managed device with port data
   if (isManaged && sortedPorts.length > 0) {
@@ -228,11 +228,19 @@ function PortInput({
         className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
       >
         <option value="">-- Select port --</option>
-        {sortedPorts.map((p) => (
-          <option key={p.port_name} value={p.port_name}>
-            {p.port_name} ({p.role}, {p.mac_count} MACs)
-          </option>
-        ))}
+        {sortedPorts.map((p) => {
+          const details: string[] = [];
+          if (p.role) details.push(p.role);
+          if (p.speed) details.push(p.speed);
+          if (p.mac_count != null) details.push(`${p.mac_count} MACs`);
+          if (!p.running) details.push("down");
+          const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
+          return (
+            <option key={p.port_name} value={p.port_name}>
+              {p.port_name}{suffix}
+            </option>
+          );
+        })}
       </select>
     );
   }

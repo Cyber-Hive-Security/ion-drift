@@ -210,6 +210,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/devices/{id}/resources", get(switch_data::device_resources))
         .route("/devices/{id}/interfaces", get(switch_data::device_interfaces))
         .route("/devices/{id}/ports", get(switch_data::device_ports))
+        .route("/devices/{id}/port-list", get(switch_data::device_port_list))
         .route("/devices/{id}/mac-table", get(switch_data::device_mac_table))
         .route("/devices/{id}/neighbors", get(switch_data::device_neighbors))
         .route("/devices/{id}/vlans", get(switch_data::device_vlans))
@@ -287,7 +288,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         ))
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("content-security-policy"),
-            HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'"),
+            HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'"),
         ))
         .with_state(state))
 }

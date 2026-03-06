@@ -66,6 +66,7 @@ import type {
   NetworkIdentity,
   VlanMembershipEntry,
   PortRoleEntry,
+  DevicePort,
   IdentityStats,
   NmapScan,
   NmapResult,
@@ -832,6 +833,18 @@ export function useDevicePortRoles(deviceId: string | undefined) {
     queryFn: () =>
       apiFetch<PortRoleEntry[]>(
         `/api/devices/${encodeURIComponent(deviceId!)}/port-roles`,
+      ),
+    refetchInterval: 60_000,
+    enabled: !!deviceId,
+  });
+}
+
+export function useDevicePortList(deviceId: string | undefined) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "port-list"],
+    queryFn: () =>
+      apiFetch<DevicePort[]>(
+        `/api/devices/${encodeURIComponent(deviceId!)}/port-list`,
       ),
     refetchInterval: 60_000,
     enabled: !!deviceId,

@@ -242,6 +242,16 @@ pub struct PortRoleEntry {
     pub updated_at: i64,
 }
 
+/// A port discovered on a device (from metrics), optionally enriched with role data.
+#[derive(Debug, Clone, Serialize)]
+pub struct DevicePort {
+    pub port_name: String,
+    pub speed: Option<String>,
+    pub running: bool,
+    pub role: Option<String>,
+    pub mac_count: Option<u32>,
+}
+
 /// VLAN configuration metadata (media type, color, subnet).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VlanConfig {
@@ -604,6 +614,38 @@ impl SwitchStore {
             }
         }
         Ok(map)
+    }
+
+    /// Get a distinct list of ports for a device, derived from port metrics
+    /// and enriched with role data from switch_port_roles if available.
+    pub async fn get_device_port_list(
+        &self,
+        device_id: &str,
+    ) -> Result<Vec<DevicePort>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT m.port_name, m.speed, m.running, r.role, r.mac_count
+             FROM switch_port_metrics m
+             LEFT JOIN switch_port_roles r
+               ON r.device_id = m.device_id AND LOWER(r.port_name) = LOWER(m.port_name)
+             WHERE m.device_id = ?1
+               AND m.id IN (
+                 SELECT MAX(id) FROM switch_port_metrics
+                 WHERE device_id = ?1
+                 GROUP BY port_name
+               )
+             ORDER BY m.port_name COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map(params![device_id], |row| {
+            Ok(DevicePort {
+                port_name: row.get(0)?,
+                speed: row.get(1)?,
+                running: row.get::<_, i32>(2)? != 0,
+                role: row.get(3)?,
+                mac_count: row.get::<_, Option<i64>>(4)?.map(|v| v as u32),
+            })
+        })?;
+        rows.collect()
     }
 
     /// Get recent port metrics for a device.

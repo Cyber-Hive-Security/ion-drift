@@ -998,6 +998,14 @@ export interface PortRoleEntry {
   updated_at: number;
 }
 
+export interface DevicePort {
+  port_name: string;
+  speed: string | null;
+  running: boolean;
+  role: string | null;
+  mac_count: number | null;
+}
+
 export interface IdentityStats {
   total: number;
   confirmed: number;
