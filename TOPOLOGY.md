@@ -1,6 +1,6 @@
 # How the Topology Map Works
 
-> **Last updated:** 2026-03-06 — commit `de128ae`
+> **Last updated:** 2026-03-06 — commit `54ad563`
 
 This document explains the complete data pipeline from device polling through correlation to the rendered D3.js topology map. It covers every stage: what data feeds in, how the correct switch is chosen for each device, how identities are correlated, how the graph is computed, how layout is determined, and how the frontend renders it.
 
@@ -511,45 +511,80 @@ The topology engine reads from the correlation output (network_identities) plus 
 **Step 1 — Registered Devices:**
 All devices from the device registry become topology nodes. The router gets `NodeKind::Router`, all others get `NodeKind::ManagedSwitch`. Status (Online/Offline) comes from the device health check.
 
-**Step 2 — LLDP/MNDP Neighbors:**
-For each neighbor record:
-1. Try to match to a registered device by identity name, IP, or MAC (using fuzzy matching: lowercase, strip punctuation)
-2. If matched → create a trunk edge between the reporting device and the matched device
-3. If unmatched but has MikroTik platform → create an `UnmanagedSwitch` or `AccessPoint` node (inferred infrastructure)
-4. If the neighbor is on the router's WAN-facing port (ether1) → collapse into a single "WAN / ISP" placeholder node
+**Step 2 — Pre-processing: Build Lookup Maps:**
+
+Before processing neighbors, the engine builds progressively-enriched maps for deduplication:
+
+- `identity_to_device` — normalized LLDP identity string → registered device ID
+- `ip_to_device` — neighbor IP → device ID (link-local `fe80::` addresses are excluded)
+- `mac_to_device` — MAC → device ID
+
+**Reverse identity learning:** When a neighbor matches a registered device, that mapping is injected back into the lookup maps. This means if switch A's LLDP reports neighbor "CRS310" and matches it to device X, then switch B's LLDP reporting the same identity will also match device X — even if switch B didn't have the mapping initially.
+
+**Neighbor aliases** (`get_neighbor_aliases()`) are loaded and applied:
+- `action = "hide"` — MAC or identity added to skip sets, neighbor will not appear on the map
+- `action = "alias"` — alternative identity/MAC mappings injected into the lookup maps
+
+**Step 2b — LLDP/MNDP Neighbor Processing:**
+
+For each neighbor record, in order:
+1. Skip if on a WAN-facing port (router's ether1) — these are collected and collapsed into a single "WAN / ISP" node later
+2. Skip if hidden via neighbor alias
+3. Try to match to a registered device in priority order: identity (exact lowercase) → identity (fuzzy normalized) → IP address (skip `fe80::`) → MAC address
+4. If matched → create a trunk edge between the reporting device and the matched device, learn reverse mappings for future matches
+5. If unmatched but has platform string → check `identity_overrides_lldp()` against any matching network identity. If the identity says it's NOT infrastructure, skip creating an infra node. Otherwise, infer NodeKind from platform: `"routeros"/"mikrotik"/"swos"` → UnmanagedSwitch, `"cap"/"wap"/"wireless"` → AccessPoint, default → UnmanagedSwitch
 
 **Step 3 — Backbone Links:**
-For each backbone link:
-1. Create a trunk edge between device_a and device_b
-2. If either device doesn't exist as a node yet (e.g. WAP from infrastructure identities), create it
-3. Deduplicate against LLDP-discovered edges (same device pair → keep LLDP, skip backbone)
 
-**Step 4 — BFS Layer Assignment:**
-Starting from the router (layer 0), BFS through trunk edges:
+For each backbone link:
+1. If either device doesn't exist as a node yet (e.g. WAP referenced only by backbone link), create it using metadata from `get_infrastructure_identities()`
+2. If a trunk edge already exists between the same device pair (from LLDP): **merge** — backbone link's port names and `speed_mbps` override the LLDP edge values. This is not a skip; backbone data augments LLDP data.
+3. If no existing edge → create a new trunk edge
+
+**Step 3b — WAN Node:**
+
+If any neighbors were on WAN-facing ports, a single "WAN / ISP" placeholder node is created with an Uplink edge from the router. The label includes a count of collapsed upstream neighbors.
+
+**Step 4 — Reverse Port Labels:**
+
+For trunk edges missing a `target_port` label, the engine searches neighbor records from the target device for a reverse entry pointing back to the source. If found, the target's interface name fills in the label.
+
+**Step 5 — BFS Layer Assignment:**
+
+Starting from the router (layer 0), BFS through trunk edges only:
 - Router = layer 0
 - Directly connected switches = layer 1
 - Downstream switches = layer 2, 3, etc.
+- Infrastructure nodes not reached by BFS (e.g. isolated switches) get `max_layer + 1`
+- WAN node stays at layer 0 (Uplink edges are not traversed)
 
 ### 4.2 Layer 2: Endpoint Placement
 
-For each `network_identity` record:
-1. Skip if MAC matches a registered device IP or MAC
-2. Skip if MAC falls within any switch-local MAC range
-3. Skip if `disposition = 'ignored'`
-4. Skip if the identity is already represented as infrastructure (matched by IP, MAC, or identity name)
+First, the engine builds an `infra_macs` set — all MACs belonging to infrastructure devices:
+- MACs from LLDP neighbors that matched registered devices
+- MACs from LLDP neighbors that created inferred infrastructure nodes
+- MACs from any node with `is_infrastructure = true`
+- **Exception:** MACs where `identity_overrides_lldp()` returns true are removed from this set (human-confirmed non-infrastructure devices can escape LLDP classification)
+
+Then for each `network_identity` record:
+1. Skip if MAC is in `infra_macs` (known infrastructure)
+2. Skip if MAC already exists as a node (e.g. inferred infrastructure from Step 2)
+3. Skip if IP matches a registered device (catches router gateway IPs that leak through ARP)
+4. Skip if MAC matches a known infrastructure device via `mac_to_device` map
 5. Convert `device_type` to `NodeKind` (camera → Camera, server → Server, etc.)
-6. Create a topology node with `parent_id = switch_device_id` (the correlated switch binding)
-7. Create an access edge from the parent switch to this endpoint
-8. Edge kind is `Wireless` if the VLAN's `media_type = 'wireless'`, otherwise `Access`
+6. Determine label: `human_label` > `hostname` > `manufacturer` > MAC address
+7. Create a topology node with `parent_id = switch_device_id` (the correlated switch binding)
+8. Create an access edge from the parent switch to this endpoint
+9. Edge kind is `Wireless` if the VLAN's `media_type = 'wireless'`, otherwise `Access`
 
 ### 4.3 Layer 3: Orphan Handling
 
-Endpoints without a `switch_device_id` (not seen on any switch port) are placed in an orphan group. They still appear on the map but are visually separated.
+Endpoints without a `switch_device_id` (not seen on any switch port) are assigned `layer = endpoint_layer + 1` — one layer below normal endpoints. This places them in their own visual tier, separated from switch-connected devices.
 
 ### 4.4 VLAN Group Computation
 
 Nodes are grouped by VLAN ID. Each VLAN group tracks:
-- `vlan_id`, `name`, `color` (from vlan_config)
+- `vlan_id`, `name`, `color` (from `vlan_config` table, with hardcoded fallbacks for VLANs 2, 6, 10, 25, 30, 35, 40, 90, 99 if missing from DB)
 - `node_ids` — all nodes in this VLAN
 - Bounding box: `x`, `y`, `width`, `height` (computed by layout)
 
@@ -641,12 +676,19 @@ The layout uses a **center-spine model** — VLAN 2 (Network Management) runs as
 ### 5.1 Layout Constants
 
 ```
-CANVAS_W     = 4000px    Total canvas width
-LAYER_SPACING = 300px    Vertical distance between infrastructure layers
-NODE_SPACING  = 120px    Grid spacing between endpoint nodes
-TOP_MARGIN    = 150px    Top padding
-SPINE_WIDTH   = 300px    Width of center spine (VLAN 2)
-SECTOR_PADDING = 40px    Padding inside VLAN sector boxes
+CANVAS_W              = 4000px    Total canvas width
+LAYER_SPACING         = 300px     Vertical distance between infrastructure layers
+NODE_SPACING          = 120px     Grid spacing between endpoint nodes
+TOP_MARGIN            = 150px     Top padding
+SPINE_WIDTH           = 300px     Width of center spine (VLAN 2)
+SECTOR_PADDING        = 40px      Padding inside VLAN sector boxes
+COLUMN_GAP            = 60px      Gap between spine and left/right columns
+SECTOR_V_GAP          = 30px      Vertical gap between VLAN sectors in a column
+MIN_SECTOR_H          = 100px     Minimum sector height (even for empty VLANs)
+SECTOR_HEADER_H       = 50px      VLAN label header height
+VLAN_SECTOR_MIN_W     = 200px     Minimum sector width
+VLAN_SECTOR_EMPTY_W   = 150px     Width for VLAN sectors with zero endpoints
+ENDPOINT_OFFSET       = 200px     VLAN 2 grid starts this far below infrastructure
 ```
 
 ### 5.2 Infrastructure Positioning
@@ -654,29 +696,41 @@ SECTOR_PADDING = 40px    Padding inside VLAN sector boxes
 Infrastructure nodes (router, switches) are positioned along the center spine:
 
 ```
-Layer 0 (router):    centered at (CANVAS_W/2, TOP_MARGIN)
-Layer 1 (switches):  spread horizontally across center, Y = TOP_MARGIN + LAYER_SPACING
+spine_left  = CANVAS_W/2 - SPINE_WIDTH/2  = 1850px
+spine_right = CANVAS_W/2 + SPINE_WIDTH/2  = 2150px
+
+Layer 0 (router):    Y = TOP_MARGIN, spread across SPINE_WIDTH
+Layer 1 (switches):  Y = TOP_MARGIN + LAYER_SPACING
 Layer 2 (switches):  Y = TOP_MARGIN + 2 * LAYER_SPACING
 ...
 ```
 
-Within each layer, nodes are distributed evenly across the available width.
+Within each layer, nodes are distributed evenly: `slot_width = SPINE_WIDTH / (count + 1)`, so 2 nodes in a layer sit at 1/3 and 2/3 of the spine width.
+
+**WAN node** is positioned 300px to the left of the router's X position — outside the spine, visually separate.
 
 ### 5.3 VLAN Sector Layout
 
-1. **VLAN 2** (Management) is placed as the center spine
-2. All other VLANs are assigned to left or right columns using a **greedy balancing algorithm**: each VLAN goes to whichever column currently has fewer total devices
-3. Column heights are proportional to device count per VLAN
-4. VLANs stack vertically within each column
+1. **Collect active VLANs** from a hardcoded precedence order (2, 6, 10, 25, 30, 35, 40, 90, 99), then add any additional VLANs found on nodes
+2. **VLAN 2** (Management) is placed as the center spine
+3. All other VLANs are sorted by endpoint count (descending), then assigned to left or right columns using a **greedy balancing algorithm**: each VLAN goes to whichever column currently has fewer total devices. Within each column, VLANs are re-sorted by VLAN ID for deterministic ordering.
+4. **Column width** is uniform within each column: the maximum of `VLAN_SECTOR_MIN_W` and the widest VLAN's grid width (`ceil(sqrt(count)) * NODE_SPACING + 2*SECTOR_PADDING`). Empty VLANs use `VLAN_SECTOR_EMPTY_W` (150px).
+5. **Column positioning:** left column sits at `spine_left - COLUMN_GAP - column_width`, right column at `spine_right + COLUMN_GAP`
+6. VLANs stack vertically within each column with `SECTOR_V_GAP` (30px) between them
+7. **Sector height** per VLAN: `cols = floor(usable_width / NODE_SPACING)`, `rows = ceil(count / cols)`, height = `max(MIN_SECTOR_H, rows * NODE_SPACING + SECTOR_HEADER_H + 2*SECTOR_PADDING)`
+8. **Spine height** (VLAN 2): `max(left_total_height, right_total_height, infra_bottom - TOP_MARGIN, MIN_SECTOR_H)`
 
 ### 5.4 Endpoint Grid Layout
 
-Within each VLAN sector, endpoints are arranged in a square grid:
-- Grid starts below the parent infrastructure node
-- Columns = ceil(sqrt(device_count))
+Within each VLAN sector, endpoints are arranged in a roughly-square grid:
+- Columns = `ceil(sqrt(device_count))` — produces approximately square grids (e.g. 20 devices → 5 cols × 4 rows)
 - Spacing = NODE_SPACING (120px)
 - Padding = SECTOR_PADDING (40px) on all sides
-- Collections sorted by MAC or node_id for deterministic ordering
+- Collections sorted by node ID for deterministic ordering
+- **VLAN 2 special case:** endpoint grid starts at `max(infrastructure_Y) + ENDPOINT_OFFSET` (200px below the lowest infrastructure node), preventing overlap with switches in the spine
+- **All other VLANs:** endpoint grid starts at `sector_top + SECTOR_HEADER_H + SECTOR_PADDING`
+
+**Empty VLANs** still render as small boxes (VLAN_SECTOR_EMPTY_W × MIN_SECTOR_H) — they appear even with zero devices.
 
 ### 5.5 Human Position Overrides
 
@@ -718,7 +772,7 @@ The `parse_speed_mbps()` function handles all formats:
 During topology computation, edge speed is resolved in priority order:
 
 1. **Backbone link `speed_mbps`** — if the edge corresponds to a backbone link with manual speed, use it
-2. **Polled port speed** — query `switch_port_metrics` for the latest speed on the edge's port, parse and merge (take the higher of device_a's port speed and device_b's port speed)
+2. **Polled port speed** — query `switch_port_metrics` for the latest speed on the edge's port, parse via `parse_speed_mbps()`. If both endpoints report a speed, use `min()` (bottleneck — the link is only as fast as its slowest end). If only one reports, use that.
 3. **NULL** — no speed data available (displayed as cyan 1.2px default)
 
 ### 6.4 Traffic Rate Computation
@@ -731,7 +785,7 @@ delta_time  = timestamp1 - timestamp0
 bps         = (delta_bytes / delta_time) * 8
 ```
 
-Traffic is resolved per-edge by matching the edge's port name (lowercased) to the port metrics for each device. The higher of the two endpoints' traffic is used.
+Traffic is resolved per-edge by matching the edge's port name (lowercased) to the port metrics for each device. The `max()` of the two endpoints' traffic is used (both sides see the same traffic, so take whichever reported higher). This is the opposite of speed resolution, which uses `min()` (bottleneck).
 
 ### 6.5 Frontend Speed Visualization
 
