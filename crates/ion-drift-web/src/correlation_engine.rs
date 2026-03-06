@@ -322,23 +322,34 @@ async fn run_correlation(
 
         let is_trunk = trunk_ports.contains(&(entry.device_id.clone(), entry.port_name.to_lowercase()));
         let is_router = entry.device_id == router_id;
-        let depth = switch_depths.get(&entry.device_id).copied().unwrap_or(0);
+        let known_depth = switch_depths.get(&entry.device_id).copied();
         // Priority formula:
-        //   Router:      100         — always lowest, sees every MAC via bridge
+        //   Router:       100         — always lowest, sees every MAC via bridge
         //   Switch trunk: 200+depth*10 — deeper trunk = closer to device (correct)
         //   Access port:  400-depth*10 — shallower access = more trustworthy
+        //   Unknown depth: 250        — switches not in topology get neutral priority
         //
         // Why invert depth for access? A MAC can appear on "access" ports of
         // multiple switches when a deeper switch's uplink is misclassified
         // (e.g. SwOS port name doesn't match backbone link). The shallower
         // switch's access port is more likely the genuine connection.
         // Access always beats trunk (min 310 vs max ~240).
+        //
+        // Unknown-depth switches (not reachable from router via backbone/LLDP)
+        // get a neutral score of 250 — lower than any known access port (min 310)
+        // but higher than trunk ports at depth <=4. This prevents unregistered
+        // switches from stealing MACs from known topology positions.
         let new_priority: u32 = if is_router {
             100
-        } else if is_trunk {
-            200 + depth * 10
+        } else if let Some(depth) = known_depth {
+            if is_trunk {
+                200 + depth * 10
+            } else {
+                400_u32.saturating_sub(depth * 10)
+            }
         } else {
-            400_u32.saturating_sub(depth * 10)
+            // Switch not in backbone topology — use neutral priority
+            250
         };
 
         let builder = identity_map
@@ -394,10 +405,12 @@ async fn run_correlation(
     }
 
     // ── 2c. WAP attribution for wireless devices ──────────────────
-    // Devices on wireless VLANs are attributed to WAPs instead of switches
-    // when the switch has exactly one WAP child in the backbone links.
+    // Devices on wireless VLANs are attributed to WAPs. For each wireless
+    // device: if its current switch has WAP children (via backbone links),
+    // round-robin among those WAPs. Otherwise, round-robin among ALL known
+    // WAPs. This ensures every wireless device gets a WAP parent — the user
+    // can manually correct via the identity manager.
     {
-        // Build WAP child map: switch_id → list of WAP identifiers
         let infra_identities = store.get_infrastructure_identities().await.unwrap_or_default();
         let wap_identifiers: HashSet<String> = infra_identities
             .iter()
@@ -411,32 +424,65 @@ async fn run_correlation(
             .collect();
 
         let wap_children = build_wap_children(&backbone_links, &wap_identifiers);
-        let mut wap_attributed = 0u32;
+        // Sorted list of all WAPs for deterministic round-robin
+        let mut all_waps: Vec<String> = wap_identifiers.iter().cloned().collect();
+        all_waps.sort();
 
-        for builder in identity_map.values_mut() {
-            // Only consider devices on wireless VLANs
-            match builder.vlan_id {
-                Some(v) if wireless_vlans.contains(&v) => {}
-                _ => continue,
-            };
+        if all_waps.is_empty() {
+            tracing::debug!("no WAPs found, skipping wireless attribution");
+        } else {
+            // Per-WAP round-robin counters (keyed by WAP list identity)
+            let mut global_rr = 0usize;
+            let mut switch_rr: HashMap<String, usize> = HashMap::new();
+            let mut wap_attributed = 0u32;
 
-            let switch_id = match &builder.switch_device_id {
-                Some(id) => id.clone(),
-                None => continue,
-            };
+            // Collect wireless MAC keys first, then iterate — avoids borrow issues
+            let wireless_macs: Vec<String> = identity_map
+                .iter()
+                .filter_map(|(mac, b)| {
+                    match b.vlan_id {
+                        Some(v) if wireless_vlans.contains(&v) => Some(mac.clone()),
+                        _ => None,
+                    }
+                })
+                .collect();
 
-            // If this switch has exactly one WAP child, attribute to that WAP
-            if let Some(waps) = wap_children.get(&switch_id) {
-                if waps.len() == 1 {
-                    builder.switch_device_id = Some(waps[0].clone());
-                    builder.switch_port = None;
-                    wap_attributed += 1;
+            for mac in &wireless_macs {
+                let builder = identity_map.get_mut(mac).unwrap();
+                let switch_id = match &builder.switch_device_id {
+                    Some(id) => id.clone(),
+                    None => continue,
+                };
+
+                // Prefer switch-specific WAPs if available, else all WAPs
+                let wap_list = wap_children.get(&switch_id).unwrap_or(&all_waps);
+                if wap_list.is_empty() {
+                    continue;
                 }
-            }
-        }
 
-        if wap_attributed > 0 {
-            tracing::info!(count = wap_attributed, "wireless devices attributed to WAPs");
+                let idx = if wap_list.len() == all_waps.len() {
+                    let i = global_rr;
+                    global_rr += 1;
+                    i
+                } else {
+                    let i = switch_rr.entry(switch_id.clone()).or_insert(0);
+                    let idx = *i;
+                    *i += 1;
+                    idx
+                };
+
+                builder.switch_device_id = Some(wap_list[idx % wap_list.len()].clone());
+                builder.switch_port = None;
+                wap_attributed += 1;
+            }
+
+            if wap_attributed > 0 {
+                tracing::info!(
+                    count = wap_attributed,
+                    waps = all_waps.len(),
+                    "wireless devices attributed to WAPs (round-robin)"
+                );
+            }
         }
     }
 

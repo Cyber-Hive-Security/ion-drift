@@ -616,20 +616,20 @@ pub async fn compute_topology(
         }
 
         // Fill in speed_mbps on edges that don't already have one (manual override takes priority)
+        // Port names in speed_map are lowercased for case-insensitive matching.
         for edge in &mut edges {
             if edge.speed_mbps.is_some() {
                 continue;
             }
-            // Try source port speed first, then target port speed, take the max
             let src_speed = edge
                 .source_port
                 .as_deref()
-                .and_then(|p| speed_map.get(&edge.source).and_then(|m| m.get(p)))
+                .and_then(|p| speed_map.get(&edge.source).and_then(|m| m.get(&p.to_lowercase())))
                 .copied();
             let tgt_speed = edge
                 .target_port
                 .as_deref()
-                .and_then(|p| speed_map.get(&edge.target).and_then(|m| m.get(p)))
+                .and_then(|p| speed_map.get(&edge.target).and_then(|m| m.get(&p.to_lowercase())))
                 .copied();
             edge.speed_mbps = match (src_speed, tgt_speed) {
                 (Some(a), Some(b)) => Some(a.min(b)), // bottleneck speed

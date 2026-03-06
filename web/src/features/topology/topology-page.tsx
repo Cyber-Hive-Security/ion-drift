@@ -97,98 +97,161 @@ function Row({ label, value }: { label: string; value: string }) {
 
 // ─── Legend ──────────────────────────────────────────────
 
+const LEGEND_NODES = [
+  { color: "#ffd700", label: "Router" },
+  { color: "#00e5ff", label: "Switch" },
+  { color: "#00c853", label: "Access Point" },
+  { color: "#90a4ae", label: "Endpoint" },
+] as const;
+
+const LEGEND_SPEEDS = [
+  { width: 3.5, color: "#ffd700", label: "10 Gbps" },
+  { width: 2.5, color: "#ff8c00", label: "5 Gbps" },
+  { width: 2.0, color: "#00e5ff", label: "2.5 Gbps" },
+  { width: 1.2, color: "#00f0ff", label: "1 Gbps" },
+] as const;
+
+const LEGEND_EDGES = [
+  { color: "#00e5ff", width: 2, dash: false, label: "Trunk" },
+  { color: "#ffd700", width: 2, dash: false, label: "Uplink" },
+  { color: "#666", width: 1, dash: false, label: "Access" },
+  { color: "#666", width: 1, dash: true, label: "Wireless" },
+] as const;
+
+function LegendSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-2 first:mt-0">
+      <div
+        className="mb-1 text-[9px] font-bold tracking-[2px]"
+        style={{ color: "#ffd700", fontFamily: "'Orbitron', monospace" }}
+      >
+        {title}
+      </div>
+      <div className="space-y-0.5">{children}</div>
+    </div>
+  );
+}
+
 function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   return (
-    <div className="absolute bottom-12 left-3 z-20 rounded-lg border border-border bg-card/90 backdrop-blur">
+    <div
+      className="absolute bottom-12 left-3 z-20 w-[200px] overflow-y-auto rounded-lg border backdrop-blur"
+      style={{
+        background: "rgba(8, 16, 32, 0.92)",
+        borderColor: "rgba(0, 240, 255, 0.12)",
+        maxHeight: "calc(100% - 80px)",
+      }}
+    >
       <button
         onClick={onToggle}
-        className="flex w-full items-center justify-between px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
+        className="flex w-full items-center justify-between px-3 py-1.5 text-xs font-semibold hover:text-foreground"
+        style={{ color: "#ffd700", fontFamily: "'Orbitron', monospace", fontSize: "10px", letterSpacing: "2px" }}
       >
-        Legend
+        LEGEND
         {collapsed ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
       </button>
       {!collapsed && (
-        <div className="border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
-          <div className="space-y-1">
-            <div className="font-semibold text-foreground">Nodes</div>
+        <div className="border-t px-3 py-2 text-[10px]" style={{ borderColor: "rgba(0, 240, 255, 0.08)", color: "#c0d0e0" }}>
+          {/* Nodes */}
+          <LegendSection title="NODES">
+            {LEGEND_NODES.map((n) => (
+              <div key={n.label} className="flex items-center gap-2">
+                <svg width="14" height="12" viewBox="-7 -6 14 12">
+                  <polygon
+                    points="5.2,3 0,6 -5.2,3 -5.2,-3 0,-6 5.2,-3"
+                    fill={n.color + "20"}
+                    stroke={n.color}
+                    strokeWidth="1"
+                  />
+                </svg>
+                {n.label}
+              </div>
+            ))}
+          </LegendSection>
+
+          {/* Speed Tiers */}
+          <LegendSection title="CONNECTIONS">
+            {LEGEND_SPEEDS.map((s) => (
+              <div key={s.label} className="flex items-center gap-2">
+                <span
+                  className="inline-block h-0 w-5 flex-shrink-0"
+                  style={{ borderTop: `${s.width}px solid ${s.color}` }}
+                />
+                {s.label}
+              </div>
+            ))}
+          </LegendSection>
+
+          {/* Edge Types */}
+          <LegendSection title="EDGE TYPES">
+            {LEGEND_EDGES.map((e) => (
+              <div key={e.label} className="flex items-center gap-2">
+                <span
+                  className="inline-block h-0 w-5 flex-shrink-0"
+                  style={{
+                    borderTop: `${e.width}px ${e.dash ? "dashed" : "solid"} ${e.color}`,
+                  }}
+                />
+                {e.label}
+              </div>
+            ))}
+          </LegendSection>
+
+          {/* VLAN Sectors */}
+          <LegendSection title="VLAN SECTORS">
+            {Object.entries(VLAN_COLORS).map(([vid, color]) => (
+              <div key={vid} className="flex items-center gap-2">
+                <span
+                  className="inline-block h-2.5 w-2.5 flex-shrink-0 rounded-sm"
+                  style={{ background: color, opacity: 0.6 }}
+                />
+                <span>
+                  <span style={{ color: "#5a7080" }}>{vid}:</span> {VLAN_NAMES[Number(vid)] ?? ""}
+                </span>
+              </div>
+            ))}
+          </LegendSection>
+
+          {/* Status */}
+          <LegendSection title="STATUS">
             <div className="flex items-center gap-2">
-              <svg width="16" height="14" viewBox="-8 -7 16 14">
-                <polygon points="6.93,4 0,8 -6.93,4 -6.93,-4 0,-8 6.93,-4" fill="rgba(255,215,0,0.15)" stroke="#ffd700" strokeWidth="1" />
-              </svg>
-              Router
-            </div>
-            <div className="flex items-center gap-2">
-              <svg width="16" height="14" viewBox="-8 -7 16 14">
-                <polygon points="6.93,4 0,8 -6.93,4 -6.93,-4 0,-8 6.93,-4" fill="rgba(0,229,255,0.15)" stroke="#00e5ff" strokeWidth="1" />
-              </svg>
-              Switch
-            </div>
-            <div className="flex items-center gap-2">
-              <svg width="16" height="14" viewBox="-8 -7 16 14">
-                <polygon points="6.93,4 0,8 -6.93,4 -6.93,-4 0,-8 6.93,-4" fill="rgba(0,200,83,0.15)" stroke="#00c853" strokeWidth="1" />
-              </svg>
-              Access Point
-            </div>
-            <div className="flex items-center gap-2">
-              <svg width="12" height="10" viewBox="-6 -5 12 10">
-                <polygon points="4.2,2.4 0,4.8 -4.2,2.4 -4.2,-2.4 0,-4.8 4.2,-2.4" fill="rgba(144,164,174,0.15)" stroke="#90a4ae" strokeWidth="1" />
-              </svg>
-              Endpoint
-            </div>
-          </div>
-          <div className="mt-2 space-y-1">
-            <div className="font-semibold text-foreground">Speed Tiers</div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-0 w-5" style={{ borderTop: "3.5px solid #ffd700" }} />
-              10G
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-0 w-5" style={{ borderTop: "2.5px solid #ff9100" }} />
-              5G
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-0 w-5" style={{ borderTop: "2px solid #00e5ff" }} />
-              2.5G
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-0 w-5" style={{ borderTop: "1.2px solid #00bcd4" }} />
-              1G
-            </div>
-          </div>
-          <div className="mt-2 space-y-1">
-            <div className="font-semibold text-foreground">Edges</div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-0 w-5 border-t-2 border-cyan-400" />
-              Trunk
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-0 w-5 border-t-2 border-yellow-500" />
-              Uplink
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-0 w-5 border-t border-gray-500" />
-              Access
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-0 w-5 border-t border-dashed border-gray-500" />
-              Wireless
-            </div>
-          </div>
-          <div className="mt-2 space-y-1">
-            <div className="font-semibold text-foreground">Status</div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-2 w-2 rounded-full bg-green-500 shadow-[0_0_4px_#00ff88]" />
+              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full bg-green-500 shadow-[0_0_4px_#00ff88]" />
               Online
             </div>
             <div className="flex items-center gap-2">
-              <span className="inline-block h-2 w-2 rounded-full bg-red-500 shadow-[0_0_4px_#ff4444]" />
+              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full bg-red-500 shadow-[0_0_4px_#ff4444]" />
               Offline
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px]">{"\uD83D\uDCCC"}</span>
-              Pinned position
+              Pinned
             </div>
-          </div>
+          </LegendSection>
+
+          {/* Controls */}
+          <LegendSection title="CONTROLS">
+            {([
+              ["Drag", "Move nodes / sectors"],
+              ["Scroll", "Zoom in / out"],
+              ["Click", "Select node"],
+              ["Right-click", "Context menu"],
+            ] as const).map(([key, desc]) => (
+              <div key={key} className="flex items-center gap-2">
+                <kbd
+                  className="inline-block min-w-[50px] rounded px-1 py-px text-center text-[9px]"
+                  style={{
+                    fontFamily: "'Share Tech Mono', monospace",
+                    color: "#5a7080",
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                  }}
+                >
+                  {key}
+                </kbd>
+                <span>{desc}</span>
+              </div>
+            ))}
+          </LegendSection>
         </div>
       )}
     </div>

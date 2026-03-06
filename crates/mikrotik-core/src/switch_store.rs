@@ -269,6 +269,29 @@ pub struct SwitchStore {
     db: Arc<Mutex<Connection>>,
 }
 
+/// Parse a speed string from any device poller into Mbps.
+///
+/// Supported formats:
+///   - RouterOS/SNMP: "1000Mbps", "10000Mbps"
+///   - SwOS:          "10M", "100M", "1G", "2.5G", "5G", "10G"
+fn parse_speed_mbps(s: &str) -> Option<u32> {
+    // Try "1000Mbps" format (RouterOS / SNMP)
+    if let Some(num_str) = s.strip_suffix("Mbps") {
+        return num_str.parse::<u32>().ok();
+    }
+    // Try "1G", "2.5G", "10G" format (SwOS gigabit)
+    if let Some(num_str) = s.strip_suffix('G') {
+        if let Ok(gig) = num_str.parse::<f64>() {
+            return Some((gig * 1000.0) as u32);
+        }
+    }
+    // Try "100M", "10M" format (SwOS megabit)
+    if let Some(num_str) = s.strip_suffix('M') {
+        return num_str.parse::<u32>().ok();
+    }
+    None
+}
+
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -582,7 +605,8 @@ impl SwitchStore {
     }
 
     /// Get the latest port link speed for every port on a device.
-    /// Returns a map of port_name → speed in Mbps (e.g. 1000, 2500, 10000).
+    /// Returns a map of port_name (lowercase) → speed in Mbps (e.g. 1000, 2500, 10000).
+    /// Port names are lowercased for case-insensitive matching against edge port names.
     pub async fn get_port_speeds(
         &self,
         device_id: &str,
@@ -606,11 +630,12 @@ impl SwitchStore {
         let mut map = HashMap::new();
         for row in rows {
             let (port, speed_str) = row?;
-            // Parse "1000Mbps" → 1000, "10000Mbps" → 10000
-            if let Some(num_str) = speed_str.strip_suffix("Mbps") {
-                if let Ok(mbps) = num_str.parse::<u32>() {
-                    map.insert(port, mbps);
-                }
+            let port_lower = port.to_lowercase();
+            // Parse multiple speed formats:
+            //   RouterOS/SNMP: "1000Mbps", "10000Mbps"
+            //   SwOS:          "10M", "100M", "1G", "2.5G", "5G", "10G"
+            if let Some(mbps) = parse_speed_mbps(&speed_str) {
+                map.insert(port_lower, mbps);
             }
         }
         Ok(map)

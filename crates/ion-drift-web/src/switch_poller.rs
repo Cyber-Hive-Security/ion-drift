@@ -7,9 +7,9 @@ use tokio::sync::RwLock;
 
 use crate::device_manager::{DeviceClient, DeviceManager, DeviceStatus};
 
-/// Spawn switch pollers for all enabled RouterOS switch devices.
+/// Spawn switch pollers for all enabled RouterOS devices (switches + router).
 ///
-/// Each switch gets its own tokio task with an independent polling interval
+/// Each device gets its own tokio task with an independent polling interval
 /// from its `poll_interval_secs` configuration.
 pub fn spawn_switch_pollers(
     device_manager: Arc<RwLock<DeviceManager>>,
@@ -21,14 +21,19 @@ pub fn spawn_switch_pollers(
         tokio::time::sleep(Duration::from_secs(30)).await;
 
         let dm_read = dm.read().await;
-        let switches = dm_read.get_switches();
+        let mut routeros_devices: Vec<&crate::device_manager::DeviceEntry> =
+            dm_read.get_switches();
+        // Include the router so it also gets port metrics for backbone port selection
+        if let Some(router) = dm_read.get_router() {
+            routeros_devices.push(router);
+        }
 
-        if switches.is_empty() {
-            tracing::info!("no RouterOS switch devices configured, switch poller idle");
+        if routeros_devices.is_empty() {
+            tracing::info!("no RouterOS devices configured, switch poller idle");
             return;
         }
 
-        for entry in switches {
+        for entry in routeros_devices {
             let device_id = entry.record.id.clone();
             let device_name = entry.record.name.clone();
             let poll_interval = entry.record.poll_interval_secs as u64;

@@ -302,9 +302,10 @@ export function createTopologyMapInstance(
   const layerGrid = zoomGroup.append("g").attr("class", "layer-grid");
   const layerVlanBg = zoomGroup.append("g").attr("class", "layer-vlan-bg");
   const layerEdges = zoomGroup.append("g").attr("class", "layer-edges");
-  const layerParticles = zoomGroup.append("g").attr("class", "layer-particles");
+  const layerParticles = zoomGroup.append("g").attr("class", "layer-particles").attr("pointer-events", "none");
   const layerNodes = zoomGroup.append("g").attr("class", "layer-nodes");
   const layerLabels = zoomGroup.append("g").attr("class", "layer-labels");
+  const layerSectorDrag = zoomGroup.append("g").attr("class", "layer-sector-drag");
 
   // ── Stars ──
   function renderStars() {
@@ -489,6 +490,7 @@ export function createTopologyMapInstance(
   // ── VLAN background sectors ──
   function renderVlanBackgrounds(groups: TopologyVlanGroup[]) {
     layerVlanBg.selectAll("*").remove();
+    layerSectorDrag.selectAll("*").remove();
 
     groups.forEach((group) => {
       const color = group.color || VLAN_COLORS[group.vlan_id] || "#555";
@@ -511,7 +513,7 @@ export function createTopologyMapInstance(
         .attr("stroke-width", group.position_source === "human" ? 2 : 1)
         .attr("stroke-dasharray", "8,4");
 
-      const headerLabel = g.append("text")
+      g.append("text")
         .attr("class", "sector-header")
         .attr("x", group.bbox_x + 12)
         .attr("y", group.bbox_y + 18)
@@ -521,7 +523,7 @@ export function createTopologyMapInstance(
         .attr("font-family", "'Orbitron', monospace")
         .attr("font-weight", "bold")
         .attr("letter-spacing", "2px")
-        .attr("cursor", "grab")
+        .attr("pointer-events", "none")
         .text(`SECTOR-${group.vlan_id} \u2014 ${group.name}`);
 
       if (group.subnet) {
@@ -580,13 +582,27 @@ export function createTopologyMapInstance(
           .attr("stroke-opacity", 0.35);
       });
 
-      // ── Sector drag (on header label) ──
+      // ── Sector drag overlay (in layerSectorDrag — above all other layers) ──
+      // Visual elements stay in layerVlanBg but interactive drag handles
+      // are placed in layerSectorDrag (topmost layer) to prevent edges,
+      // particles, and nodes from blocking mouse events.
       let dragStartX = 0;
       let dragStartY = 0;
       let origBboxX = group.bbox_x;
       let origBboxY = group.bbox_y;
 
-      const sectorDrag = d3.drag<SVGTextElement, unknown>()
+      const HEADER_H = 42; // height of the draggable header area
+      const dragOverlay = layerSectorDrag.append("rect")
+        .attr("class", `sector-drag-${group.vlan_id}`)
+        .attr("data-vlan-id", group.vlan_id)
+        .attr("x", group.bbox_x)
+        .attr("y", group.bbox_y)
+        .attr("width", group.bbox_w)
+        .attr("height", HEADER_H)
+        .attr("fill", "transparent")
+        .attr("cursor", "grab");
+
+      const sectorDrag = d3.drag<SVGRectElement, unknown>()
         .on("start", function (event) {
           dragStartX = event.x;
           dragStartY = event.y;
@@ -600,6 +616,7 @@ export function createTopologyMapInstance(
           const newX = origBboxX + dx;
           const newY = origBboxY + dy;
 
+          // Update visual elements in layerVlanBg
           g.select(".sector-rect")
             .attr("x", newX).attr("y", newY);
           g.select(".sector-header")
@@ -610,9 +627,13 @@ export function createTopologyMapInstance(
             .attr("x", newX + group.bbox_w - 12).attr("y", newY + 18);
           g.select(".sector-pin")
             .attr("x", newX + group.bbox_w - 30).attr("y", newY + 18);
-          g.select(".resize-handle")
+          // Update drag overlay position
+          d3.select(this).attr("x", newX).attr("y", newY);
+          // Update resize handle
+          layerSectorDrag.select(`.sector-resize-${group.vlan_id}`)
             .attr("x", newX + group.bbox_w - 14).attr("y", newY + group.bbox_h - 14);
 
+          // Move all nodes in this VLAN
           if (currentData) {
             currentData.nodes.forEach((node) => {
               if (node.vlan_id === group.vlan_id) {
@@ -633,6 +654,7 @@ export function createTopologyMapInstance(
           const newX = origBboxX + dx;
           const newY = origBboxY + dy;
 
+          // Commit node position changes + update edges
           if (currentData) {
             currentData.nodes.forEach((node) => {
               if (node.vlan_id === group.vlan_id) {
@@ -662,6 +684,24 @@ export function createTopologyMapInstance(
             });
           }
 
+          // Update corner marks
+          g.selectAll("path").remove();
+          const sz2 = 12;
+          const corners2: [number, number, number, number][] = [
+            [newX, newY, 1, 1],
+            [newX + group.bbox_w, newY, -1, 1],
+            [newX, newY + group.bbox_h, 1, -1],
+            [newX + group.bbox_w, newY + group.bbox_h, -1, -1],
+          ];
+          corners2.forEach(([cx, cy, cdx, cdy]) => {
+            g.append("path")
+              .attr("d", `M${cx},${cy + cdy * sz2} L${cx},${cy} L${cx + cdx * sz2},${cy}`)
+              .attr("fill", "none")
+              .attr("stroke", color)
+              .attr("stroke-width", 2)
+              .attr("stroke-opacity", 0.35);
+          });
+
           group.bbox_x = newX;
           group.bbox_y = newY;
           group.position_source = "human";
@@ -669,21 +709,22 @@ export function createTopologyMapInstance(
         });
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      headerLabel.call(sectorDrag as any);
+      dragOverlay.call(sectorDrag as any);
 
-      // ── Resize handle ──
-      const handleSize = 12;
-      g.append("rect")
-        .attr("class", "resize-handle")
-        .attr("x", group.bbox_x + group.bbox_w - handleSize - 2)
-        .attr("y", group.bbox_y + group.bbox_h - handleSize - 2)
+      // ── Resize handle (also in layerSectorDrag for interactivity) ──
+      const handleSize = 14;
+      layerSectorDrag.append("rect")
+        .attr("class", `sector-resize-${group.vlan_id}`)
+        .attr("data-vlan-id", group.vlan_id)
+        .attr("x", group.bbox_x + group.bbox_w - handleSize)
+        .attr("y", group.bbox_y + group.bbox_h - handleSize)
         .attr("width", handleSize)
         .attr("height", handleSize)
         .attr("rx", 2)
         .attr("fill", color)
-        .attr("fill-opacity", 0.2)
+        .attr("fill-opacity", 0.25)
         .attr("stroke", color)
-        .attr("stroke-opacity", 0.4)
+        .attr("stroke-opacity", 0.5)
         .attr("stroke-width", 1)
         .attr("cursor", "nwse-resize")
         .call(
@@ -701,9 +742,10 @@ export function createTopologyMapInstance(
                 .attr("x", group.bbox_x + newW - 12);
               g.select(".sector-pin")
                 .attr("x", group.bbox_x + newW - 30);
+              dragOverlay.attr("width", newW);
               d3.select(this)
-                .attr("x", group.bbox_x + newW - handleSize - 2)
-                .attr("y", group.bbox_y + newH - handleSize - 2);
+                .attr("x", group.bbox_x + newW - handleSize)
+                .attr("y", group.bbox_y + newH - handleSize);
             })
             .on("end", function (event) {
               const newW = Math.max(100, event.x - group.bbox_x);
@@ -1126,6 +1168,12 @@ export function createTopologyMapInstance(
           const visible = !vlanFilter || vlanFilter.has(group.vlan_id);
           bg.attr("opacity", visible ? 1 : 0.08);
         }
+        // Also toggle drag overlays
+        const dragEl = layerSectorDrag.select(`.sector-drag-${group.vlan_id}`);
+        const resizeEl = layerSectorDrag.select(`.sector-resize-${group.vlan_id}`);
+        const dVis = !vlanFilter || vlanFilter.has(group.vlan_id);
+        if (!dragEl.empty()) dragEl.attr("pointer-events", dVis ? "all" : "none");
+        if (!resizeEl.empty()) resizeEl.attr("pointer-events", dVis ? "all" : "none");
       });
     }
   }

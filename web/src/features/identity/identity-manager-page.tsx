@@ -212,6 +212,7 @@ function LabelCell({
             setEditing(true);
           }}
           className="rounded px-1.5 py-0.5 text-left hover:bg-muted/50"
+          title="Custom name — overrides hostname in topology map"
         >
           {identity.human_label || "—"}
         </button>
@@ -660,6 +661,7 @@ export default function IdentityManagerPage() {
     {
       key: "label",
       header: "Label",
+      headerTitle: "Overrides the auto-discovered hostname in the topology map. Clear with the X button to revert.",
       render: (row) => (
         <LabelCell
           identity={row}

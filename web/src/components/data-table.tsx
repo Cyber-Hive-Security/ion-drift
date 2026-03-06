@@ -5,6 +5,7 @@ import { ArrowUpDown, Search } from "lucide-react";
 export interface Column<T> {
   key: string;
   header: string;
+  headerTitle?: string;
   render: (row: T) => ReactNode;
   sortValue?: (row: T) => string | number | boolean;
 }
@@ -106,6 +107,7 @@ export function DataTable<T>({
                     "px-3 py-2 text-left font-medium text-muted-foreground",
                     col.sortValue && "cursor-pointer select-none hover:text-foreground",
                   )}
+                  title={col.headerTitle}
                   onClick={col.sortValue ? () => toggleSort(col.key) : undefined}
                 >
                   <span className="inline-flex items-center gap-1">
