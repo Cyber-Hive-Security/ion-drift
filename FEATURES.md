@@ -1,5 +1,7 @@
 # ion-drift — Feature List
 
+> **Last updated:** 2026-03-06 — commit `4b1af95` (add link speed column to identity manager table)
+
 ## Overview
 
 ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network discovery platform. Manages a primary RB4011 router plus multiple managed switches with automatic device discovery, identity correlation, and topology visualization. Dual interface: CLI tool + Axum web server serving a React frontend. Authenticates via Keycloak OIDC. Deployed as Docker container behind Traefik.
@@ -54,7 +56,7 @@ ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network 
 
 Supports registering and polling multiple Mikrotik devices (router + managed switches), each with independent credentials, polling interval, and TLS configuration. Device state is persisted in the encrypted secrets database.
 
-- **Device Types:** `router` (one primary), `switch` (multiple)
+- **Device Types:** `router` (one primary RouterOS), `switch` (RouterOS), `swos_switch` (SwOS HTTP), `snmp_switch` (SNMPv2c/v3)
 - **Per-Device Config:** host, port, TLS toggle, custom CA cert path, polling interval (min 10s), model
 - **Status Tracking:** Online (with RouterOS identity), Offline (with error), Unknown
 - **Health Checks:** Per-device connectivity verification loop (30s startup delay)
@@ -79,15 +81,17 @@ Background polling of each registered switch, collecting port metrics, MAC addre
 
 | Task | Interval | Data Collected |
 |------|----------|----------------|
-| Switch poller | Per-device interval | Ethernet interfaces, bridge hosts, bridge ports, bridge VLANs, port RX/TX metrics |
-| Neighbor poller | 60s | LLDP/MNDP/CDP neighbor discovery from all devices |
-| Device health check | Per-device interval | Connectivity status |
+| Switch poller (RouterOS) | Per-device interval | Ethernet interfaces, ethernet monitor (actual negotiated speed), bridge hosts, bridge ports, bridge VLANs, port RX/TX metrics |
+| Switch poller (SwOS) | Per-device interval | Link status, port counters, VLAN membership, host table (HTTP Digest auth, serialized requests) |
+| Switch poller (SNMP) | Per-device interval | ifTable/ifXTable (ifHighSpeed for actual link speed), ifHCInOctets/ifHCOutOctets, physical port filtering |
+| Neighbor poller | 60s | LLDP/MNDP/CDP neighbor discovery from RouterOS devices |
+| Device health check | Per-device interval | Connectivity status (all device types via `DeviceClient::test_connection()`) |
 
 ### Switch Data Tables
 
 | Table | Purpose |
 |-------|---------|
-| `switch_port_metrics` | Per-port RX/TX bytes, packets, speed, running status (time-series) |
+| `switch_port_metrics` | Per-port RX/TX bytes, packets, speed (actual negotiated from monitor/ifHighSpeed), running status (time-series) |
 | `switch_mac_table` | MAC address learning: device_id, mac, port, bridge, vlan_id, is_local flag |
 | `switch_vlan_membership` | Port-to-VLAN mapping with tagged/untagged status |
 | `neighbor_discovery` | LLDP/MNDP neighbors: identity, platform, board, address, MAC |
@@ -109,7 +113,7 @@ Runs every 60 seconds (90s startup delay) to synthesize unified network identiti
 
 ### 1. Port Role Classification
 
-Analyzes per-port MAC counts, VLAN counts, and LLDP neighbor presence to classify each switch port:
+Analyzes per-port MAC counts, VLAN counts, and LLDP neighbor presence to classify each switch port. Runs across all device types (RouterOS, SwOS, SNMP):
 
 | Role | Criteria |
 |------|----------|
@@ -153,7 +157,7 @@ priority = base_class * 100 + depth * 10
 
 **Examples:** Camera MAC on rb4011 trunk (depth 0) = 100, CRS326 trunk (depth 1) = 210, CRS310 trunk (depth 2) = 220, CRS326 access port (depth 1) = 310.
 
-Equal priority → no change (eliminates flapping between same-class ports from alternating poll order). Trunk redirection uses `200 + peer_depth * 10`.
+Equal priority → no change (eliminates flapping between same-class ports from alternating poll order). Trunk redirection uses `200 + peer_depth * 10` (downstream-only — higher depth redirects to lower depth peer). Access port priority inverted: shallower access wins (closer to router = higher priority). Switch depth computed from LLDP adjacency and backbone links.
 
 ### 5. WAP Attribution
 
@@ -255,7 +259,9 @@ User-facing interface for reviewing auto-discovered identities, setting manual o
 ### Frontend Features
 
 - Stats dashboard: total/confirmed/unconfirmed counts, breakdowns by type/source/disposition
-- Review queue table: inline edit for device_type and human_label, disposition badges
+- Review queue table: inline edit for device_type, human_label, switch binding, infrastructure flag
+- Per-field reset buttons: revert individual overrides to auto-detected state
+- Link speed column: shows polled port speed from switch_port_metrics (defaults to 1G when null)
 - Bulk actions: confirm multiple, set disposition for multiple
 - Confidence indicators: green (confirmed), blue (LLDP), amber (automated), orange (low-confidence)
 - Disposition filter: show all, hide ignored, or filter to specific disposition
@@ -294,7 +300,7 @@ Endpoints without switch_device_id assigned to orphan layer.
 
 ### VLAN Configuration
 
-VLAN metadata (name, color, subnet, media type) is stored in the `vlan_config` SQLite table, editable via Settings UI and API. Seeded with defaults on first run. Topology and correlation engine read from DB; hardcoded fallback for unknown VLANs.
+VLAN metadata (name, color, subnet, media type) is stored in the `vlan_config` SQLite table, editable via Settings UI and API. Synced from router on startup (pulls VLAN interfaces with subnets), with defaults for known VLANs. Topology and correlation engine read from DB; hardcoded fallback for unknown VLANs.
 
 | VLAN | Name | Media Type | Color | Subnet |
 |------|------|------------|-------|--------|
@@ -327,10 +333,27 @@ VLAN metadata (name, color, subnet, media type) is stored in the `vlan_config` S
 
 | Kind | Style |
 |------|-------|
-| Trunk | Width 2.5, cyan, port labels at 15%/85% along edge |
-| Uplink | Width 2, gold |
-| Access | Width 0.8, subtle |
-| Wireless | Width 0.8, dashed |
+| Trunk | Port labels at 15%/85% along edge |
+| Uplink | Gold |
+| Access | Subtle, width 0.8 |
+| Wireless | Dashed, width 0.8 |
+
+### Speed-Based Edge Styling
+
+Edges are colored and sized by link speed (from polled port metrics or backbone link manual speed):
+
+| Speed Tier | Color | Width |
+|------------|-------|-------|
+| 10G | Gold `#ffd700` | 3.5 |
+| 5G | Dark orange `#ff8c00` | 2.5 |
+| 2.5G | Silver `#c0c0c0` | 2.0 |
+| 1G | Cyan `#00f0ff` | 1.2 |
+| < 1G | Gray `#666666` | 0.8 |
+| Unknown | Cyan `#00f0ff` | 1.2 |
+
+### Traffic-Based Edge Thickness
+
+When live traffic data is available, edge stroke width scales by log10 of bits per second (overrides speed-tier width). Range: 0.6px (idle) to 6px (heavy traffic). Traffic rate computed from delta between two most recent port metric samples.
 
 ### D3 Visualization Features
 
@@ -349,8 +372,9 @@ VLAN metadata (name, color, subnet, media type) is stored in the `vlan_config` S
 - VLAN filter chips (toggle VLAN visibility)
 - Endpoint toggle (show/hide non-infrastructure)
 - Search by label, IP, MAC, kind, manufacturer, VLAN
-- Legend (collapsible, bottom-left)
+- Legend (collapsible, draggable, bottom-left) with speed tier color key, node shapes, and edge styles
 - Status bar: device count, infrastructure count, endpoint count, connections, last computed
+- Collapsible sidebar on desktop
 
 ### Topology APIs
 
@@ -374,14 +398,16 @@ Manual switch-to-switch interconnect configuration for devices without LLDP supp
 4. Correlation engine uses backbone links for BFS depth computation (deeper switches = higher priority)
 5. Topology engine creates trunk edges from backbone links (deduplicated against LLDP-discovered edges)
 
-**Storage:** `backbone_links` table — device_a, port_a, device_b, port_b, label, created_at. Devices normalized lexicographically on insert. Port names case-normalized to lowercase.
+**Storage:** `backbone_links` table — device_a, port_a, device_b, port_b, label, link_type, speed_mbps, created_at. Devices normalized lexicographically on insert. Port names case-normalized to lowercase.
 
 **APIs:**
 - `GET /api/network/backbone-links` — List all backbone links
-- `POST /api/network/backbone-links` — Create link (device_a, port_a?, device_b, port_b?, label?)
+- `POST /api/network/backbone-links` — Create link (device_a, port_a?, device_b, port_b?, label?, link_type?, speed_mbps?)
+- `PUT /api/network/backbone-links/{id}` — Update link (port_a, port_b, label, link_type, speed_mbps — devices not editable)
 - `DELETE /api/network/backbone-links/{id}` — Delete link
+- `GET /api/devices/{id}/ports` — Port list for port dropdowns
 
-**Frontend:** `/network/backbone` — Configuration table with inline add form. Device selectors show two optgroups: "Managed Devices" (from device registry) and "Discovered Infrastructure" (WAPs, unmanaged switches from infrastructure identities API). Free-text port inputs, optional label. Delete button per row.
+**Frontend:** `/network/backbone` — Configuration table with inline add form. Device selectors show two optgroups: "Managed Devices" (from device registry) and "Discovered Infrastructure" (WAPs, unmanaged switches from infrastructure identities API). Port dropdowns populated from device port-list API (managed devices) or free-text (infrastructure). Link type dropdown (DAC, Fiber, Ethernet, default). Speed dropdown (100M, 1G, 2.5G, 5G, 10G). Inline row editing: click pencil icon to edit ports/type/speed/label in-place with Save/Cancel. Delete button per row.
 
 ### Background Task
 
