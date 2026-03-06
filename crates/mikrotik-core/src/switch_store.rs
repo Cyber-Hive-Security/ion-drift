@@ -244,6 +244,46 @@ pub struct PortRoleEntry {
     pub updated_at: i64,
 }
 
+/// A time-series MAC observation for the topology inference engine.
+#[derive(Debug, Clone, Serialize)]
+pub struct MacObservation {
+    pub id: i64,
+    pub mac_address: String,
+    pub device_id: String,
+    pub port_name: String,
+    pub vlan_id: Option<u32>,
+    pub timestamp: i64,
+    pub observation_confidence: f64,
+    pub edge_likelihood: f64,
+    pub transit_likelihood: f64,
+}
+
+/// Persisted attachment state for the topology inference state machine.
+#[derive(Debug, Clone, Serialize)]
+pub struct AttachmentStateRow {
+    pub mac_address: String,
+    pub state: String,
+    pub current_device_id: Option<String>,
+    pub current_port_name: Option<String>,
+    pub current_score: f64,
+    pub confidence: f64,
+    pub consecutive_wins: u32,
+    pub consecutive_losses: u32,
+    pub updated_at: i64,
+}
+
+/// Port role probability distribution (replaces binary classification).
+#[derive(Debug, Clone, Serialize)]
+pub struct PortRoleProbability {
+    pub device_id: String,
+    pub port_name: String,
+    pub trunk_prob: f64,
+    pub uplink_prob: f64,
+    pub access_prob: f64,
+    pub wireless_prob: f64,
+    pub computed_at: i64,
+}
+
 /// A port discovered on a device (from metrics), optionally enriched with role data.
 #[derive(Debug, Clone, Serialize)]
 pub struct DevicePort {
@@ -527,6 +567,45 @@ impl SwitchStore {
                 media_type TEXT NOT NULL DEFAULT 'wired' CHECK(media_type IN ('wired', 'wireless', 'mixed')),
                 subnet TEXT,
                 color TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS mac_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mac_address TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                port_name TEXT NOT NULL,
+                vlan_id INTEGER,
+                timestamp INTEGER NOT NULL,
+                observation_confidence REAL NOT NULL DEFAULT 0.5,
+                edge_likelihood REAL NOT NULL DEFAULT 0.5,
+                transit_likelihood REAL NOT NULL DEFAULT 0.5
+            );
+            CREATE INDEX IF NOT EXISTS idx_mo_mac_time
+                ON mac_observations(mac_address, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_mo_device_port
+                ON mac_observations(device_id, port_name, timestamp DESC);
+
+            CREATE TABLE IF NOT EXISTS port_role_probabilities (
+                device_id TEXT NOT NULL,
+                port_name TEXT NOT NULL,
+                trunk_prob REAL NOT NULL DEFAULT 0.0,
+                uplink_prob REAL NOT NULL DEFAULT 0.0,
+                access_prob REAL NOT NULL DEFAULT 0.0,
+                wireless_prob REAL NOT NULL DEFAULT 0.0,
+                computed_at INTEGER NOT NULL,
+                PRIMARY KEY (device_id, port_name)
+            );
+
+            CREATE TABLE IF NOT EXISTS mac_attachment_state (
+                mac_address TEXT PRIMARY KEY,
+                state TEXT NOT NULL DEFAULT 'unknown',
+                current_device_id TEXT,
+                current_port_name TEXT,
+                current_score REAL NOT NULL DEFAULT 0.0,
+                confidence REAL NOT NULL DEFAULT 0.0,
+                consecutive_wins INTEGER NOT NULL DEFAULT 0,
+                consecutive_losses INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
             );
 
             PRAGMA journal_mode=WAL;",
@@ -1559,6 +1638,269 @@ impl SwitchStore {
         rows.collect()
     }
 
+    // ── MAC observations (topology inference) ────────────────────
+
+    /// Record a batch of MAC observations for the topology inference engine.
+    pub async fn insert_mac_observations(
+        &self,
+        observations: &[MacObservation],
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare_cached(
+            "INSERT INTO mac_observations
+             (mac_address, device_id, port_name, vlan_id, timestamp,
+              observation_confidence, edge_likelihood, transit_likelihood)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        for obs in observations {
+            stmt.execute(params![
+                &obs.mac_address,
+                &obs.device_id,
+                &obs.port_name,
+                obs.vlan_id.map(|v| v as i64),
+                obs.timestamp,
+                obs.observation_confidence,
+                obs.edge_likelihood,
+                obs.transit_likelihood,
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// Get recent MAC observations within a time window.
+    pub async fn get_recent_observations(
+        &self,
+        mac_address: &str,
+        since: i64,
+    ) -> Result<Vec<MacObservation>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare_cached(
+            "SELECT id, mac_address, device_id, port_name, vlan_id, timestamp,
+                    observation_confidence, edge_likelihood, transit_likelihood
+             FROM mac_observations
+             WHERE mac_address = ?1 AND timestamp >= ?2
+             ORDER BY timestamp DESC",
+        )?;
+        let rows = stmt.query_map(params![mac_address, since], map_mac_observation_row)?;
+        rows.collect()
+    }
+
+    /// Get observation counts per (device_id, port_name) for a MAC within a time window.
+    /// Returns Vec of (device_id, port_name, count, avg_confidence, avg_edge_likelihood).
+    pub async fn get_observation_counts(
+        &self,
+        mac_address: &str,
+        since: i64,
+    ) -> Result<Vec<(String, String, u32, f64, f64)>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare_cached(
+            "SELECT device_id, port_name, COUNT(*) as cnt,
+                    AVG(observation_confidence) as avg_conf,
+                    AVG(edge_likelihood) as avg_edge
+             FROM mac_observations
+             WHERE mac_address = ?1 AND timestamp >= ?2
+             GROUP BY device_id, port_name
+             ORDER BY cnt DESC",
+        )?;
+        let rows = stmt.query_map(params![mac_address, since], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)? as u32,
+                row.get::<_, f64>(3)?,
+                row.get::<_, f64>(4)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// Prune observations older than the retention window.
+    pub async fn prune_old_observations(&self, max_age_secs: i64) -> Result<usize, rusqlite::Error> {
+        let cutoff = now_unix() - max_age_secs;
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM mac_observations WHERE timestamp < ?1",
+            params![cutoff],
+        )?;
+        Ok(affected)
+    }
+
+    // ── Port role probabilities (topology inference) ────────────
+
+    /// Upsert port role probabilities for a device+port.
+    pub async fn set_port_role_probabilities(
+        &self,
+        device_id: &str,
+        port_name: &str,
+        trunk_prob: f64,
+        uplink_prob: f64,
+        access_prob: f64,
+        wireless_prob: f64,
+    ) -> Result<(), rusqlite::Error> {
+        let now = now_unix();
+        let port_lower = port_name.to_lowercase();
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO port_role_probabilities
+             (device_id, port_name, trunk_prob, uplink_prob, access_prob, wireless_prob, computed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(device_id, port_name) DO UPDATE SET
+                 trunk_prob = excluded.trunk_prob,
+                 uplink_prob = excluded.uplink_prob,
+                 access_prob = excluded.access_prob,
+                 wireless_prob = excluded.wireless_prob,
+                 computed_at = excluded.computed_at",
+            params![device_id, &port_lower, trunk_prob, uplink_prob, access_prob, wireless_prob, now],
+        )?;
+        Ok(())
+    }
+
+    /// Batch upsert port role probabilities.
+    pub async fn set_port_role_probabilities_batch(
+        &self,
+        entries: &[PortRoleProbability],
+    ) -> Result<(), rusqlite::Error> {
+        let now = now_unix();
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare_cached(
+            "INSERT INTO port_role_probabilities
+             (device_id, port_name, trunk_prob, uplink_prob, access_prob, wireless_prob, computed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(device_id, port_name) DO UPDATE SET
+                 trunk_prob = excluded.trunk_prob,
+                 uplink_prob = excluded.uplink_prob,
+                 access_prob = excluded.access_prob,
+                 wireless_prob = excluded.wireless_prob,
+                 computed_at = excluded.computed_at",
+        )?;
+        for entry in entries {
+            stmt.execute(params![
+                &entry.device_id,
+                &entry.port_name,
+                entry.trunk_prob,
+                entry.uplink_prob,
+                entry.access_prob,
+                entry.wireless_prob,
+                now,
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// Get port role probabilities for a device (or all devices if None).
+    pub async fn get_port_role_probabilities(
+        &self,
+        device_id: Option<&str>,
+    ) -> Result<Vec<PortRoleProbability>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let (sql, device_filter) = match device_id {
+            Some(id) => (
+                "SELECT device_id, port_name, trunk_prob, uplink_prob, access_prob, wireless_prob, computed_at
+                 FROM port_role_probabilities WHERE device_id = ?1 ORDER BY port_name",
+                Some(id.to_string()),
+            ),
+            None => (
+                "SELECT device_id, port_name, trunk_prob, uplink_prob, access_prob, wireless_prob, computed_at
+                 FROM port_role_probabilities ORDER BY device_id, port_name",
+                None,
+            ),
+        };
+        let mut stmt = db.prepare(sql)?;
+        let rows = if let Some(ref id) = device_filter {
+            stmt.query_map(params![id], map_port_role_prob_row)?
+        } else {
+            stmt.query_map([], map_port_role_prob_row)?
+        };
+        rows.collect()
+    }
+
+    // ── MAC attachment state (topology inference) ────────────────
+
+    /// Get all recent observations across all MACs (for bulk inference).
+    pub async fn get_all_recent_observations(
+        &self,
+        since: i64,
+    ) -> Result<Vec<MacObservation>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare_cached(
+            "SELECT id, mac_address, device_id, port_name, vlan_id, timestamp,
+                    observation_confidence, edge_likelihood, transit_likelihood
+             FROM mac_observations
+             WHERE timestamp >= ?1
+             ORDER BY mac_address, timestamp DESC",
+        )?;
+        let rows = stmt.query_map(params![since], map_mac_observation_row)?;
+        rows.collect()
+    }
+
+    /// Get all attachment states.
+    pub async fn get_all_attachment_states(&self) -> Result<Vec<AttachmentStateRow>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare_cached(
+            "SELECT mac_address, state, current_device_id, current_port_name,
+                    current_score, confidence, consecutive_wins, consecutive_losses,
+                    updated_at
+             FROM mac_attachment_state",
+        )?;
+        let rows = stmt.query_map([], map_attachment_state_row)?;
+        rows.collect()
+    }
+
+    /// Get a single attachment state by MAC.
+    pub async fn get_attachment_state(
+        &self,
+        mac: &str,
+    ) -> Result<Option<AttachmentStateRow>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare_cached(
+            "SELECT mac_address, state, current_device_id, current_port_name,
+                    current_score, confidence, consecutive_wins, consecutive_losses,
+                    updated_at
+             FROM mac_attachment_state WHERE mac_address = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![mac], map_attachment_state_row)?;
+        match rows.next() {
+            Some(Ok(row)) => Ok(Some(row)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        }
+    }
+
+    /// Upsert an attachment state (from the inference state machine).
+    pub async fn upsert_attachment_state_row(
+        &self,
+        row: &AttachmentStateRow,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO mac_attachment_state
+             (mac_address, state, current_device_id, current_port_name,
+              current_score, confidence, consecutive_wins, consecutive_losses, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(mac_address) DO UPDATE SET
+                 state = excluded.state,
+                 current_device_id = excluded.current_device_id,
+                 current_port_name = excluded.current_port_name,
+                 current_score = excluded.current_score,
+                 confidence = excluded.confidence,
+                 consecutive_wins = excluded.consecutive_wins,
+                 consecutive_losses = excluded.consecutive_losses,
+                 updated_at = excluded.updated_at",
+            params![
+                &row.mac_address,
+                &row.state,
+                &row.current_device_id,
+                &row.current_port_name,
+                row.current_score,
+                row.confidence,
+                row.consecutive_wins as i64,
+                row.consecutive_losses as i64,
+                row.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
     // ── Cleanup ─────────────────────────────────────────────────
 
     /// Prune old port metrics data.
@@ -2323,5 +2665,45 @@ fn map_port_violation_row(row: &rusqlite::Row<'_>) -> Result<PortViolation, rusq
         last_seen: row.get(7)?,
         resolved: row.get::<_, i32>(8)? != 0,
         resolved_at: row.get(9)?,
+    })
+}
+
+fn map_mac_observation_row(row: &rusqlite::Row<'_>) -> Result<MacObservation, rusqlite::Error> {
+    Ok(MacObservation {
+        id: row.get(0)?,
+        mac_address: row.get(1)?,
+        device_id: row.get(2)?,
+        port_name: row.get(3)?,
+        vlan_id: row.get::<_, Option<i64>>(4)?.map(|v| v as u32),
+        timestamp: row.get(5)?,
+        observation_confidence: row.get(6)?,
+        edge_likelihood: row.get(7)?,
+        transit_likelihood: row.get(8)?,
+    })
+}
+
+fn map_port_role_prob_row(row: &rusqlite::Row<'_>) -> Result<PortRoleProbability, rusqlite::Error> {
+    Ok(PortRoleProbability {
+        device_id: row.get(0)?,
+        port_name: row.get(1)?,
+        trunk_prob: row.get(2)?,
+        uplink_prob: row.get(3)?,
+        access_prob: row.get(4)?,
+        wireless_prob: row.get(5)?,
+        computed_at: row.get(6)?,
+    })
+}
+
+fn map_attachment_state_row(row: &rusqlite::Row<'_>) -> Result<AttachmentStateRow, rusqlite::Error> {
+    Ok(AttachmentStateRow {
+        mac_address: row.get(0)?,
+        state: row.get(1)?,
+        current_device_id: row.get(2)?,
+        current_port_name: row.get(3)?,
+        current_score: row.get(4)?,
+        confidence: row.get(5)?,
+        consecutive_wins: row.get::<_, i64>(6)? as u32,
+        consecutive_losses: row.get::<_, i64>(7)? as u32,
+        updated_at: row.get(8)?,
     })
 }

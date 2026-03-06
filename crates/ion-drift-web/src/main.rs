@@ -6,6 +6,7 @@ mod certwarden;
 mod config;
 mod connection_store;
 mod correlation_engine;
+mod topology_inference;
 mod device_manager;
 mod geo;
 mod live_traffic;

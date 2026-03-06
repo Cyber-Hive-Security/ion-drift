@@ -7,7 +7,9 @@ use hickory_resolver::Resolver;
 use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use mikrotik_core::{MikrotikClient, SwitchStore};
-use mikrotik_core::switch_store::{BackboneLink, MacTableEntry};
+use mikrotik_core::switch_store::{BackboneLink, MacTableEntry, PortRoleProbability};
+use crate::topology_inference::graph::{DeviceResolutionMaps, InfrastructureGraph};
+use crate::topology_inference::resolver::{self, InferenceMode};
 use tokio::sync::RwLock;
 
 use crate::device_manager::DeviceManager;
@@ -88,6 +90,13 @@ async fn run_correlation(
         .filter_map(|c| c.subnet.as_ref().filter(|s| !s.is_empty()).map(|s| (c.vlan_id, s.clone())))
         .collect();
 
+    // Build wireless VLAN set early — needed for both port role probabilities and identity assembly.
+    let wireless_vlans: HashSet<u32> = vlan_configs
+        .iter()
+        .filter(|v| v.media_type == "wireless" || v.media_type == "mixed")
+        .map(|v| v.vlan_id)
+        .collect();
+
     // ── 1. Port role classification ───────────────────────────────
     let dm_read = device_manager.read().await;
     let mut switch_ids: Vec<String> = dm_read
@@ -136,13 +145,14 @@ async fn run_correlation(
 
     let device_ids: Vec<String> = switch_ids.clone();
 
+    let mut all_role_probs: Vec<PortRoleProbability> = Vec::new();
+
     for device_id in &device_ids {
         let mac_entries = store.get_mac_table(Some(device_id)).await?;
         let vlan_entries = store.get_vlan_membership(device_id).await?;
 
         // Count MACs per port (skip switch-local MACs — they're the switch's own port addresses)
-        let mut mac_counts: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
+        let mut mac_counts: HashMap<String, u32> = HashMap::new();
         for entry in &mac_entries {
             if entry.is_local {
                 continue;
@@ -151,23 +161,26 @@ async fn run_correlation(
         }
 
         // Count VLANs per port
-        let mut vlan_counts: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
+        let mut vlan_counts: HashMap<String, u32> = HashMap::new();
         for entry in &vlan_entries {
             *vlan_counts.entry(entry.port_name.clone()).or_default() += 1;
         }
 
+        // Track which VLAN IDs are on each port (for wireless detection)
+        let mut port_vlan_ids: HashMap<String, Vec<u32>> = HashMap::new();
+        for entry in &vlan_entries {
+            port_vlan_ids.entry(entry.port_name.clone()).or_default().push(entry.vlan_id);
+        }
+
         // Check LLDP neighbors per port
         let neighbors = store.get_neighbors(Some(device_id)).await?;
-        let mut has_neighbor: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut has_neighbor: HashSet<String> = HashSet::new();
         for nb in &neighbors {
             has_neighbor.insert(nb.interface.clone());
         }
 
         // Collect all known port names
-        let mut all_ports: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut all_ports: HashSet<String> = HashSet::new();
         all_ports.extend(mac_counts.keys().cloned());
         all_ports.extend(vlan_counts.keys().cloned());
 
@@ -176,6 +189,7 @@ async fn run_correlation(
             let vlan_count = vlan_counts.get(port_name).copied().unwrap_or(0);
             let has_lldp = has_neighbor.contains(port_name);
 
+            // Discrete role (existing behavior, kept for backward compat)
             let role = classify_port_role(mac_count, vlan_count, has_lldp);
 
             if let Err(e) = store
@@ -184,18 +198,33 @@ async fn run_correlation(
             {
                 tracing::warn!(device = %device_id, port = %port_name, "port role: {e}");
             }
+
+            // Probabilistic role (new — additive model)
+            let port_vlans = port_vlan_ids.get(port_name.as_str()).map(|v| v.as_slice()).unwrap_or(&[]);
+            let probs = compute_port_role_probabilities(mac_count, vlan_count, has_lldp, port_vlans, &wireless_vlans);
+            all_role_probs.push(PortRoleProbability {
+                device_id: device_id.clone(),
+                port_name: port_name.to_lowercase(),
+                trunk_prob: probs.0,
+                uplink_prob: probs.1,
+                access_prob: probs.2,
+                wireless_prob: probs.3,
+                computed_at: 0, // filled by store
+            });
         }
     }
 
-    // ── 1b. Build switch-local MAC ranges ─────────────────────────
-    // Manufacturers assign sequential MACs to switch/router ports. By collecting
-    // all is_local=true MACs per device and computing [min, max], we can
-    // identify the full block — catching infrastructure MACs even when they
-    // appear from other data sources (ARP, DHCP, neighbor tables, or
-    // other switches' MAC tables where they are NOT marked local).
-    let mut all_infra_ids = device_ids.clone();
-    all_infra_ids.push(router_id.clone());
-    let switch_local_macs = build_switch_local_mac_set(store, &all_infra_ids).await;
+    // Batch-store all port role probabilities
+    if !all_role_probs.is_empty() {
+        if let Err(e) = store.set_port_role_probabilities_batch(&all_role_probs).await {
+            tracing::warn!("port role probabilities batch store: {e}");
+        }
+    }
+
+    // ── 1b. Build switch-local MAC set ────────────────────────────
+    let mut all_infra_device_ids = device_ids.clone();
+    all_infra_device_ids.push(router_id.clone());
+    let switch_local_macs = build_switch_local_mac_set(store, &all_infra_device_ids).await;
 
     // Clean up any existing identities that we now recognise as infrastructure MACs.
     // These may have been created in earlier cycles before the range was computed.
@@ -218,92 +247,182 @@ async fn run_correlation(
     let all_macs = store.get_mac_table(None).await?;
     let all_neighbors = store.get_neighbors(None).await?;
 
-    // ── 2a. Trunk port detection + peer resolution ──────────────
-    // Identify trunk/uplink ports so we can deprioritise their MAC bindings.
-    // MACs learned on a trunk port are *transiting*, not directly connected.
+    // ── 2a. Build infrastructure graph ──────────────────────────
+    // The InfrastructureGraph consolidates trunk detection, peer resolution,
+    // and BFS depth — used by both legacy binding and new inference engine.
     let port_roles = store.get_port_roles(None).await.unwrap_or_default();
-    let mut trunk_ports: HashSet<(String, String)> = port_roles
+    let backbone_links = store.get_backbone_links().await.unwrap_or_default();
+
+    let dm_read = device_manager.read().await;
+    let resolution = DeviceResolutionMaps {
+        identity_to_device: {
+            let mut m = HashMap::new();
+            for entry in dm_read.all_devices() {
+                m.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
+                m.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
+            }
+            m
+        },
+        ip_to_device: {
+            let mut m = HashMap::new();
+            for entry in dm_read.all_devices() {
+                m.insert(entry.record.host.clone(), entry.record.id.clone());
+            }
+            m
+        },
+    };
+    drop(dm_read);
+
+    let port_role_tuples: Vec<(String, String, String)> = port_roles
         .iter()
-        .filter(|r| r.role == "trunk" || r.role == "uplink")
-        .map(|r| (r.device_id.clone(), r.port_name.to_lowercase()))
+        .map(|r| (r.device_id.clone(), r.port_name.clone(), r.role.clone()))
         .collect();
 
-    // Force backbone-linked ports to trunk role (fills in what LLDP would provide
-    // for non-LLDP switches like SwOS devices).
-    let backbone_links = store.get_backbone_links().await.unwrap_or_default();
+    let infra_graph = InfrastructureGraph::build(
+        &all_infra_device_ids,
+        &router_id,
+        &all_neighbors,
+        &backbone_links,
+        &port_role_tuples,
+        &resolution,
+    );
+
+    // Force backbone-linked ports to trunk role in the store
     for link in &backbone_links {
         if let Some(ref port) = link.port_a {
-            trunk_ports.insert((link.device_a.clone(), port.to_lowercase()));
             let _ = store.set_port_role(&link.device_a, port, "trunk", 0, 0, false).await;
         }
         if let Some(ref port) = link.port_b {
-            trunk_ports.insert((link.device_b.clone(), port.to_lowercase()));
             let _ = store.set_port_role(&link.device_b, port, "trunk", 0, 0, false).await;
         }
     }
 
-    // Build device resolution maps for LLDP identity → device_id
-    let dm_read = device_manager.read().await;
-    let mut lldp_identity_to_device: HashMap<String, String> = HashMap::new();
-    let mut lldp_ip_to_device: HashMap<String, String> = HashMap::new();
-    for entry in dm_read.all_devices() {
-        lldp_identity_to_device.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
-        lldp_identity_to_device.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
-        lldp_ip_to_device.insert(entry.record.host.clone(), entry.record.id.clone());
-    }
-    drop(dm_read);
+    // Derive legacy variables from the graph for backward compat
+    let trunk_ports = &infra_graph.trunk_ports;
+    let trunk_peer = &infra_graph.trunk_peers;
+    let switch_depths = &infra_graph.depth;
 
-    // Build trunk peer map: (device_id, normalized_port) → peer_device_id.
-    // When a MAC is only seen on a trunk port, we redirect it to the peer
-    // device (e.g. router's trunk to CRS326 → attribute MAC to CRS326).
-    let mut trunk_peer: HashMap<(String, String), String> = HashMap::new();
-    for nb in &all_neighbors {
-        let resolved = nb
-            .identity
-            .as_deref()
-            .and_then(|id| lldp_identity_to_device.get(&id.to_lowercase()).cloned())
-            .or_else(|| {
-                nb.address
-                    .as_deref()
-                    .and_then(|addr| lldp_ip_to_device.get(addr).cloned())
-            });
-        if let Some(peer_id) = resolved {
-            // Normalize LLDP interface: "1-sfp-sfpplus,B-VLANs" → "1-sfp-sfpplus"
-            let port = nb.interface.split(',').next().unwrap_or(&nb.interface);
-            trunk_peer.insert((nb.device_id.clone(), port.to_lowercase()), peer_id);
-        }
-    }
-
-    // Add backbone links as trunk peers (don't overwrite LLDP-derived peers).
-    for link in &backbone_links {
-        if let Some(ref port) = link.port_a {
-            trunk_peer.entry((link.device_a.clone(), port.to_lowercase()))
-                .or_insert_with(|| link.device_b.clone());
-        }
-        if let Some(ref port) = link.port_b {
-            trunk_peer.entry((link.device_b.clone(), port.to_lowercase()))
-                .or_insert_with(|| link.device_a.clone());
-        }
-    }
-
-    // Build wireless VLAN set for WAP attribution.
-    let wireless_vlans: HashSet<u32> = vlan_configs
-        .iter()
-        .filter(|v| v.media_type == "wireless" || v.media_type == "mixed")
-        .map(|v| v.vlan_id)
-        .collect();
-
-    // Compute switch depth from router via BFS over backbone + LLDP adjacency.
-    // Deeper switches get higher priority scores — a MAC on a depth-2 switch
-    // trunk is more specific than the same MAC on a depth-1 switch trunk.
-    let switch_depths = compute_switch_depths(&backbone_links, &trunk_peer, &router_id);
-    if !switch_depths.is_empty() {
-        let depth_summary: Vec<String> = switch_depths
+    if infra_graph.depth.len() > 1 {
+        let depth_summary: Vec<String> = infra_graph.depth
             .iter()
             .filter(|(id, _)| *id != &router_id)
             .map(|(id, d)| format!("{}={}", id, d))
             .collect();
         tracing::info!(router = %router_id, depths = ?depth_summary, "switch depth map");
+    }
+
+    // ── 2b. Record MAC observations for topology inference ──────
+    // Build a role probability lookup from the batch we just computed.
+    let role_prob_map: HashMap<(String, String), &PortRoleProbability> = all_role_probs
+        .iter()
+        .map(|p| ((p.device_id.clone(), p.port_name.clone()), p))
+        .collect();
+
+    let now_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let mut pending_observations: Vec<mikrotik_core::switch_store::MacObservation> = Vec::new();
+
+    for entry in &all_macs {
+        if entry.is_local {
+            continue;
+        }
+        if is_switch_local_mac(&entry.mac_address, &switch_local_macs) {
+            continue;
+        }
+
+        let port_lower = entry.port_name.to_lowercase();
+        let key = (entry.device_id.clone(), port_lower.clone());
+
+        // Look up role probabilities for this port
+        let (obs_confidence, edge_lk, transit_lk) = if let Some(probs) = role_prob_map.get(&key) {
+            // Observation confidence: high for access, medium for wireless, low for trunk/uplink
+            let confidence = probs.access_prob * 0.9
+                + probs.wireless_prob * 0.7
+                + probs.uplink_prob * 0.2
+                + probs.trunk_prob * 0.1;
+            let edge = probs.access_prob + probs.wireless_prob * 0.8;
+            let transit = probs.trunk_prob + probs.uplink_prob * 0.7;
+            (confidence.clamp(0.0, 1.0), edge.clamp(0.0, 1.0), transit.clamp(0.0, 1.0))
+        } else {
+            // No role data — use neutral defaults
+            (0.5, 0.5, 0.5)
+        };
+
+        pending_observations.push(mikrotik_core::switch_store::MacObservation {
+            id: 0, // auto-assigned by DB
+            mac_address: entry.mac_address.to_uppercase(),
+            device_id: entry.device_id.clone(),
+            port_name: port_lower,
+            vlan_id: entry.vlan_id,
+            timestamp: now_ts,
+            observation_confidence: obs_confidence,
+            edge_likelihood: edge_lk,
+            transit_likelihood: transit_lk,
+        });
+    }
+
+    if !pending_observations.is_empty() {
+        if let Err(e) = store.insert_mac_observations(&pending_observations).await {
+            tracing::warn!(count = pending_observations.len(), "MAC observation insert: {e}");
+        }
+    }
+
+    // Prune observations older than 20 minutes (retention window)
+    match store.prune_old_observations(1200).await {
+        Ok(n) if n > 0 => tracing::debug!(count = n, "pruned old MAC observations"),
+        Err(e) => tracing::warn!("prune MAC observations: {e}"),
+        _ => {}
+    }
+
+    // ── 2c. Run topology inference engine ─────────────────────────
+    let inference_mode = InferenceMode::from_env();
+    if inference_mode != InferenceMode::Legacy {
+        let results = resolver::run_inference_cycle(
+            store, &infra_graph, &wireless_vlans, now_ts,
+        ).await;
+
+        if !results.is_empty() {
+            let changed = results.iter().filter(|r| r.binding_changed).count();
+            let total = results.len();
+
+            if inference_mode == InferenceMode::Shadow {
+                // Shadow mode: log divergences between old and new binding
+                let mut divergences = 0u32;
+                for r in &results {
+                    if let Some(ref winner) = r.winner {
+                        let identities = store.get_network_identities().await.unwrap_or_default();
+                        if let Some(ident) = identities.iter().find(|i| i.mac_address.eq_ignore_ascii_case(&r.mac)) {
+                            let old_dev = ident.switch_device_id.as_deref().unwrap_or("");
+                            let old_port = ident.switch_port.as_deref().unwrap_or("");
+                            if old_dev != winner.device_id || old_port != winner.port_name {
+                                divergences += 1;
+                                tracing::debug!(
+                                    mac = %r.mac,
+                                    old_dev = %old_dev, old_port = %old_port,
+                                    new_dev = %winner.device_id, new_port = %winner.port_name,
+                                    score = %format!("{:.2}", winner.score),
+                                    confidence = %format!("{:.2}", r.confidence),
+                                    state = %r.state.state.as_str(),
+                                    "inference divergence (shadow)"
+                                );
+                            }
+                        }
+                    }
+                }
+                tracing::info!(
+                    mode = "shadow", total = total, changed = changed,
+                    divergences = divergences, "inference cycle"
+                );
+            } else {
+                // Active mode: log results (binding already applied by resolver)
+                tracing::info!(
+                    mode = "active", total = total, changed = changed,
+                    "inference cycle"
+                );
+            }
+        }
     }
 
     // Build a map: MAC → best known info
@@ -776,6 +895,74 @@ fn classify_port_role(mac_count: u32, vlan_count: u32, has_lldp: bool) -> String
     }
 }
 
+/// Compute port role probabilities using an additive evidence model.
+///
+/// Returns (trunk_prob, uplink_prob, access_prob, wireless_prob) normalized
+/// so the values sum to ~1.0. Each signal contributes additive weight to
+/// the relevant role, then soft-max normalization distributes the mass.
+fn compute_port_role_probabilities(
+    mac_count: u32,
+    vlan_count: u32,
+    has_lldp: bool,
+    port_vlans: &[u32],
+    wireless_vlans: &HashSet<u32>,
+) -> (f64, f64, f64, f64) {
+    let mut trunk = 0.0_f64;
+    let mut uplink = 0.0_f64;
+    let mut access = 0.0_f64;
+    let mut wireless = 0.0_f64;
+
+    // ── Trunk signals ────────────────────────────────────────
+    if vlan_count > 3 {
+        trunk += 0.9;
+    } else if vlan_count > 1 {
+        trunk += 0.6;
+    }
+
+    // ── Uplink signals ───────────────────────────────────────
+    if has_lldp {
+        uplink += 0.7;
+    }
+    if mac_count > 20 {
+        uplink += 0.5;
+    } else if mac_count > 10 {
+        uplink += 0.3;
+    }
+
+    // ── Access signals ───────────────────────────────────────
+    if mac_count >= 1 && mac_count <= 3 && !has_lldp && vlan_count <= 1 {
+        access += 0.8;
+    } else if mac_count >= 1 && mac_count <= 10 && !has_lldp {
+        access += 0.5;
+    }
+
+    // ── Wireless signals ─────────────────────────────────────
+    // Port carries at least one wireless/mixed VLAN
+    let wireless_vlan_count = port_vlans.iter().filter(|v| wireless_vlans.contains(v)).count();
+    if wireless_vlan_count > 0 {
+        wireless += 0.4;
+        // If majority of VLANs are wireless, stronger signal
+        if !port_vlans.is_empty() && wireless_vlan_count * 2 > port_vlans.len() {
+            wireless += 0.3;
+        }
+    }
+
+    // ── Unused baseline ──────────────────────────────────────
+    // If no evidence at all, all probabilities are low (effectively unused)
+    if mac_count == 0 && !has_lldp && vlan_count == 0 {
+        // Leave all at 0 — the normalization will produce equal small values
+        // (or the caller can interpret all-zeros as "unused")
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+
+    // ── Normalize ────────────────────────────────────────────
+    let total = trunk + uplink + access + wireless;
+    if total < 0.001 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    (trunk / total, uplink / total, access / total, wireless / total)
+}
+
 /// Intermediate struct for building a network identity from multiple sources.
 #[derive(Default)]
 struct IdentityBuilder {
@@ -874,6 +1061,7 @@ fn mac_to_u64(mac: &str) -> Option<u64> {
 }
 
 /// Convert a u64 back to a colon-separated MAC string.
+#[allow(dead_code)]
 fn u64_to_mac(val: u64) -> String {
     format!(
         "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
@@ -886,13 +1074,12 @@ fn u64_to_mac(val: u64) -> String {
     )
 }
 
-/// Build the set of all switch-local MAC addresses by computing sequential
-/// ranges from the is_local=true entries on each managed switch.
+/// Build the set of all switch-local MAC addresses using exact observed values.
 ///
-/// Manufacturers assign MACs sequentially per switch (port 1 = base, port 2 =
-/// base+1, etc.). By finding [min, max] of the local MACs per switch, we can
-/// identify the full block — catching switch MACs even when they appear from
-/// other data sources like ARP or DHCP.
+/// Uses only the is_local=true MACs that switches explicitly report — no range
+/// expansion. Range expansion assumed sequential OUI allocation and could
+/// incorrectly flag non-infrastructure MACs that happened to fall within the
+/// min/max range of a switch's local MACs.
 async fn build_switch_local_mac_set(
     store: &SwitchStore,
     device_ids: &[String],
@@ -905,43 +1092,21 @@ async fn build_switch_local_mac_set(
             Err(_) => continue,
         };
 
-        // Collect all local MAC values for this switch
-        let local_vals: Vec<u64> = entries
-            .iter()
-            .filter(|e| e.is_local)
-            .filter_map(|e| mac_to_u64(&e.mac_address))
-            .collect();
-
-        if local_vals.is_empty() {
-            continue;
+        let mut count = 0u32;
+        for entry in &entries {
+            if entry.is_local {
+                if let Some(val) = mac_to_u64(&entry.mac_address) {
+                    local_macs.insert(val);
+                    count += 1;
+                }
+            }
         }
 
-        let min_mac = *local_vals.iter().min().unwrap();
-        let max_mac = *local_vals.iter().max().unwrap();
-
-        // Sanity check: the range should be reasonable (< 128 addresses).
-        // A 48-port switch uses ~48 MACs. If the range is absurdly large,
-        // the MACs aren't sequential and we fall back to the exact set.
-        let range_size = max_mac - min_mac + 1;
-        if range_size <= 128 {
-            for val in min_mac..=max_mac {
-                local_macs.insert(val);
-            }
+        if count > 0 {
             tracing::debug!(
                 device = %device_id,
-                range = %format!("{} — {}", u64_to_mac(min_mac), u64_to_mac(max_mac)),
-                count = range_size,
-                "switch-local MAC range"
-            );
-        } else {
-            // Not sequential — just use the exact set
-            for val in &local_vals {
-                local_macs.insert(*val);
-            }
-            tracing::debug!(
-                device = %device_id,
-                count = local_vals.len(),
-                "switch-local MACs (non-sequential, exact set)"
+                count = count,
+                "switch-local MACs (exact set)"
             );
         }
     }
@@ -1064,62 +1229,6 @@ fn build_wap_children(
         }
     }
     children
-}
-
-/// Compute the BFS depth of each switch from the router through backbone links
-/// AND LLDP trunk peers. Uses both data sources to build the adjacency graph:
-/// - LLDP neighbors provide depth for managed switches automatically
-/// - Backbone links fill in for non-LLDP devices (SwOS switches, WAPs)
-///
-/// Router is depth 0, directly connected switches are depth 1, etc.
-/// Switches not reachable via either source get depth 0 (no bonus).
-fn compute_switch_depths(
-    backbone_links: &[BackboneLink],
-    trunk_peer: &HashMap<(String, String), String>,
-    router_id: &str,
-) -> HashMap<String, u32> {
-    // Build undirected adjacency set from both sources
-    let mut adj: HashMap<String, HashSet<String>> = HashMap::new();
-
-    // From backbone links
-    for link in backbone_links {
-        adj.entry(link.device_a.clone())
-            .or_default()
-            .insert(link.device_b.clone());
-        adj.entry(link.device_b.clone())
-            .or_default()
-            .insert(link.device_a.clone());
-    }
-
-    // From LLDP trunk peers (already resolved to device IDs)
-    for ((dev_id, _port), peer_id) in trunk_peer {
-        adj.entry(dev_id.clone())
-            .or_default()
-            .insert(peer_id.clone());
-        adj.entry(peer_id.clone())
-            .or_default()
-            .insert(dev_id.clone());
-    }
-
-    // BFS from router
-    let mut depths: HashMap<String, u32> = HashMap::new();
-    depths.insert(router_id.to_string(), 0);
-    let mut queue = std::collections::VecDeque::new();
-    queue.push_back(router_id.to_string());
-
-    while let Some(current) = queue.pop_front() {
-        let current_depth = depths[&current];
-        if let Some(neighbors) = adj.get(&current) {
-            for neighbor in neighbors {
-                if !depths.contains_key(neighbor) {
-                    depths.insert(neighbor.clone(), current_depth + 1);
-                    queue.push_back(neighbor.clone());
-                }
-            }
-        }
-    }
-
-    depths
 }
 
 /// Build an async DNS resolver pointing at Technitium for PTR lookups.
