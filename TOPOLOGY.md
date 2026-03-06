@@ -470,6 +470,62 @@ When an LLDP neighbor reports identity "MikroTik CRS310" with IP 10.2.2.3:
 2. Check identity_to_device → not found
 3. Check ip_to_device for 10.2.2.3 → matches registered device "CRS310" → trunk edge
 
+### 4.7 How Identity Manager Fields Affect the Topology
+
+Every field set in the Identity Manager UI flows through `network_identities` into the topology computation. Here's exactly what each one does:
+
+| Identity Manager Field | Effect on Topology Map |
+|------------------------|----------------------|
+| **`device_type`** | Determines node shape/icon. `camera` → camera icon, `server` → server icon, `access_point` → AP icon with signal arcs, etc. Infrastructure types (`router`, `switch`, `network_equipment`, `access_point`) promote the node to infrastructure tier. |
+| **`human_label`** | Overrides the auto-discovered hostname as the node's display label. Priority: `human_label` > `hostname` > `manufacturer` > MAC address. |
+| **`disposition`** | Controls visibility and visual treatment: `ignored` → **hidden entirely** (filtered out before node creation). `flagged` → **red dashed hexagon ring** + warning styling. `external` → **blue dashed border** + reduced opacity (40%). `my_device` / `unknown` → normal rendering. |
+| **`is_infrastructure`** | Tri-state override for infrastructure classification: `true` → node renders as infrastructure (switch/AP shape, centered in spine, participates in BFS layering). `false` → forces node to endpoint tier even if LLDP reports it as infrastructure (overrides LLDP). `null` (Auto) → falls through to heuristic detection. |
+| **`switch_device_id` + `switch_port`** | When `switch_binding_source = 'human'`, these override the automated priority-based binding. The node is placed under the specified switch on the topology map regardless of which switch's MAC table sees it. |
+| **`human_confirmed`** | A human-confirmed non-infrastructure device type overrides LLDP infrastructure inference. E.g., if LLDP says a device is a switch but a human confirms it as a "server", the identity wins and it renders as an endpoint. |
+| **`vlan_id`** | Determines which VLAN sector the node is placed in. Affects sector sizing and column balancing. |
+| **`confidence`** | Unregistered infrastructure nodes with confidence < 1.0 get an orange indicator ring to flag them for review. |
+
+**Identity vs. LLDP conflict resolution:** When an LLDP neighbor and a network identity refer to the same device, the `identity_overrides_lldp()` function decides:
+- `is_infrastructure = false` (human override) → identity wins, device is an endpoint
+- Human-confirmed non-infrastructure type → identity wins
+- Auto-detected non-infrastructure type with ≥ 0.8 confidence → identity wins
+- Otherwise → LLDP inference stands (device remains infrastructure)
+
+### 4.8 How Backbone Links Feed Into the Topology
+
+Backbone links affect the topology at three levels:
+
+**1. Correlation Engine (switch binding accuracy):**
+
+| Backbone Link Property | Correlation Effect |
+|----------------------|-------------------|
+| `device_a` + `device_b` | Establishes adjacency for BFS depth computation. Depth affects the priority score that determines which switch "owns" each MAC. |
+| `port_a` + `port_b` | Forces these ports to `trunk` role, overriding auto-detection. Critical for SwOS switches without LLDP — without this, their uplink ports would be classified as `access` or `uplink`, breaking MAC redirection. |
+| (adjacency itself) | Enables downstream trunk redirection. MACs on device_a's trunk port are redirected to device_b (or vice versa, depending on depth), allowing the correlation engine to trace MACs to their actual access port. |
+
+**2. Topology Computation (graph structure):**
+
+| Backbone Link Property | Topology Effect |
+|----------------------|----------------|
+| `device_a` + `device_b` | Creates a trunk edge between the two devices. If either device doesn't exist as a node (e.g. a WAP referenced only by backbone link), the topology engine creates it from infrastructure identities. |
+| `port_a` + `port_b` | Shown as port labels at 15%/85% along the trunk edge (visible at zoom > 0.8). |
+| `label` | Displayed as edge label on hover tooltip. |
+| `speed_mbps` | **Highest priority speed source.** If set, this speed determines the edge color (gold/orange/silver/cyan/gray) and stroke width. Overrides polled port speed. Essential for SwOS SFP+ ports where the API reports wrong speeds. |
+| `link_type` | Stored but not currently used for visual differentiation (DAC, Fiber, Ethernet all render the same). Available in the data for future use. |
+
+**3. D3 Visualization (rendering):**
+
+Backbone link edges render identically to LLDP-discovered trunk edges — same speed-tier coloring, traffic-based thickness, port labels, and animated particles. If both an LLDP edge and a backbone link exist for the same device pair, the LLDP edge takes precedence (backbone is deduplicated).
+
+**Example flow — adding a WAP:**
+1. User creates backbone link: CRS326 ↔ WAP-MainFloor (port ether9, speed 1G)
+2. Correlation engine: forces CRS326:ether9 to `trunk` role, computes WAP depth = 2, builds trunk peer map
+3. Correlation engine: MACs on CRS326:ether9 trunk get redirected to WAP-MainFloor
+4. Correlation engine: wireless VLAN devices on CRS326 attributed to WAP-MainFloor (WAP attribution)
+5. Topology engine: creates WAP-MainFloor node (from infrastructure identities), trunk edge to CRS326
+6. Topology engine: wireless endpoints placed under WAP-MainFloor instead of CRS326
+7. D3: WAP renders as AP icon with signal arcs, trunk edge shows "ether9" port label, colored cyan (1G)
+
 ---
 
 ## 5. Layout Algorithm
