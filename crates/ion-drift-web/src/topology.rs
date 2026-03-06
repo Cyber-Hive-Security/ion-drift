@@ -506,16 +506,75 @@ pub async fn compute_topology(
         }
     }
 
-    // ── Backbone links → trunk edges ─────────────────────────────
+    // ── Backbone links → trunk edges + auto-create missing nodes ──
     // Manual switch-to-switch connections for non-LLDP devices.
+    // If a backbone link references a device that doesn't have a node yet
+    // (e.g. WAPs, SwOS switches without LLDP), create an infrastructure
+    // node so the edge renders in the topology.
     let backbone_links = store.get_backbone_links().await.unwrap_or_default();
+    let infra_identities = store.get_infrastructure_identities().await.unwrap_or_default();
+    let infra_by_id: HashMap<String, &mikrotik_core::switch_store::NetworkIdentity> = infra_identities
+        .iter()
+        .filter_map(|i| {
+            let key = i.hostname.clone().unwrap_or_else(|| i.mac_address.clone());
+            Some((key, i))
+        })
+        .collect();
+
     for link in &backbone_links {
+        // Auto-create nodes for backbone link endpoints that don't exist yet
+        for device_id in [&link.device_a, &link.device_b] {
+            if nodes.contains_key(device_id) || infra_ids.contains(device_id) {
+                continue;
+            }
+
+            // Look up from infrastructure identities for metadata
+            let ident = infra_by_id.get(device_id);
+            let kind = match ident.and_then(|i| i.device_type.as_deref()) {
+                Some("access_point") | Some("wap") => NodeKind::AccessPoint,
+                _ => NodeKind::UnmanagedSwitch,
+            };
+            let label = ident
+                .and_then(|i| i.human_label.clone().or(i.hostname.clone()))
+                .unwrap_or_else(|| device_id.clone());
+
+            infra_ids.insert(device_id.clone());
+            nodes.insert(
+                device_id.clone(),
+                TopologyNode {
+                    id: device_id.clone(),
+                    label,
+                    ip: ident.and_then(|i| i.best_ip.clone()),
+                    mac: ident.map(|i| i.mac_address.clone()),
+                    kind,
+                    vlan_id: None,
+                    vlans_served: Vec::new(),
+                    device_type: ident.and_then(|i| i.device_type.clone()),
+                    manufacturer: ident.and_then(|i| i.manufacturer.clone()),
+                    is_infrastructure: true,
+                    layer: 0,
+                    x: 0.0,
+                    y: 0.0,
+                    position_source: "auto".to_string(),
+                    first_seen: now,
+                    last_seen: now,
+                    parent_id: None,
+                    switch_port: None,
+                    status: NodeStatus::Unknown,
+                    confidence: 0.8,
+                    disposition: "unknown".to_string(),
+                },
+            );
+            tracing::debug!(device = %device_id, "created node from backbone link reference");
+        }
+
         let pair = if link.device_a < link.device_b {
             (link.device_a.clone(), link.device_b.clone())
         } else {
             (link.device_b.clone(), link.device_a.clone())
         };
-        if edge_set.insert(pair) {
+        if edge_set.insert(pair.clone()) {
+            // New edge — create it
             edges.push(TopologyEdge {
                 source: link.device_a.clone(),
                 target: link.device_b.clone(),
@@ -523,8 +582,33 @@ pub async fn compute_topology(
                 source_port: link.port_a.clone(),
                 target_port: link.port_b.clone(),
                 vlans: Vec::new(),
-                speed_mbps: link.speed_mbps, // manual override from backbone link
+                speed_mbps: link.speed_mbps,
             });
+        } else {
+            // Edge already exists (from LLDP) — merge backbone link data into it.
+            // Backbone ports and speed override LLDP-discovered values.
+            if let Some(existing) = edges.iter_mut().find(|e| {
+                let ep = if e.source < e.target {
+                    (&e.source, &e.target)
+                } else {
+                    (&e.target, &e.source)
+                };
+                ep == (&pair.0, &pair.1)
+            }) {
+                if link.port_a.is_some() {
+                    // Figure out which direction the existing edge uses
+                    if existing.source == link.device_a {
+                        existing.source_port = link.port_a.clone();
+                        existing.target_port = existing.target_port.clone().or(link.port_b.clone());
+                    } else {
+                        existing.target_port = link.port_a.clone();
+                        existing.source_port = existing.source_port.clone().or(link.port_b.clone());
+                    }
+                }
+                if link.speed_mbps.is_some() {
+                    existing.speed_mbps = link.speed_mbps;
+                }
+            }
         }
     }
 

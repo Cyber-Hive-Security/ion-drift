@@ -492,7 +492,7 @@ export function TopologyPage() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [showEndpoints, setShowEndpoints] = useState(true);
-  const [legendCollapsed, setLegendCollapsed] = useState(true);
+  const [legendCollapsed, setLegendCollapsed] = useState(false);
   const [vlanFilter, setVlanFilter] = useState<Set<number> | null>(null);
 
   const topology = useNetworkTopology();
