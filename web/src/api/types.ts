@@ -978,6 +978,7 @@ export interface NetworkIdentity {
   disposition: DeviceDisposition;
   is_infrastructure: boolean | null;
   switch_binding_source: string;
+  link_speed_mbps: number | null;
 }
 
 export type DeviceDisposition = "unknown" | "my_device" | "external" | "ignored" | "flagged";

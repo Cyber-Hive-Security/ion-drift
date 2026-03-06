@@ -716,6 +716,27 @@ export default function IdentityManagerPage() {
       sortValue: (row) => row.switch_port || "",
     },
     {
+      key: "speed",
+      header: "Speed",
+      render: (row) => {
+        const mbps = row.link_speed_mbps ?? 1000;
+        const label =
+          mbps >= 1000 ? `${mbps / 1000}G` : `${mbps}M`;
+        return (
+          <span
+            className={cn(
+              "text-xs font-mono",
+              row.link_speed_mbps == null && "text-muted-foreground"
+            )}
+            title={row.link_speed_mbps == null ? "Default (no polled speed)" : `${mbps} Mbps`}
+          >
+            {label}
+          </span>
+        );
+      },
+      sortValue: (row) => row.link_speed_mbps ?? 1000,
+    },
+    {
       key: "infra",
       header: "Infra",
       render: (row) => (

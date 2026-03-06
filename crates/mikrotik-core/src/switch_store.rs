@@ -78,6 +78,7 @@ pub struct NetworkIdentity {
     pub disposition: String,
     pub is_infrastructure: Option<bool>,
     pub switch_binding_source: String,
+    pub link_speed_mbps: Option<u32>,
 }
 
 /// An nmap scan record.
@@ -1007,7 +1008,12 @@ impl SwitchStore {
                     first_seen, last_seen, confidence,
                     device_type, device_type_source, device_type_confidence,
                     human_confirmed, human_label, disposition,
-                    is_infrastructure, switch_binding_source
+                    is_infrastructure, switch_binding_source,
+                    (SELECT speed FROM switch_port_metrics
+                     WHERE device_id = network_identities.switch_device_id
+                       AND LOWER(port_name) = LOWER(network_identities.switch_port)
+                       AND speed IS NOT NULL
+                     ORDER BY id DESC LIMIT 1) AS link_speed
              FROM network_identities ORDER BY last_seen DESC",
         )?;
         let rows = stmt.query_map([], map_identity_row)?;
@@ -1023,7 +1029,12 @@ impl SwitchStore {
                     first_seen, last_seen, confidence,
                     device_type, device_type_source, device_type_confidence,
                     human_confirmed, human_label, disposition,
-                    is_infrastructure, switch_binding_source
+                    is_infrastructure, switch_binding_source,
+                    (SELECT speed FROM switch_port_metrics
+                     WHERE device_id = network_identities.switch_device_id
+                       AND LOWER(port_name) = LOWER(network_identities.switch_port)
+                       AND speed IS NOT NULL
+                     ORDER BY id DESC LIMIT 1) AS link_speed
              FROM network_identities
              WHERE is_infrastructure = 1
                 OR device_type IN ('access_point', 'switch', 'network_equipment')
@@ -1046,7 +1057,12 @@ impl SwitchStore {
                     first_seen, last_seen, confidence,
                     device_type, device_type_source, device_type_confidence,
                     human_confirmed, human_label, disposition,
-                    is_infrastructure, switch_binding_source
+                    is_infrastructure, switch_binding_source,
+                    (SELECT speed FROM switch_port_metrics
+                     WHERE device_id = network_identities.switch_device_id
+                       AND LOWER(port_name) = LOWER(network_identities.switch_port)
+                       AND speed IS NOT NULL
+                     ORDER BY id DESC LIMIT 1) AS link_speed
              FROM network_identities
              WHERE human_confirmed = 0
              ORDER BY device_type_confidence ASC, last_seen DESC
@@ -2281,6 +2297,7 @@ fn map_identity_row(row: &rusqlite::Row<'_>) -> Result<NetworkIdentity, rusqlite
         disposition: row.get::<_, Option<String>>(18)?.unwrap_or_else(|| "unknown".to_string()),
         is_infrastructure: row.get::<_, Option<i32>>(19)?.map(|v| v != 0),
         switch_binding_source: row.get::<_, Option<String>>(20)?.unwrap_or_else(|| "auto".to_string()),
+        link_speed_mbps: row.get::<_, Option<String>>(21)?.and_then(|s| parse_speed_mbps(&s)),
     })
 }
 
