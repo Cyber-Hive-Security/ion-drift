@@ -1822,6 +1822,27 @@ impl SwitchStore {
         Ok(db.last_insert_rowid())
     }
 
+    /// Update a backbone link's mutable fields (ports, label, type, speed).
+    pub async fn update_backbone_link(
+        &self,
+        id: i64,
+        port_a: Option<&str>,
+        port_b: Option<&str>,
+        label: Option<&str>,
+        link_type: Option<&str>,
+        speed_mbps: Option<u32>,
+    ) -> Result<bool, rusqlite::Error> {
+        let pa_lower = port_a.map(|p| p.to_lowercase());
+        let pb_lower = port_b.map(|p| p.to_lowercase());
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "UPDATE backbone_links SET port_a = ?2, port_b = ?3, label = ?4, link_type = ?5, speed_mbps = ?6
+             WHERE id = ?1",
+            rusqlite::params![id, pa_lower, pb_lower, label, link_type, speed_mbps],
+        )?;
+        Ok(affected > 0)
+    }
+
     /// Delete a backbone link by id.
     pub async fn delete_backbone_link(&self, id: i64) -> Result<bool, rusqlite::Error> {
         let db = self.db.lock().await;

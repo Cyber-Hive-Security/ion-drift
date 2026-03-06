@@ -1124,6 +1124,14 @@ export interface CreateBackboneLinkRequest {
   speed_mbps?: number;
 }
 
+export interface UpdateBackboneLinkRequest {
+  port_a?: string;
+  port_b?: string;
+  label?: string;
+  link_type?: string;
+  speed_mbps?: number;
+}
+
 // ── Neighbor Aliases ───────────────────────────────────────────
 
 export interface NeighborAlias {

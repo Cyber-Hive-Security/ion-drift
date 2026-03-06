@@ -55,6 +55,37 @@ pub async fn create_backbone_link(
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
+#[derive(Deserialize)]
+pub struct UpdateBackboneLinkRequest {
+    pub port_a: Option<String>,
+    pub port_b: Option<String>,
+    pub label: Option<String>,
+    pub link_type: Option<String>,
+    pub speed_mbps: Option<u32>,
+}
+
+/// PUT /api/network/backbone-links/{id} — update a backbone link.
+pub async fn update_backbone_link(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateBackboneLinkRequest>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let updated = state
+        .switch_store
+        .update_backbone_link(
+            id,
+            body.port_a.as_deref(),
+            body.port_b.as_deref(),
+            body.label.as_deref(),
+            body.link_type.as_deref(),
+            body.speed_mbps,
+        )
+        .await
+        .map_err(|e| internal_error("update backbone link", e))?;
+    Ok(Json(serde_json::json!({ "updated": updated })))
+}
+
 /// DELETE /api/network/backbone-links/{id} — delete a backbone link.
 pub async fn delete_backbone_link(
     RequireAuth(_session): RequireAuth,

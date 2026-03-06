@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { useBackboneLinks, useCreateBackboneLink, useDeleteBackboneLink, useDevices, useInfrastructureIdentities, useDevicePortList } from "@/api/queries";
-import type { NetworkDevice, NetworkIdentity, DevicePort } from "@/api/types";
-import { Cable, Trash2, Plus } from "lucide-react";
+import { useBackboneLinks, useCreateBackboneLink, useDeleteBackboneLink, useUpdateBackboneLink, useDevices, useInfrastructureIdentities, useDevicePortList } from "@/api/queries";
+import type { BackboneLink, NetworkDevice, NetworkIdentity, DevicePort } from "@/api/types";
+import { Cable, Trash2, Plus, Pencil, Check, X } from "lucide-react";
 
 const SPEED_LABELS: Record<number, string> = {
   100: "100M",
@@ -22,6 +22,14 @@ export function BackboneLinksPage() {
   const infraIdentities = useInfrastructureIdentities();
   const createMutation = useCreateBackboneLink();
   const deleteMutation = useDeleteBackboneLink();
+  const updateMutation = useUpdateBackboneLink();
+
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editPortA, setEditPortA] = useState("");
+  const [editPortB, setEditPortB] = useState("");
+  const [editLinkType, setEditLinkType] = useState("dac");
+  const [editSpeedMbps, setEditSpeedMbps] = useState<number>(10000);
+  const [editLabel, setEditLabel] = useState("");
 
   const [deviceA, setDeviceA] = useState("");
   const [portA, setPortA] = useState("");
@@ -92,6 +100,29 @@ export function BackboneLinksPage() {
     return nameMap.get(id) ?? id;
   }
 
+  function startEditing(link: BackboneLink) {
+    setEditingId(link.id);
+    setEditPortA(link.port_a ?? "");
+    setEditPortB(link.port_b ?? "");
+    setEditLinkType(link.link_type ?? "dac");
+    setEditSpeedMbps(link.speed_mbps ?? 10000);
+    setEditLabel(link.label ?? "");
+  }
+
+  function handleSave(id: number) {
+    updateMutation.mutate(
+      {
+        id,
+        port_a: editPortA || undefined,
+        port_b: editPortB || undefined,
+        link_type: editLinkType || undefined,
+        speed_mbps: editSpeedMbps || undefined,
+        label: editLabel || undefined,
+      },
+      { onSuccess: () => setEditingId(null) },
+    );
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
       {/* Header */}
@@ -120,7 +151,7 @@ export function BackboneLinksPage() {
               <th className="px-3 py-2">Speed</th>
               <th className="px-3 py-2">Label</th>
               <th className="px-3 py-2">Created</th>
-              <th className="px-3 py-2 w-10" />
+              <th className="px-3 py-2 w-20" />
             </tr>
           </thead>
           <tbody>
@@ -200,29 +231,60 @@ export function BackboneLinksPage() {
             </tr>
 
             {/* Existing links */}
-            {links.data?.map((link) => (
-              <tr key={link.id} className="border-b border-border last:border-0 hover:bg-muted/30">
-                <td className="px-3 py-2 font-mono text-foreground">{resolveName(link.device_a)}</td>
-                <td className="px-3 py-2 font-mono text-muted-foreground">{link.port_a ?? "—"}</td>
-                <td className="px-3 py-2 text-center text-muted-foreground">↔</td>
-                <td className="px-3 py-2 font-mono text-foreground">{resolveName(link.device_b)}</td>
-                <td className="px-3 py-2 font-mono text-muted-foreground">{link.port_b ?? "—"}</td>
-                <td className="px-3 py-2 text-muted-foreground capitalize">{link.link_type ?? "—"}</td>
-                <td className="px-3 py-2 font-mono text-muted-foreground">{formatSpeed(link.speed_mbps)}</td>
-                <td className="px-3 py-2 text-muted-foreground">{link.label ?? "—"}</td>
-                <td className="px-3 py-2 text-muted-foreground">{link.created_at.slice(0, 10)}</td>
-                <td className="px-3 py-2">
-                  <button
-                    onClick={() => deleteMutation.mutate(link.id)}
-                    disabled={deleteMutation.isPending}
-                    className="rounded p-1 text-muted-foreground hover:bg-destructive/20 hover:text-destructive"
-                    title="Delete link"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {links.data?.map((link) =>
+              editingId === link.id ? (
+                <EditableRow
+                  key={link.id}
+                  link={link}
+                  resolveName={resolveName}
+                  managedIds={managedIds}
+                  editPortA={editPortA}
+                  setEditPortA={setEditPortA}
+                  editPortB={editPortB}
+                  setEditPortB={setEditPortB}
+                  editLinkType={editLinkType}
+                  setEditLinkType={setEditLinkType}
+                  editSpeedMbps={editSpeedMbps}
+                  setEditSpeedMbps={setEditSpeedMbps}
+                  editLabel={editLabel}
+                  setEditLabel={setEditLabel}
+                  onSave={() => handleSave(link.id)}
+                  onCancel={() => setEditingId(null)}
+                  isSaving={updateMutation.isPending}
+                />
+              ) : (
+                <tr key={link.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                  <td className="px-3 py-2 font-mono text-foreground">{resolveName(link.device_a)}</td>
+                  <td className="px-3 py-2 font-mono text-muted-foreground">{link.port_a ?? "—"}</td>
+                  <td className="px-3 py-2 text-center text-muted-foreground">↔</td>
+                  <td className="px-3 py-2 font-mono text-foreground">{resolveName(link.device_b)}</td>
+                  <td className="px-3 py-2 font-mono text-muted-foreground">{link.port_b ?? "—"}</td>
+                  <td className="px-3 py-2 text-muted-foreground capitalize">{link.link_type ?? "—"}</td>
+                  <td className="px-3 py-2 font-mono text-muted-foreground">{formatSpeed(link.speed_mbps)}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{link.label ?? "—"}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{link.created_at.slice(0, 10)}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => startEditing(link)}
+                        className="rounded p-1 text-muted-foreground hover:bg-primary/20 hover:text-primary"
+                        title="Edit link"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => deleteMutation.mutate(link.id)}
+                        disabled={deleteMutation.isPending}
+                        className="rounded p-1 text-muted-foreground hover:bg-destructive/20 hover:text-destructive"
+                        title="Delete link"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ),
+            )}
 
             {/* Empty state */}
             {links.data && links.data.length === 0 && (
@@ -241,6 +303,125 @@ export function BackboneLinksPage() {
         <p className="text-xs text-destructive">Device A and Device B must be different.</p>
       )}
     </div>
+  );
+}
+
+/** Inline-editable row for an existing backbone link. */
+function EditableRow({
+  link,
+  resolveName,
+  managedIds,
+  editPortA,
+  setEditPortA,
+  editPortB,
+  setEditPortB,
+  editLinkType,
+  setEditLinkType,
+  editSpeedMbps,
+  setEditSpeedMbps,
+  editLabel,
+  setEditLabel,
+  onSave,
+  onCancel,
+  isSaving,
+}: {
+  link: BackboneLink;
+  resolveName: (id: string) => string;
+  managedIds: Set<string>;
+  editPortA: string;
+  setEditPortA: (v: string) => void;
+  editPortB: string;
+  setEditPortB: (v: string) => void;
+  editLinkType: string;
+  setEditLinkType: (v: string) => void;
+  editSpeedMbps: number;
+  setEditSpeedMbps: (v: number) => void;
+  editLabel: string;
+  setEditLabel: (v: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  isSaving: boolean;
+}) {
+  const portListA = useDevicePortList(managedIds.has(link.device_a) ? link.device_a : undefined);
+  const portListB = useDevicePortList(managedIds.has(link.device_b) ? link.device_b : undefined);
+
+  return (
+    <tr className="border-b border-border bg-primary/5">
+      <td className="px-3 py-2 font-mono text-foreground">{resolveName(link.device_a)}</td>
+      <td className="px-3 py-2">
+        <PortInput
+          value={editPortA}
+          onChange={setEditPortA}
+          ports={portListA.data}
+          isManaged={managedIds.has(link.device_a)}
+          hasDevice
+        />
+      </td>
+      <td className="px-3 py-2 text-center text-muted-foreground">↔</td>
+      <td className="px-3 py-2 font-mono text-foreground">{resolveName(link.device_b)}</td>
+      <td className="px-3 py-2">
+        <PortInput
+          value={editPortB}
+          onChange={setEditPortB}
+          ports={portListB.data}
+          isManaged={managedIds.has(link.device_b)}
+          hasDevice
+        />
+      </td>
+      <td className="px-3 py-2">
+        <select
+          value={editLinkType}
+          onChange={(e) => setEditLinkType(e.target.value)}
+          className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+        >
+          <option value="dac">DAC</option>
+          <option value="fiber">Fiber</option>
+          <option value="ethernet">Ethernet</option>
+        </select>
+      </td>
+      <td className="px-3 py-2">
+        <select
+          value={editSpeedMbps}
+          onChange={(e) => setEditSpeedMbps(Number(e.target.value))}
+          className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+        >
+          <option value={10000}>10G</option>
+          <option value={5000}>5G</option>
+          <option value={2500}>2.5G</option>
+          <option value={1000}>1G</option>
+          <option value={100}>100M</option>
+        </select>
+      </td>
+      <td className="px-3 py-2">
+        <input
+          type="text"
+          value={editLabel}
+          onChange={(e) => setEditLabel(e.target.value)}
+          placeholder="Optional"
+          className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground"
+        />
+      </td>
+      <td className="px-3 py-2 text-muted-foreground">{link.created_at.slice(0, 10)}</td>
+      <td className="px-3 py-2">
+        <div className="flex gap-1">
+          <button
+            onClick={onSave}
+            disabled={isSaving}
+            className="rounded p-1 text-green-500 hover:bg-green-500/20 disabled:opacity-40"
+            title="Save changes"
+          >
+            <Check className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={onCancel}
+            className="rounded p-1 text-muted-foreground hover:bg-muted"
+            title="Cancel"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }
 

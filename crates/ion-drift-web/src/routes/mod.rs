@@ -251,7 +251,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/network/vlan-config/{vlan_id}", put(vlans::upsert_vlan_config))
         // Backbone links (manual switch interconnects)
         .route("/network/backbone-links", get(backbone::list_backbone_links).post(backbone::create_backbone_link))
-        .route("/network/backbone-links/{id}", delete(backbone::delete_backbone_link))
+        .route("/network/backbone-links/{id}", put(backbone::update_backbone_link).delete(backbone::delete_backbone_link))
         // Neighbor aliases (topology neighbor mapping/hiding)
         .route("/network/neighbor-aliases", get(neighbor_aliases::list_neighbor_aliases).post(neighbor_aliases::create_neighbor_alias))
         .route("/network/neighbor-aliases/{id}", delete(neighbor_aliases::delete_neighbor_alias))

@@ -79,6 +79,7 @@ import type {
   PortViolation,
   BackboneLink,
   CreateBackboneLinkRequest,
+  UpdateBackboneLinkRequest,
   NeighborAlias,
   CreateNeighborAliasRequest,
   DeviceDisposition,
@@ -1391,6 +1392,22 @@ export function useDeleteBackboneLink() {
     mutationFn: (id: number) =>
       apiFetch<{ removed: boolean }>(`/api/network/backbone-links/${id}`, {
         method: "DELETE",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "backbone-links"] });
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    },
+  });
+}
+
+export function useUpdateBackboneLink() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: number } & UpdateBackboneLinkRequest) =>
+      apiFetch<{ updated: boolean }>(`/api/network/backbone-links/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["network", "backbone-links"] });
