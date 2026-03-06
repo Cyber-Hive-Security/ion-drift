@@ -1,6 +1,6 @@
 # How the Topology Map Works
 
-> **Last updated:** 2026-03-06 — commit `2f79745`
+> **Last updated:** 2026-03-06 — commit `de128ae`
 
 This document explains the complete data pipeline from device polling through correlation to the rendered D3.js topology map. It covers every stage: what data feeds in, how the correct switch is chosen for each device, how identities are correlated, how the graph is computed, how layout is determined, and how the frontend renders it.
 
@@ -115,6 +115,8 @@ This document explains the complete data pipeline from device polling through co
 
 ## 2. Data Sources
 
+Every piece of data that feeds the topology map originates from a device poll, a user action, or a DNS lookup. This section traces each data element from its source API through storage into the engine that consumes it.
+
 ### 2.1 Device Registry
 
 Managed in `secrets.db` (AES-256-GCM encrypted). Each device has:
@@ -126,86 +128,177 @@ Managed in `secrets.db` (AES-256-GCM encrypted). Each device has:
 
 One device must be type `router` (the primary Mikrotik RB4011). All other devices are switches.
 
+**Consumed by:** Topology engine (Layer 1 — every registered device becomes a node), Correlation engine (gets list of all switch IDs + router ID for port role classification).
+
 ### 2.2 RouterOS REST API (router + RouterOS switches)
 
-Polled by `switch_poller.rs` at each device's configured interval.
+Polled by `switch_poller.rs` at each device's configured interval. All six endpoints are fetched concurrently via `tokio::join!`.
 
-| Endpoint | Data | Stored In |
-|----------|------|-----------|
-| `/rest/interface/ethernet` | Port list, configured speed, RX/TX counters, running status | `switch_port_metrics` |
-| `/rest/interface/ethernet/monitor` (POST) | **Actual negotiated speed** (`rate` field), link status | `switch_port_metrics.speed` |
-| `/rest/bridge/host` | MAC address table: which MAC is on which port | `switch_mac_table` |
-| `/rest/bridge/vlan` | VLAN membership: tagged/untagged ports per VLAN ID | `switch_vlan_membership` |
-| `/rest/bridge/port` | Bridge port configuration | (logged only) |
-| `/rest/ip/neighbor` | LLDP/MNDP/CDP neighbors: identity, platform, board, IP, MAC | `neighbor_discovery` |
-| `/rest/ip/arp` | ARP table: MAC → IP mappings | (consumed by correlation) |
-| `/rest/ip/dhcp-server/lease` | DHCP leases: MAC → IP + hostname | (consumed by correlation) |
+#### Port Metrics — `/rest/interface/ethernet` + `/rest/interface/ethernet/monitor`
 
-**Important:** The `/rest/interface/ethernet` endpoint returns the **configured** speed, which is empty when auto-negotiate is enabled (most ports). The `/rest/interface/ethernet/monitor` endpoint returns the **actual negotiated** link speed via the `rate` field (e.g. `"1Gbps"`, `"10Gbps"`). The poller prefers the monitor speed, falling back to the static speed.
+**Source fields:** `name`, `rx-byte`, `tx-byte`, `rx-packet`, `tx-packet`, `speed`, `running` from ethernet; `name`, `rate`, `status`, `full-duplex` from monitor.
+
+**Storage:** `switch_port_metrics` table — one row per port per poll cycle (time-series):
+```
+device_id | port_name | timestamp | rx_bytes | tx_bytes | rx_packets | tx_packets | speed | running
+```
+The `speed` column is set by preferring the monitor's `rate` field (actual negotiated speed like `"1Gbps"`, `"10Gbps"`) and falling back to the ethernet `speed` field (configured speed, often NULL on auto-negotiate).
+
+**Consumed by:**
+- Topology engine → `get_port_speeds(device_id)` queries the latest `speed` per port, parses via `parse_speed_mbps()`, returns `HashMap<port_name, u32>`. Used to color/size trunk edges.
+- Topology engine → `get_port_traffic_bps(device_id)` takes the two most recent rows per port, computes `(delta_bytes / delta_time) * 8` = bits/sec. Used for traffic-based edge thickness.
+- Identity Manager → `link_speed_mbps` field on each identity is a correlated subquery: `SELECT speed FROM switch_port_metrics WHERE device_id = identity.switch_device_id AND LOWER(port_name) = LOWER(identity.switch_port) ORDER BY id DESC LIMIT 1`.
+
+#### MAC Address Table — `/rest/bridge/host`
+
+**Source fields:** `mac-address`, `on-interface`, `bridge`, `local` (bool).
+
+**Storage:** `switch_mac_table` table via `upsert_mac_entry()`:
+```
+device_id | mac_address | port_name | bridge | vlan_id | is_local | first_seen | last_seen
+```
+Port name is lowercased on storage. Upsert keyed on `(device_id, mac_address, port_name)` — same MAC on same port updates `last_seen`; same MAC on different port creates a new row.
+
+**The `is_local` flag is critical:** When `local=true`, this MAC belongs to the switch itself (one of its port addresses). These MACs are used to compute switch-local MAC ranges (Phase 1b of correlation) and are excluded from identity assembly.
+
+**Consumed by:**
+- Correlation engine Phase 1 → `get_mac_table(device_id)` for port role classification (count non-local MACs per port).
+- Correlation engine Phase 1b → `get_mac_table(device_id)` filtered to `is_local=true` for switch-local MAC range computation.
+- Correlation engine Phase 2 → `get_mac_table(None)` (all devices) for identity assembly. Each MAC entry is evaluated against the priority formula to determine which switch/port "owns" this MAC.
+
+#### VLAN Membership — `/rest/bridge/vlan`
+
+**Source fields:** `vlan-ids`, `tagged` (comma-separated port list), `untagged` (comma-separated port list).
+
+**Storage:** `switch_vlan_membership` table via `set_vlan_membership()` (full replace per device per cycle):
+```
+device_id | port_name | vlan_id | tagged (bool)
+```
+
+**Consumed by:**
+- Correlation engine Phase 1 → `get_vlan_membership(device_id)` for port role classification (count VLANs per port; >1 VLAN = trunk).
+- Topology engine → used for VLAN sector membership computation (which VLANs does each switch serve).
+
+#### LLDP/MNDP Neighbors — `/rest/ip/neighbor`
+
+**Source fields:** `interface` (or `interface-name`), `mac-address`, `address` (or `address4`), `identity`, `platform`, `board`, `version`.
+
+**Storage:** `neighbor_discovery` table via `upsert_neighbor()`:
+```
+device_id | interface | mac_address | address | identity | platform | board | version | first_seen | last_seen
+```
+
+**Consumed by:**
+- Correlation engine Phase 1 → `get_neighbors(device_id)` for port role classification (port has LLDP = uplink).
+- Correlation engine Phase 2a → `get_neighbors(None)` for building trunk peer map: `(device_id, port) → peer_device_id`. LLDP identity or IP is resolved against the device registry.
+- Correlation engine Phase 2 → neighbor records enrich identities with IP, hostname, platform, device_type (LLDP devices get `device_type = "network_equipment"` at 0.95 confidence).
+- Topology engine Layer 1 → creates trunk edges between devices, infers unregistered infrastructure (MikroTik platform → UnmanagedSwitch or AccessPoint).
+
+#### ARP Table — `/rest/ip/arp` (router only)
+
+**Source fields:** `mac-address`, `address` (IP).
+
+**Not stored in a table.** Fetched live by the correlation engine each cycle (`router_client.arp_table()`).
+
+**Consumed by:** Correlation engine Phase 2 → sets `best_ip` on the identity for each MAC, but only if `best_ip` is not already set (LLDP and DHCP take precedence).
+
+#### DHCP Leases — `/rest/ip/dhcp-server/lease` (router only)
+
+**Source fields:** `mac-address`, `address` (IP), `host-name`.
+
+**Not stored in a table.** Fetched live by the correlation engine each cycle (`router_client.dhcp_leases()`).
+
+**Consumed by:** Correlation engine Phase 2 → sets `best_ip` (overwrites ARP — DHCP is authoritative) and `hostname` (only if not already set by LLDP) for each MAC.
+
+#### Bridge Hosts (router only) — `/rest/bridge/host`
+
+The router's bridge hosts are fetched separately at the start of the correlation cycle (not in the switch poller). This ensures the router's own port MACs are present in `switch_mac_table` with `is_local=true`, so they can be included in the switch-local MAC range computation.
 
 ### 2.3 SwOS HTTP API (SwOS switches like CRS310)
 
 Polled by `swos_poller.rs`. SwOS devices use HTTP Digest authentication. Requests are serialized (one at a time) because SwOS crashes on concurrent connections.
 
-| Endpoint | Data |
-|----------|------|
-| `link.b` | Port link status, speed codes, port names |
-| `fdb.b` | Forwarding database (MAC table) |
-| `vlan.b` | VLAN membership |
-| `stats.b` | Port RX/TX byte/packet counters |
+| Endpoint | Data | Stored In |
+|----------|------|-----------|
+| `link.b` | Port link status, speed codes, port names | `switch_port_metrics` (speed + running) |
+| `fdb.b` | Forwarding database (MAC → port) | `switch_mac_table` |
+| `vlan.b` | VLAN membership | `switch_vlan_membership` |
+| `stats.b` | Port RX/TX byte/packet counters | `switch_port_metrics` |
 
-**Known limitation:** SwOS `link.b` returns incorrect speed codes for SFP+ ports (reports 1G instead of 10G). The backbone link manual speed is the authoritative source for these ports.
+All four endpoints store data in the same tables as RouterOS, using the same `upsert_mac_entry()`, `set_vlan_membership()`, and `record_port_metrics()` functions. The correlation engine processes SwOS data identically to RouterOS data.
+
+**Known limitation:** SwOS `link.b` returns incorrect speed codes for SFP+ ports (reports 1G instead of 10G). The backbone link manual `speed_mbps` is the authoritative source for these ports.
 
 ### 2.4 SNMP (e.g. Netgear MS510TXPP)
 
 Polled by `snmp_poller.rs`. Supports SNMPv2c and SNMPv3.
 
-| OID | Data |
-|-----|------|
-| `ifDescr` / `ifName` | Port names |
-| `ifHighSpeed` | **Actual link speed in Mbps** (most accurate source) |
-| `ifHCInOctets` / `ifHCOutOctets` | 64-bit byte counters |
-| `ifOperStatus` | Port up/down |
-| `dot1dTpFdbTable` | MAC forwarding table |
+| OID | Data | Stored In |
+|-----|------|-----------|
+| `ifDescr` / `ifName` | Port names | `switch_port_metrics.port_name` |
+| `ifHighSpeed` | **Actual link speed in Mbps** | `switch_port_metrics.speed` (stored as `"{n}Mbps"`) |
+| `ifHCInOctets` / `ifHCOutOctets` | 64-bit byte counters | `switch_port_metrics.rx_bytes`, `tx_bytes` |
+| `ifOperStatus` | Port up/down | `switch_port_metrics.running` |
+| `dot1dTpFdbTable` | MAC forwarding table | `switch_mac_table` |
 
-Virtual/aggregate interfaces are filtered out — only physical port names are stored.
+Virtual/aggregate interfaces are filtered out — only physical port names are stored. `ifHighSpeed` is the most accurate speed source of any device type.
 
-### 2.5 Backbone Links (manual configuration)
+### 2.5 Reverse DNS (PTR Lookups)
 
-User-defined switch-to-switch interconnects for devices that don't support LLDP (SwOS switches, WAPs, unmanaged switches). Stored in `backbone_links` table:
+**Source:** Technitium DNS server at 10.20.25.6 (hardcoded in `correlation_engine.rs`).
 
+**Not stored in a table.** Performed live during each correlation cycle for any MAC that has an IP but no hostname (not set by LLDP or DHCP). Each lookup has a 500ms timeout. Results are written directly into the `IdentityBuilder.hostname` field.
+
+**Consumed by:** Correlation engine Phase 2 → sets `hostname` for devices that have DNS records but don't advertise via DHCP or LLDP.
+
+### 2.6 OUI Database
+
+**Source:** Bundled IEEE OUI database (~40K entries) loaded from `/data/oui.csv` at startup into an in-memory `HashMap<[u8; 3], &str>`.
+
+**Not stored in a table.** Queried in-memory by the correlation engine each cycle.
+
+**Consumed by:** Correlation engine Phase 2 → sets `manufacturer` from MAC prefix, and infers `device_type` + `device_type_confidence` from manufacturer name heuristics (e.g. "Hikvision" → `camera` at 0.6, "MikroTik" → `network_equipment` at 0.6).
+
+### 2.7 Backbone Links (manual configuration)
+
+User-defined switch-to-switch interconnects for devices that don't support LLDP (SwOS switches, WAPs, unmanaged switches). Created via the Backbone Links UI page (`/network/backbone`).
+
+**Storage:** `backbone_links` table:
 ```
-id, device_a, port_a, device_b, port_b, label, link_type, speed_mbps, created_at
+id | device_a | port_a | device_b | port_b | label | link_type | speed_mbps | created_at
 ```
 
 - Devices are normalized lexicographically on insert (device_a < device_b)
-- Port names are lowercased
+- Port names are lowercased on insert
 - `link_type`: DAC, Fiber, Ethernet, or NULL
 - `speed_mbps`: manual speed override (e.g. 10000 for 10G DAC)
 
-Backbone links serve three critical purposes in the correlation engine:
-1. Force linked ports to `trunk` role (overriding auto-detection)
-2. Enable MAC redirection from non-LLDP switches to their peer
-3. Provide BFS depth data for switch priority scoring
+**Consumed by (Correlation engine):**
+1. `get_backbone_links()` → forces linked ports into the `trunk_ports` set (overriding auto-detection). Calls `set_port_role()` to persist the trunk classification.
+2. Backbone link port pairs are added to the `trunk_peer` map: `(device_a, port_a) → device_b` and vice versa. This enables trunk redirection — MACs on a backbone trunk port are redirected to the peer device.
+3. Backbone link adjacency feeds into `compute_switch_depths()` — BFS from the router determines each switch's depth, which directly affects the priority score for switch binding.
 
-### 2.6 VLAN Configuration
+**Consumed by (Topology engine):**
+1. `get_backbone_links()` → creates trunk edges in the graph. If a device referenced by a backbone link isn't already a node (e.g. a WAP that has no device registry entry), the topology engine creates it using data from `get_infrastructure_identities()`.
+2. `speed_mbps` on the backbone link is the highest-priority speed source for the resulting edge — overrides polled port speed.
+3. `port_a` / `port_b` are rendered as port labels at 15%/85% along the trunk edge.
 
-Stored in `vlan_config` table. Synced from the router on startup (discovers VLAN interfaces and their IP subnets). Editable via Settings UI.
+### 2.8 VLAN Configuration
 
+**Storage:** `vlan_config` table:
 ```
-vlan_id, name, media_type (wired/wireless/mixed), subnet, color
+vlan_id | name | media_type | subnet | color | created_at
 ```
 
-The `media_type` field is critical: VLANs marked `wireless` trigger WAP attribution in the correlation engine.
+Synced from the router each correlation cycle via `sync_vlan_config_from_router()` — discovers VLAN interfaces and their IP subnets, inserts new VLANs (never overwrites human edits). Also editable via Settings UI.
 
-### 2.7 Additional Data Sources (consumed by correlation)
+**Consumed by (Correlation engine):**
+1. `media_type` field → builds the `wireless_vlans` set. Any VLAN with `media_type = 'wireless'` or `'mixed'` triggers WAP attribution for devices on that VLAN.
+2. `subnet` field → used for VLAN-from-IP inference. When a MAC has an IP but no VLAN from the switch MAC table, the engine tries to match the IP against each VLAN's subnet (CIDR match). Falls back to third-octet heuristic.
 
-| Source | Method | Fields |
-|--------|--------|--------|
-| Router ARP table | REST API poll | MAC → IP |
-| Router DHCP leases | REST API poll | MAC → IP + hostname (preferred over ARP) |
-| Reverse DNS (PTR) | Async UDP to Technitium (10.20.25.6) | IP → hostname (fallback) |
-| OUI database | In-memory HashMap from `/data/oui.csv` | MAC prefix → manufacturer + device type |
+**Consumed by (Topology engine):**
+1. `name`, `color` → VLAN sector labels and background colors.
+2. VLAN IDs → group endpoints into VLAN sectors for layout.
 
 ---
 
@@ -326,16 +419,27 @@ MAC on RB4011:sfp+1 (trunk, depth 0)
 
 #### 3.4e: Data Enrichment Pipeline
 
-After switch binding is resolved, each identity is enriched from multiple sources in order:
+After switch binding is resolved, each identity is enriched from multiple sources in order. Each MAC gets an `IdentityBuilder` — a temporary struct that accumulates fields during the enrichment pipeline before being upserted to the `network_identities` table:
+
+```
+IdentityBuilder {
+    best_ip, hostname, manufacturer,
+    switch_device_id, switch_port, vlan_id,
+    discovery_protocol, remote_identity, remote_platform,
+    device_type, device_type_source, device_type_confidence,
+    binding_priority,    // internal: used for priority comparison
+    binding_last_seen,   // internal: tie-break same-priority bindings
+}
+```
 
 | Step | Source | Fields Set | Notes |
 |------|--------|------------|-------|
-| 1 | MAC table (all devices) | `switch_device_id`, `switch_port`, `vlan_id` | Priority-based binding (see above) |
-| 2 | LLDP/MNDP neighbors | `best_ip`, `hostname`, `discovery_protocol`, `remote_identity`, `remote_platform`, `device_type` | LLDP-discovered types get 0.95 confidence |
-| 3 | Router ARP table | `best_ip` | MAC → IP (if not already set by LLDP) |
-| 4 | Router DHCP leases | `best_ip`, `hostname` | Preferred over ARP for DHCP-managed devices |
-| 5 | Reverse DNS (PTR) | `hostname` | Only for IPs without hostname from steps 2-4. Queries Technitium (10.20.25.6), 500ms timeout |
-| 6 | OUI database | `manufacturer`, `device_type` | Heuristic type inference at 0.5-0.6 confidence |
+| 1 | MAC table (all devices) | `switch_device_id`, `switch_port`, `vlan_id`, `binding_priority`, `binding_last_seen` | Priority-based binding (see above). Only overwrites if new priority > current priority, or same priority + more recent `last_seen`. |
+| 2 | LLDP/MNDP neighbors | `best_ip`, `hostname`, `discovery_protocol`, `remote_identity`, `remote_platform`, `device_type`, `device_type_source` = `"lldp"`, `device_type_confidence` = `0.95` | LLDP is the most authoritative identity source. Sets `device_type` to `"network_equipment"` for all LLDP-discovered devices. |
+| 3 | Router ARP table | `best_ip` | Only if `best_ip` is not already set by LLDP. ARP provides MAC → IP mapping from the router's ARP cache. |
+| 4 | Router DHCP leases | `best_ip`, `hostname` | Overwrites ARP IP (DHCP is more authoritative). Hostname only set if not already set by LLDP. |
+| 5 | Reverse DNS (PTR) | `hostname` | Only for IPs without hostname from steps 2-4. Queries Technitium (10.20.25.6), 500ms timeout per lookup. |
+| 6 | OUI database | `manufacturer`, `device_type`, `device_type_source` = `"oui"`, `device_type_confidence` = `0.5-0.6` | `device_type` only set if not already set by LLDP. Manufacturer heuristics: "Hikvision" → `camera` (0.6), "MikroTik" → `network_equipment` (0.6), etc. |
 
 **Human overrides are preserved:** If `switch_binding_source = 'human'`, the automated binding never overwrites `switch_device_id` or `switch_port`.
 
