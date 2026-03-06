@@ -242,7 +242,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         // Network topology
         .route("/network/topology", get(topology::get_topology))
         .route("/network/topology/refresh", post(topology::refresh_topology))
-        .route("/network/topology/positions", get(topology::get_positions))
+        .route("/network/topology/positions", get(topology::get_positions).put(topology::batch_update_positions))
         .route("/network/topology/positions/{nodeId}", put(topology::update_position).delete(topology::reset_position))
         .route("/network/topology/sectors", get(topology::get_sectors))
         .route("/network/topology/sectors/{vlanId}", put(topology::update_sector).delete(topology::reset_sector))

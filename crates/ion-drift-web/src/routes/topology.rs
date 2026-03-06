@@ -80,6 +80,37 @@ pub async fn update_position(
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
+/// PUT /api/network/topology/positions — batch position update (e.g. sector drag).
+#[derive(Deserialize)]
+pub struct BatchPositionUpdate {
+    pub positions: Vec<NodePositionEntry>,
+}
+
+#[derive(Deserialize)]
+pub struct NodePositionEntry {
+    pub node_id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+pub async fn batch_update_positions(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Json(body): Json<BatchPositionUpdate>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let entries: Vec<(String, f64, f64)> = body
+        .positions
+        .into_iter()
+        .map(|p| (p.node_id, p.x, p.y))
+        .collect();
+    state
+        .switch_store
+        .set_topology_positions_batch(&entries, "human")
+        .await
+        .map_err(|e| internal_error("batch set positions", e))?;
+    Ok(Json(serde_json::json!({ "status": "ok", "count": entries.len() })))
+}
+
 /// DELETE /api/network/topology/positions/{nodeId} — reset to auto.
 pub async fn reset_position(
     RequireAuth(_session): RequireAuth,

@@ -3,6 +3,19 @@ import { useBackboneLinks, useCreateBackboneLink, useDeleteBackboneLink, useDevi
 import type { NetworkDevice, NetworkIdentity, DevicePort } from "@/api/types";
 import { Cable, Trash2, Plus } from "lucide-react";
 
+const SPEED_LABELS: Record<number, string> = {
+  100: "100M",
+  1000: "1G",
+  2500: "2.5G",
+  5000: "5G",
+  10000: "10G",
+};
+
+function formatSpeed(mbps: number | null): string {
+  if (mbps == null) return "—";
+  return SPEED_LABELS[mbps] ?? `${mbps}M`;
+}
+
 export function BackboneLinksPage() {
   const links = useBackboneLinks();
   const devices = useDevices();
@@ -14,6 +27,8 @@ export function BackboneLinksPage() {
   const [portA, setPortA] = useState("");
   const [deviceB, setDeviceB] = useState("");
   const [portB, setPortB] = useState("");
+  const [linkType, setLinkType] = useState("dac");
+  const [speedMbps, setSpeedMbps] = useState<number>(10000);
   const [label, setLabel] = useState("");
 
   const managedDevices = devices.data ?? [];
@@ -55,6 +70,8 @@ export function BackboneLinksPage() {
         port_a: portA || undefined,
         device_b: deviceB,
         port_b: portB || undefined,
+        link_type: linkType || undefined,
+        speed_mbps: speedMbps || undefined,
         label: label || undefined,
       },
       {
@@ -63,6 +80,8 @@ export function BackboneLinksPage() {
           setPortA("");
           setDeviceB("");
           setPortB("");
+          setLinkType("dac");
+          setSpeedMbps(10000);
           setLabel("");
         },
       },
@@ -97,6 +116,8 @@ export function BackboneLinksPage() {
               <th className="px-3 py-2 text-center">Link</th>
               <th className="px-3 py-2">Device B</th>
               <th className="px-3 py-2">Port B</th>
+              <th className="px-3 py-2">Type</th>
+              <th className="px-3 py-2">Speed</th>
               <th className="px-3 py-2">Label</th>
               <th className="px-3 py-2">Created</th>
               <th className="px-3 py-2 w-10" />
@@ -133,11 +154,35 @@ export function BackboneLinksPage() {
                 />
               </td>
               <td className="px-3 py-2">
+                <select
+                  value={linkType}
+                  onChange={(e) => setLinkType(e.target.value)}
+                  className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+                >
+                  <option value="dac">DAC</option>
+                  <option value="fiber">Fiber</option>
+                  <option value="ethernet">Ethernet</option>
+                </select>
+              </td>
+              <td className="px-3 py-2">
+                <select
+                  value={speedMbps}
+                  onChange={(e) => setSpeedMbps(Number(e.target.value))}
+                  className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+                >
+                  <option value={10000}>10G</option>
+                  <option value={5000}>5G</option>
+                  <option value={2500}>2.5G</option>
+                  <option value={1000}>1G</option>
+                  <option value={100}>100M</option>
+                </select>
+              </td>
+              <td className="px-3 py-2">
                 <input
                   type="text"
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
-                  placeholder="Optional description"
+                  placeholder="Optional"
                   className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground"
                 />
               </td>
@@ -162,6 +207,8 @@ export function BackboneLinksPage() {
                 <td className="px-3 py-2 text-center text-muted-foreground">↔</td>
                 <td className="px-3 py-2 font-mono text-foreground">{resolveName(link.device_b)}</td>
                 <td className="px-3 py-2 font-mono text-muted-foreground">{link.port_b ?? "—"}</td>
+                <td className="px-3 py-2 text-muted-foreground capitalize">{link.link_type ?? "—"}</td>
+                <td className="px-3 py-2 font-mono text-muted-foreground">{formatSpeed(link.speed_mbps)}</td>
                 <td className="px-3 py-2 text-muted-foreground">{link.label ?? "—"}</td>
                 <td className="px-3 py-2 text-muted-foreground">{link.created_at.slice(0, 10)}</td>
                 <td className="px-3 py-2">
@@ -180,7 +227,7 @@ export function BackboneLinksPage() {
             {/* Empty state */}
             {links.data && links.data.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                <td colSpan={10} className="px-3 py-8 text-center text-sm text-muted-foreground">
                   No backbone links configured. Add one above to define a switch-to-switch connection.
                 </td>
               </tr>

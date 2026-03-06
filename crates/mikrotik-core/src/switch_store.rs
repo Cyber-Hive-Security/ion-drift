@@ -227,6 +227,7 @@ pub struct BackboneLink {
     pub port_b: Option<String>,
     pub label: Option<String>,
     pub speed_mbps: Option<u32>,
+    pub link_type: Option<String>,
     pub created_at: String,
 }
 
@@ -571,6 +572,12 @@ impl SwitchStore {
         // Migration: add speed_mbps column to backbone_links
         let _ = conn.execute(
             "ALTER TABLE backbone_links ADD COLUMN speed_mbps INTEGER",
+            [],
+        );
+
+        // Migration: add link_type column to backbone_links
+        let _ = conn.execute(
+            "ALTER TABLE backbone_links ADD COLUMN link_type TEXT DEFAULT 'dac'",
             [],
         );
 
@@ -1677,6 +1684,28 @@ impl SwitchStore {
         Ok(())
     }
 
+    /// Batch-upsert topology positions (e.g. when a VLAN sector is dragged).
+    pub async fn set_topology_positions_batch(
+        &self,
+        positions: &[(String, f64, f64)],
+        source: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        let tx = db.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO topology_positions (node_id, x, y, source, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, datetime('now'))
+                 ON CONFLICT(node_id) DO UPDATE SET x = ?2, y = ?3, source = ?4, updated_at = datetime('now')",
+            )?;
+            for (node_id, x, y) in positions {
+                stmt.execute(rusqlite::params![node_id, x, y, source])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Delete a topology position override (revert to auto).
     pub async fn delete_topology_position(&self, node_id: &str) -> Result<bool, rusqlite::Error> {
         let db = self.db.lock().await;
@@ -1747,7 +1776,7 @@ impl SwitchStore {
     pub async fn get_backbone_links(&self) -> Result<Vec<BackboneLink>, rusqlite::Error> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT id, device_a, port_a, device_b, port_b, label, speed_mbps, created_at
+            "SELECT id, device_a, port_a, device_b, port_b, label, speed_mbps, link_type, created_at
              FROM backbone_links ORDER BY device_a, device_b",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1759,7 +1788,8 @@ impl SwitchStore {
                 port_b: row.get(4)?,
                 label: row.get(5)?,
                 speed_mbps: row.get::<_, Option<u32>>(6)?,
-                created_at: row.get(7)?,
+                link_type: row.get(7)?,
+                created_at: row.get(8)?,
             })
         })?;
         rows.collect()
@@ -1773,6 +1803,8 @@ impl SwitchStore {
         device_b: &str,
         port_b: Option<&str>,
         label: Option<&str>,
+        link_type: Option<&str>,
+        speed_mbps: Option<u32>,
     ) -> Result<i64, rusqlite::Error> {
         let pa_lower = port_a.map(|p| p.to_lowercase());
         let pb_lower = port_b.map(|p| p.to_lowercase());
@@ -1783,9 +1815,9 @@ impl SwitchStore {
         };
         let db = self.db.lock().await;
         db.execute(
-            "INSERT INTO backbone_links (device_a, port_a, device_b, port_b, label)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![da, pa, db_dev, pb, label],
+            "INSERT INTO backbone_links (device_a, port_a, device_b, port_b, label, link_type, speed_mbps)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![da, pa, db_dev, pb, label, link_type, speed_mbps],
         )?;
         Ok(db.last_insert_rowid())
     }

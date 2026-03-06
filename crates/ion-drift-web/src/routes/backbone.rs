@@ -29,6 +29,8 @@ pub struct CreateBackboneLinkRequest {
     pub device_b: String,
     pub port_b: Option<String>,
     pub label: Option<String>,
+    pub link_type: Option<String>,
+    pub speed_mbps: Option<u32>,
 }
 
 /// POST /api/network/backbone-links — create a backbone link.
@@ -45,6 +47,8 @@ pub async fn create_backbone_link(
             &body.device_b,
             body.port_b.as_deref(),
             body.label.as_deref(),
+            body.link_type.as_deref(),
+            body.speed_mbps,
         )
         .await
         .map_err(|e| internal_error("create backbone link", e))?;

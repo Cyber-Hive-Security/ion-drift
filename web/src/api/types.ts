@@ -1109,6 +1109,8 @@ export interface BackboneLink {
   device_b: string;
   port_b: string | null;
   label: string | null;
+  speed_mbps: number | null;
+  link_type: string | null;
   created_at: string;
 }
 
@@ -1118,6 +1120,8 @@ export interface CreateBackboneLinkRequest {
   device_b: string;
   port_b?: string;
   label?: string;
+  link_type?: string;
+  speed_mbps?: number;
 }
 
 // ── Neighbor Aliases ───────────────────────────────────────────

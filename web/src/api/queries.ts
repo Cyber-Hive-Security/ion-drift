@@ -1330,6 +1330,35 @@ export function useResetSectorPosition() {
   });
 }
 
+export function useBatchUpdateNodePositions() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (positions: { node_id: string; x: number; y: number }[]) =>
+      apiFetch<{ status: string; count: number }>(
+        "/api/network/topology/positions",
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ positions }),
+        },
+      ),
+    onSuccess: (_data, positions) => {
+      // Optimistic cache update — mark all moved nodes as human-positioned
+      const posMap = new Map(positions.map((p) => [p.node_id, p]));
+      queryClient.setQueryData<NetworkTopologyResponse>(["network", "topology"], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          nodes: old.nodes.map((n) => {
+            const p = posMap.get(n.id);
+            return p ? { ...n, x: p.x, y: p.y, position_source: "human" } : n;
+          }),
+        };
+      });
+    },
+  });
+}
+
 // ── Backbone Links ──────────────────────────────────────────────
 
 export function useBackboneLinks() {

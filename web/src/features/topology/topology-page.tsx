@@ -6,6 +6,7 @@ import {
   useResetNodePosition,
   useUpdateSectorPosition,
   useResetSectorPosition,
+  useBatchUpdateNodePositions,
   useDevices,
   useCreateNeighborAlias,
   useSetDisposition,
@@ -544,6 +545,7 @@ export function TopologyPage() {
   const positionMutation = useUpdateNodePosition();
   const resetMutation = useResetNodePosition();
   const sectorPositionMutation = useUpdateSectorPosition();
+  const batchPositionMutation = useBatchUpdateNodePositions();
   const sectorResetMutation = useResetSectorPosition();
   const devicesList = useDevices();
   const createAliasMutation = useCreateNeighborAlias();
@@ -575,6 +577,9 @@ export function TopologyPage() {
       },
       onSectorDragEnd: (vlanId, x, y, width, height) => {
         sectorPositionMutation.mutate({ vlanId, x, y, width, height });
+      },
+      onSectorNodesDrag: (positions) => {
+        batchPositionMutation.mutate(positions);
       },
       onSectorReset: (vlanId) => {
         sectorResetMutation.mutate(vlanId);

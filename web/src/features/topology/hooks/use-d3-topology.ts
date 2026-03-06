@@ -94,6 +94,7 @@ export interface TopologyCallbacks {
   onDragEnd?: (nodeId: string, x: number, y: number) => void;
   onUnpin?: (nodeId: string) => void;
   onSectorDragEnd?: (vlanId: number, x: number, y: number, width: number, height: number) => void;
+  onSectorNodesDrag?: (positions: { node_id: string; x: number; y: number }[]) => void;
   onSectorReset?: (vlanId: number) => void;
 }
 
@@ -706,6 +707,19 @@ export function createTopologyMapInstance(
           group.bbox_y = newY;
           group.position_source = "human";
           callbacks.onSectorDragEnd?.(group.vlan_id, newX, newY, group.bbox_w, group.bbox_h);
+
+          // Batch-save all node positions in this VLAN sector
+          if (currentData && callbacks.onSectorNodesDrag) {
+            const movedNodes: { node_id: string; x: number; y: number }[] = [];
+            currentData.nodes.forEach((node) => {
+              if (node.vlan_id === group.vlan_id) {
+                movedNodes.push({ node_id: node.id, x: node.x, y: node.y });
+              }
+            });
+            if (movedNodes.length > 0) {
+              callbacks.onSectorNodesDrag(movedNodes);
+            }
+          }
         });
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
