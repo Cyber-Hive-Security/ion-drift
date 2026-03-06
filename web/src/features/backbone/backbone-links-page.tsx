@@ -124,7 +124,7 @@ export function BackboneLinksPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
+    <div className="mx-auto max-w-7xl space-y-6 p-6">
       {/* Header */}
       <div className="flex items-center gap-3">
         <Cable className="h-6 w-6 text-primary" />
@@ -139,7 +139,7 @@ export function BackboneLinksPage() {
 
       {/* Table */}
       <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[900px] text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/50 text-left text-xs text-muted-foreground">
               <th className="px-3 py-2">Device A</th>
