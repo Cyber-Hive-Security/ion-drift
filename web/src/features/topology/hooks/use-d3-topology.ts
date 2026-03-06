@@ -81,7 +81,7 @@ function speedStyle(mbps: number | null): SpeedStyle {
   if (mbps == null) return { color: "#00f0ff", width: 1.2, label: "" };
   if (mbps >= 10000) return { color: "#ffd700", width: 3.5, label: "10G" };
   if (mbps >= 5000) return { color: "#ff8c00", width: 2.5, label: "5G" };
-  if (mbps >= 2500) return { color: "#00e5ff", width: 2.0, label: "2.5G" };
+  if (mbps >= 2500) return { color: "#c0c0c0", width: 2.0, label: "2.5G" };
   if (mbps >= 1000) return { color: "#00f0ff", width: 1.2, label: "1G" };
   return { color: "#666666", width: 0.8, label: `${mbps}M` };
 }
@@ -159,7 +159,16 @@ export function createTopologyMapInstance(
     return node.kind === "router" || node.kind === "managed_switch";
   }
 
+  /** Map traffic bps to stroke width using log10.
+   *  0 bps → 0.6,  1 Kbps → 1.0,  1 Mbps → 2.0,  100 Mbps → 3.5,  1 Gbps → 4.5 */
+  function trafficWidth(bps: number): number {
+    if (bps <= 0) return 0.6;
+    const log = Math.log10(bps); // 3=1K, 6=1M, 9=1G
+    return Math.min(0.6 + (log - 2) * 0.55, 6);
+  }
+
   function edgeWidth(edge: TopologyEdge): number {
+    if (edge.traffic_bps != null && edge.traffic_bps > 0) return trafficWidth(edge.traffic_bps);
     if (edge.speed_mbps != null) return speedStyle(edge.speed_mbps).width;
     switch (edge.kind) {
       case "trunk": return 2.5;

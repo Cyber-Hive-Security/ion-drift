@@ -1202,6 +1202,7 @@ export interface TopologyEdge {
   target_port: string | null;
   vlans: number[];
   speed_mbps: number | null;
+  traffic_bps: number | null;
 }
 
 export interface TopologyVlanGroup {

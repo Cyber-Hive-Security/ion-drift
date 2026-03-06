@@ -85,6 +85,7 @@ pub struct TopologyEdge {
     pub target_port: Option<String>,
     pub vlans: Vec<u32>,
     pub speed_mbps: Option<u32>,
+    pub traffic_bps: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -412,6 +413,7 @@ pub async fn compute_topology(
                     target_port: None, // Will be filled if we find the reverse neighbor
                     vlans: Vec::new(),
                     speed_mbps: None,
+                    traffic_bps: None,
                 });
             }
         } else if let Some(ref platform) = nb.platform {
@@ -501,6 +503,7 @@ pub async fn compute_topology(
                     target_port: None,
                     vlans: Vec::new(),
                     speed_mbps: None,
+                    traffic_bps: None,
                 });
             }
         }
@@ -583,6 +586,7 @@ pub async fn compute_topology(
                 target_port: link.port_b.clone(),
                 vlans: Vec::new(),
                 speed_mbps: link.speed_mbps,
+                traffic_bps: None,
             });
         } else {
             // Edge already exists (from LLDP) — merge backbone link data into it.
@@ -651,6 +655,7 @@ pub async fn compute_topology(
                 target_port: None,
                 vlans: Vec::new(),
                 speed_mbps: Some(1000), // WAN — 1Gbps fiber
+                traffic_bps: None,
             });
         }
     }
@@ -736,6 +741,46 @@ pub async fn compute_topology(
                 resolved = ?edge.speed_mbps,
                 "edge speed resolution"
             );
+        }
+    }
+
+    // 1b-2. Resolve traffic rates on edges from port metrics
+    {
+        let mut traffic_map: HashMap<String, HashMap<String, u64>> = HashMap::new();
+        let mut device_ids_with_edges: HashSet<String> = HashSet::new();
+        for edge in &edges {
+            if edge.source_port.is_some() {
+                device_ids_with_edges.insert(edge.source.clone());
+            }
+            if edge.target_port.is_some() {
+                device_ids_with_edges.insert(edge.target.clone());
+            }
+        }
+        for dev_id in &device_ids_with_edges {
+            if let Ok(traffic) = store.get_port_traffic_bps(dev_id).await {
+                if !traffic.is_empty() {
+                    traffic_map.insert(dev_id.clone(), traffic);
+                }
+            }
+        }
+        for edge in &mut edges {
+            let src_bps = edge
+                .source_port
+                .as_deref()
+                .and_then(|p| traffic_map.get(&edge.source).and_then(|m| m.get(&p.to_lowercase())))
+                .copied();
+            let tgt_bps = edge
+                .target_port
+                .as_deref()
+                .and_then(|p| traffic_map.get(&edge.target).and_then(|m| m.get(&p.to_lowercase())))
+                .copied();
+            // Use the higher of the two (same traffic seen from both sides)
+            edge.traffic_bps = match (src_bps, tgt_bps) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            };
         }
     }
 
@@ -926,6 +971,7 @@ pub async fn compute_topology(
                     target_port: None,
                     vlans: identity.vlan_id.map(|v| vec![v]).unwrap_or_default(),
                     speed_mbps: None,
+                    traffic_bps: None,
                 });
             }
         }

@@ -657,6 +657,59 @@ impl SwitchStore {
         Ok(map)
     }
 
+    /// Get the latest traffic rate (bytes/sec) for each port on a device.
+    /// Computes rate from the two most recent metric samples per port.
+    /// Returns port_name (lowercase) → total bps (rx + tx combined, converted to bits).
+    pub async fn get_port_traffic_bps(
+        &self,
+        device_id: &str,
+    ) -> Result<HashMap<String, u64>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        // For each port, get the two most recent rows ordered by id DESC
+        let mut stmt = db.prepare(
+            "SELECT port_name, rx_bytes, tx_bytes, timestamp
+             FROM switch_port_metrics
+             WHERE device_id = ?1 AND running = 1
+             ORDER BY port_name, id DESC",
+        )?;
+        let rows = stmt.query_map(params![device_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+
+        // Group by port, take first two samples (most recent)
+        let mut port_samples: HashMap<String, Vec<(i64, i64, i64)>> = HashMap::new();
+        for row in rows {
+            let (port, rx, tx, ts) = row?;
+            let lower = port.to_lowercase();
+            let samples = port_samples.entry(lower).or_default();
+            if samples.len() < 2 {
+                samples.push((rx, tx, ts));
+            }
+        }
+
+        let mut map = HashMap::new();
+        for (port, samples) in &port_samples {
+            if samples.len() == 2 {
+                let (rx1, tx1, ts1) = samples[0]; // newer
+                let (rx0, tx0, ts0) = samples[1]; // older
+                let dt = (ts1 - ts0).max(1) as u64;
+                let rx_delta = (rx1 - rx0).max(0) as u64;
+                let tx_delta = (tx1 - tx0).max(0) as u64;
+                let bytes_per_sec = (rx_delta + tx_delta) / dt;
+                let bps = bytes_per_sec * 8;
+                if bps > 0 {
+                    map.insert(port.clone(), bps);
+                }
+            }
+        }
+        Ok(map)
+    }
+
     /// Get a distinct list of ports for a device, derived from port metrics
     /// and enriched with role data from switch_port_roles if available.
     pub async fn get_device_port_list(
