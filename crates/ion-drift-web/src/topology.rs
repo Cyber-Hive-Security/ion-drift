@@ -694,7 +694,10 @@ pub async fn compute_topology(
         for dev_id in &device_ids_with_edges {
             if let Ok(speeds) = store.get_port_speeds(dev_id).await {
                 if !speeds.is_empty() {
+                    tracing::debug!(device = %dev_id, ports = ?speeds, "port speeds loaded");
                     speed_map.insert(dev_id.clone(), speeds);
+                } else {
+                    tracing::debug!(device = %dev_id, "no port speed data available");
                 }
             }
         }
@@ -703,6 +706,11 @@ pub async fn compute_topology(
         // Port names in speed_map are lowercased for case-insensitive matching.
         for edge in &mut edges {
             if edge.speed_mbps.is_some() {
+                tracing::debug!(
+                    src = %edge.source, tgt = %edge.target,
+                    speed = ?edge.speed_mbps,
+                    "edge already has speed (manual override)"
+                );
                 continue;
             }
             let src_speed = edge
@@ -721,6 +729,13 @@ pub async fn compute_topology(
                 (None, Some(b)) => Some(b),
                 (None, None) => None,
             };
+            tracing::debug!(
+                src = %edge.source, tgt = %edge.target,
+                src_port = ?edge.source_port, tgt_port = ?edge.target_port,
+                src_speed = ?src_speed, tgt_speed = ?tgt_speed,
+                resolved = ?edge.speed_mbps,
+                "edge speed resolution"
+            );
         }
     }
 

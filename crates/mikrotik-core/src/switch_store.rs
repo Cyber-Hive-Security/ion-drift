@@ -279,6 +279,12 @@ fn parse_speed_mbps(s: &str) -> Option<u32> {
     if let Some(num_str) = s.strip_suffix("Mbps") {
         return num_str.parse::<u32>().ok();
     }
+    // Try "10Gbps", "1Gbps" format (RouterOS v7 SFP+/ethernet)
+    if let Some(num_str) = s.strip_suffix("Gbps") {
+        if let Ok(gig) = num_str.parse::<f64>() {
+            return Some((gig * 1000.0) as u32);
+        }
+    }
     // Try "1G", "2.5G", "10G" format (SwOS gigabit)
     if let Some(num_str) = s.strip_suffix('G') {
         if let Ok(gig) = num_str.parse::<f64>() {
@@ -633,9 +639,12 @@ impl SwitchStore {
             let port_lower = port.to_lowercase();
             // Parse multiple speed formats:
             //   RouterOS/SNMP: "1000Mbps", "10000Mbps"
+            //   RouterOS v7:   "1Gbps", "10Gbps"
             //   SwOS:          "10M", "100M", "1G", "2.5G", "5G", "10G"
             if let Some(mbps) = parse_speed_mbps(&speed_str) {
                 map.insert(port_lower, mbps);
+            } else {
+                tracing::warn!(device = %device_id, port = %port_lower, raw = %speed_str, "unparseable speed string");
             }
         }
         Ok(map)
