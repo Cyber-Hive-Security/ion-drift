@@ -265,6 +265,8 @@ pub struct AttachmentStateRow {
     pub state: String,
     pub current_device_id: Option<String>,
     pub current_port_name: Option<String>,
+    pub previous_device_id: Option<String>,
+    pub previous_port_name: Option<String>,
     pub current_score: f64,
     pub confidence: f64,
     pub consecutive_wins: u32,
@@ -601,6 +603,8 @@ impl SwitchStore {
                 state TEXT NOT NULL DEFAULT 'unknown',
                 current_device_id TEXT,
                 current_port_name TEXT,
+                previous_device_id TEXT,
+                previous_port_name TEXT,
                 current_score REAL NOT NULL DEFAULT 0.0,
                 confidence REAL NOT NULL DEFAULT 0.0,
                 consecutive_wins INTEGER NOT NULL DEFAULT 0,
@@ -621,6 +625,14 @@ impl SwitchStore {
             "ALTER TABLE network_identities ADD COLUMN disposition TEXT DEFAULT 'unknown'",
             "ALTER TABLE network_identities ADD COLUMN is_infrastructure INTEGER",
             "ALTER TABLE network_identities ADD COLUMN switch_binding_source TEXT DEFAULT 'auto'",
+        ] {
+            let _ = conn.execute(alter, []);
+        }
+
+        // Idempotent schema migrations — add previous binding columns to mac_attachment_state
+        for alter in &[
+            "ALTER TABLE mac_attachment_state ADD COLUMN previous_device_id TEXT",
+            "ALTER TABLE mac_attachment_state ADD COLUMN previous_port_name TEXT",
         ] {
             let _ = conn.execute(alter, []);
         }
@@ -1838,6 +1850,7 @@ impl SwitchStore {
         let db = self.db.lock().await;
         let mut stmt = db.prepare_cached(
             "SELECT mac_address, state, current_device_id, current_port_name,
+                    previous_device_id, previous_port_name,
                     current_score, confidence, consecutive_wins, consecutive_losses,
                     updated_at
              FROM mac_attachment_state",
@@ -1854,6 +1867,7 @@ impl SwitchStore {
         let db = self.db.lock().await;
         let mut stmt = db.prepare_cached(
             "SELECT mac_address, state, current_device_id, current_port_name,
+                    previous_device_id, previous_port_name,
                     current_score, confidence, consecutive_wins, consecutive_losses,
                     updated_at
              FROM mac_attachment_state WHERE mac_address = ?1",
@@ -1875,12 +1889,15 @@ impl SwitchStore {
         db.execute(
             "INSERT INTO mac_attachment_state
              (mac_address, state, current_device_id, current_port_name,
+              previous_device_id, previous_port_name,
               current_score, confidence, consecutive_wins, consecutive_losses, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(mac_address) DO UPDATE SET
                  state = excluded.state,
                  current_device_id = excluded.current_device_id,
                  current_port_name = excluded.current_port_name,
+                 previous_device_id = excluded.previous_device_id,
+                 previous_port_name = excluded.previous_port_name,
                  current_score = excluded.current_score,
                  confidence = excluded.confidence,
                  consecutive_wins = excluded.consecutive_wins,
@@ -1891,6 +1908,8 @@ impl SwitchStore {
                 &row.state,
                 &row.current_device_id,
                 &row.current_port_name,
+                &row.previous_device_id,
+                &row.previous_port_name,
                 row.current_score,
                 row.confidence,
                 row.consecutive_wins as i64,
@@ -2700,10 +2719,12 @@ fn map_attachment_state_row(row: &rusqlite::Row<'_>) -> Result<AttachmentStateRo
         state: row.get(1)?,
         current_device_id: row.get(2)?,
         current_port_name: row.get(3)?,
-        current_score: row.get(4)?,
-        confidence: row.get(5)?,
-        consecutive_wins: row.get::<_, i64>(6)? as u32,
-        consecutive_losses: row.get::<_, i64>(7)? as u32,
-        updated_at: row.get(8)?,
+        previous_device_id: row.get(4)?,
+        previous_port_name: row.get(5)?,
+        current_score: row.get(6)?,
+        confidence: row.get(7)?,
+        consecutive_wins: row.get::<_, i64>(8)? as u32,
+        consecutive_losses: row.get::<_, i64>(9)? as u32,
+        updated_at: row.get(10)?,
     })
 }

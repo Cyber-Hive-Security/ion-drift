@@ -50,6 +50,8 @@ pub struct AttachmentState {
     pub state: AttachmentStateKind,
     pub current_device_id: Option<String>,
     pub current_port_name: Option<String>,
+    pub previous_device_id: Option<String>,
+    pub previous_port_name: Option<String>,
     pub current_score: f64,
     pub confidence: f64,
     pub consecutive_wins: u32,
@@ -83,6 +85,8 @@ impl AttachmentState {
             state: AttachmentStateKind::Unknown,
             current_device_id: None,
             current_port_name: None,
+            previous_device_id: None,
+            previous_port_name: None,
             current_score: 0.0,
             confidence: 0.0,
             consecutive_wins: 0,
@@ -152,7 +156,9 @@ impl AttachmentState {
                 self.consecutive_losses = self.consecutive_losses.saturating_add(1);
 
                 if self.consecutive_losses >= loss_threshold {
-                    // Binding changes
+                    // Binding changes — save previous for roaming detection
+                    self.previous_device_id = self.current_device_id.take();
+                    self.previous_port_name = self.current_port_name.take();
                     self.current_device_id = Some(winner_device.to_string());
                     self.current_port_name = Some(winner_port.to_string());
                     self.current_score = winner_score;

@@ -131,38 +131,6 @@ pub fn prune_candidates(
     // Layer 2: Upstream suppression
     // For each pair (A, B): if B is descendant of A, and A is transit-like,
     // and B is edge-plausible, mark A as suppressed.
-    let n = candidates.len();
-    for i in 0..n {
-        for j in 0..n {
-            if i == j {
-                continue;
-            }
-            let a_dev = &candidates[i].device_id;
-            let b_dev = &candidates[j].device_id;
-
-            if graph.is_descendant_of(b_dev, a_dev) {
-                let a_key = (candidates[i].device_id.clone(), candidates[i].port_name.clone());
-                let b_key = (candidates[j].device_id.clone(), candidates[j].port_name.clone());
-
-                let a_transit_like = role_probs.get(&a_key)
-                    .map(|p| p.trunk_prob > 0.4 || p.uplink_prob > 0.4)
-                    .unwrap_or(false)
-                    || graph.is_trunk_port(&candidates[i].device_id, &candidates[i].port_name);
-
-                let b_edge_plausible = role_probs.get(&b_key)
-                    .map(|p| p.access_prob > 0.3 || p.wireless_prob > 0.3)
-                    .unwrap_or(false);
-
-                if a_transit_like && b_edge_plausible {
-                    // Mark for suppression (can't mutate while iterating)
-                    // We'll handle this after the loop
-                    break;
-                }
-            }
-        }
-    }
-
-    // Apply suppression flags using indices
     let suppress_indices: Vec<usize> = (0..candidates.len())
         .filter(|&i| {
             if candidates[i].candidate_type == CandidateType::HumanOverride {

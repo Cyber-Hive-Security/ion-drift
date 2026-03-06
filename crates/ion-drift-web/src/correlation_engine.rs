@@ -145,6 +145,20 @@ async fn run_correlation(
 
     let device_ids: Vec<String> = switch_ids.clone();
 
+    // Load backbone links early — needed for port role probability computation.
+    let backbone_links = store.get_backbone_links().await.unwrap_or_default();
+
+    // Build a set of backbone port pairs for quick lookup during probability computation.
+    let mut backbone_port_set: HashSet<(String, String)> = HashSet::new();
+    for link in &backbone_links {
+        if let Some(ref port) = link.port_a {
+            backbone_port_set.insert((link.device_a.clone(), port.to_lowercase()));
+        }
+        if let Some(ref port) = link.port_b {
+            backbone_port_set.insert((link.device_b.clone(), port.to_lowercase()));
+        }
+    }
+
     let mut all_role_probs: Vec<PortRoleProbability> = Vec::new();
 
     for device_id in &device_ids {
@@ -188,6 +202,9 @@ async fn run_correlation(
             let mac_count = mac_counts.get(port_name).copied().unwrap_or(0);
             let vlan_count = vlan_counts.get(port_name).copied().unwrap_or(0);
             let has_lldp = has_neighbor.contains(port_name);
+            let is_backbone = backbone_port_set.contains(
+                &(device_id.clone(), port_name.to_lowercase())
+            );
 
             // Discrete role (existing behavior, kept for backward compat)
             let role = classify_port_role(mac_count, vlan_count, has_lldp);
@@ -201,7 +218,7 @@ async fn run_correlation(
 
             // Probabilistic role (new — additive model)
             let port_vlans = port_vlan_ids.get(port_name.as_str()).map(|v| v.as_slice()).unwrap_or(&[]);
-            let probs = compute_port_role_probabilities(mac_count, vlan_count, has_lldp, port_vlans, &wireless_vlans);
+            let probs = compute_port_role_probabilities(mac_count, vlan_count, has_lldp, is_backbone, port_vlans, &wireless_vlans);
             all_role_probs.push(PortRoleProbability {
                 device_id: device_id.clone(),
                 port_name: port_name.to_lowercase(),
@@ -251,7 +268,6 @@ async fn run_correlation(
     // The InfrastructureGraph consolidates trunk detection, peer resolution,
     // and BFS depth — used by both legacy binding and new inference engine.
     let port_roles = store.get_port_roles(None).await.unwrap_or_default();
-    let backbone_links = store.get_backbone_links().await.unwrap_or_default();
 
     let dm_read = device_manager.read().await;
     let resolution = DeviceResolutionMaps {
@@ -904,6 +920,7 @@ fn compute_port_role_probabilities(
     mac_count: u32,
     vlan_count: u32,
     has_lldp: bool,
+    is_backbone: bool,
     port_vlans: &[u32],
     wireless_vlans: &HashSet<u32>,
 ) -> (f64, f64, f64, f64) {
@@ -911,6 +928,11 @@ fn compute_port_role_probabilities(
     let mut uplink = 0.0_f64;
     let mut access = 0.0_f64;
     let mut wireless = 0.0_f64;
+
+    // ── Backbone signal (strongest trunk indicator) ──────────
+    if is_backbone {
+        trunk += 0.75;
+    }
 
     // ── Trunk signals ────────────────────────────────────────
     if vlan_count > 3 {
