@@ -333,6 +333,8 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/settings/map-config", get(settings::map_config))
         .route("/settings/secrets", get(settings::secrets_status).put(settings::update_secrets))
         .route("/settings/secrets/session/regenerate", post(settings::regenerate_session))
+        .route("/settings/sessions", get(settings::list_sessions))
+        .route("/settings/sessions/{session_id}", delete(settings::revoke_session))
         .route("/settings/encryption", get(settings::encryption_status))
         .route("/settings/cert", get(settings::cert_status))
         .route("/settings/syslog", get(connections::syslog_status))

@@ -152,10 +152,11 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
 /// Clean up expired sessions every 10 minutes.
 fn spawn_session_cleanup(sessions: crate::auth::SessionStore) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         loop {
             interval.tick().await;
             sessions.cleanup();
+            sessions.flush_dirty();
             tracing::debug!("session cleanup complete");
         }
     });

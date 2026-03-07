@@ -49,7 +49,7 @@ where
                 .into_response()
         })?;
 
-    app_state.sessions.get(&session_id).ok_or_else(|| {
+    let session = app_state.sessions.get(&session_id).ok_or_else(|| {
         (
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse {
@@ -57,7 +57,22 @@ where
             }),
         )
             .into_response()
-    })
+    })?;
+
+    let ip = parts
+        .headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
+        .filter(|s| !s.is_empty());
+    let ua = parts
+        .headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    app_state.sessions.record_access(&session_id, ip, ua);
+
+    Ok(session)
 }
 
 impl<S> FromRequestParts<S> for RequireAuth

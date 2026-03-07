@@ -295,7 +295,10 @@ async fn main() -> anyhow::Result<()> {
     let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
 
     // Session store
-    let sessions = auth::SessionStore::new(config.session.max_age_seconds);
+    let sessions = auth::SessionStore::new(
+        config.session.max_age_seconds,
+        &data_dir.join("sessions.db"),
+    )?;
 
     // Load MAC OUI database (bundled)
     let oui_db = oui::OuiDb::load();

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Query, State};
@@ -8,6 +9,7 @@ use base64::Engine;
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use dashmap::DashMap;
+use rusqlite::params;
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata};
 use openidconnect::{
     AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet,
@@ -42,6 +44,9 @@ pub struct SessionData {
     pub email: Option<String>,
     pub roles: Vec<String>,
     pub created_at: u64,
+    pub last_accessed: u64,
+    pub created_ip: Option<String>,
+    pub user_agent: Option<String>,
 }
 
 impl SessionData {
@@ -63,41 +68,157 @@ struct PendingAuth {
     created_at: u64,
 }
 
+#[derive(Debug, Clone)]
+struct SessionRecord {
+    data: SessionData,
+    dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionListEntry {
+    pub session_id: String,
+    pub username: String,
+    pub created_at: u64,
+    pub last_accessed: u64,
+    pub created_ip: Option<String>,
+    pub user_agent: Option<String>,
+    pub is_current: bool,
+}
+
 /// In-memory session store using DashMap for lock-free concurrent access.
 #[derive(Clone)]
 pub struct SessionStore {
-    sessions: Arc<DashMap<String, SessionData>>,
+    sessions: Arc<DashMap<String, SessionRecord>>,
     pending_auth: Arc<DashMap<String, PendingAuth>>,
+    db: Arc<std::sync::Mutex<rusqlite::Connection>>,
     max_age: Duration,
 }
 
 impl SessionStore {
-    pub fn new(max_age_seconds: u64) -> Self {
-        Self {
+    pub fn new(max_age_seconds: u64, db_path: &Path) -> anyhow::Result<Self> {
+        let conn = rusqlite::Connection::open(db_path)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                email TEXT,
+                roles TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_accessed INTEGER NOT NULL,
+                created_ip TEXT,
+                user_agent TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (created_at);",
+        )?;
+        let store = Self {
             sessions: Arc::new(DashMap::new()),
             pending_auth: Arc::new(DashMap::new()),
+            db: Arc::new(std::sync::Mutex::new(conn)),
             max_age: Duration::from_secs(max_age_seconds),
+        };
+        store.load_active_from_db();
+        Ok(store)
+    }
+
+    fn load_active_from_db(&self) {
+        let now = now_secs();
+        let max_age = self.max_age.as_secs() as i64;
+        let Ok(db) = self.db.lock() else {
+            return;
+        };
+        let mut stmt = match db.prepare(
+            "SELECT session_id, user_id, username, email, roles, created_at, last_accessed, created_ip, user_agent
+             FROM sessions
+             WHERE (?1 - created_at) <= ?2",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("failed to prepare session preload query: {e}");
+                return;
+            }
+        };
+        let rows = match stmt.query_map(params![now as i64, max_age], |row| {
+            let roles_json: String = row.get(4)?;
+            let roles: Vec<String> = serde_json::from_str(&roles_json).unwrap_or_default();
+            Ok((
+                row.get::<_, String>(0)?,
+                SessionData {
+                    user_id: row.get(1)?,
+                    username: row.get(2)?,
+                    email: row.get(3)?,
+                    roles,
+                    created_at: row.get::<_, i64>(5)? as u64,
+                    last_accessed: row.get::<_, i64>(6)? as u64,
+                    created_ip: row.get(7)?,
+                    user_agent: row.get(8)?,
+                },
+            ))
+        }) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("failed to query persisted sessions: {e}");
+                return;
+            }
+        };
+        for row in rows.flatten() {
+            self.sessions.insert(
+                row.0,
+                SessionRecord {
+                    data: row.1,
+                    dirty: false,
+                },
+            );
+        }
+        if !self.sessions.is_empty() {
+            tracing::info!(count = self.sessions.len(), "loaded active sessions from sqlite");
         }
     }
 
     /// Look up a session by ID, returning None if expired.
     pub fn get(&self, session_id: &str) -> Option<SessionData> {
-        let entry = self.sessions.get(session_id)?;
+        let mut entry = self.sessions.get_mut(session_id)?;
         let now = now_secs();
-        if now - entry.created_at > self.max_age.as_secs() {
+        if now - entry.data.created_at > self.max_age.as_secs() {
             drop(entry);
             self.sessions.remove(session_id);
+            self.delete_from_db(session_id);
             return None;
         }
-        Some(entry.clone())
+        entry.data.last_accessed = now;
+        entry.dirty = true;
+        Some(entry.data.clone())
     }
 
     fn insert_session(&self, session_id: String, data: SessionData) {
-        self.sessions.insert(session_id, data);
+        self.upsert_db(&session_id, &data);
+        self.sessions.insert(
+            session_id,
+            SessionRecord {
+                data,
+                dirty: false,
+            },
+        );
     }
 
     fn remove_session(&self, session_id: &str) {
         self.sessions.remove(session_id);
+        self.delete_from_db(session_id);
+    }
+
+    pub fn record_access(&self, session_id: &str, ip: Option<String>, ua: Option<String>) {
+        if let Some(mut entry) = self.sessions.get_mut(session_id) {
+            entry.data.last_accessed = now_secs();
+            if entry.data.created_ip.is_none() {
+                entry.data.created_ip = ip;
+            }
+            if entry.data.user_agent.is_none() {
+                entry.data.user_agent = ua;
+            }
+            entry.dirty = true;
+        }
     }
 
     /// Insert a pending auth entry. Returns false if the map is at capacity
@@ -131,6 +252,9 @@ impl SessionStore {
     pub fn clear_all(&self) {
         self.sessions.clear();
         self.pending_auth.clear();
+        if let Ok(db) = self.db.lock() {
+            let _ = db.execute("DELETE FROM sessions", []);
+        }
     }
 
     /// Remove expired sessions and stale pending auth entries.
@@ -139,10 +263,100 @@ impl SessionStore {
         let session_max = self.max_age.as_secs();
         let pending_max = 300; // 5 minutes
 
-        self.sessions
-            .retain(|_, v| now - v.created_at <= session_max);
+        let mut expired_ids = Vec::new();
+        self.sessions.retain(|id, v| {
+            let keep = now - v.data.created_at <= session_max;
+            if !keep {
+                expired_ids.push(id.clone());
+            }
+            keep
+        });
+        for id in expired_ids {
+            self.delete_from_db(&id);
+        }
         self.pending_auth
             .retain(|_, v| now - v.created_at <= pending_max);
+
+        if let Ok(db) = self.db.lock() {
+            let cutoff = (now.saturating_sub(session_max)) as i64;
+            let _ = db.execute("DELETE FROM sessions WHERE created_at < ?1", params![cutoff]);
+        }
+    }
+
+    pub fn flush_dirty(&self) {
+        for mut entry in self.sessions.iter_mut() {
+            if entry.dirty {
+                self.upsert_db(entry.key(), &entry.data);
+                entry.dirty = false;
+            }
+        }
+    }
+
+    pub fn list_sessions(&self, current_session: Option<&str>) -> Vec<SessionListEntry> {
+        let mut out = Vec::new();
+        for entry in self.sessions.iter() {
+            let data = &entry.data;
+            out.push(SessionListEntry {
+                session_id: entry.key().clone(),
+                username: data.username.clone(),
+                created_at: data.created_at,
+                last_accessed: data.last_accessed,
+                created_ip: data.created_ip.clone(),
+                user_agent: data.user_agent.clone(),
+                is_current: current_session == Some(entry.key().as_str()),
+            });
+        }
+        out.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+        out
+    }
+
+    pub fn revoke_session(&self, session_id: &str) -> bool {
+        let existed = self.sessions.remove(session_id).is_some();
+        self.delete_from_db(session_id);
+        existed
+    }
+
+    fn upsert_db(&self, session_id: &str, data: &SessionData) {
+        let roles = match serde_json::to_string(&data.roles) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("failed to serialize session roles: {e}");
+                return;
+            }
+        };
+        if let Ok(db) = self.db.lock() {
+            let _ = db.execute(
+                "INSERT INTO sessions
+                    (session_id, user_id, username, email, roles, created_at, last_accessed, created_ip, user_agent)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(session_id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    username = excluded.username,
+                    email = excluded.email,
+                    roles = excluded.roles,
+                    created_at = excluded.created_at,
+                    last_accessed = excluded.last_accessed,
+                    created_ip = excluded.created_ip,
+                    user_agent = excluded.user_agent",
+                params![
+                    session_id,
+                    data.user_id,
+                    data.username,
+                    data.email,
+                    roles,
+                    data.created_at as i64,
+                    data.last_accessed as i64,
+                    data.created_ip,
+                    data.user_agent
+                ],
+            );
+        }
+    }
+
+    fn delete_from_db(&self, session_id: &str) {
+        if let Ok(db) = self.db.lock() {
+            let _ = db.execute("DELETE FROM sessions WHERE session_id = ?1", params![session_id]);
+        }
     }
 }
 
@@ -262,6 +476,7 @@ pub async fn callback(
     State(state): State<AppState>,
     Query(params): Query<CallbackParams>,
     jar: CookieJar,
+    headers: axum::http::HeaderMap,
 ) -> Result<(CookieJar, Redirect), Response> {
     // Retrieve and consume the pending auth state
     let (nonce, pkce_verifier) = state
@@ -316,12 +531,25 @@ pub async fn callback(
     // Create session with 256-bit cryptographic token
     let session_bytes: [u8; 32] = rand::random();
     let session_id = hex::encode(session_bytes);
+    let created_at = now_secs();
+    let created_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
+        .filter(|s| !s.is_empty());
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     let session_data = SessionData {
         user_id,
         username,
         email,
         roles,
-        created_at: now_secs(),
+        created_at,
+        last_accessed: created_at,
+        created_ip,
+        user_agent,
     };
     state
         .sessions
