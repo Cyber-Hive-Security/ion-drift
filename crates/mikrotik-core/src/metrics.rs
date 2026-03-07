@@ -334,6 +334,36 @@ impl MetricsStore {
         Ok(points)
     }
 
+    /// Return the most recent VLAN metrics row per VLAN name.
+    /// Each tuple is (vlan_name, rx_bps, tx_bps).
+    pub async fn latest_vlan_metrics(&self) -> Result<Vec<(String, u64, u64)>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db
+            .prepare(
+                "SELECT vlan_name, rx_bps, tx_bps
+                 FROM vlan_metrics
+                 WHERE timestamp = (SELECT MAX(timestamp) FROM vlan_metrics)
+                 ORDER BY vlan_name ASC",
+            )
+            .map_err(|e| format!("latest_vlan_metrics prepare: {e}"))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
+            })
+            .map_err(|e| format!("latest_vlan_metrics query: {e}"))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| format!("latest_vlan_metrics row: {e}"))?);
+        }
+        Ok(results)
+    }
+
     // ── Log aggregates ───────────────────────────────────────────
 
     /// Record an hourly log aggregate.

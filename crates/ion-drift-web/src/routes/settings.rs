@@ -9,6 +9,29 @@ use crate::state::AppState;
 
 use super::internal_error;
 
+// ── GET /api/settings/map-config ────────────────────────────────
+
+#[derive(Serialize)]
+pub struct MapConfigResponse {
+    /// Home longitude, if configured.
+    pub home_lon: Option<f64>,
+    /// Home latitude, if configured.
+    pub home_lat: Option<f64>,
+    /// Home country ISO 3166-1 alpha-2 code, if configured.
+    pub home_country: Option<String>,
+}
+
+pub async fn map_config(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Json<MapConfigResponse> {
+    Json(MapConfigResponse {
+        home_lon: state.config.server.home_lon,
+        home_lat: state.config.server.home_lat,
+        home_country: state.config.server.home_country.clone(),
+    })
+}
+
 // ── GET /api/settings/secrets ────────────────────────────────────
 
 #[derive(Serialize)]

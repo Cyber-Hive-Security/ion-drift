@@ -1,6 +1,12 @@
 [server]
 listen_addr = "0.0.0.0"
 listen_port = 3000
+# Optional: home location for the world map. If set, arcs originate from here
+# and the home country is highlighted green. If omitted, no home marker is shown
+# and all data points are displayed without suppression.
+# home_lon = -111.97
+# home_lat = 41.22
+# home_country = "US"
 
 [router]
 host = "192.168.88.1"
@@ -9,6 +15,8 @@ tls = true
 ca_cert_path = "/path/to/ca.crt"
 username = "admin"
 # password from HIVE_ROUTER_PASSWORD env var (legacy mode only)
+# Internal DNS server IP for PTR lookups (omit to disable PTR lookups)
+# dns_server = "10.20.25.6"
 
 [oidc]
 issuer_url = "https://your-keycloak.example.com/realms/YourRealm"

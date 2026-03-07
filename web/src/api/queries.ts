@@ -54,6 +54,7 @@ import type {
   WeeklySnapshot,
   SyslogStatus,
   GeoIpStatus,
+  MapConfig,
   ConnectionHistoryStats,
   NetworkDevice,
   CreateDeviceRequest,
@@ -687,6 +688,14 @@ export function useGeoIpStatus() {
     queryKey: ["settings", "geoip"],
     queryFn: () => apiFetch<GeoIpStatus>("/api/settings/geoip"),
     staleTime: 300_000,
+  });
+}
+
+export function useMapConfig() {
+  return useQuery({
+    queryKey: ["settings", "map-config"],
+    queryFn: () => apiFetch<MapConfig>("/api/settings/map-config"),
+    staleTime: Infinity,
   });
 }
 

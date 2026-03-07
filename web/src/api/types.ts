@@ -842,6 +842,12 @@ export interface GeoIpStatus {
   has_credentials: boolean;
 }
 
+export interface MapConfig {
+  home_lon: number | null;
+  home_lat: number | null;
+  home_country: string | null;
+}
+
 export interface ConnectionHistoryStats {
   retention_days: number;
   row_count: number;

@@ -197,6 +197,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/history/snapshots", get(history::list_snapshots))
         .route("/history/snapshot/{week}/{snapshot_type}", get(history::get_snapshot))
         // Settings
+        .route("/settings/map-config", get(settings::map_config))
         .route("/settings/secrets", get(settings::secrets_status).put(settings::update_secrets))
         .route("/settings/secrets/session/regenerate", post(settings::regenerate_session))
         .route("/settings/encryption", get(settings::encryption_status))

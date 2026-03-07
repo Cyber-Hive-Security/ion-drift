@@ -417,6 +417,7 @@ async fn main() -> anyhow::Result<()> {
         app_state.oui_db.clone(),
         device_manager.clone(),
         app_state.mikrotik.clone(),
+        config.router.dns_server.clone(),
     );
     topology::spawn_topology_updater(
         switch_store.clone(),

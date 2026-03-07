@@ -5,6 +5,7 @@ import {
   useSnapshots,
   useSnapshot,
   useConnectionHistory,
+  useMapConfig,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { HistoryHelp } from "@/components/help-content";
@@ -270,6 +271,14 @@ export function HistoryPage() {
   const [countryFilter, setCountryFilter] = useState<string | undefined>();
   const [historyPage, setHistoryPage] = useState(1);
 
+  // Map config (home location)
+  const mapConfig = useMapConfig();
+  const home: [number, number] | null =
+    mapConfig.data?.home_lon != null && mapConfig.data?.home_lat != null
+      ? [mapConfig.data.home_lon, mapConfig.data.home_lat]
+      : null;
+  const homeCountry = mapConfig.data?.home_country ?? null;
+
   // Live data queries
   const geoSummary = useGeoSummary(Number(timeRange));
   const citySummary = useCitySummary(Number(timeRange), 50);
@@ -417,6 +426,8 @@ export function HistoryPage() {
                 onCountryClick={handleCountryClick}
                 onCityClick={handleCityClick}
                 timeRange={selectedWeek ?? timeRange}
+                home={home}
+                homeCountry={homeCountry}
               />
               {mapData.length > 0 && (
                 <div className="mt-6">

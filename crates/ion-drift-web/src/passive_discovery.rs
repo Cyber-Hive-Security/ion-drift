@@ -213,26 +213,9 @@ fn parse_ip_port(addr: &str) -> (String, Option<u32>) {
 }
 
 /// Check if an IP is in RFC 1918 private ranges.
+/// Delegates to the canonical implementation in mikrotik-core.
 fn is_internal_ip(ip: &str) -> bool {
-    let octets: Vec<&str> = ip.split('.').collect();
-    if octets.len() != 4 {
-        return false;
-    }
-    let first: u8 = match octets[0].parse() {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let second: u8 = match octets[1].parse() {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-
-    match first {
-        10 => true,                             // 10.0.0.0/8
-        172 => (16..=31).contains(&second),     // 172.16.0.0/12
-        192 => second == 168,                   // 192.168.0.0/16
-        _ => false,
-    }
+    mikrotik_core::behavior::is_internal_ip(ip)
 }
 
 /// Well-known high ports that are legitimate server ports (not ephemeral).

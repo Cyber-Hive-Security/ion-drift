@@ -16,13 +16,6 @@ use tokio::sync::RwLock;
 use crate::device_manager::DeviceManager;
 use crate::oui::OuiDb;
 
-/// Technitium internal DNS server for PTR lookups.
-const DNS_SERVER: IpAddr = {
-    // 10.20.25.6 — const IpAddr construction
-    use std::net::{IpAddr, Ipv4Addr};
-    IpAddr::V4(Ipv4Addr::new(10, 20, 25, 6))
-};
-
 /// Spawn the correlation engine that runs every 60s to:
 /// 1. Classify port roles (access/trunk/uplink/unused)
 /// 2. Build unified network identities from MAC/neighbor/OUI/ARP/DHCP data
@@ -31,7 +24,19 @@ pub fn spawn_correlation_engine(
     oui_db: Arc<OuiDb>,
     device_manager: Arc<RwLock<DeviceManager>>,
     router_client: MikrotikClient,
+    dns_server: Option<String>,
 ) {
+    // Parse the DNS server IP once at spawn time.
+    let dns_server_ip: Option<IpAddr> = dns_server.as_deref().and_then(|s| {
+        match s.parse::<IpAddr>() {
+            Ok(ip) => Some(ip),
+            Err(e) => {
+                tracing::warn!("invalid dns_server IP '{s}': {e} — PTR lookups disabled");
+                None
+            }
+        }
+    });
+
     tokio::spawn(async move {
         // 90-second startup delay — let switch pollers collect initial data
         tokio::time::sleep(Duration::from_secs(90)).await;
@@ -43,7 +48,7 @@ pub fn spawn_correlation_engine(
         loop {
             interval.tick().await;
 
-            if let Err(e) = run_correlation(&switch_store, &oui_db, &device_manager, &router_client).await {
+            if let Err(e) = run_correlation(&switch_store, &oui_db, &device_manager, &router_client, dns_server_ip).await {
                 tracing::warn!("correlation engine error: {e}");
             }
         }
@@ -55,6 +60,7 @@ async fn run_correlation(
     oui_db: &OuiDb,
     device_manager: &Arc<RwLock<DeviceManager>>,
     router_client: &MikrotikClient,
+    dns_server_ip: Option<IpAddr>,
 ) -> anyhow::Result<()> {
     // ── 0. Prune stale entries ──────────────────────────────────
     // Entries older than 1 hour are leftovers from port renames or
@@ -784,8 +790,8 @@ async fn run_correlation(
         .map(|(mac, b)| (mac.clone(), b.best_ip.clone().unwrap()))
         .collect();
 
-    if !ips_needing_ptr.is_empty() {
-        match build_ptr_resolver() {
+    if !ips_needing_ptr.is_empty() && dns_server_ip.is_some() {
+        match build_ptr_resolver(dns_server_ip.unwrap()) {
             Ok(resolver) => {
                 let mut resolved = 0u32;
                 for (mac, ip) in &ips_needing_ptr {
@@ -1097,12 +1103,11 @@ impl IdentityBuilder {
 }
 
 /// Infer VLAN ID from an IP address using the vlan_config subnet data.
-/// Falls back to third-octet heuristic for VLANs not yet in the DB.
 fn vlan_from_ip(ip: &str, vlan_subnets: &[(u32, String)]) -> Option<u32> {
     let ip_addr: std::net::Ipv4Addr = ip.parse().ok()?;
     let ip_u32 = u32::from(ip_addr);
 
-    // Try DB-sourced subnets first (exact CIDR match)
+    // Match against DB-sourced subnets (exact CIDR match)
     for (vlan_id, cidr) in vlan_subnets {
         if let Some((net, mask_bits)) = parse_cidr(cidr) {
             let mask = if mask_bits == 0 { 0 } else { !0u32 << (32 - mask_bits) };
@@ -1112,24 +1117,7 @@ fn vlan_from_ip(ip: &str, vlan_subnets: &[(u32, String)]) -> Option<u32> {
         }
     }
 
-    // Fallback: third-octet heuristic for any VLANs not in DB yet
-    let octets: Vec<&str> = ip.split('.').collect();
-    if octets.len() != 4 {
-        return None;
-    }
-    let third: u32 = octets[2].parse().ok()?;
-    match (octets[0], octets[1], third) {
-        ("10", "2", 2) => Some(2),
-        ("172", "20", 6) => Some(6),
-        ("172", "20", 10) => Some(10),
-        ("10", "20", 25) => Some(25),
-        ("10", "20", 30) => Some(30),
-        ("10", "20", 35) => Some(35),
-        ("172", "20", 40) => Some(40),
-        ("192", "168", 90) => Some(90),
-        ("192", "168", 99) => Some(99),
-        _ => None,
-    }
+    None
 }
 
 /// Parse a CIDR string like "10.20.25.0/24" into (network_u32, mask_bits).
@@ -1328,9 +1316,9 @@ fn build_wap_children(
     children
 }
 
-/// Build an async DNS resolver pointing at Technitium for PTR lookups.
-fn build_ptr_resolver() -> anyhow::Result<Resolver<TokioConnectionProvider>> {
-    let ns_group = NameServerConfigGroup::from_ips_clear(&[DNS_SERVER], 53, true);
+/// Build an async DNS resolver pointing at the given DNS server for PTR lookups.
+fn build_ptr_resolver(dns_server: IpAddr) -> anyhow::Result<Resolver<TokioConnectionProvider>> {
+    let ns_group = NameServerConfigGroup::from_ips_clear(&[dns_server], 53, true);
     let config = ResolverConfig::from_parts(None, Vec::new(), ns_group);
     let mut opts = ResolverOpts::default();
     opts.timeout = Duration::from_millis(500);

@@ -6,11 +6,8 @@ import type { GeoSummaryEntry, CitySummaryEntry } from "@/api/types";
 import { formatBytes, formatNumber } from "@/lib/format";
 import { escHtml } from "@/lib/utils";
 
-// Home location (Ogden, UT) and home country
-const HOME: [number, number] = [-111.97, 41.22];
-const HOME_COUNTRY = "US";
-
 // Distance threshold (in projected pixels) to suppress city dots near home
+// (only applies when a home location is configured)
 const HOME_EXCLUSION_PX = 30;
 
 // Country centroid fallbacks — approximate [lon, lat] for countries
@@ -114,6 +111,10 @@ interface WorldMapProps {
   onCountryClick?: (code: string) => void;
   onCityClick?: (city: string, countryCode: string) => void;
   timeRange: string;
+  /** Home longitude/latitude from server config. Null = no home configured. */
+  home?: [number, number] | null;
+  /** Home country ISO 3166-1 alpha-2 code. Null = no home country. */
+  homeCountry?: string | null;
 }
 
 export function WorldMap({
@@ -123,6 +124,8 @@ export function WorldMap({
   onCountryClick,
   onCityClick,
   timeRange,
+  home = null,
+  homeCountry = null,
 }: WorldMapProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -155,7 +158,7 @@ export function WorldMap({
 
   // Pre-compute scaling ranges for arcs and dots
   const { minBytes, maxBytes, minCount, maxCount } = useMemo(() => {
-    const nonHome = data.filter((d) => d.country_code !== HOME_COUNTRY);
+    const nonHome = homeCountry ? data.filter((d) => d.country_code !== homeCountry) : data;
     const bytes = nonHome.map((d) => d.total_tx + d.total_rx).filter((b) => b > 0);
     const counts = nonHome.map((d) => d.connection_count).filter((c) => c > 0);
     return {
@@ -181,7 +184,7 @@ export function WorldMap({
   // Country fill color
   function countryColor(code: string, entry: GeoSummaryEntry | undefined): string {
     if (!entry || entry.connection_count === 0) return "#2C3038";
-    if (code === HOME_COUNTRY) return "#21D07A";
+    if (homeCountry && code === homeCountry) return "#21D07A";
     if (entry.flagged_count > 0) return "#FF4D4F";
     return "#2FA4FF";
   }
@@ -399,52 +402,56 @@ export function WorldMap({
       const countryDotsGroup = zoomGroup.append("g").attr("class", "country-dots");
 
       for (const entry of data) {
-        if (entry.country_code === HOME_COUNTRY) continue;
+        if (homeCountry && entry.country_code === homeCountry) continue;
         const dest = getDestination(entry);
         if (!dest) continue;
 
         const color = arcColor(entry);
         const totalBytes = entry.total_tx + entry.total_rx;
-        const strokeWidth = logScale(totalBytes, minBytes, maxBytes, 1, 6);
-        const opacity = Math.min(0.85, 0.3 + strokeWidth * 0.08);
 
-        const lineGeo: GeoJSON.Feature<GeoJSON.LineString> = {
-          type: "Feature",
-          properties: {},
-          geometry: { type: "LineString", coordinates: [HOME, dest] },
-        };
+        // Only draw arcs if home is configured
+        if (home) {
+          const strokeWidth = logScale(totalBytes, minBytes, maxBytes, 1, 6);
+          const opacity = Math.min(0.85, 0.3 + strokeWidth * 0.08);
 
-        // Arc line — interactive
-        arcsGroup
-          .append("path")
-          .datum(lineGeo)
-          .attr("d", path as any)
-          .attr("fill", "none")
-          .attr("stroke", color)
-          .attr("stroke-width", strokeWidth)
-          .attr("stroke-opacity", opacity)
-          .attr("cursor", "pointer")
-          .on("mouseenter", function (event: MouseEvent) {
-            d3.select(this)
-              .attr("stroke-width", strokeWidth + 2)
-              .attr("stroke-opacity", 1);
-            showTooltip(`
-              <div style="font-weight:600;margin-bottom:4px">Ogden, UT &rarr; ${countryFlag(entry.country_code)} ${esc(entry.country)}</div>
-              <div>Connections: ${formatNumber(entry.connection_count)}</div>
-              <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
-              ${entry.flagged_count > 0 ? `<div style="color:#FF4D4F">Flagged: ${formatNumber(entry.flagged_count)}</div>` : ""}
-              ${entry.top_orgs.length > 0 ? `<div style="font-size:10px;color:#8A929D">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
-            `);
-            moveTooltip(event);
-          })
-          .on("mousemove", (event: MouseEvent) => moveTooltip(event))
-          .on("mouseleave", function () {
-            d3.select(this)
-              .attr("stroke-width", strokeWidth)
-              .attr("stroke-opacity", opacity);
-            hideTooltip();
-          })
-          .on("click", () => onCountryClick?.(entry.country_code));
+          const lineGeo: GeoJSON.Feature<GeoJSON.LineString> = {
+            type: "Feature",
+            properties: {},
+            geometry: { type: "LineString", coordinates: [home, dest] },
+          };
+
+          // Arc line — interactive
+          arcsGroup
+            .append("path")
+            .datum(lineGeo)
+            .attr("d", path as any)
+            .attr("fill", "none")
+            .attr("stroke", color)
+            .attr("stroke-width", strokeWidth)
+            .attr("stroke-opacity", opacity)
+            .attr("cursor", "pointer")
+            .on("mouseenter", function (event: MouseEvent) {
+              d3.select(this)
+                .attr("stroke-width", strokeWidth + 2)
+                .attr("stroke-opacity", 1);
+              showTooltip(`
+                <div style="font-weight:600;margin-bottom:4px">Home &rarr; ${countryFlag(entry.country_code)} ${esc(entry.country)}</div>
+                <div>Connections: ${formatNumber(entry.connection_count)}</div>
+                <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
+                ${entry.flagged_count > 0 ? `<div style="color:#FF4D4F">Flagged: ${formatNumber(entry.flagged_count)}</div>` : ""}
+                ${entry.top_orgs.length > 0 ? `<div style="font-size:10px;color:#8A929D">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
+              `);
+              moveTooltip(event);
+            })
+            .on("mousemove", (event: MouseEvent) => moveTooltip(event))
+            .on("mouseleave", function () {
+              d3.select(this)
+                .attr("stroke-width", strokeWidth)
+                .attr("stroke-opacity", opacity);
+              hideTooltip();
+            })
+            .on("click", () => onCountryClick?.(entry.country_code));
+        }
 
         // Country destination dot — scaled by connection count
         const projected = projection(dest);
@@ -481,7 +488,7 @@ export function WorldMap({
       }
 
       // ── City-level arcs and dots ───────────────────────────────
-      const homeProj = projection(HOME);
+      const homeProj = home ? projection(home) : null;
       const cityArcsGroup = zoomGroup.append("g").attr("class", "city-arcs");
       const cityDotsGroup = zoomGroup.append("g").attr("class", "city-dots");
 
@@ -490,8 +497,8 @@ export function WorldMap({
         const projected = projection(cityCoords);
         if (!projected) continue;
 
-        // Skip cities too close to home dot
-        if (homeProj) {
+        // Skip cities too close to home dot (only when home is configured)
+        if (home && homeProj) {
           const dx = projected[0] - homeProj[0];
           const dy = projected[1] - homeProj[1];
           if (Math.sqrt(dx * dx + dy * dy) < HOME_EXCLUSION_PX) continue;
@@ -501,26 +508,28 @@ export function WorldMap({
         // City dots: 2px to 10px (always smaller than country dots' 4-16px range)
         const radius = logScale(city.connection_count, minCityCount, maxCityCount, 2, 10);
 
-        // Arc line from home to city
-        const cityBytes = city.bytes_tx + city.bytes_rx;
-        const arcWidth = logScale(cityBytes, minCityBytes, maxCityBytes, 0.5, 3);
-        const arcOpacity = Math.min(0.7, 0.15 + arcWidth * 0.06);
+        // Arc line from home to city (only when home is configured)
+        if (home) {
+          const cityBytes = city.bytes_tx + city.bytes_rx;
+          const arcWidth = logScale(cityBytes, minCityBytes, maxCityBytes, 0.5, 3);
+          const arcOpacity = Math.min(0.7, 0.15 + arcWidth * 0.06);
 
-        const lineGeo: GeoJSON.Feature<GeoJSON.LineString> = {
-          type: "Feature",
-          properties: {},
-          geometry: { type: "LineString", coordinates: [HOME, cityCoords] },
-        };
+          const lineGeo: GeoJSON.Feature<GeoJSON.LineString> = {
+            type: "Feature",
+            properties: {},
+            geometry: { type: "LineString", coordinates: [home, cityCoords] },
+          };
 
-        cityArcsGroup
-          .append("path")
-          .datum(lineGeo)
-          .attr("d", path as any)
-          .attr("fill", "none")
-          .attr("stroke", color)
-          .attr("stroke-width", arcWidth)
-          .attr("stroke-opacity", arcOpacity)
-          .attr("pointer-events", "none");
+          cityArcsGroup
+            .append("path")
+            .datum(lineGeo)
+            .attr("d", path as any)
+            .attr("fill", "none")
+            .attr("stroke", color)
+            .attr("stroke-width", arcWidth)
+            .attr("stroke-opacity", arcOpacity)
+            .attr("pointer-events", "none");
+        }
 
         // Outer halo ring
         cityDotsGroup
@@ -568,7 +577,7 @@ export function WorldMap({
       }
 
       // ── Home marker (on top of everything, fixed size) ────────
-      if (homeProj) {
+      if (home && homeProj) {
         zoomGroup
           .append("circle")
           .attr("cx", homeProj[0])
@@ -594,7 +603,7 @@ export function WorldMap({
     return () => {
       cancelled = true;
     };
-  }, [data, cityData, dimensions, countryIndex, minBytes, maxBytes, minCount, maxCount, minCityCount, maxCityCount, minCityBytes, maxCityBytes, onCountryClick, onCityClick, timeRange]);
+  }, [data, cityData, dimensions, countryIndex, minBytes, maxBytes, minCount, maxCount, minCityCount, maxCityCount, minCityBytes, maxCityBytes, onCountryClick, onCityClick, timeRange, home, homeCountry]);
 
   // Summary: per-country breakdown sorted by connection count
   const sortedCountries = useMemo(
@@ -727,13 +736,15 @@ export function WorldMap({
 
       {/* Legend */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground md:text-[10px]">
-        <div className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-2.5 w-2.5 rounded-full"
-            style={{ background: "#21D07A" }}
-          />
-          Home (US)
-        </div>
+        {homeCountry && (
+          <div className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-full"
+              style={{ background: "#21D07A" }}
+            />
+            Home ({homeCountry})
+          </div>
+        )}
         <div className="flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-2.5 rounded-full"
