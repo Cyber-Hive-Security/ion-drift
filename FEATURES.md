@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-06 — commit `4b1af95` (add link speed column to identity manager table)
+> **Last updated:** 2026-03-06 — commit `131ecdf` (topology inference engine in active mode)
 
 ## Overview
 
@@ -22,7 +22,7 @@ ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network 
 |-------|------|
 | `mikrotik-core` | Shared RouterOS REST API client, resource models, SwitchStore (SQLite), BehaviorStore |
 | `ion-drift-cli` | clap-based CLI binary with table/JSON/CSV output |
-| `ion-drift-web` | Axum web server + React SPA, OIDC auth, 50+ API routes, 20+ background tasks |
+| `ion-drift-web` | Axum web server + React SPA, OIDC auth, 55+ API routes, 21 background tasks |
 | `web/` | React frontend (Vite + TypeScript) |
 
 ### Deployment
@@ -182,6 +182,105 @@ Compares expected MACs (from `port_mac_bindings`) against actual on each port. C
 ### Confidence Scoring
 
 Cumulative: IP (+0.2), hostname (+0.2), manufacturer (+0.15), switch_port (+0.15), discovery_protocol (+0.15), VLAN (+0.15). Max 1.0.
+
+---
+
+## Topology Inference Engine
+
+Probabilistic MAC attachment resolver that replaces the deterministic depth-based priority scoring (Section 4 above) with a weighted candidate scoring pipeline. Controlled by `TOPOLOGY_INFERENCE_MODE` environment variable.
+
+### Operating Modes
+
+| Mode | Behavior |
+|------|----------|
+| `legacy` | Old deterministic binding only. Inference disabled. |
+| `shadow` | Both old and new run. New results logged but not applied to identities. |
+| `active` | New inference replaces old binding logic. (Current mode.) |
+
+### Pipeline
+
+For each active MAC address in the observation window (10 minutes):
+
+1. **Candidate Generation** — Each unique (device_id, port_name) pair from recent MAC observations becomes a candidate. Additional candidates generated for wireless parents (WAP attribution via AP feeder map) and human overrides.
+2. **Pruning** — Candidates on trunk/uplink ports are suppressed (with reason). Router-bound candidates suppressed when access-port alternatives exist. Wired device types (`camera`, `printer`, `server`, `switch`, `router`) never generate WAP candidates.
+3. **Scoring** — 13-feature weighted scoring per candidate:
+
+| Feature | Weight | Description |
+|---------|--------|-------------|
+| Edge likelihood | 2.0 | Port role probability of being an access port |
+| Persistence | 1.5 | Observation frequency within window |
+| VLAN consistency | 1.2 | Match between candidate VLAN and identity VLAN |
+| Downstream preference | 1.0 | Deeper switches preferred over upstream |
+| Recency | 0.8 | More recent observations weighted higher |
+| Graph depth | 0.6 | BFS depth from router in infrastructure graph |
+| Device class fit | 0.6 | Device type matches expected port behavior |
+| Transit penalty | -2.0 | Penalizes trunk/uplink candidates |
+| Contradiction penalty | -1.5 | Penalizes candidates contradicting other evidence |
+| Router penalty | -3.0 | Strongly suppresses router as attachment point |
+| Wireless attachment likelihood | 0.5 | Wireless VLAN + WAP feeder port alignment |
+| WAP path consistency | 0.3 | WAP candidate matches AP feeder topology |
+| AP feeder penalty | -1.0 | Penalizes non-WAP candidates on WAP feeder ports |
+
+4. **Winner Selection** — Highest-scoring non-suppressed candidate wins. Margin of victory (gap to runner-up) factors into confidence.
+
+### Attachment State Machine
+
+Per-MAC state tracked with confidence progression:
+
+```
+Unknown -> Candidate (1 win) -> Probable (3 wins) -> Stable (10 wins)
+```
+
+Additional states: `Roaming` (binding changed), `Conflicted` (low-margin winner), `HumanPinned` (manual override).
+
+Each state tracks: current/previous device+port, score, confidence (0.0-1.0), consecutive wins/losses.
+
+### Infrastructure Graph
+
+BFS-computed graph of registered devices connected via LLDP neighbors and backbone links. Used for depth scoring and downstream preference calculations. Devices resolved by identity name, IP, or MAC to registered device IDs.
+
+### SNMP Port Name Canonicalization
+
+SNMP agents (e.g. Netgear MS510TXPP) expose the same physical port under multiple MIB naming conventions (`mg5`, `twopointfivegigabitethernet5`, `port5`). All are normalized to `portN` canonical form so MAC counts, VLAN counts, and role probabilities aggregate correctly.
+
+### Divergence Analytics
+
+When running in shadow or active mode, tracks divergences between inference bindings and legacy bindings. Categorized as:
+- `port_alias_only` — Same device, canonical ports match (naming difference only)
+- `router_fallback` — Legacy was bound to router, inference found a better switch
+- `wireless_parent_preferred` — Inference resolved to a WAP
+- `better_downstream_access` — Same device, inference found a better port
+- `different_switch` — Completely different device
+
+### APIs
+
+- `GET /api/network/inference/status` — Mode, MAC count, state distribution, avg confidence, divergence stats
+- `GET /api/network/inference/mac/{mac}` — Per-MAC detail: attachment state, current binding, scored candidates, explanation
+- `GET /api/network/inference/observations` — Recent observation stats (total, unique MACs, per-device counts)
+- `GET /api/network/inference/states` — All attachment state rows
+
+### Frontend
+
+`/inference` — Diagnostic dashboard with:
+- Status cards: mode badge, total MACs, average confidence, divergence count
+- State distribution breakdown
+- Divergence category breakdown
+- Attachment states table with state badges (color-coded by confidence level)
+- Per-MAC drill-down: scored candidates with feature breakdowns, explanation text, current vs inferred binding comparison
+
+### Background Task
+
+- Runs as part of the correlation engine cycle (60s interval)
+- In active mode: writes resolved bindings back to `network_identities`
+- In shadow mode: writes attachment states only, does not modify identities
+
+### Data Persistence
+
+| Table | Database | Purpose |
+|-------|----------|---------|
+| `mac_observations` | `switch.db` | Recent MAC sightings per (device, port) with timestamps |
+| `attachment_states` | `switch.db` | Per-MAC state machine state, scores, confidence |
+| `port_role_probabilities` | `switch.db` | Per-port role probability distributions |
 
 ---
 
@@ -700,6 +799,7 @@ Output formats: `--format table|json|csv`
 | Neighbor poller | 60s | LLDP/MNDP/CDP discovery from all devices |
 | Device health check | Per-device | Connectivity status for each registered device |
 | Correlation engine | 60s | Port roles, MAC ranges, unified identity assembly |
+| Topology inference | 60s | Probabilistic MAC attachment scoring (runs within correlation cycle) |
 | Topology updater | 120s | Recompute hierarchical graph from all data sources |
 | Passive discovery | 120s | Service detection from conntrack (replaces nmap) |
 
@@ -715,7 +815,7 @@ Output formats: `--format table|json|csv`
 | `behavior.db` | `device_profiles`, `device_observations`, `baselines`, `anomalies` | Behavioral analysis |
 | `connections.db` | `connection_history`, `port_flow_baseline`, `anomaly_links`, `snapshots` | Connection history, anomaly cross-references, snapshots |
 | `geo.db` | `geo_cache` | ip-api.com lookup cache (7-day TTL) |
-| `switch.db` | `switch_port_metrics`, `switch_mac_table`, `switch_vlan_membership`, `neighbor_discovery`, `switch_port_roles`, `network_identities`, `observed_services`, `topology_positions`, `topology_sector_positions`, `backbone_links`, `vlan_config`, `port_mac_bindings`, `port_violations` | Switch data, correlated identities, topology, backbone links, VLAN config, port security |
+| `switch.db` | `switch_port_metrics`, `switch_mac_table`, `switch_vlan_membership`, `neighbor_discovery`, `switch_port_roles`, `network_identities`, `observed_services`, `topology_positions`, `topology_sector_positions`, `backbone_links`, `vlan_config`, `port_mac_bindings`, `port_violations`, `mac_observations`, `attachment_states`, `port_role_probabilities` | Switch data, correlated identities, topology, backbone links, VLAN config, port security, inference state |
 
 ---
 
@@ -734,6 +834,7 @@ Output formats: `--format table|json|csv`
 | `/network-map` | Tactical Map | Hand-curated D3 force-directed topology (legacy) |
 | `/network/identities` | Identity Manager | Review queue, disposition tags, MAC bindings, services |
 | `/network/backbone` | Backbone Links | Manual switch-to-switch interconnect config for non-LLDP devices |
+| `/inference` | Inference Diagnostics | Mode badge, state distribution, divergence analytics, per-MAC drill-down |
 | `/topology` | Network Topology | Auto-generated D3 hierarchical map, VLAN sectors, drag-to-pin |
 | `/switches/$deviceId` | Switch Detail | Per-switch port metrics, MAC table, VLANs, port roles |
 | `/settings` | Settings | Device registry, secrets, cert, syslog, GeoIP, connection stats |
