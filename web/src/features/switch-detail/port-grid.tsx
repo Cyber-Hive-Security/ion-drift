@@ -167,7 +167,8 @@ export function PortGrid({
       });
     }
 
-    // Group by port family prefix and filter out families with no running ports
+    // Group by port family and keep families that have at least one running port
+    // OR have VLAN membership data (proves they're real physical ports)
     const familyMap = new Map<string, PortCellData[]>();
     for (const cell of allCells) {
       const family = portFamily(cell.portName);
@@ -178,7 +179,7 @@ export function PortGrid({
 
     const activeFamilies = new Set<string>();
     for (const [family, members] of familyMap) {
-      if (members.some((c) => c.running)) {
+      if (members.some((c) => c.running || c.primaryVlanId !== null || c.macCount > 0)) {
         activeFamilies.add(family);
       }
     }
