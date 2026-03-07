@@ -69,7 +69,7 @@ function CustomNode(props: SankeyNodePayload) {
         y={y + height / 2 + 14}
         textAnchor={isLeft ? "end" : "start"}
         dominantBaseline="central"
-        fill="#6B7785"
+        fill="#8A929D"
         fontSize={10}
       >
         {formatBytes(payload.rawValue)}
@@ -282,8 +282,8 @@ export function VlanTrafficBreakdown() {
           position: "fixed",
           pointerEvents: "none",
           zIndex: 50,
-          backgroundColor: "#141A21",
-          border: "1px solid #2A323D",
+          backgroundColor: "#2C3038",
+          border: "1px solid #444B55",
           color: "#E6EDF3",
           borderRadius: "6px",
           padding: "6px 12px",

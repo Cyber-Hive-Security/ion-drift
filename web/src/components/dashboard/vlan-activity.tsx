@@ -108,13 +108,13 @@ function VlanRow({
               </defs>
               <XAxis
                 dataKey="time"
-                tick={{ fill: "#6B7785", fontSize: 9 }}
+                tick={{ fill: "#8A929D", fontSize: 9 }}
                 interval="preserveStartEnd"
                 axisLine={false}
                 tickLine={false}
               />
               <YAxis
-                tick={{ fill: "#6B7785", fontSize: 9 }}
+                tick={{ fill: "#8A929D", fontSize: 9 }}
                 tickFormatter={(v: number) => formatBps(v)}
                 width={60}
                 axisLine={false}
@@ -122,8 +122,8 @@ function VlanRow({
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: "#141A21",
-                  border: "1px solid #2A323D",
+                  backgroundColor: "#2C3038",
+                  border: "1px solid #444B55",
                   borderRadius: "6px",
                   color: "#E6EDF3",
                   fontSize: "11px",

@@ -1,7 +1,7 @@
 import { useMemo, useRef, useEffect } from "react";
 import { DataTable, type Column } from "@/components/data-table";
 import { cn } from "@/lib/utils";
-import { VLAN_CONFIG } from "@/features/network-map/data";
+import { VLAN_CONFIG } from "@/constants/vlans";
 import { formatBytes } from "@/lib/format";
 import type {
   PortMetricsTuple,

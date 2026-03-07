@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { DataTable, type Column } from "@/components/data-table";
-import { VLAN_CONFIG } from "@/features/network-map/data";
+import { VLAN_CONFIG } from "@/constants/vlans";
 import { X } from "lucide-react";
 import type { MacTableEntry, NetworkIdentity } from "@/api/types";
 import { relativeTime } from "./utils";

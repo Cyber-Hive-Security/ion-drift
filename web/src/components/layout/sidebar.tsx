@@ -9,7 +9,6 @@ import {
   Plug2,
   ScrollText,
   Activity,
-  Map,
   Settings,
   History,
   Fingerprint,
@@ -27,7 +26,6 @@ const navItems = [
   { to: "/behavior", label: "Behavior", icon: Activity },
   { to: "/history", label: "History", icon: History },
   { to: "/logs", label: "Logs", icon: ScrollText },
-  { to: "/network-map", label: "Network Map", icon: Map },
 ] as const;
 
 interface SidebarProps {

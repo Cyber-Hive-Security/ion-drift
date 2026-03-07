@@ -26,7 +26,7 @@ import {
   useDevices,
 } from "@/api/queries";
 import type { NetworkIdentity, ObservedService, DeviceDisposition } from "@/api/types";
-import { VLAN_CONFIG } from "@/features/network-map/data";
+import { VLAN_CONFIG } from "@/constants/vlans";
 
 // ── Device type options ─────────────────────────────────────────
 

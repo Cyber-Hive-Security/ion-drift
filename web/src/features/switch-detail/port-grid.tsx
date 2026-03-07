@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { VLAN_CONFIG } from "@/features/network-map/data";
+import { VLAN_CONFIG } from "@/constants/vlans";
 import type {
   PortMetricsTuple,
   VlanMembershipEntry,

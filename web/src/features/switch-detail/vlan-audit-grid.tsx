@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { VLAN_CONFIG } from "@/features/network-map/data";
+import { VLAN_CONFIG } from "@/constants/vlans";
 import type { VlanMembershipEntry, PortRoleEntry } from "@/api/types";
 import { portSortKey, portShortName } from "./utils";
 

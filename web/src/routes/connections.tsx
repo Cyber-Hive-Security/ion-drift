@@ -29,7 +29,7 @@ const PROTOCOL_COLORS: Record<string, string> = {
   tcp: "#2FA4FF",
   udp: "#21D07A",
   icmp: "#FFC857",
-  other: "#6B7785",
+  other: "#8A929D",
 };
 
 type FilterMode = "all" | "flagged" | "tcp" | "udp" | "external";
@@ -345,7 +345,7 @@ function GeoDistribution({
       </p>
       <ResponsiveContainer width="100%" height={Math.max(200, countryData.length * 24)}>
         <BarChart data={countryData} layout="vertical" margin={{ left: 60 }}>
-          <XAxis type="number" tick={{ fontSize: 10, fill: "#6B7785" }} />
+          <XAxis type="number" tick={{ fontSize: 10, fill: "#8A929D" }} />
           <YAxis
             type="category"
             dataKey="code"
@@ -355,8 +355,8 @@ function GeoDistribution({
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: "#141A21",
-              border: "1px solid #2A323D",
+              backgroundColor: "#2C3038",
+              border: "1px solid #444B55",
               borderRadius: "6px",
               color: "#E6EDF3",
               fontSize: "12px",
@@ -900,24 +900,24 @@ function ConnectionHistoryChart() {
               <stop offset="95%" stopColor="#21D07A" stopOpacity={0} />
             </linearGradient>
             <linearGradient id="connOtherGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#6B7785" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="#6B7785" stopOpacity={0} />
+              <stop offset="5%" stopColor="#8A929D" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#8A929D" stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#2A323D" />
+          <CartesianGrid strokeDasharray="3 3" stroke="#444B55" />
           <XAxis
             dataKey="time"
-            tick={{ fill: "#6B7785", fontSize: 11 }}
+            tick={{ fill: "#8A929D", fontSize: 11 }}
             interval="preserveStartEnd"
           />
           <YAxis
-            tick={{ fill: "#6B7785", fontSize: 11 }}
+            tick={{ fill: "#8A929D", fontSize: 11 }}
             tickFormatter={(v: number) => formatNumber(v)}
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: "#141A21",
-              border: "1px solid #2A323D",
+              backgroundColor: "#2C3038",
+              border: "1px solid #444B55",
               borderRadius: "6px",
               color: "#E6EDF3",
               fontSize: "12px",
@@ -949,7 +949,7 @@ function ConnectionHistoryChart() {
             type="monotone"
             dataKey="other"
             stackId="1"
-            stroke="#6B7785"
+            stroke="#8A929D"
             strokeWidth={1.5}
             fill="url(#connOtherGrad)"
             isAnimationActive={false}

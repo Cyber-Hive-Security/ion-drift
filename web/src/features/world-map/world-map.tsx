@@ -180,7 +180,7 @@ export function WorldMap({
 
   // Country fill color
   function countryColor(code: string, entry: GeoSummaryEntry | undefined): string {
-    if (!entry || entry.connection_count === 0) return "#141A21";
+    if (!entry || entry.connection_count === 0) return "#2C3038";
     if (code === HOME_COUNTRY) return "#21D07A";
     if (entry.flagged_count > 0) return "#FF4D4F";
     return "#2FA4FF";
@@ -297,8 +297,8 @@ export function WorldMap({
         .append("path")
         .datum({ type: "Sphere" } as any)
         .attr("d", path as any)
-        .attr("fill", "#0B0F14")
-        .attr("stroke", "#1C232C");
+        .attr("fill", "#24272C")
+        .attr("stroke", "#343840");
 
       const countries = topojson.feature(
         world,
@@ -361,7 +361,7 @@ export function WorldMap({
           const alpha2 = numericToAlpha2[d.id] || "";
           return countryColor(alpha2, countryIndex.get(alpha2));
         })
-        .attr("stroke", "#1C232C")
+        .attr("stroke", "#343840")
         .attr("stroke-width", 0.5)
         .attr("cursor", "pointer")
         .on("mouseenter", function (_event: MouseEvent, d: any) {
@@ -378,13 +378,13 @@ export function WorldMap({
               <div>Sources: ${formatNumber(entry.unique_sources)} / Destinations: ${formatNumber(entry.unique_destinations)}</div>
               <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
               ${flagged}
-              ${entry.top_orgs.length > 0 ? `<div style="margin-top:4px;font-size:10px;color:#6B7785">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
+              ${entry.top_orgs.length > 0 ? `<div style="margin-top:4px;font-size:10px;color:#8A929D">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
             `);
           }
         })
         .on("mousemove", (event: MouseEvent) => moveTooltip(event))
         .on("mouseleave", function () {
-          d3.select(this).attr("stroke", "#1C232C").attr("stroke-width", 0.5);
+          d3.select(this).attr("stroke", "#343840").attr("stroke-width", 0.5);
           hideTooltip();
         })
         .on("click", (_event: any, d: any) => {
@@ -433,7 +433,7 @@ export function WorldMap({
               <div>Connections: ${formatNumber(entry.connection_count)}</div>
               <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
               ${entry.flagged_count > 0 ? `<div style="color:#FF4D4F">Flagged: ${formatNumber(entry.flagged_count)}</div>` : ""}
-              ${entry.top_orgs.length > 0 ? `<div style="font-size:10px;color:#6B7785">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
+              ${entry.top_orgs.length > 0 ? `<div style="font-size:10px;color:#8A929D">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
             `);
             moveTooltip(event);
           })
@@ -548,7 +548,7 @@ export function WorldMap({
           .on("mouseenter", function (event: MouseEvent) {
             d3.select(this).attr("r", radius + 1.5).attr("fill-opacity", 0.9);
             const orgsLine = city.top_orgs.length > 0
-              ? `<div style="font-size:10px;color:#6B7785">Top: ${city.top_orgs.slice(0, 3).map(esc).join(" &middot; ")}</div>`
+              ? `<div style="font-size:10px;color:#8A929D">Top: ${city.top_orgs.slice(0, 3).map(esc).join(" &middot; ")}</div>`
               : "";
             showTooltip(`
               <div style="font-weight:600;margin-bottom:4px">${esc(city.city)}, ${esc(city.country_code)}</div>
@@ -658,7 +658,7 @@ export function WorldMap({
       </div>
 
       {/* Map */}
-      <div className="relative overflow-hidden rounded-lg border border-border bg-[#0B0F14]">
+      <div className="relative overflow-hidden rounded-lg border border-border bg-[#24272C]">
         {isLoading && data.length === 0 ? (
           <div
             className="flex items-center justify-center text-sm text-muted-foreground"
@@ -714,8 +714,8 @@ export function WorldMap({
           position: "fixed",
           pointerEvents: "none",
           zIndex: 50,
-          backgroundColor: "#141A21",
-          border: "1px solid #2A323D",
+          backgroundColor: "#2C3038",
+          border: "1px solid #444B55",
           color: "#E6EDF3",
           borderRadius: "6px",
           padding: "8px 12px",

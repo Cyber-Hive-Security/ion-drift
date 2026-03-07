@@ -60,8 +60,8 @@ export function TrafficCard({ data }: { data: LifetimeTraffic }) {
                 </defs>
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: "#141A21",
-                    border: "1px solid #2A323D",
+                    backgroundColor: "#2C3038",
+                    border: "1px solid #444B55",
                     borderRadius: "6px",
                     color: "#E6EDF3",
                     fontSize: "12px",

@@ -907,15 +907,15 @@ function LogTrendsSection() {
             <BarChart data={chartData}>
               <XAxis
                 dataKey="time"
-                tick={{ fill: "#6B7785", fontSize: 9 }}
+                tick={{ fill: "#8A929D", fontSize: 9 }}
                 interval="preserveStartEnd"
                 axisLine={false}
                 tickLine={false}
               />
               <Tooltip
                 contentStyle={{
-                  background: "#141A21",
-                  border: "1px solid #2A323D",
+                  background: "#2C3038",
+                  border: "1px solid #444B55",
                   borderRadius: 6,
                   fontSize: 11,
                 }}
@@ -1007,8 +1007,8 @@ function AnalyticsPanel({ analytics }: { analytics: LogAnalytics }) {
               />
               <Tooltip
                 contentStyle={{
-                  background: "#141A21",
-                  border: "1px solid #2A323D",
+                  background: "#2C3038",
+                  border: "1px solid #444B55",
                   borderRadius: 6,
                   fontSize: 11,
                 }}
@@ -1043,7 +1043,7 @@ function AnalyticsPanel({ analytics }: { analytics: LogAnalytics }) {
               </defs>
               <XAxis
                 dataKey="minute"
-                tick={{ fontSize: 9, fill: "#6B7785" }}
+                tick={{ fontSize: 9, fill: "#8A929D" }}
                 tickFormatter={(v: string) => (v.length > 11 ? v.slice(11) : v)}
                 interval="preserveStartEnd"
                 axisLine={false}
@@ -1051,8 +1051,8 @@ function AnalyticsPanel({ analytics }: { analytics: LogAnalytics }) {
               />
               <Tooltip
                 contentStyle={{
-                  background: "#141A21",
-                  border: "1px solid #2A323D",
+                  background: "#2C3038",
+                  border: "1px solid #444B55",
                   borderRadius: 6,
                   fontSize: 11,
                 }}

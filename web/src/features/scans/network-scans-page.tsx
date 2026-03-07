@@ -25,7 +25,7 @@ import {
   useRemoveExclusion,
 } from "@/api/queries";
 import type { NmapScan, NmapResult, ScanExclusion } from "@/api/types";
-import { VLAN_CONFIG } from "@/features/network-map/data";
+import { VLAN_CONFIG } from "@/constants/vlans";
 
 // ── Helpers ─────────────────────────────────────────────────────
 

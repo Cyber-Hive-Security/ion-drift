@@ -83,7 +83,7 @@ function speedStyle(mbps: number | null): SpeedStyle {
   if (mbps >= 5000) return { color: "#FF4FD8", width: 2.5, label: "5G" };
   if (mbps >= 2500) return { color: "#7A5CFF", width: 2.0, label: "2.5G" };
   if (mbps >= 1000) return { color: "#00E5FF", width: 1.2, label: "1G" };
-  return { color: "#6B7785", width: 0.8, label: `${mbps}M` };
+  return { color: "#8A929D", width: 0.8, label: `${mbps}M` };
 }
 
 // ─── Public Types ───────────────────────────────────────
@@ -140,7 +140,7 @@ export function createTopologyMapInstance(
     if (node.kind === "unmanaged_switch") return "#7A5CFF";
     if (node.kind === "access_point") return "#7A5CFF";
     if (node.kind === "server") return "#2FA4FF";
-    if (node.kind === "camera") return "#6B7785";
+    if (node.kind === "camera") return "#8A929D";
     if (node.kind === "media_player") return "#FF4FD8";
     if (node.vlan_id != null && VLAN_COLORS[node.vlan_id]) return VLAN_COLORS[node.vlan_id];
     if (node.is_infrastructure) return "#00E5FF";
@@ -190,7 +190,7 @@ export function createTopologyMapInstance(
     if (edge.kind === "uplink") return "#2FA4FF";
     if (edge.kind === "trunk") return "#00E5FF";
     if (edge.vlans.length === 1 && VLAN_COLORS[edge.vlans[0]]) return VLAN_COLORS[edge.vlans[0]];
-    return "#6B7785";
+    return "#8A929D";
   }
 
   function edgeSpeedLabel(edge: TopologyEdge): string {
@@ -376,16 +376,16 @@ export function createTopologyMapInstance(
     const tip = createTooltip();
     const lines: string[] = [];
     lines.push(`<strong style="color:${nodeColor(node)}">${escHtml(node.label)}</strong>`);
-    if (node.kind) lines.push(`<span style="color:#6B7785">Kind:</span> ${escHtml(node.kind)}`);
-    if (node.ip) lines.push(`<span style="color:#6B7785">IP:</span> ${escHtml(node.ip)}`);
-    if (node.mac) lines.push(`<span style="color:#6B7785">MAC:</span> ${escHtml(node.mac)}`);
-    if (node.vlan_id != null) lines.push(`<span style="color:#6B7785">VLAN:</span> ${node.vlan_id}`);
-    if (node.device_type) lines.push(`<span style="color:#6B7785">Type:</span> ${escHtml(node.device_type)}`);
-    if (node.manufacturer) lines.push(`<span style="color:#6B7785">Mfg:</span> ${escHtml(node.manufacturer)}`);
+    if (node.kind) lines.push(`<span style="color:#8A929D">Kind:</span> ${escHtml(node.kind)}`);
+    if (node.ip) lines.push(`<span style="color:#8A929D">IP:</span> ${escHtml(node.ip)}`);
+    if (node.mac) lines.push(`<span style="color:#8A929D">MAC:</span> ${escHtml(node.mac)}`);
+    if (node.vlan_id != null) lines.push(`<span style="color:#8A929D">VLAN:</span> ${node.vlan_id}`);
+    if (node.device_type) lines.push(`<span style="color:#8A929D">Type:</span> ${escHtml(node.device_type)}`);
+    if (node.manufacturer) lines.push(`<span style="color:#8A929D">Mfg:</span> ${escHtml(node.manufacturer)}`);
     if (node.switch_port) {
-      lines.push(`<span style="color:#6B7785">Port:</span> ${escHtml(node.switch_port)}`);
+      lines.push(`<span style="color:#8A929D">Port:</span> ${escHtml(node.switch_port)}`);
     } else if (node.parent_id) {
-      lines.push(`<span style="color:#6B7785">Port:</span> <em style="color:#2A323D">downstream of ${escHtml(node.parent_id)}</em>`);
+      lines.push(`<span style="color:#8A929D">Port:</span> <em style="color:#444B55">downstream of ${escHtml(node.parent_id)}</em>`);
     }
     tip.innerHTML = lines.join("<br>");
     tip.style.display = "block";
@@ -400,10 +400,10 @@ export function createTopologyMapInstance(
     const speedLbl = edgeSpeedLabel(edge);
     const lines: string[] = [];
     lines.push(`<span style="color:#00E5FF;font-weight:600">${escHtml(edge.kind)}</span>`);
-    lines.push(`<span style="color:#6B7785">${escHtml(src?.label || edge.source)} &harr; ${escHtml(tgt?.label || edge.target)}</span>`);
+    lines.push(`<span style="color:#8A929D">${escHtml(src?.label || edge.source)} &harr; ${escHtml(tgt?.label || edge.target)}</span>`);
     if (speedLbl) lines.push(`<span style="color:#2FA4FF">${escHtml(speedLbl)}</span>`);
     if (edge.source_port || edge.target_port) {
-      lines.push(`<span style="color:#6B7785">${escHtml(edge.source_port || "?")} → ${escHtml(edge.target_port || "?")}</span>`);
+      lines.push(`<span style="color:#8A929D">${escHtml(edge.source_port || "?")} → ${escHtml(edge.target_port || "?")}</span>`);
     }
     tip.innerHTML = lines.join("<br>");
     tip.style.display = "block";
@@ -833,7 +833,7 @@ export function createTopologyMapInstance(
             .attr("x", src.x + dx * 0.15)
             .attr("y", src.y + dy * 0.15 - 6)
             .attr("text-anchor", "middle")
-            .attr("fill", "#6B7785")
+            .attr("fill", "#8A929D")
             .attr("font-size", 8)
             .attr("font-family", "'Share Tech Mono', monospace")
             .text(edge.source_port);
@@ -843,7 +843,7 @@ export function createTopologyMapInstance(
             .attr("x", src.x + dx * 0.85)
             .attr("y", src.y + dy * 0.85 - 6)
             .attr("text-anchor", "middle")
-            .attr("fill", "#6B7785")
+            .attr("fill", "#8A929D")
             .attr("font-size", 8)
             .attr("font-family", "'Share Tech Mono', monospace")
             .text(edge.target_port);
@@ -1143,7 +1143,7 @@ export function createTopologyMapInstance(
             .attr("x", node.x + labelX)
             .attr("y", node.y + labelY + 13)
             .attr("text-anchor", anchor)
-            .attr("fill", "#6B7785")
+            .attr("fill", "#8A929D")
             .attr("font-size", 9)
             .attr("font-family", "'Share Tech Mono', monospace")
             .text(node.ip);

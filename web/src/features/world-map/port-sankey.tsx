@@ -34,8 +34,8 @@ const CLASSIFICATION_COLORS: Record<
     tcp: "#FFC857",
   },
   disappeared: {
-    udp: "#6B7785", // muted
-    tcp: "#6B7785",
+    udp: "#8A929D", // muted
+    tcp: "#8A929D",
   },
 };
 
@@ -132,7 +132,7 @@ function CustomNode(props: SankeyNodePayload) {
       : cls === "volume_spike" || cls === "source_anomaly"
         ? "#FFC857"
         : cls === "disappeared"
-          ? "#6B7785"
+          ? "#8A929D"
           : undefined;
 
   return (
@@ -162,7 +162,7 @@ function CustomNode(props: SankeyNodePayload) {
         y={y + height / 2 + 14}
         textAnchor={isLeft ? "end" : "start"}
         dominantBaseline="central"
-        fill="#6B7785"
+        fill="#8A929D"
         fontSize={10}
       >
         {cls === "disappeared" && payload.baselineAvg
@@ -274,7 +274,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
             cls === "new_port"
               ? "#FF4D4F"
               : cls === "disappeared"
-                ? "#6B7785"
+                ? "#8A929D"
                 : "#FFC857";
           badge.textContent =
             cls === "new_port"
@@ -312,7 +312,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
               el.appendChild(document.createElement("br"));
               const more = document.createElement("span");
               more.style.fontSize = "10px";
-              more.style.color = "#6B7785";
+              more.style.color = "#8A929D";
               more.textContent = `  +${devices.length - 5} more`;
               el.appendChild(more);
             }
@@ -475,8 +475,8 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
           position: "fixed",
           pointerEvents: "none",
           zIndex: 50,
-          backgroundColor: "#141A21",
-          border: "1px solid #2A323D",
+          backgroundColor: "#2C3038",
+          border: "1px solid #444B55",
           color: "#E6EDF3",
           borderRadius: "6px",
           padding: "6px 12px",

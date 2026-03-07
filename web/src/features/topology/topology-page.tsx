@@ -115,8 +115,8 @@ const LEGEND_SPEEDS = [
 const LEGEND_EDGES = [
   { color: "#00E5FF", width: 2, dash: false, label: "Trunk" },
   { color: "#2FA4FF", width: 2, dash: false, label: "Uplink" },
-  { color: "#6B7785", width: 1, dash: false, label: "Access" },
-  { color: "#6B7785", width: 1, dash: true, label: "Wireless" },
+  { color: "#8A929D", width: 1, dash: false, label: "Access" },
+  { color: "#8A929D", width: 1, dash: true, label: "Wireless" },
 ] as const;
 
 function LegendSection({ title, children }: { title: string; children: React.ReactNode }) {
@@ -251,7 +251,7 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
                   style={{ background: color, opacity: 0.6 }}
                 />
                 <span>
-                  <span style={{ color: "#6B7785" }}>{vid}:</span> {VLAN_NAMES[Number(vid)] ?? ""}
+                  <span style={{ color: "#8A929D" }}>{vid}:</span> {VLAN_NAMES[Number(vid)] ?? ""}
                 </span>
               </div>
             ))}
@@ -286,7 +286,7 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
                   className="inline-block min-w-[50px] rounded px-1 py-px text-center text-[9px]"
                   style={{
                     fontFamily: "'Share Tech Mono', monospace",
-                    color: "#6B7785",
+                    color: "#8A929D",
                     background: "rgba(255,255,255,0.04)",
                     border: "1px solid rgba(255,255,255,0.08)",
                   }}
@@ -721,7 +721,7 @@ export function TopologyPage() {
         <svg
           ref={svgRef}
           className="topology-root h-full w-full"
-          style={{ background: "#0B0F14" }}
+          style={{ background: "#24272C" }}
         />
 
         {/* Detail Panel */}

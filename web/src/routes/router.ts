@@ -21,12 +21,6 @@ import BackboneLinksPage from "@/features/backbone/backbone-links-page";
 import { InferencePage } from "@/features/inference/inference-page";
 import { SetupWizard } from "@/features/provision/setup-wizard";
 
-// Lazy-load the network map page — it pulls in D3 and heavy SVG rendering
-// that benefits from being in a separate chunk.
-const LazyNetworkMapPage = React.lazy(
-  () => import("@/features/network-map/network-map-page").then((m) => ({ default: m.NetworkMapPage })),
-);
-
 // Lazy-load the auto-generated topology page (separate D3 chunk).
 const LazyTopologyPage = React.lazy(
   () => import("@/features/topology/topology-page").then((m) => ({ default: m.TopologyPage })),
@@ -83,48 +77,6 @@ const historyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/history",
   component: HistoryPage,
-});
-
-class NetworkMapErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { error: Error | null }
-> {
-  state = { error: null as Error | null };
-  static getDerivedStateFromError(error: Error) { return { error }; }
-  componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error("[NetworkMap] Load failed:", error.message, error.stack);
-    console.error("[NetworkMap] Component stack:", info.componentStack);
-  }
-  render() {
-    if (this.state.error) {
-      return React.createElement("div", { className: "flex h-full flex-col items-center justify-center gap-4 text-muted-foreground" },
-        React.createElement("p", null, "Failed to load Network Map."),
-        React.createElement("p", { className: "text-xs text-destructive max-w-md text-center" }, this.state.error.message),
-        React.createElement("button", {
-          className: "rounded border border-border px-4 py-2 text-sm hover:bg-accent",
-          onClick: () => this.setState({ error: null }),
-        }, "Retry"),
-      );
-    }
-    return this.props.children;
-  }
-}
-
-function NetworkMapWrapper() {
-  return React.createElement(
-    NetworkMapErrorBoundary, null,
-    React.createElement(
-      React.Suspense,
-      { fallback: React.createElement("div", { className: "flex h-full items-center justify-center text-muted-foreground" }, "Loading Network Map\u2026") },
-      React.createElement(LazyNetworkMapPage),
-    ),
-  );
-}
-
-const networkMapRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/network-map",
-  component: NetworkMapWrapper,
 });
 
 class TopologyErrorBoundary extends React.Component<
@@ -214,7 +166,6 @@ const routeTree = rootRoute.addChildren([
   logsRoute,
   behaviorRoute,
   historyRoute,
-  networkMapRoute,
   topologyRoute,
   switchDetailRoute,
   identitiesRoute,
