@@ -4,8 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use mikrotik_core::SwitchStore;
-use mikrotik_core::switch_store::{AttachmentStateRow, MacObservation, PortRoleProbability};
+use ion_drift_storage::SwitchStore;
+use ion_drift_storage::switch::{AttachmentStateRow, MacObservation, PortRoleProbability};
 
 use super::ApFeederMap;
 use super::candidates;

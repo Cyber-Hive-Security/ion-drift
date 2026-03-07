@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use mikrotik_core::{BehaviorStore, MikrotikClient, MetricsStore, SwitchStore, TrafficTracker};
-use mikrotik_core::behavior::VlanRegistry;
+use mikrotik_core::{MikrotikClient, TrafficTracker};
+use ion_drift_storage::{BehaviorStore, MetricsStore, SwitchStore};
+use ion_drift_storage::behavior::VlanRegistry;
 use mikrotik_core::resources::firewall::FilterRule;
 use crate::auth::{OidcClient, SessionStore};
 use crate::config::ServerConfig;

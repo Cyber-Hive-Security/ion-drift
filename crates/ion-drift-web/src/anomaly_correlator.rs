@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::behavior::{BehaviorStore, NewAnomaly, VlanRegistry};
+use ion_drift_storage::behavior::{BehaviorStore, NewAnomaly, VlanRegistry};
 use tokio::sync::RwLock;
 
 use crate::connection_store::{ConnectionStore, FlowClassification, NewAnomalyLink};

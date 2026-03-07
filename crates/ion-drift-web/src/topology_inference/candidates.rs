@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use mikrotik_core::switch_store::{MacObservation, PortRoleProbability};
+use ion_drift_storage::switch::{MacObservation, PortRoleProbability};
 use serde::Serialize;
 
 use super::ApFeederMap;

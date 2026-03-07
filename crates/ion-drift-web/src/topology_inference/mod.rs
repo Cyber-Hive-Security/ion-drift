@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use mikrotik_core::switch_store::BackboneLink;
+use ion_drift_storage::switch::BackboneLink;
 
 pub mod graph;
 pub mod candidates;
@@ -53,7 +53,7 @@ pub fn build_ap_feeder_map(
 /// Identifies devices with device_type "access_point" or "wap" and returns
 /// their hostname (preferred) or MAC address as identifiers.
 pub fn build_wap_identifier_set(
-    infrastructure_identities: &[mikrotik_core::switch_store::NetworkIdentity],
+    infrastructure_identities: &[ion_drift_storage::switch::NetworkIdentity],
 ) -> HashSet<String> {
     infrastructure_identities
         .iter()

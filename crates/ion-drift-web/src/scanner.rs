@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use mikrotik_core::switch_store::{NmapResult, NmapScan, SwitchStore};
+use ion_drift_storage::switch::{NmapResult, NmapScan, SwitchStore};
 
 /// Nmap scanner with single-scan enforcement.
 pub struct NmapScanner {
@@ -180,7 +180,7 @@ async fn run_nmap_scan(
     scan_id: &str,
     cidr: &str,
     profile: ScanProfile,
-    exclusions: &[mikrotik_core::switch_store::ScanExclusion],
+    exclusions: &[ion_drift_storage::switch::ScanExclusion],
 ) -> Result<i32, String> {
     let mut args: Vec<String> = profile.flags().into_iter().map(|s| s.to_string()).collect();
     args.push("-oX".to_string());

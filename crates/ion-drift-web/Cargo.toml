@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 mikrotik-core = { path = "../mikrotik-core" }
+ion-drift-storage = { path = "../ion-drift-storage" }
 axum = { version = "0.8", features = ["macros"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
 tower = "0.5"

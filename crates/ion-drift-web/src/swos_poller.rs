@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::SwitchStore;
-use mikrotik_core::switch_store::{PortMetricEntry, VlanMembershipEntry};
+use ion_drift_storage::SwitchStore;
+use ion_drift_storage::switch::{PortMetricEntry, VlanMembershipEntry};
 use mikrotik_core::swos_client::{SwosClient, SwosLink};
 use tokio::sync::{watch, RwLock};
 

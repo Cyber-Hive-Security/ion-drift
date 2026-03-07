@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::{MikrotikClient, SwitchStore};
-use mikrotik_core::switch_store::{PortMetricEntry, VlanMembershipEntry};
+use mikrotik_core::MikrotikClient;
+use ion_drift_storage::SwitchStore;
+use ion_drift_storage::switch::{PortMetricEntry, VlanMembershipEntry};
 use tokio::sync::{watch, RwLock};
 
 use crate::device_manager::{DeviceClient, DeviceManager, DeviceStatus};

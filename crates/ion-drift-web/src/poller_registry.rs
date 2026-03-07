@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mikrotik_core::SwitchStore;
+use ion_drift_storage::SwitchStore;
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 

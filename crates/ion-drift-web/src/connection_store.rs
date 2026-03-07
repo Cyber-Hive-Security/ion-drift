@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
-use mikrotik_core::behavior::VlanRegistry;
+use ion_drift_storage::behavior::VlanRegistry;
 
 use crate::geo::{self, GeoCache, GeoInfo};
 

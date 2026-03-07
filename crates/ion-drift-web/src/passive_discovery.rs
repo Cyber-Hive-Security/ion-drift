@@ -21,7 +21,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::{MikrotikClient, SwitchStore};
+use mikrotik_core::MikrotikClient;
+use ion_drift_storage::SwitchStore;
 
 /// Background task interval (seconds).
 const POLL_INTERVAL_SECS: u64 = 120;
@@ -215,7 +216,7 @@ fn parse_ip_port(addr: &str) -> (String, Option<u32>) {
 /// Check if an IP is in RFC 1918 private ranges.
 /// Delegates to the canonical implementation in mikrotik-core.
 fn is_internal_ip(ip: &str) -> bool {
-    mikrotik_core::behavior::is_internal_ip(ip)
+    ion_drift_storage::behavior::is_internal_ip(ip)
 }
 
 /// Well-known high ports that are legitimate server ports (not ephemeral).

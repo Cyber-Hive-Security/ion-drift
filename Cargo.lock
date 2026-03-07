@@ -1449,6 +1449,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ion-drift-storage"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ion-drift-web"
 version = "0.1.0"
 dependencies = [
@@ -1464,6 +1475,7 @@ dependencies = [
  "futures",
  "hex",
  "hickory-resolver",
+ "ion-drift-storage",
  "jsonwebtoken",
  "libc",
  "maxminddb",

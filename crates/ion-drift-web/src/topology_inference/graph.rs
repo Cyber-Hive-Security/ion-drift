@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use mikrotik_core::switch_store::{BackboneLink, NeighborEntry};
+use ion_drift_storage::switch::{BackboneLink, NeighborEntry};
 use serde::Serialize;
 
 use super::canonicalize_port_name;

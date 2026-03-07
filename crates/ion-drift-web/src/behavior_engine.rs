@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use mikrotik_core::behavior::{
+use ion_drift_storage::behavior::{
     self, BehaviorStore, DeviceObservation, NewAnomaly, VlanRegistry,
 };
 use mikrotik_core::resources::firewall::FilterRule;
@@ -276,7 +276,7 @@ pub async fn detect_anomalies(
         }
 
         // Build baseline lookup
-        let baseline_map: HashMap<(String, Option<i64>, String, String), &mikrotik_core::behavior::DeviceBaseline> =
+        let baseline_map: HashMap<(String, Option<i64>, String, String), &ion_drift_storage::behavior::DeviceBaseline> =
             baselines.iter().map(|b| {
                 ((b.protocol.clone(), b.dst_port, b.dst_subnet.clone(), b.direction.clone()), b)
             }).collect();

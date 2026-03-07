@@ -6,8 +6,9 @@ use std::time::Duration;
 use hickory_resolver::Resolver;
 use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
-use mikrotik_core::{MikrotikClient, SwitchStore};
-use mikrotik_core::switch_store::{BackboneLink, MacTableEntry, PortRoleProbability};
+use mikrotik_core::MikrotikClient;
+use ion_drift_storage::SwitchStore;
+use ion_drift_storage::switch::{BackboneLink, MacTableEntry, PortRoleProbability};
 use crate::topology_inference::canonicalize_port_name;
 use crate::topology_inference::graph::{DeviceResolutionMaps, InfrastructureGraph};
 use crate::topology_inference::resolver::{self, InferenceMode};
@@ -363,7 +364,7 @@ async fn run_correlation(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let mut pending_observations: Vec<mikrotik_core::switch_store::MacObservation> = Vec::new();
+    let mut pending_observations: Vec<ion_drift_storage::switch::MacObservation> = Vec::new();
 
     // Deduplicate MAC table entries per (device_id, mac_address) to avoid
     // double-counting from SNMP port alias duplication (e.g. Netgear returns
@@ -403,7 +404,7 @@ async fn run_correlation(
             (0.5, 0.5, 0.5)
         };
 
-        pending_observations.push(mikrotik_core::switch_store::MacObservation {
+        pending_observations.push(ion_drift_storage::switch::MacObservation {
             id: 0, // auto-assigned by DB
             mac_address: mac_upper,
             device_id: entry.device_id.clone(),
@@ -1213,7 +1214,7 @@ async fn sync_vlan_config_from_router(
     store: &SwitchStore,
     router_client: &MikrotikClient,
 ) -> anyhow::Result<()> {
-    use mikrotik_core::switch_store::VlanConfig;
+    use ion_drift_storage::switch::VlanConfig;
 
     let vlan_ifaces = router_client.vlan_interfaces().await?;
     let ip_addrs = router_client.ip_addresses().await?;

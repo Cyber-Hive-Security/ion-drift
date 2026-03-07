@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use mikrotik_core::behavior::VlanRegistry;
+use ion_drift_storage::behavior::VlanRegistry;
 use tokio::sync::RwLock;
 
 use crate::connection_store::{ConnectionStore, SyslogEvent};

@@ -39,7 +39,7 @@ struct CurrentBinding {
 #[derive(Serialize)]
 pub struct InferenceMacDetail {
     mac: String,
-    state: mikrotik_core::switch_store::AttachmentStateRow,
+    state: ion_drift_storage::switch::AttachmentStateRow,
     current_binding: Option<CurrentBinding>,
     candidates: Vec<crate::topology_inference::scoring::ScoredCandidate>,
     explanation: Vec<String>,
@@ -162,7 +162,7 @@ pub async fn inference_mac_detail(
             // Return empty detail for unknown MAC
             return Ok(Json(InferenceMacDetail {
                 mac: mac_upper,
-                state: mikrotik_core::switch_store::AttachmentStateRow {
+                state: ion_drift_storage::switch::AttachmentStateRow {
                     mac_address: mac.to_uppercase(),
                     state: "unknown".to_string(),
                     current_device_id: None,
@@ -358,7 +358,7 @@ pub async fn observation_stats(
 pub async fn all_attachment_states(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
-) -> Result<Json<Vec<mikrotik_core::switch_store::AttachmentStateRow>>, Response> {
+) -> Result<Json<Vec<ion_drift_storage::switch::AttachmentStateRow>>, Response> {
     let states = state
         .switch_store
         .get_all_attachment_states()

@@ -26,8 +26,8 @@ pub struct ResolveRequest {
 #[derive(Serialize)]
 pub struct VlanBehaviorDetail {
     pub vlan: i64,
-    pub devices: Vec<mikrotik_core::behavior::DeviceProfile>,
-    pub anomalies: Vec<mikrotik_core::behavior::DeviceAnomaly>,
+    pub devices: Vec<ion_drift_storage::behavior::DeviceProfile>,
+    pub anomalies: Vec<ion_drift_storage::behavior::DeviceAnomaly>,
 }
 
 // ── Handlers ─────────────────────────────────────────────────
@@ -36,7 +36,7 @@ pub struct VlanBehaviorDetail {
 pub async fn overview(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
-) -> Result<Json<mikrotik_core::behavior::BehaviorOverview>, Response> {
+) -> Result<Json<ion_drift_storage::behavior::BehaviorOverview>, Response> {
     let stats = state
         .behavior_store
         .overview_stats()
@@ -133,7 +133,7 @@ pub async fn anomalies(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
     Query(params): Query<AnomalyQueryParams>,
-) -> Result<Json<Vec<mikrotik_core::behavior::DeviceAnomaly>>, Response> {
+) -> Result<Json<Vec<ion_drift_storage::behavior::DeviceAnomaly>>, Response> {
     let results = state
         .behavior_store
         .get_anomalies(
@@ -180,7 +180,7 @@ pub async fn resolve_anomaly(
 pub async fn alerts(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
-) -> Result<Json<mikrotik_core::behavior::AlertCount>, Response> {
+) -> Result<Json<ion_drift_storage::behavior::AlertCount>, Response> {
     let counts = state
         .behavior_store
         .get_pending_anomaly_counts()
@@ -262,8 +262,8 @@ pub async fn resolve_anomaly_link(
 /// Enhanced device detail with port flow context.
 #[derive(Serialize)]
 pub struct EnhancedDeviceDetailResponse {
-    pub profile: mikrotik_core::behavior::DeviceProfile,
-    pub baselines: Vec<mikrotik_core::behavior::DeviceBaseline>,
-    pub anomalies: Vec<mikrotik_core::behavior::DeviceAnomaly>,
+    pub profile: ion_drift_storage::behavior::DeviceProfile,
+    pub baselines: Vec<ion_drift_storage::behavior::DeviceBaseline>,
+    pub anomalies: Vec<ion_drift_storage::behavior::DeviceAnomaly>,
     pub port_flow_contexts: Vec<crate::connection_store::PortFlowContext>,
 }

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::switch_store::{NetworkIdentity, SectorPosition, SwitchStore};
+use ion_drift_storage::switch::{NetworkIdentity, SectorPosition, SwitchStore};
 use serde::Serialize;
 use tokio::sync::RwLock;
 
@@ -121,7 +121,7 @@ fn vlan_config_fallback(id: u32) -> (String, &'static str, &'static str) {
     (format!("VLAN {id}"), "#888888", "")
 }
 
-use mikrotik_core::switch_store::VlanConfig;
+use ion_drift_storage::switch::VlanConfig;
 
 /// Resolve VLAN metadata from DB config map, falling back to hardcoded defaults.
 fn resolve_vlan_config(
@@ -505,7 +505,7 @@ pub async fn compute_topology(
     // node so the edge renders in the topology.
     let backbone_links = store.get_backbone_links().await.unwrap_or_default();
     let infra_identities = store.get_infrastructure_identities().await.unwrap_or_default();
-    let infra_by_id: HashMap<String, &mikrotik_core::switch_store::NetworkIdentity> = infra_identities
+    let infra_by_id: HashMap<String, &ion_drift_storage::switch::NetworkIdentity> = infra_identities
         .iter()
         .filter_map(|i| {
             let key = i.hostname.clone().unwrap_or_else(|| i.mac_address.clone());

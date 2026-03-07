@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::SwitchStore;
+use ion_drift_storage::SwitchStore;
 use mikrotik_core::snmp_client::SnmpClient;
-use mikrotik_core::switch_store::{PortMetricEntry, VlanMembershipEntry};
+use ion_drift_storage::switch::{PortMetricEntry, VlanMembershipEntry};
 use tokio::sync::{watch, RwLock};
 
 use crate::device_manager::{DeviceManager, DeviceStatus};

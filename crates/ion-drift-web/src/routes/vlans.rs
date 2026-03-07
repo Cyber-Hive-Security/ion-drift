@@ -3,7 +3,7 @@
 use axum::extract::{Path, State};
 use axum::response::{Json, Response};
 use axum::http::StatusCode;
-use mikrotik_core::switch_store::VlanConfig;
+use ion_drift_storage::switch::VlanConfig;
 
 use crate::middleware::RequireAuth;
 use crate::state::AppState;

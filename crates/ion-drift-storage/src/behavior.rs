@@ -84,7 +84,7 @@ impl Default for VlanRegistry {
 
 impl VlanRegistry {
     /// Build a VlanRegistry from a list of VlanConfig entries.
-    pub fn from_configs(configs: &[crate::switch_store::VlanConfig]) -> Self {
+    pub fn from_configs(configs: &[crate::switch::VlanConfig]) -> Self {
         let mut names = HashMap::new();
         let mut sensitivities = HashMap::new();
         let mut subnets = Vec::new();
@@ -94,7 +94,7 @@ impl VlanRegistry {
             names.insert(vid, cfg.name.clone());
             sensitivities.insert(vid, VlanSensitivity::from_str(&cfg.sensitivity));
 
-            if let Some(ref subnet_str) = cfg.subnet {
+            if let Some(subnet_str) = &cfg.subnet {
                 if let Some(entry) = Self::parse_cidr(subnet_str, vid) {
                     subnets.push(entry);
                 }
