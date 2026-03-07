@@ -12,6 +12,15 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+/// Validate that a string is a well-formed MAC address (XX:XX:XX:XX:XX:XX).
+pub fn is_valid_mac(mac: &str) -> bool {
+    let mac = mac.to_uppercase();
+    mac.len() == 17 && mac.bytes().enumerate().all(|(i, b)| {
+        if i % 3 == 2 { b == b':' }
+        else { b.is_ascii_hexdigit() }
+    })
+}
+
 // ── Data types ──────────────────────────────────────────────────
 
 /// A single switch port metrics entry.
@@ -874,6 +883,10 @@ impl SwitchStore {
         vlan_id: Option<u32>,
         is_local: bool,
     ) -> Result<(), rusqlite::Error> {
+        if !is_valid_mac(mac_address) {
+            tracing::warn!(mac = %mac_address, "rejecting invalid MAC address");
+            return Ok(());
+        }
         let now = now_unix();
         let port_lower = port_name.to_lowercase();
         let db = self.db.lock().await;

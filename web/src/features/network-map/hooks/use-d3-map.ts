@@ -882,7 +882,7 @@ export function createMapInstance(
     highlightNode(nodeId: string) {
       layerNodes.selectAll(".node-group").classed("selected", false);
       layerNodes
-        .select(`[data-id="${nodeId}"]`)
+        .select(`[data-id="${CSS.escape(nodeId)}"]`)
         .classed("selected", true);
       highlightConnectionsForNode(nodeId);
     },

@@ -14,6 +14,13 @@ use crate::state::AppState;
 /// Returns 401 JSON error if no valid session cookie is present.
 pub struct RequireAuth(pub SessionData);
 
+/// Axum extractor that requires a valid session **with admin privileges**.
+///
+/// Use as a handler parameter: `RequireAdmin(session)` gives you the `SessionData`.
+/// Returns 401 if not authenticated, 403 if authenticated but not an admin.
+/// Admin status is determined by the `ion-drift-admin` Keycloak realm role.
+pub struct RequireAdmin(pub SessionData);
+
 #[derive(Serialize)]
 struct ErrorResponse {
     error: String,
@@ -57,5 +64,30 @@ where
         })?;
 
         Ok(RequireAuth(session))
+    }
+}
+
+impl<S> FromRequestParts<S> for RequireAdmin
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // First, require a valid session (reuses the same logic as RequireAuth).
+        let RequireAuth(session) = RequireAuth::from_request_parts(parts, state).await?;
+
+        if !session.is_admin {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "admin privileges required".into(),
+                }),
+            )
+                .into_response());
+        }
+
+        Ok(RequireAdmin(session))
     }
 }

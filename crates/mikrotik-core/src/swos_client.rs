@@ -3,6 +3,17 @@
 //! SwOS uses an undocumented HTTP API with `.b` endpoints that return
 //! JavaScript-like object notation (not valid JSON). This module handles
 //! HTTP Digest authentication, response parsing, and data extraction.
+//!
+//! # Security Note
+//!
+//! SwOS devices do not support HTTPS. All communication including HTTP Digest
+//! authentication occurs over plaintext HTTP. While Digest auth avoids sending
+//! passwords in cleartext, the MD5-based scheme is cryptographically weak.
+//!
+//! Mitigations:
+//! - Restrict SwOS management interfaces to a dedicated management VLAN
+//! - Use firewall ACLs to limit which hosts can reach SwOS management ports
+//! - Use strong, unique passwords for SwOS devices
 
 use reqwest::Client;
 use serde::Deserialize;
@@ -179,12 +190,7 @@ impl SwosClient {
         let resp_input = format!("{}:{}:{}:{}:auth:{}", ha1, nonce, nc, cnonce, ha2);
         let response_hash = format!("{:x}", md5::compute(&resp_input));
 
-        tracing::debug!(
-            ha1 = %ha1,
-            ha2 = %ha2,
-            response = %response_hash,
-            "SwOS fetch: computed digest"
-        );
+        tracing::trace!("digest auth computed");
 
         let auth_header = format!(
             r#"Digest username="{}", realm="{}", nonce="{}", uri="{}", qop=auth, nc={}, cnonce="{}", response="{}""#,
@@ -364,13 +370,13 @@ impl SwosClient {
         }
 
         // Log first 300 chars of raw response for debugging parse issues
-        let preview: &str = if raw.len() > 300 { &raw[..300] } else { &raw };
+        let preview: &str = raw.get(..300).unwrap_or(&raw);
         tracing::debug!(host = %self.host, preview = %preview, "SwOS !dhost.b raw content");
 
         let json = transform_swos_to_json(&raw);
         let entries: Vec<DhostEntry> = serde_json::from_str(&json)
             .map_err(|e| {
-                let json_preview: &str = if json.len() > 300 { &json[..300] } else { &json };
+                let json_preview: &str = json.get(..300).unwrap_or(&json);
                 tracing::warn!(host = %self.host, json = %json_preview, error = %e, "SwOS !dhost.b parse failed");
                 MikrotikError::Deserialize(format!("!dhost.b parse: {e}"))
             })?;

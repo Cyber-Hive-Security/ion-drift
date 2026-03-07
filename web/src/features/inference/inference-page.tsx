@@ -261,15 +261,15 @@ export function InferencePage() {
     );
   }
 
-  if (status.error) {
+  if (status.error || !status.data) {
     return (
       <PageShell title="Topology Inference">
-        <ErrorDisplay message={String(status.error)} />
+        <ErrorDisplay message={status.error ? String(status.error) : "No data available"} />
       </PageShell>
     );
   }
 
-  const s = status.data!;
+  const s = status.data;
   const states = statesQuery.data ?? [];
   const identities = identitiesQuery.data ?? [];
 
@@ -437,6 +437,7 @@ export function InferencePage() {
         >
           <div className="text-2xl font-bold">{s.divergence_count}</div>
           {s.divergence_categories &&
+            typeof s.divergence_categories === "object" &&
             Object.keys(s.divergence_categories).length > 0 ? (
             <div className="flex flex-wrap gap-1 mt-1">
               {Object.entries(s.divergence_categories).map(([cat, count]) => (
@@ -444,7 +445,7 @@ export function InferencePage() {
                   key={cat}
                   className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
                 >
-                  {cat.replace(/_/g, " ")}: {count}
+                  {cat.replace(/_/g, " ")}: {String(count)}
                 </span>
               ))}
             </div>
@@ -457,10 +458,11 @@ export function InferencePage() {
 
         <StatCard title="State Distribution" icon={<Eye className="h-4 w-4" />}>
           <div className="flex flex-wrap gap-1">
-            {Object.entries(s.state_distribution).map(([state, count]) => (
+            {s.state_distribution && typeof s.state_distribution === "object" &&
+              Object.entries(s.state_distribution).map(([state, count]) => (
               <span key={state} className="text-xs">
                 <StateBadge state={state} />{" "}
-                <span className="font-mono">{count}</span>
+                <span className="font-mono">{String(count)}</span>
               </span>
             ))}
           </div>
@@ -482,12 +484,14 @@ export function InferencePage() {
               {observations.data.unique_macs}
             </span>
           </span>
-          {Object.entries(observations.data.observations_per_device).map(
+          {observations.data.observations_per_device &&
+            typeof observations.data.observations_per_device === "object" &&
+            Object.entries(observations.data.observations_per_device).map(
             ([dev, count]) => (
               <span key={dev}>
                 {dev}:{" "}
                 <span className="font-mono font-medium text-foreground">
-                  {count}
+                  {String(count)}
                 </span>
               </span>
             ),

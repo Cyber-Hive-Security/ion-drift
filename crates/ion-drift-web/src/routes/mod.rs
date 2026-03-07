@@ -23,7 +23,7 @@ pub mod vlan_flows;
 pub mod vlans;
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
@@ -262,7 +262,9 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/network/inference/mac/{mac}", get(inference::inference_mac_detail))
         .route("/network/inference/observations", get(inference::observation_stats))
         // Global auth middleware for all API routes
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer))
+        // Limit request body size to 2 MiB
+        .layer(DefaultBodyLimit::max(2_097_152));
 
     Ok(Router::new()
         // Health check (no auth)

@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Redirect, Response};
+use base64::Engine;
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use dashmap::DashMap;
@@ -39,6 +40,7 @@ pub struct SessionData {
     pub user_id: String,
     pub username: String,
     pub email: Option<String>,
+    pub is_admin: bool,
     pub created_at: u64,
 }
 
@@ -106,6 +108,10 @@ impl SessionStore {
 
     fn take_pending(&self, csrf_token: &str) -> Option<(Nonce, PkceCodeVerifier)> {
         let (_, pending) = self.pending_auth.remove(csrf_token)?;
+        // Reject entries older than 300 seconds (5 minutes)
+        if now_secs() - pending.created_at > 300 {
+            return None;
+        }
         Some((pending.nonce, pending.pkce_verifier))
     }
 
@@ -199,6 +205,34 @@ fn json_error(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(ErrorResponse { error: msg.into() })).into_response()
 }
 
+// ── Role extraction ───────────────────────────────────────────────
+
+/// Extract a realm role from a JWT token string (already signature-verified).
+///
+/// Decodes the JWT payload (base64url) and checks `realm_access.roles` for
+/// the given role name. Returns `false` on any parse failure — never blocks login.
+fn extract_realm_role(jwt: &str, role: &str) -> bool {
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    // JWT payload is base64url-encoded (no padding)
+    let payload = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1]) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&payload) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    value
+        .get("realm_access")
+        .and_then(|ra| ra.get("roles"))
+        .and_then(|roles| roles.as_array())
+        .map(|arr| arr.iter().any(|r| r.as_str() == Some(role)))
+        .unwrap_or(false)
+}
+
 // ── Handlers ──────────────────────────────────────────────────────
 
 /// `GET /auth/login` — Start the OIDC authorization code flow.
@@ -287,7 +321,13 @@ pub async fn callback(
         .email()
         .map(|e: &EndUserEmail| e.to_string());
 
-    tracing::info!(user_id, username, "user authenticated via OIDC");
+    // Check for admin role in realm_access.roles from the ID token.
+    // Keycloak embeds realm_access: { roles: ["ion-drift-admin", ...] } in the JWT payload.
+    // Since CoreIdTokenClaims uses EmptyAdditionalClaims, we decode the JWT payload directly.
+    // The token signature has already been verified above via id_token.claims().
+    let is_admin = extract_realm_role(id_token.to_string().as_str(), "ion-drift-admin");
+
+    tracing::info!(user_id, username, is_admin, "user authenticated via OIDC");
 
     // Create session with 256-bit cryptographic token
     let session_bytes: [u8; 32] = rand::random();
@@ -296,6 +336,7 @@ pub async fn callback(
         user_id,
         username,
         email,
+        is_admin,
         created_at: now_secs(),
     };
     state
@@ -361,6 +402,7 @@ pub struct UserInfo {
     user_id: String,
     username: String,
     email: Option<String>,
+    is_admin: bool,
 }
 
 /// `GET /auth/status` — Check whether the current request has a valid session.
@@ -376,6 +418,7 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar) -> Json<AuthS
                 user_id: data.user_id,
                 username: data.username,
                 email: data.email,
+                is_admin: data.is_admin,
             }),
         }),
         None => Json(AuthStatus {

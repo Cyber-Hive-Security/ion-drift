@@ -8,7 +8,7 @@ use tracing::{debug, trace};
 use crate::error::{MikrotikError, RouterOsErrorResponse};
 
 /// Configuration for connecting to a RouterOS device.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MikrotikConfig {
     /// Router address (IP or hostname), e.g. "10.20.25.1"
     pub host: String,
@@ -34,6 +34,19 @@ impl Default for MikrotikConfig {
             username: "admin".into(),
             password: String::new(),
         }
+    }
+}
+
+impl std::fmt::Debug for MikrotikConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MikrotikConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("tls", &self.tls)
+            .field("ca_cert_path", &self.ca_cert_path)
+            .finish()
     }
 }
 
@@ -212,8 +225,8 @@ impl MikrotikClient {
         trace!(body_len = body.len(), "response received");
 
         serde_json::from_str::<T>(&body).map_err(|e| {
-            let preview = if body.len() > 500 {
-                format!("{}...", &body[..500])
+            let preview = if body.len() > 200 {
+                format!("{}...", &body[..200])
             } else {
                 body
             };

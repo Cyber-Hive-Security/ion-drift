@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde::{Deserialize, Serialize};
 
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAuth, RequireAdmin};
 use crate::secrets;
 use crate::state::AppState;
 
@@ -61,7 +61,7 @@ pub struct UpdateSecretsResponse {
 }
 
 pub async fn update_secrets(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(req): Json<UpdateSecretsRequest>,
 ) -> Result<Json<UpdateSecretsResponse>, Response> {
@@ -154,7 +154,7 @@ pub struct RegenerateSessionResponse {
 }
 
 pub async fn regenerate_session(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
 ) -> Result<Json<RegenerateSessionResponse>, Response> {
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {

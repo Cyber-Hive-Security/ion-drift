@@ -133,7 +133,7 @@ pub struct SnmpVlanEntry {
 
 /// SNMP client for generic managed switches using standard MIBs.
 /// Supports both SNMPv2c (community string) and SNMPv3 (AuthPriv).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SnmpClient {
     pub host: String,
     pub port: u16,
@@ -145,6 +145,21 @@ pub struct SnmpClient {
     pub v3_auth_protocol: Option<String>,
     pub v3_priv_password: Option<String>,
     pub v3_priv_protocol: Option<String>,
+}
+
+impl std::fmt::Debug for SnmpClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SnmpClient")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("community", &self.community.as_ref().map(|_| "[REDACTED]"))
+            .field("v3_username", &self.v3_username)
+            .field("v3_auth_password", &self.v3_auth_password.as_ref().map(|_| "[REDACTED]"))
+            .field("v3_auth_protocol", &self.v3_auth_protocol)
+            .field("v3_priv_password", &self.v3_priv_password.as_ref().map(|_| "[REDACTED]"))
+            .field("v3_priv_protocol", &self.v3_priv_protocol)
+            .finish()
+    }
 }
 
 impl SnmpClient {

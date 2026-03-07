@@ -38,7 +38,7 @@ pub fn spawn_switch_pollers(
             let device_name = entry.record.name.clone();
             let poll_interval = entry.record.poll_interval_secs as u64;
             // get_switches() only returns RouterOS switches, so unwrap is safe
-            let client = entry.client.as_routeros().cloned().unwrap();
+            let client = entry.client.as_routeros().cloned().expect("device type verified by filter");
             let store = switch_store.clone();
             let dm_ref = device_manager.clone();
 

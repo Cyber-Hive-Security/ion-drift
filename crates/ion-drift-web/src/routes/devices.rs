@@ -8,11 +8,46 @@ use serde::Deserialize;
 use mikrotik_core::{MikrotikClient, MikrotikConfig, SnmpClient, SwosClient};
 
 use crate::device_manager::{DeviceClient, DeviceStatus, DeviceInfo};
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAuth, RequireAdmin};
 use crate::secrets::{NewDevice, UpdateDevice};
 use crate::state::AppState;
 
 use super::internal_error;
+
+fn is_blocked_host(host: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    if let Ok(addrs) = (host, 0u16).to_socket_addrs() {
+        for addr in addrs {
+            let ip = addr.ip();
+            match ip {
+                std::net::IpAddr::V4(v4) => {
+                    if v4.is_loopback() || v4.is_link_local() || v4.is_broadcast()
+                        || v4.octets()[0] == 0
+                        || (v4.octets()[0] == 169 && v4.octets()[1] == 254) {
+                        return true;
+                    }
+                }
+                std::net::IpAddr::V6(v6) => {
+                    if v6.is_loopback() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn validate_ca_cert_path(path: &str) -> Result<(), Response> {
+    if path.contains("..") || (!path.starts_with("/app/data/certs/") && !path.starts_with("/app/certs/")) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "ca_cert_path must be within /app/data/certs/ or /app/certs/" })),
+        )
+            .into_response());
+    }
+    Ok(())
+}
 
 // ── GET /api/devices ─────────────────────────────────────────────
 
@@ -60,7 +95,7 @@ pub struct CreateDeviceRequest {
 }
 
 pub async fn create_device(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(req): Json<CreateDeviceRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -107,6 +142,20 @@ pub async fn create_device(
             Json(serde_json::json!({ "error": "invalid name: max 128 chars" })),
         )
             .into_response());
+    }
+
+    // SSRF protection: block connections to loopback, link-local, metadata IPs
+    if is_blocked_host(&req.device.host) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "host resolves to a blocked address" })),
+        )
+            .into_response());
+    }
+
+    // Validate ca_cert_path if provided
+    if let Some(ref path) = req.device.ca_cert_path {
+        validate_ca_cert_path(path)?;
     }
 
     // Build client based on device type and test connection
@@ -230,7 +279,7 @@ pub async fn create_device(
 // ── PUT /api/devices/{id} ────────────────────────────────────────
 
 pub async fn update_device(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(update): Json<UpdateDevice>,
@@ -275,7 +324,7 @@ pub async fn update_device(
 // ── DELETE /api/devices/{id} ─────────────────────────────────────
 
 pub async fn delete_device(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -396,6 +445,20 @@ pub async fn test_connection(
             Json(serde_json::json!({ "error": "invalid host: 1-253 chars, no whitespace" })),
         )
             .into_response());
+    }
+
+    // SSRF protection: block connections to loopback, link-local, metadata IPs
+    if is_blocked_host(&req.host) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "host resolves to a blocked address" })),
+        )
+            .into_response());
+    }
+
+    // Validate ca_cert_path if provided
+    if let Some(ref path) = req.ca_cert_path {
+        validate_ca_cert_path(path)?;
     }
 
     let device_type = req.device_type.as_deref().unwrap_or("switch");

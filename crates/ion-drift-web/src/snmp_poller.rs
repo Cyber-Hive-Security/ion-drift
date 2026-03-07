@@ -34,7 +34,7 @@ pub fn spawn_snmp_pollers(
             let device_id = entry.record.id.clone();
             let device_name = entry.record.name.clone();
             let poll_interval = entry.record.poll_interval_secs as u64;
-            let client = entry.client.as_snmp().cloned().unwrap();
+            let client = entry.client.as_snmp().cloned().expect("device type verified by filter");
             let store = switch_store.clone();
             let dm_ref = device_manager.clone();
 

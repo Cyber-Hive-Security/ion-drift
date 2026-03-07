@@ -55,6 +55,11 @@ pub fn parse_routeros_syslog(line: &str) -> Option<SyslogEvent> {
     let (src_ip, _src_port) = split_addr(src_segment);
     let (dst_ip, dst_port) = split_addr(dst_segment);
 
+    // Validate extracted IPs
+    if src_ip.parse::<std::net::IpAddr>().is_err() || dst_ip.parse::<std::net::IpAddr>().is_err() {
+        return None;
+    }
+
     let dst_port_num = dst_port.and_then(|p| p.parse::<i64>().ok());
 
     // Extract src-mac

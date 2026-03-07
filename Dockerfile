@@ -16,6 +16,9 @@ RUN npm run build
 
 # Stage 3: Runtime
 FROM debian:bookworm-slim
+# SECURITY: nmap requires NET_RAW/NET_ADMIN for SYN scanning.
+# These capabilities are restricted to the nmap binary only (not the app).
+# If nmap scanning is disabled, remove this line and the docker-compose capabilities.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates gosu curl nmap libcap2-bin \
     && rm -rf /var/lib/apt/lists/* \

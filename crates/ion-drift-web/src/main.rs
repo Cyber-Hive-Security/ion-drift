@@ -145,6 +145,11 @@ async fn main() -> anyhow::Result<()> {
             None
         };
 
+    // Warn if session cookies will be sent over HTTP on a non-localhost bind
+    if !config.session.secure && config.server.listen_addr != "127.0.0.1" && config.server.listen_addr != "localhost" {
+        tracing::warn!("Session cookie 'secure' flag is disabled on a non-localhost bind address. Cookies will be sent over HTTP.");
+    }
+
     let config = Arc::new(config);
 
     // ── Device Manager + SwitchStore ─────────────────────────────
