@@ -2,6 +2,7 @@ pub mod arp;
 pub mod backbone;
 pub mod behavior;
 pub mod neighbor_aliases;
+pub mod provision;
 pub mod connections;
 pub mod devices;
 pub mod firewall;
@@ -216,6 +217,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/devices/{id}/neighbors", get(switch_data::device_neighbors))
         .route("/devices/{id}/vlans", get(switch_data::device_vlans))
         .route("/devices/{id}/port-roles", get(switch_data::device_port_roles))
+        // Provisioning (Setup Wizard)
+        .route("/devices/{id}/provision/plan", post(provision::plan))
+        .route("/devices/{id}/provision/apply", post(provision::apply))
+        .route("/devices/{id}/provision/interfaces", get(provision::interfaces))
         // Network-wide correlation data
         .route("/network/identities", get(switch_data::network_identities))
         .route("/network/mac-table", get(switch_data::network_mac_table))

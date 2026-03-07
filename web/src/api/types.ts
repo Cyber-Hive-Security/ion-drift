@@ -1329,3 +1329,53 @@ export interface ObservationStats {
   unique_macs: number;
   observations_per_device: Record<string, number>;
 }
+
+// ── Provision / Setup Wizard types ──────────────────────────────
+
+export interface ProvisionInterface {
+  name: string;
+  type: string;
+  running: boolean;
+  comment: string | null;
+}
+
+export interface ProvisionConfig {
+  wan_interface: string;
+  syslog_host: string;
+  syslog_port: number;
+  router_source_ip: string;
+}
+
+export interface ProvisionItem {
+  id: string;
+  category: string;
+  action: string;
+  title: string;
+  description: string;
+  detail: Record<string, unknown>;
+}
+
+export interface ProvisionPlan {
+  items: ProvisionItem[];
+  summary: {
+    create: number;
+    skip: number;
+    update: number;
+    total_mangle: number;
+    total_syslog: number;
+    total_firewall: number;
+  };
+}
+
+export interface ApplyItemResult {
+  id: string;
+  title: string;
+  success: boolean;
+  error: string | null;
+}
+
+export interface ApplyResult {
+  results: ApplyItemResult[];
+  succeeded: number;
+  failed: number;
+}

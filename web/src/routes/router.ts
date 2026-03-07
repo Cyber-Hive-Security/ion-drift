@@ -19,6 +19,7 @@ import { SwitchDetailPageWrapper } from "@/features/switch-detail/switch-detail-
 import IdentityManagerPage from "@/features/identity/identity-manager-page";
 import BackboneLinksPage from "@/features/backbone/backbone-links-page";
 import { InferencePage } from "@/features/inference/inference-page";
+import { SetupWizard } from "@/features/provision/setup-wizard";
 
 // Lazy-load the network map page — it pulls in D3 and heavy SVG rendering
 // that benefits from being in a separate chunk.
@@ -198,6 +199,12 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const setupWizardRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/setup-wizard",
+  component: SetupWizard,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   interfacesRoute,
@@ -214,6 +221,7 @@ const routeTree = rootRoute.addChildren([
   backboneRoute,
   inferenceRoute,
   settingsRoute,
+  setupWizardRoute,
 ]);
 
 export const router = createRouter({ routeTree });

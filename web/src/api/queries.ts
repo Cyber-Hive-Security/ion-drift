@@ -90,6 +90,7 @@ import type {
   InferenceStatus,
   InferenceMacDetail,
   ObservationStats,
+  ProvisionInterface,
 } from "./types";
 
 // Auth
@@ -1523,5 +1524,18 @@ export function useInferenceObservations() {
     queryFn: () =>
       apiFetch<ObservationStats>("/api/network/inference/observations"),
     refetchInterval: 30_000,
+  });
+}
+
+// ── Provision / Setup Wizard ────────────────────────────────────
+
+export function useProvisionInterfaces(deviceId: string | null) {
+  return useQuery({
+    queryKey: ["provision", "interfaces", deviceId],
+    queryFn: () =>
+      apiFetch<ProvisionInterface[]>(
+        `/api/devices/${encodeURIComponent(deviceId!)}/provision/interfaces`,
+      ),
+    enabled: !!deviceId,
   });
 }
