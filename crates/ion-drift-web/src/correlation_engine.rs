@@ -3,9 +3,6 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hickory_resolver::Resolver;
-use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::TokioConnectionProvider;
 use mikrotik_core::MikrotikClient;
 use ion_drift_storage::SwitchStore;
 use ion_drift_storage::switch::{BackboneLink, MacTableEntry, PortRoleProbability};
@@ -15,6 +12,7 @@ use crate::topology_inference::resolver::{self, InferenceMode};
 use tokio::sync::RwLock;
 
 use crate::device_manager::DeviceManager;
+use crate::dns::DnsResolver;
 use crate::oui::OuiDb;
 use crate::task_supervisor::TaskSupervisor;
 
@@ -27,14 +25,14 @@ pub fn spawn_correlation_engine(
     oui_db: Arc<OuiDb>,
     device_manager: Arc<RwLock<DeviceManager>>,
     router_client: MikrotikClient,
-    dns_server: Option<String>,
+    dns_resolver: Arc<dyn DnsResolver>,
 ) {
     supervisor.spawn("correlation_engine", move || {
         let switch_store = switch_store.clone();
         let oui_db = oui_db.clone();
         let device_manager = device_manager.clone();
         let router_client = router_client.clone();
-        let dns_server = dns_server.clone();
+        let dns_resolver = dns_resolver.clone();
         Box::pin(async move {
         // 90-second startup delay — let switch pollers collect initial data
         tokio::time::sleep(Duration::from_secs(90)).await;
@@ -46,7 +44,15 @@ pub fn spawn_correlation_engine(
         loop {
             interval.tick().await;
 
-            if let Err(e) = run_correlation(&switch_store, &oui_db, &device_manager, &router_client, dns_server.as_deref()).await {
+            if let Err(e) = run_correlation(
+                &switch_store,
+                &oui_db,
+                &device_manager,
+                &router_client,
+                dns_resolver.as_ref(),
+            )
+            .await
+            {
                 tracing::warn!("correlation engine error: {e}");
             }
         }
@@ -58,7 +64,7 @@ async fn run_correlation(
     oui_db: &OuiDb,
     device_manager: &Arc<RwLock<DeviceManager>>,
     router_client: &MikrotikClient,
-    dns_server: Option<&str>,
+    dns_resolver: &dyn DnsResolver,
 ) -> anyhow::Result<()> {
     // ── 0. Prune stale entries ──────────────────────────────────
     // Entries older than 1 hour are leftovers from port renames or
@@ -789,38 +795,21 @@ async fn run_correlation(
         .collect();
 
     if !ips_needing_ptr.is_empty() {
-        match build_ptr_resolver(dns_server) {
-            Ok(resolver) => {
-                let mut resolved = 0u32;
-                for (mac, ip) in &ips_needing_ptr {
-                    if let Ok(addr) = ip.parse::<IpAddr>() {
-                        match tokio::time::timeout(
-                            Duration::from_millis(500),
-                            resolver.reverse_lookup(addr),
-                        )
-                        .await
-                        {
-                            Ok(Ok(lookup)) => {
-                                if let Some(name) = lookup.iter().next() {
-                                    let hostname = name.to_string().trim_end_matches('.').to_string();
-                                    if !hostname.is_empty() {
-                                        if let Some(builder) = identity_map.get_mut(mac) {
-                                            builder.hostname = Some(hostname);
-                                            resolved += 1;
-                                        }
-                                    }
-                                }
-                            }
-                            Ok(Err(_)) => {} // no PTR record — that's fine
-                            Err(_) => {}     // timeout — skip
+        let mut resolved = 0u32;
+        for (mac, ip) in &ips_needing_ptr {
+            if let Ok(addr) = ip.parse::<IpAddr>() {
+                if let Some(hostname) = dns_resolver.reverse_lookup(addr).await {
+                    if !hostname.is_empty() {
+                        if let Some(builder) = identity_map.get_mut(mac) {
+                            builder.hostname = Some(hostname);
+                            resolved += 1;
                         }
                     }
                 }
-                if resolved > 0 {
-                    tracing::debug!(resolved, total = ips_needing_ptr.len(), "PTR lookups");
-                }
             }
-            Err(e) => tracing::warn!("correlation: PTR resolver setup failed: {e}"),
+        }
+        if resolved > 0 {
+            tracing::debug!(resolved, total = ips_needing_ptr.len(), "PTR lookups");
         }
     }
 
@@ -1314,26 +1303,4 @@ fn build_wap_children(
     children
 }
 
-/// Build an async DNS resolver for PTR lookups.
-///
-/// If `dns_server` is provided, it is used as the nameserver for PTR lookups.
-/// Otherwise, falls back to the system default resolver.
-fn build_ptr_resolver(dns_server: Option<&str>) -> anyhow::Result<Resolver<TokioConnectionProvider>> {
-    let config = if let Some(server) = dns_server {
-        let addr: IpAddr = server
-            .parse()
-            .map_err(|e| anyhow::anyhow!("invalid dns_server IP {server:?}: {e}"))?;
-        let ns_group = NameServerConfigGroup::from_ips_clear(&[addr], 53, true);
-        ResolverConfig::from_parts(None, Vec::new(), ns_group)
-    } else {
-        tracing::debug!("no dns_server configured, using system resolver for PTR lookups");
-        ResolverConfig::default()
-    };
-    let mut opts = ResolverOpts::default();
-    opts.timeout = Duration::from_millis(500);
-    opts.attempts = 1;
-    let resolver = Resolver::builder_with_config(config, TokioConnectionProvider::default())
-        .with_options(opts)
-        .build();
-    Ok(resolver)
-}
+

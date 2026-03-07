@@ -5,9 +5,10 @@ mod metrics;
 mod traffic;
 
 use crate::state::AppState;
+use crate::dns::DnsResolver;
 
 /// Spawn all background tasks using shared application state.
-pub fn spawn_all(state: &AppState) {
+pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>) {
     // Traffic polling
     traffic::spawn_traffic_poller(
         state.traffic_tracker.clone(),
@@ -119,7 +120,7 @@ pub fn spawn_all(state: &AppState) {
         state.oui_db.clone(),
         state.device_manager.clone(),
         state.mikrotik.clone(),
-        state.config.router.dns_server.clone(),
+        dns_resolver,
     );
     crate::topology::spawn_topology_updater(
         &state.task_supervisor,

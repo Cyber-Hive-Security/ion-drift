@@ -8,6 +8,7 @@ pub mod config;
 pub mod connection_store;
 pub mod correlation_engine;
 pub mod device_manager;
+pub mod dns;
 pub mod geo;
 pub mod live_traffic;
 pub mod log_parser;

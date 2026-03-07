@@ -9,6 +9,7 @@ mod connection_store;
 mod correlation_engine;
 mod topology_inference;
 mod device_manager;
+mod dns;
 mod geo;
 mod live_traffic;
 mod log_parser;
@@ -173,6 +174,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config = Arc::new(config);
+    let dns_resolver = dns::build_dns_resolver(config.router.dns_server.as_deref());
 
     // ── Device Manager + SwitchStore ─────────────────────────────
     let switch_store = Arc::new(
@@ -386,7 +388,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Spawn all background tasks
-    tasks::spawn_all(&app_state);
+    tasks::spawn_all(&app_state, dns_resolver);
 
     // Resolve web/dist path relative to the config file's parent (project root)
     let web_dist = config_file
