@@ -13,6 +13,7 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 
 use crate::device_manager::{DeviceManager, DeviceStatus};
+use crate::task_supervisor::TaskSupervisor;
 
 // ── Data structures ──────────────────────────────────────────────
 
@@ -149,7 +150,7 @@ pub async fn compute_topology(
 ) -> anyhow::Result<NetworkTopology> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
 
     let mut nodes: BTreeMap<String, TopologyNode> = BTreeMap::new();
@@ -739,11 +740,16 @@ fn map_device_type(dt: Option<&str>) -> NodeKind {
 // ── Background task ──────────────────────────────────────────────
 
 pub fn spawn_topology_updater(
+    supervisor: &TaskSupervisor,
     switch_store: Arc<SwitchStore>,
     device_manager: Arc<RwLock<DeviceManager>>,
     cache: Arc<RwLock<Option<NetworkTopology>>>,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("topology_updater", move || {
+        let switch_store = switch_store.clone();
+        let device_manager = device_manager.clone();
+        let cache = cache.clone();
+        Box::pin(async move {
         // Wait for correlation engine to populate data
         tokio::time::sleep(Duration::from_secs(120)).await;
         tracing::info!("topology updater starting (120s interval)");
@@ -769,5 +775,5 @@ pub fn spawn_topology_updater(
             }
             interval.tick().await;
         }
-    });
+    })});
 }

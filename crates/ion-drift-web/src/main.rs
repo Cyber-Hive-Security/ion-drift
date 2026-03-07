@@ -1,3 +1,4 @@
+mod alerting;
 mod anomaly_correlator;
 mod auth;
 mod behavior_engine;
@@ -22,6 +23,7 @@ mod snapshots;
 mod state;
 mod switch_poller;
 mod syslog;
+mod task_supervisor;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,6 +37,7 @@ use crate::config::ServerConfig;
 use crate::live_traffic::{LiveTrafficBuffer, TrafficSample};
 use crate::secrets::{DecryptedSecrets, SecretsManager};
 use crate::state::AppState;
+use crate::task_supervisor::TaskSupervisor;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -226,14 +229,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Set up VLAN flow counter mangle rules (non-fatal on failure)
     tracing::info!("setting up VLAN flow counters...");
-    match mikrotik_core::VlanFlowManager::setup_flow_counters(&mikrotik).await {
+    match mikrotik_core::VlanFlowManager::setup_flow_counters(&mikrotik, &config.router.wan_interface).await {
         Ok(n) => tracing::info!("VLAN flow counter setup complete ({n} new rules created)"),
         Err(e) => tracing::warn!("VLAN flow counter setup failed (dashboard flows unavailable): {e}"),
     }
 
     // Set up syslog forwarding from router to ion-drift (non-fatal on failure)
     tracing::info!("configuring router syslog forwarding...");
-    match setup_router_syslog(&mikrotik).await {
+    match setup_router_syslog(&mikrotik, &config.syslog).await {
         Ok(msg) => tracing::info!("syslog setup: {msg}"),
         Err(e) => tracing::warn!("syslog setup failed (syslog capture unavailable): {e}"),
     }
@@ -248,7 +251,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize traffic tracker
     let traffic_tracker = Arc::new(
-        mikrotik_core::TrafficTracker::new(&data_dir.join("traffic.db"), "1-WAN")
+        mikrotik_core::TrafficTracker::new(&data_dir.join("traffic.db"), &config.router.wan_interface)
             .map_err(|e| anyhow::anyhow!("failed to init traffic tracker: {e}"))?,
     );
     let metrics_store = Arc::new(
@@ -320,6 +323,9 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Create task supervisor
+    let supervisor = TaskSupervisor::new();
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),
@@ -340,22 +346,25 @@ async fn main() -> anyhow::Result<()> {
         device_manager: device_manager.clone(),
         switch_store: switch_store.clone(),
         topology_cache: Arc::new(tokio::sync::RwLock::new(None)),
+        task_supervisor: supervisor.clone(),
     };
 
-    // Spawn background tasks
-    spawn_traffic_poller(traffic_tracker.clone(), live_traffic.clone(), mikrotik.clone());
-    spawn_metrics_poller(metrics_store.clone(), mikrotik.clone());
-    spawn_drops_poller(metrics_store.clone(), mikrotik.clone());
-    spawn_connection_metrics_poller(metrics_store.clone(), mikrotik.clone());
-    spawn_vlan_metrics_poller(metrics_store.clone(), mikrotik.clone());
+    // Spawn supervised background tasks
+    spawn_traffic_poller(&supervisor, traffic_tracker.clone(), live_traffic.clone(), mikrotik.clone(), config.router.wan_interface.clone());
+    spawn_metrics_poller(&supervisor, metrics_store.clone(), mikrotik.clone());
+    spawn_drops_poller(&supervisor, metrics_store.clone(), mikrotik.clone());
+    spawn_connection_metrics_poller(&supervisor, metrics_store.clone(), mikrotik.clone());
+    spawn_vlan_metrics_poller(&supervisor, metrics_store.clone(), mikrotik.clone());
     spawn_log_aggregation(
+        &supervisor,
         metrics_store.clone(),
         mikrotik.clone(),
         app_state.geo_cache.clone(),
         app_state.oui_db.clone(),
     );
-    spawn_session_cleanup(sessions);
+    spawn_session_cleanup(&supervisor, sessions);
     spawn_behavior_collector(
+        &supervisor,
         behavior_store.clone(),
         mikrotik.clone(),
         app_state.oui_db.clone(),
@@ -363,52 +372,61 @@ async fn main() -> anyhow::Result<()> {
         app_state.firewall_rules_cache.clone(),
     );
     spawn_behavior_maintenance(
+        &supervisor,
         behavior_store.clone(),
         connection_store.clone(),
         app_state.switch_store.clone(),
     );
-    spawn_behavior_auto_classifier(behavior_store.clone());
-    anomaly_correlator::spawn_anomaly_correlator(connection_store.clone(), behavior_store);
+    spawn_behavior_auto_classifier(&supervisor, behavior_store.clone());
+    anomaly_correlator::spawn_anomaly_correlator(&supervisor, connection_store.clone(), behavior_store);
 
     // Spawn connection history persistence + pruning
     spawn_connection_persister(
+        &supervisor,
         connection_store.clone(),
         mikrotik.clone(),
         geo_cache.clone(),
     );
-    spawn_connection_pruner(connection_store.clone());
+    spawn_connection_pruner(&supervisor, connection_store.clone());
 
     // Spawn weekly snapshot generator
-    snapshots::spawn_snapshot_generator(connection_store.clone());
+    snapshots::spawn_snapshot_generator(&supervisor, connection_store.clone());
 
-    // Spawn syslog listener (UDP 5514 by default) — only accepts packets from configured router
-    syslog::spawn_syslog_listener(5514, connection_store, geo_cache, config.router.host.clone());
+    // Spawn syslog listener — only accepts packets from configured router
+    syslog::spawn_syslog_listener(&supervisor, config.syslog.port, connection_store, geo_cache, config.router.host.clone());
 
     // Spawn multi-device background tasks
-    switch_poller::spawn_switch_pollers(device_manager.clone(), switch_store.clone());
-    switch_poller::spawn_neighbor_poller(device_manager.clone(), switch_store.clone());
-    switch_poller::spawn_device_health_check(device_manager.clone());
+    switch_poller::spawn_switch_pollers(&supervisor, device_manager.clone(), switch_store.clone());
+    switch_poller::spawn_neighbor_poller(&supervisor, device_manager.clone(), switch_store.clone());
+    switch_poller::spawn_device_health_check(&supervisor, device_manager.clone());
     correlation_engine::spawn_correlation_engine(
+        &supervisor,
         switch_store.clone(),
         app_state.oui_db.clone(),
         device_manager.clone(),
         app_state.mikrotik.clone(),
+        config.router.dns_server.clone(),
     );
     topology::spawn_topology_updater(
+        &supervisor,
         switch_store.clone(),
         device_manager.clone(),
         app_state.topology_cache.clone(),
     );
     passive_discovery::spawn_passive_discovery(
+        &supervisor,
         switch_store.clone(),
         app_state.mikrotik.clone(),
     );
+
+    alerting::spawn_alert_engine(&supervisor, app_state.clone());
 
     // Spawn cert rotation background task if CertWarden is configured
     if let Some(ref sm) = secrets_manager {
         if let Some(cw_config) = config.certwarden.resolve() {
             if let Some(ca_path) = config.oidc.ca_cert_path.as_deref() {
                 spawn_cert_rotation(
+                    &supervisor,
                     sm.clone(),
                     cw_config,
                     config.tls.clone(),
@@ -490,6 +508,7 @@ fn parse_config_arg() -> Option<String> {
 
 /// Background task: check cert expiry and renew from CertWarden when within threshold.
 fn spawn_cert_rotation(
+    supervisor: &TaskSupervisor,
     sm: Arc<tokio::sync::RwLock<SecretsManager>>,
     cw_config: config::ResolvedCertWarden,
     tls_config: config::TlsSection,
@@ -498,7 +517,12 @@ fn spawn_cert_rotation(
     let interval_hours = cw_config.check_interval_hours.max(1) as u64;
     let threshold_secs = (cw_config.renewal_threshold_days as i64) * 86400;
 
-    tokio::spawn(async move {
+    supervisor.spawn("cert_rotation", move || {
+        let sm = sm.clone();
+        let cw_config = cw_config.clone();
+        let tls_config = tls_config.clone();
+        let ca_cert_path = ca_cert_path.clone();
+        Box::pin(async move {
         // 5-minute initial delay before first check
         tokio::time::sleep(Duration::from_secs(300)).await;
         tracing::info!(
@@ -563,17 +587,24 @@ fn spawn_cert_rotation(
 
             tokio::time::sleep(Duration::from_secs(interval_hours * 3600)).await;
         }
-    });
+    })});
 }
 
 /// Poll WAN traffic counters every 10 seconds for live rates,
 /// and every 15 minutes for lifetime totals (SQLite).
 fn spawn_traffic_poller(
+    supervisor: &TaskSupervisor,
     tracker: Arc<mikrotik_core::TrafficTracker>,
     live_buf: Arc<LiveTrafficBuffer>,
     client: mikrotik_core::MikrotikClient,
+    wan_interface: String,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("traffic_poller", move || {
+        let tracker = tracker.clone();
+        let live_buf = live_buf.clone();
+        let client = client.clone();
+        let wan_interface = wan_interface.clone();
+        Box::pin(async move {
         // Initial poll for lifetime totals
         match tracker.poll(&client).await {
             Ok(t) => tracing::info!(
@@ -602,7 +633,7 @@ fn spawn_traffic_poller(
                 }
             };
 
-            let wan = interfaces.iter().find(|i| i.name == "1-WAN");
+            let wan = interfaces.iter().find(|i| i.name == wan_interface);
             if let Some(wan) = wan {
                 let current_rx = wan.rx_byte.unwrap_or(0);
                 let current_tx = wan.tx_byte.unwrap_or(0);
@@ -616,7 +647,7 @@ fn spawn_traffic_poller(
                         let tx_bps = ((current_tx - ptx) as f64 / elapsed) * 8.0;
                         let timestamp = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
+                            .unwrap_or_default()
                             .as_secs() as i64;
                         live_buf
                             .push(TrafficSample {
@@ -643,16 +674,20 @@ fn spawn_traffic_poller(
                 }
             }
         }
-    });
+    })});
 }
 
 /// Poll system resources every 60 seconds, store CPU/memory metrics.
 /// Prune data older than 7 days every hour.
 fn spawn_metrics_poller(
+    supervisor: &TaskSupervisor,
     store: Arc<mikrotik_core::MetricsStore>,
     client: mikrotik_core::MikrotikClient,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("metrics_poller", move || {
+        let store = store.clone();
+        let client = client.clone();
+        Box::pin(async move {
         let mut tick_count: u64 = 0;
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
@@ -679,15 +714,19 @@ fn spawn_metrics_poller(
                 }
             }
         }
-    });
+    })});
 }
 
 /// Poll firewall drop counters every 60 seconds, store totals in SQLite.
 fn spawn_drops_poller(
+    supervisor: &TaskSupervisor,
     store: Arc<mikrotik_core::MetricsStore>,
     client: mikrotik_core::MikrotikClient,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("drops_poller", move || {
+        let store = store.clone();
+        let client = client.clone();
+        Box::pin(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
@@ -711,15 +750,19 @@ fn spawn_drops_poller(
                 tracing::warn!("drops poller: record failed: {e}");
             }
         }
-    });
+    })});
 }
 
 /// Poll connection tracking summary every 60 seconds, store in SQLite.
 fn spawn_connection_metrics_poller(
+    supervisor: &TaskSupervisor,
     store: Arc<mikrotik_core::MetricsStore>,
     client: mikrotik_core::MikrotikClient,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("connection_metrics_poller", move || {
+        let store = store.clone();
+        let client = client.clone();
+        Box::pin(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
@@ -748,15 +791,19 @@ fn spawn_connection_metrics_poller(
                 tracing::warn!("connection poller: record failed: {e}");
             }
         }
-    });
+    })});
 }
 
 /// Poll VLAN throughput every 60 seconds, store in SQLite.
 fn spawn_vlan_metrics_poller(
+    supervisor: &TaskSupervisor,
     store: Arc<mikrotik_core::MetricsStore>,
     client: mikrotik_core::MikrotikClient,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("vlan_metrics_poller", move || {
+        let store = store.clone();
+        let client = client.clone();
+        Box::pin(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
@@ -804,24 +851,30 @@ fn spawn_vlan_metrics_poller(
                 }
             }
         }
-    });
+    })});
 }
 
 /// Aggregate log statistics every hour, store roll-ups in SQLite.
 fn spawn_log_aggregation(
+    supervisor: &TaskSupervisor,
     store: Arc<mikrotik_core::MetricsStore>,
     client: mikrotik_core::MikrotikClient,
     geo_cache: Arc<geo::GeoCache>,
     oui_db: Arc<oui::OuiDb>,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("log_aggregation", move || {
+        let store = store.clone();
+        let client = client.clone();
+        let geo_cache = geo_cache.clone();
+        let oui_db = oui_db.clone();
+        Box::pin(async move {
         // Wait 2 minutes before first aggregation (let server stabilize)
         tokio::time::sleep(Duration::from_secs(120)).await;
 
         loop {
             let period_end = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs() as i64;
             let period_start = period_end - 3600;
 
@@ -903,38 +956,49 @@ fn spawn_log_aggregation(
             // Sleep for 1 hour
             tokio::time::sleep(Duration::from_secs(3600)).await;
         }
-    });
+    })});
 }
 
 /// Clean up expired sessions every 10 minutes.
-fn spawn_session_cleanup(sessions: auth::SessionStore) {
-    tokio::spawn(async move {
+fn spawn_session_cleanup(supervisor: &TaskSupervisor, sessions: auth::SessionStore) {
+    supervisor.spawn("session_cleanup", move || {
+        let sessions = sessions.clone();
+        Box::pin(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(600));
         loop {
             interval.tick().await;
             sessions.cleanup();
             tracing::debug!("session cleanup complete");
         }
-    });
+    })});
 }
 
 /// Collect device observations, detect anomalies, and detect blocked attempts every 60s.
 /// 3-minute startup delay to let the server stabilize.
 fn spawn_behavior_collector(
+    supervisor: &TaskSupervisor,
     store: Arc<mikrotik_core::BehaviorStore>,
     client: mikrotik_core::MikrotikClient,
     oui_db: Arc<oui::OuiDb>,
     geo_cache: Arc<geo::GeoCache>,
     firewall_cache: Arc<tokio::sync::RwLock<(Vec<mikrotik_core::resources::firewall::FilterRule>, std::time::Instant)>>,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("behavior_collector", move || {
+        let store = store.clone();
+        let client = client.clone();
+        let oui_db = oui_db.clone();
+        let geo_cache = geo_cache.clone();
+        let firewall_cache = firewall_cache.clone();
+        Box::pin(async move {
         // Wait 3 minutes before first collection
         tokio::time::sleep(Duration::from_secs(180)).await;
         tracing::info!("behavior collector starting");
 
+        let mut tick_count: u64 = 0;
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
+            tick_count += 1;
 
             // Refresh firewall rules cache
             behavior_engine::refresh_firewall_cache(&client, &firewall_cache).await;
@@ -970,43 +1034,90 @@ fn spawn_behavior_collector(
                 }
                 Err(e) => tracing::warn!("behavior: blocked attempt detection failed: {e}"),
             }
+
+            // Every 5 minutes: promote eligible devices (Priority 1 — decoupled from maintenance)
+            if tick_count % 5 == 0 {
+                match store.promote_eligible_devices().await {
+                    Ok((baselined, sparse)) => {
+                        if baselined > 0 || sparse > 0 {
+                            tracing::info!(
+                                "behavior: promoted {baselined} to baselined, {sparse} to sparse"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!("behavior: promotion check failed: {e}"),
+                }
+            }
         }
-    });
+    })});
 }
 
-/// Recompute all device baselines nightly (3 AM) and prune old observations.
+/// Recompute all device baselines daily and prune old observations.
+/// Uses persisted watermarks to detect and run overdue maintenance on restart.
 fn spawn_behavior_maintenance(
+    supervisor: &TaskSupervisor,
     store: Arc<mikrotik_core::BehaviorStore>,
     connection_store: Arc<connection_store::ConnectionStore>,
     switch_store: Arc<mikrotik_core::SwitchStore>,
 ) {
-    tokio::spawn(async move {
-        loop {
-            // Sleep until roughly 3 AM — simplified: sleep 24 hours
-            tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+    supervisor.spawn("behavior_maintenance", move || {
+        let store = store.clone();
+        let connection_store = connection_store.clone();
+        let switch_store = switch_store.clone();
+        Box::pin(async move {
+        const TASK_NAME: &str = "behavior_maintenance";
+        const MAINTENANCE_INTERVAL: i64 = 24 * 3600; // 24 hours
+        // Check watermark on startup — run immediately if overdue
+        let now = mikrotik_core::BehaviorStore::now_unix_pub();
+        let last_run = store.get_watermark(TASK_NAME).await.unwrap_or(None);
+        let overdue = match last_run {
+            None => true, // never run
+            Some(ts) => (now - ts) >= MAINTENANCE_INTERVAL,
+        };
 
-            tracing::info!("behavior maintenance: recomputing baselines");
-            match store.recompute_all_baselines(7 * 86400).await {
-                Ok(count) => tracing::info!("behavior: recomputed baselines for {count} devices"),
-                Err(e) => tracing::warn!("behavior: baseline recompute failed: {e}"),
+        if overdue {
+            tracing::info!("behavior maintenance: overdue (last run: {:?}), running now", last_run);
+            run_behavior_maintenance(&store, &connection_store, &switch_store).await;
+            if let Err(e) = store.set_watermark(TASK_NAME, mikrotik_core::BehaviorStore::now_unix_pub()).await {
+                tracing::warn!("failed to set watermark for {TASK_NAME}: {e}");
             }
-
-            match store.prune_observations(30 * 86400).await {
-                Ok(count) => tracing::info!("behavior: pruned {count} old observations"),
-                Err(e) => tracing::warn!("behavior: observation prune failed: {e}"),
-            }
-
-            // Compute port flow baselines for Sankey anomaly detection
-            tracing::info!("computing port flow baselines");
-            match connection_store.compute_port_flow_baselines() {
-                Ok(count) => tracing::info!("port flow baselines: computed {count} baselines"),
-                Err(e) => tracing::warn!("port flow baseline computation failed: {e}"),
-            }
-
-            // Classify devices by traffic patterns
-            classify_traffic_patterns(&store, &switch_store).await;
         }
-    });
+
+        loop {
+            tokio::time::sleep(Duration::from_secs(MAINTENANCE_INTERVAL as u64)).await;
+            run_behavior_maintenance(&store, &connection_store, &switch_store).await;
+            if let Err(e) = store.set_watermark(TASK_NAME, mikrotik_core::BehaviorStore::now_unix_pub()).await {
+                tracing::warn!("failed to set watermark for {TASK_NAME}: {e}");
+            }
+        }
+    })});
+}
+
+async fn run_behavior_maintenance(
+    store: &mikrotik_core::BehaviorStore,
+    connection_store: &connection_store::ConnectionStore,
+    switch_store: &mikrotik_core::SwitchStore,
+) {
+    tracing::info!("behavior maintenance: recomputing baselines");
+    match store.recompute_all_baselines(7 * 86400).await {
+        Ok(count) => tracing::info!("behavior: recomputed baselines for {count} devices"),
+        Err(e) => tracing::warn!("behavior: baseline recompute failed: {e}"),
+    }
+
+    match store.prune_observations(30 * 86400).await {
+        Ok(count) => tracing::info!("behavior: pruned {count} old observations"),
+        Err(e) => tracing::warn!("behavior: observation prune failed: {e}"),
+    }
+
+    // Compute port flow baselines for Sankey anomaly detection
+    tracing::info!("computing port flow baselines");
+    match connection_store.compute_port_flow_baselines() {
+        Ok(count) => tracing::info!("port flow baselines: computed {count} baselines"),
+        Err(e) => tracing::warn!("port flow baseline computation failed: {e}"),
+    }
+
+    // Classify devices by traffic patterns
+    classify_traffic_patterns(store, switch_store).await;
 }
 
 /// Classify devices by their observed traffic patterns.
@@ -1102,22 +1213,26 @@ async fn classify_traffic_patterns(
             });
 
             // Store classification
-            let _ = switch_store.upsert_traffic_classification(
+            if let Err(e) = switch_store.upsert_traffic_classification(
                 mac,
                 dt,
                 confidence,
                 &evidence.to_string(),
-            ).await;
+            ).await {
+                tracing::warn!(mac = %mac, "failed to upsert traffic classification: {e}");
+            }
 
             // Update identity (confidence hierarchy enforced by upsert)
-            let _ = switch_store.upsert_network_identity(
+            if let Err(e) = switch_store.upsert_network_identity(
                 mac,
                 None, None, None, None, None, None, None, None, None,
                 0.0, // don't update base confidence
                 Some(dt),
                 Some("traffic_pattern"),
                 confidence,
-            ).await;
+            ).await {
+                tracing::warn!(mac = %mac, "failed to upsert network identity from traffic classifier: {e}");
+            }
 
             classified += 1;
         }
@@ -1129,9 +1244,36 @@ async fn classify_traffic_patterns(
 }
 
 /// Auto-resolve stale anomalies every hour based on per-VLAN timeout rules.
-fn spawn_behavior_auto_classifier(store: Arc<mikrotik_core::BehaviorStore>) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+fn spawn_behavior_auto_classifier(supervisor: &TaskSupervisor, store: Arc<mikrotik_core::BehaviorStore>) {
+    supervisor.spawn("behavior_auto_classifier", move || {
+        let store = store.clone();
+        Box::pin(async move {
+        const TASK_NAME: &str = "auto_classifier";
+        const CLASSIFIER_INTERVAL: i64 = 3600; // 1 hour
+        // Check watermark on startup — run immediately if overdue
+        let now = mikrotik_core::BehaviorStore::now_unix_pub();
+        let last_run = store.get_watermark(TASK_NAME).await.unwrap_or(None);
+        let overdue = match last_run {
+            None => true,
+            Some(ts) => (now - ts) >= CLASSIFIER_INTERVAL,
+        };
+
+        if overdue {
+            tracing::info!("auto-classifier: overdue, running now");
+            match store.auto_resolve_stale().await {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("behavior: auto-resolved {count} stale anomalies (startup)");
+                    }
+                }
+                Err(e) => tracing::warn!("behavior: auto-resolve failed: {e}"),
+            }
+            if let Err(e) = store.set_watermark(TASK_NAME, mikrotik_core::BehaviorStore::now_unix_pub()).await {
+                tracing::warn!("failed to set watermark for {TASK_NAME}: {e}");
+            }
+        }
+
+        let mut interval = tokio::time::interval(Duration::from_secs(CLASSIFIER_INTERVAL as u64));
         loop {
             interval.tick().await;
             match store.auto_resolve_stale().await {
@@ -1142,17 +1284,25 @@ fn spawn_behavior_auto_classifier(store: Arc<mikrotik_core::BehaviorStore>) {
                 }
                 Err(e) => tracing::warn!("behavior: auto-resolve failed: {e}"),
             }
+            if let Err(e) = store.set_watermark(TASK_NAME, mikrotik_core::BehaviorStore::now_unix_pub()).await {
+                tracing::warn!("failed to set watermark for {TASK_NAME}: {e}");
+            }
         }
-    });
+    })});
 }
 
 /// Persist active connections to history every 30 seconds (same cadence as the connections page poll).
 fn spawn_connection_persister(
+    supervisor: &TaskSupervisor,
     store: Arc<connection_store::ConnectionStore>,
     client: mikrotik_core::MikrotikClient,
     geo_cache: Arc<geo::GeoCache>,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("connection_persister", move || {
+        let store = store.clone();
+        let client = client.clone();
+        let geo_cache = geo_cache.clone();
+        Box::pin(async move {
         // Wait 1 minute before starting (let server stabilize)
         tokio::time::sleep(Duration::from_secs(60)).await;
         tracing::info!("connection history persister starting");
@@ -1227,13 +1377,15 @@ fn spawn_connection_persister(
                 Err(e) => tracing::warn!("connection close_stale error: {e}"),
             }
         }
-    });
+    })});
 }
 
 
 /// Prune old connection history nightly.
-fn spawn_connection_pruner(store: Arc<connection_store::ConnectionStore>) {
-    tokio::spawn(async move {
+fn spawn_connection_pruner(supervisor: &TaskSupervisor, store: Arc<connection_store::ConnectionStore>) {
+    supervisor.spawn("connection_pruner", move || {
+        let store = store.clone();
+        Box::pin(async move {
         // Wait 3 hours before first prune (avoid startup load)
         tokio::time::sleep(Duration::from_secs(3 * 3600)).await;
 
@@ -1250,20 +1402,24 @@ fn spawn_connection_pruner(store: Arc<connection_store::ConnectionStore>) {
             // Sleep 24 hours
             tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
         }
-    });
+    })});
 }
 
 /// Configure the router to send firewall syslog to ion-drift.
 ///
 /// Creates (idempotently):
-/// 1. A remote logging action "ion-drift" → 10.20.25.17:5514
+/// 1. A remote logging action "ion-drift" → target_ip:port
 /// 2. A logging rule routing topic "firewall" to that action
 /// 3. Firewall log rules for new connections on input + forward chains
 async fn setup_router_syslog(
     client: &mikrotik_core::MikrotikClient,
+    syslog_config: &config::SyslogSection,
 ) -> anyhow::Result<String> {
-    const SYSLOG_TARGET: &str = "10.20.25.17";
-    const SYSLOG_PORT: u16 = 5514;
+    let syslog_target = match &syslog_config.target_ip {
+        Some(ip) => ip.as_str(),
+        None => return Ok("skipped (syslog.target_ip not configured)".to_string()),
+    };
+    let syslog_port = syslog_config.port;
     const ACTION_NAME: &str = "ion-drift";
     const LOG_PREFIX: &str = "ION";
     const COMMENT: &str = "ion-drift syslog capture";
@@ -1275,14 +1431,14 @@ async fn setup_router_syslog(
     let has_action = actions.iter().any(|a| a.name == ACTION_NAME);
 
     if !has_action {
-        tracing::info!("creating remote logging action '{ACTION_NAME}' → {SYSLOG_TARGET}:{SYSLOG_PORT}");
+        tracing::info!("creating remote logging action '{ACTION_NAME}' → {syslog_target}:{syslog_port}");
         client
             .create_logging_action(&mikrotik_core::CreateLoggingAction {
                 name: ACTION_NAME.to_string(),
                 target: "remote".to_string(),
-                remote: SYSLOG_TARGET.to_string(),
-                remote_port: SYSLOG_PORT,
-                src_address: Some("10.20.25.1".to_string()),
+                remote: syslog_target.to_string(),
+                remote_port: syslog_port,
+                src_address: None,
                 bsd_syslog: Some("yes".to_string()),
             })
             .await?;

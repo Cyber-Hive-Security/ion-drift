@@ -39,7 +39,20 @@ pub struct SessionData {
     pub user_id: String,
     pub username: String,
     pub email: Option<String>,
+    pub roles: Vec<String>,
     pub created_at: u64,
+}
+
+impl SessionData {
+    /// Check if this session has a specific role.
+    pub fn has_role(&self, role: &str) -> bool {
+        self.roles.iter().any(|r| r == role)
+    }
+
+    /// Check if this user has the admin role.
+    pub fn is_admin(&self) -> bool {
+        self.has_role("ion-drift-admin")
+    }
 }
 
 /// Temporary data stored while the OIDC auth flow is in progress.
@@ -131,7 +144,7 @@ impl SessionStore {
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs()
 }
 
@@ -140,7 +153,9 @@ fn now_secs() -> u64 {
 /// Build the `reqwest::Client` with the Smallstep CA cert loaded.
 pub fn build_oidc_http_client(ca_cert_path: Option<&str>) -> anyhow::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none());
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30));
     if let Some(ca_path) = ca_cert_path {
         let pem = std::fs::read(ca_path)
             .map_err(|e| anyhow::anyhow!("failed to read OIDC CA cert {ca_path}: {e}"))?;
@@ -287,7 +302,11 @@ pub async fn callback(
         .email()
         .map(|e: &EndUserEmail| e.to_string());
 
-    tracing::info!(user_id, username, "user authenticated via OIDC");
+    // Extract roles from Keycloak's realm_access claim.
+    // The token is already signature-verified above, so decoding the payload is safe.
+    let roles = extract_keycloak_roles(id_token.to_string().as_str());
+
+    tracing::info!(user_id, username, ?roles, "user authenticated via OIDC");
 
     // Create session with 256-bit cryptographic token
     let session_bytes: [u8; 32] = rand::random();
@@ -296,6 +315,7 @@ pub async fn callback(
         user_id,
         username,
         email,
+        roles,
         created_at: now_secs(),
     };
     state
@@ -361,6 +381,7 @@ pub struct UserInfo {
     user_id: String,
     username: String,
     email: Option<String>,
+    is_admin: bool,
 }
 
 /// `GET /auth/status` — Check whether the current request has a valid session.
@@ -373,9 +394,10 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar) -> Json<AuthS
         Some(data) => Json(AuthStatus {
             authenticated: true,
             user: Some(UserInfo {
-                user_id: data.user_id,
-                username: data.username,
-                email: data.email,
+                user_id: data.user_id.clone(),
+                username: data.username.clone(),
+                email: data.email.clone(),
+                is_admin: data.is_admin(),
             }),
         }),
         None => Json(AuthStatus {
@@ -383,4 +405,41 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar) -> Json<AuthS
             user: None,
         }),
     }
+}
+
+// ── Keycloak role extraction ──────────────────────────────────────
+
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+/// Extract realm roles from a Keycloak JWT's `realm_access.roles` claim.
+///
+/// The token must already be signature-verified before calling this.
+/// Returns an empty vec if the claim is missing or malformed.
+fn extract_keycloak_roles(jwt: &str) -> Vec<String> {
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return Vec::new();
+    }
+
+    let payload = match URL_SAFE_NO_PAD.decode(parts[1]) {
+        Ok(bytes) => bytes,
+        Err(_) => return Vec::new(),
+    };
+
+    let value: serde_json::Value = match serde_json::from_slice(&payload) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    value
+        .get("realm_access")
+        .and_then(|ra| ra.get("roles"))
+        .and_then(|r| r.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }

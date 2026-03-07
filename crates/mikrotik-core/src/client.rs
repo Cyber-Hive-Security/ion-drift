@@ -7,10 +7,23 @@ use tracing::{debug, trace};
 
 use crate::error::{MikrotikError, RouterOsErrorResponse};
 
+/// Default RouterOS REST API port (HTTPS).
+pub const DEFAULT_ROUTER_PORT: u16 = 443;
+
+/// Default RouterOS admin username.
+pub const DEFAULT_ROUTER_USERNAME: &str = "admin";
+
+/// Mikrotik factory-default IP address.
+///
+/// Used as a fallback when no router host is explicitly configured.
+/// Production deployments should always set the router host explicitly
+/// via config file or environment variable.
+pub const DEFAULT_ROUTER_HOST: &str = "192.168.88.1";
+
 /// Configuration for connecting to a RouterOS device.
 #[derive(Debug, Clone)]
 pub struct MikrotikConfig {
-    /// Router address (IP or hostname), e.g. "10.20.25.1"
+    /// Router address (IP or hostname), e.g. "192.168.88.1"
     pub host: String,
     /// REST API port (default 443 for HTTPS)
     pub port: u16,
@@ -27,13 +40,54 @@ pub struct MikrotikConfig {
 impl Default for MikrotikConfig {
     fn default() -> Self {
         Self {
-            host: "10.20.25.1".into(),
-            port: 443,
+            host: DEFAULT_ROUTER_HOST.into(),
+            port: DEFAULT_ROUTER_PORT,
             tls: true,
             ca_cert_path: None,
-            username: "admin".into(),
+            username: DEFAULT_ROUTER_USERNAME.into(),
             password: String::new(),
         }
+    }
+}
+
+impl MikrotikConfig {
+    /// Validate the configuration, returning a list of warnings.
+    ///
+    /// Returns `Err` for fatal misconfigurations (empty host, empty password).
+    /// Returns `Ok(warnings)` where warnings is a Vec of non-fatal issues
+    /// (e.g., using factory-default host).
+    pub fn validate(&self) -> Result<Vec<String>, MikrotikError> {
+        let mut warnings = Vec::new();
+
+        if self.host.is_empty() {
+            return Err(MikrotikError::Config("router host cannot be empty".into()));
+        }
+
+        if self.password.is_empty() {
+            return Err(MikrotikError::Config("router password cannot be empty".into()));
+        }
+
+        if self.host == DEFAULT_ROUTER_HOST {
+            warnings.push(format!(
+                "using Mikrotik factory-default host ({DEFAULT_ROUTER_HOST}); \
+                 set router.host in config or HIVE_ROUTER_HOST env var for production"
+            ));
+        }
+
+        if self.port == 0 {
+            return Err(MikrotikError::Config("router port cannot be 0".into()));
+        }
+
+        // Validate host is a plausible IP or hostname (not just whitespace)
+        let trimmed = self.host.trim();
+        if trimmed.is_empty() || trimmed.contains(' ') {
+            return Err(MikrotikError::Config(format!(
+                "invalid router host: {:?}",
+                self.host
+            )));
+        }
+
+        Ok(warnings)
     }
 }
 

@@ -3,12 +3,18 @@ listen_addr = "0.0.0.0"
 listen_port = 3000
 
 [router]
-host = "10.20.25.1"
+# Router IP or hostname (REQUIRED for production; default: 192.168.88.1 = Mikrotik factory default)
+# Override: HIVE_ROUTER_HOST env var
+host = "192.168.88.1"
 port = 443
 tls = true
 ca_cert_path = "/certs/root_ca.crt"
 username = "admin"
 # password from HIVE_ROUTER_PASSWORD env var (legacy mode only)
+wan_interface = "1-WAN"
+# Internal DNS server IP for PTR lookups (optional; falls back to system resolver)
+# Override: HIVE_ROUTER_DNS_SERVER env var
+# dns_server = "10.20.25.5"
 
 [oidc]
 issuer_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet"
@@ -44,3 +50,8 @@ same_site = "lax"
 # cert_name = "hiverouter"
 # renewal_threshold_days = 30
 # check_interval_hours = 1
+
+# [syslog]
+# port = 5514
+# bind_address = "0.0.0.0"
+# target_ip = "10.20.25.17"  # IP of this server as seen by the router

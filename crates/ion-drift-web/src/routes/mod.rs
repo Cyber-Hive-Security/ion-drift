@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod arp;
 pub mod behavior;
 pub mod connections;
@@ -10,6 +11,7 @@ pub mod ip;
 pub mod logs;
 pub mod metrics;
 pub mod network_map_status;
+pub mod sankey;
 pub mod settings;
 pub mod switch_data;
 pub mod system;
@@ -68,6 +70,46 @@ fn extract_origin(url: &str) -> String {
 /// Health check endpoint — no auth required.
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// CSRF protection middleware for non-GET API endpoints.
+///
+/// Requires that mutating requests (POST/PUT/DELETE) include a Content-Type
+/// header with `application/json`. This prevents cross-origin form submissions
+/// from attaching session cookies, since HTML forms cannot set custom
+/// Content-Type values beyond form-urlencoded/multipart/text-plain.
+///
+/// Combined with SameSite=Lax cookies and strict CORS, this provides
+/// defense-in-depth against CSRF attacks.
+async fn csrf_guard_layer(
+    request: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+    if method != Method::GET && method != Method::HEAD && method != Method::OPTIONS {
+        let has_body = request
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            .map_or(false, |len| len > 0);
+
+        if has_body {
+            let ct = request
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if !ct.starts_with("application/json") {
+                return (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    Json(serde_json::json!({ "error": "Content-Type must be application/json" })),
+                )
+                    .into_response();
+            }
+        }
+    }
+    next.run(request).await
 }
 
 /// Global auth guard middleware for all /api/* routes.
@@ -133,6 +175,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         // System
         .route("/system/resources", get(system::resources))
         .route("/system/identity", get(system::identity))
+        .route("/system/tasks", get(system::tasks))
         // Interfaces
         .route("/interfaces", get(interfaces::list))
         .route("/interfaces/vlans", get(interfaces::vlans))
@@ -211,6 +254,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/devices/{id}/neighbors", get(switch_data::device_neighbors))
         .route("/devices/{id}/vlans", get(switch_data::device_vlans))
         .route("/devices/{id}/port-roles", get(switch_data::device_port_roles))
+        .route("/devices/{id}/port-utilization", get(switch_data::device_port_utilization))
         // Network-wide correlation data
         .route("/network/identities", get(switch_data::network_identities))
         .route("/network/mac-table", get(switch_data::network_mac_table))
@@ -233,13 +277,29 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> Router {
         .route("/network/port-violations", get(identity::list_port_violations))
         .route("/network/port-violations/{device_id}", get(identity::list_device_port_violations))
         .route("/network/port-violations/{id}/resolve", put(identity::resolve_port_violation))
+        // Alerts
+        .route("/alerts/rules", get(alerts::list_rules).post(alerts::create_rule))
+        .route("/alerts/rules/{id}", put(alerts::update_rule).delete(alerts::delete_rule))
+        .route("/alerts/status", get(alerts::status))
+        .route("/alerts/history", get(alerts::history).delete(alerts::clear_history))
+        .route("/alerts/channels", get(alerts::list_channels))
+        .route("/alerts/channels/{channel}", put(alerts::update_channel))
+        .route("/alerts/channels/{channel}/test", post(alerts::test_channel))
+        // Sankey investigation
+        .route("/sankey/network", get(sankey::network_overview))
+        .route("/sankey/vlan/{vlan_id}", get(sankey::vlan_detail))
+        .route("/sankey/device/{mac}", get(sankey::device_trace))
+        .route("/sankey/device/{mac}/destination/{ip}", get(sankey::conversation_detail))
+        .route("/sankey/destination/{ip}/devices", get(sankey::destination_peers))
         // Network topology
         .route("/network/topology", get(topology::get_topology))
         .route("/network/topology/refresh", post(topology::refresh_topology))
         .route("/network/topology/positions", get(topology::get_positions))
         .route("/network/topology/positions/{nodeId}", put(topology::update_position).delete(topology::reset_position))
         // Global auth middleware for all API routes
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer))
+        // CSRF protection: require application/json Content-Type on mutating requests
+        .layer(middleware::from_fn(csrf_guard_layer));
 
     Router::new()
         // Health check (no auth)

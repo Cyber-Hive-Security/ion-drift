@@ -161,7 +161,7 @@ impl SecretsManager {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let db = self.db.lock().await;
@@ -303,7 +303,7 @@ impl SecretsManager {
         let cipher = Aes256Gcm::new(&self.kek);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let mut encrypted: Vec<(&str, Vec<u8>, [u8; 12])> = Vec::new();
@@ -618,6 +618,6 @@ fn open_db(db_path: &Path) -> anyhow::Result<rusqlite::Connection> {
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64
 }

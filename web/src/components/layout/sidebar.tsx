@@ -14,6 +14,7 @@ import {
   History,
   Fingerprint,
   GitBranch,
+  Search,
 } from "lucide-react";
 
 const navItems = [
@@ -88,6 +89,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           {[
             { to: "/network/identities", label: "Identities", icon: Fingerprint },
             { to: "/topology", label: "Topology", icon: GitBranch },
+            { to: "/sankey", label: "Investigation", icon: Search },
           ].map(({ to, label, icon: Icon }) => {
             const active = currentPath.startsWith(to);
             return (

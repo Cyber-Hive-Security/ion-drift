@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mikrotik_core::{MikrotikClient, SwitchStore};
+use crate::task_supervisor::TaskSupervisor;
 
 /// Background task interval (seconds).
 const POLL_INTERVAL_SECS: u64 = 120;
@@ -34,10 +35,14 @@ const SERVICE_MAX_AGE_SECS: i64 = 7 * 86400;
 
 /// Spawn the passive service discovery background task.
 pub fn spawn_passive_discovery(
+    supervisor: &TaskSupervisor,
     switch_store: Arc<SwitchStore>,
     router_client: MikrotikClient,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("passive_discovery", move || {
+        let switch_store = switch_store.clone();
+        let router_client = router_client.clone();
+        Box::pin(async move {
         tokio::time::sleep(Duration::from_secs(STARTUP_DELAY_SECS)).await;
         tracing::info!("passive service discovery starting ({POLL_INTERVAL_SECS}s interval)");
 
@@ -56,7 +61,7 @@ pub fn spawn_passive_discovery(
                 tracing::warn!("passive discovery: prune error: {e}");
             }
         }
-    });
+    })});
 }
 
 /// One cycle of passive discovery.
@@ -160,7 +165,7 @@ async fn run_passive_discovery(
                     if !identity.human_confirmed
                         && confidence > identity.device_type_confidence
                     {
-                        let _ = store
+                        if let Err(e) = store
                             .upsert_network_identity(
                                 &identity.mac_address,
                                 Some(ip),
@@ -177,7 +182,10 @@ async fn run_passive_discovery(
                                 Some("conntrack"),
                                 confidence,
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(mac = %identity.mac_address, "failed to upsert network identity from passive discovery: {e}");
+                        }
                     }
                 }
             }

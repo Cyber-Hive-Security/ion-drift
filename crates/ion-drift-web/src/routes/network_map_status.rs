@@ -50,17 +50,17 @@ pub struct NetworkMapStatusCache {
 }
 
 /// Compute hop count and internet path for a device IP.
-/// - Router (10.20.25.1): 0 hops, direct ISP connection
+/// - Router IP (from config): 0 hops, direct ISP connection
 /// - VLAN 99 (192.168.99.0/24): blocked by firewall policy
-/// - All other VLANs: 1 hop through the RB4011 router
-fn compute_hops(ip: &str) -> (Option<u8>, Option<String>) {
+/// - All other VLANs: 1 hop through the router
+fn compute_hops(ip: &str, router_host: &str) -> (Option<u8>, Option<String>) {
     let parts: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
     if parts.len() != 4 {
         return (None, None);
     }
 
-    // Router itself
-    if ip == "10.20.25.1" {
+    // Router itself (compare against configured router host)
+    if ip == router_host {
         return (Some(0), Some("\u{2192} ISP (direct)".into()));
     }
 
@@ -69,12 +69,12 @@ fn compute_hops(ip: &str) -> (Option<u8>, Option<String>) {
         return (None, Some("blocked by policy".into()));
     }
 
-    // All other internal VLANs route through the RB4011
+    // All other internal VLANs route through the router
     if parts[0] == 10
         || (parts[0] == 172 && (16..=31).contains(&parts[1]))
         || (parts[0] == 192 && parts[1] == 168)
     {
-        return (Some(1), Some("\u{2192} RB4011 \u{2192} ISP".into()));
+        return (Some(1), Some("\u{2192} Router \u{2192} ISP".into()));
     }
 
     (None, None)
@@ -106,6 +106,7 @@ pub async fn status(
 
     // Build ARP IP set
     let arp_ips: HashSet<&str> = arp_entries.iter().map(|a| a.address.as_str()).collect();
+    let router_host = state.config.router.host.as_str();
 
     // Start with DHCP leases (keyed by IP to deduplicate)
     let mut device_map: HashMap<String, DeviceStatus> = HashMap::new();
@@ -117,7 +118,7 @@ pub async fn status(
             .and_then(|m| state.oui_db.lookup(m))
             .map(String::from);
 
-        let (hop_count, internet_path) = compute_hops(&lease.address);
+        let (hop_count, internet_path) = compute_hops(&lease.address, router_host);
         device_map.insert(
             lease.address.clone(),
             DeviceStatus {
@@ -145,7 +146,7 @@ pub async fn status(
                 .and_then(|m| state.oui_db.lookup(m))
                 .map(String::from);
 
-            let (hop_count, internet_path) = compute_hops(&arp.address);
+            let (hop_count, internet_path) = compute_hops(&arp.address, router_host);
             device_map.insert(
                 arp.address.clone(),
                 DeviceStatus {
@@ -220,7 +221,7 @@ pub async fn status(
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
 
     let response = NetworkMapStatusResponse {

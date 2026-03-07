@@ -23,6 +23,9 @@ pub enum MikrotikError {
 
     #[error("Database error: {0}")]
     Database(String),
+
+    #[error("Configuration error: {0}")]
+    Config(String),
 }
 
 /// Raw error response from RouterOS REST API.

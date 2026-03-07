@@ -20,3 +20,11 @@ pub async fn identity(
     let id = state.mikrotik.system_identity().await.map_err(api_error)?;
     Ok(Json(serde_json::to_value(id).map_err(|e| internal_error("serialize system identity", e))?))
 }
+
+pub async fn tasks(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let statuses = state.task_supervisor.status().await;
+    Json(serde_json::json!({ "tasks": statuses }))
+}

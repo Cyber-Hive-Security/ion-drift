@@ -6,17 +6,22 @@ use mikrotik_core::switch_store::{PortMetricEntry, VlanMembershipEntry};
 use tokio::sync::RwLock;
 
 use crate::device_manager::{DeviceManager, DeviceStatus};
+use crate::task_supervisor::TaskSupervisor;
 
 /// Spawn switch pollers for all enabled switch devices.
 ///
 /// Each switch gets its own tokio task with an independent polling interval
 /// from its `poll_interval_secs` configuration.
 pub fn spawn_switch_pollers(
+    supervisor: &TaskSupervisor,
     device_manager: Arc<RwLock<DeviceManager>>,
     switch_store: Arc<SwitchStore>,
 ) {
+    supervisor.spawn("switch_pollers", move || {
+        let device_manager = device_manager.clone();
+        let switch_store = switch_store.clone();
+        Box::pin(async move {
     let dm = device_manager.clone();
-    tokio::spawn(async move {
         // 30-second startup delay to let the server stabilize
         tokio::time::sleep(Duration::from_secs(30)).await;
 
@@ -54,7 +59,7 @@ pub fn spawn_switch_pollers(
             });
         }
         drop(dm_read);
-    });
+    })});
 }
 
 /// Run one poll cycle for a switch device.
@@ -228,10 +233,14 @@ async fn poll_switch(
 
 /// Spawn a neighbor discovery poller that runs against ALL devices every 120s.
 pub fn spawn_neighbor_poller(
+    supervisor: &TaskSupervisor,
     device_manager: Arc<RwLock<DeviceManager>>,
     switch_store: Arc<SwitchStore>,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("neighbor_poller", move || {
+        let device_manager = device_manager.clone();
+        let switch_store = switch_store.clone();
+        Box::pin(async move {
         // 60-second startup delay
         tokio::time::sleep(Duration::from_secs(60)).await;
         tracing::info!("neighbor discovery poller starting (all devices, 120s interval)");
@@ -282,12 +291,14 @@ pub fn spawn_neighbor_poller(
                 }
             }
         }
-    });
+    })});
 }
 
 /// Spawn a device health check that pings all devices every 60s.
-pub fn spawn_device_health_check(device_manager: Arc<RwLock<DeviceManager>>) {
-    tokio::spawn(async move {
+pub fn spawn_device_health_check(supervisor: &TaskSupervisor, device_manager: Arc<RwLock<DeviceManager>>) {
+    supervisor.spawn("device_health_check", move || {
+        let device_manager = device_manager.clone();
+        Box::pin(async move {
         // Brief startup delay to let device clients initialize
         tokio::time::sleep(Duration::from_secs(5)).await;
         tracing::info!("device health check starting (60s interval)");
@@ -316,5 +327,5 @@ pub fn spawn_device_health_check(device_manager: Arc<RwLock<DeviceManager>>) {
                 dm_w.set_status(device_id, status);
             }
         }
-    });
+    })});
 }

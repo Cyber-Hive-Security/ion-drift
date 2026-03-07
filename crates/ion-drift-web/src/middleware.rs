@@ -14,9 +14,49 @@ use crate::state::AppState;
 /// Returns 401 JSON error if no valid session cookie is present.
 pub struct RequireAuth(pub SessionData);
 
+/// Axum extractor that requires a valid session with admin role.
+///
+/// Use as a handler parameter: `RequireAdmin(session)` gives you the `SessionData`.
+/// Returns 401 if not authenticated, 403 if authenticated but not admin.
+pub struct RequireAdmin(pub SessionData);
+
 #[derive(Serialize)]
 struct ErrorResponse {
     error: String,
+}
+
+/// Extract and validate the session from the cookie jar.
+/// Shared logic between RequireAuth and RequireAdmin.
+async fn extract_session<S>(parts: &mut Parts, state: &S) -> Result<SessionData, Response>
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    let app_state = AppState::from_ref(state);
+    let jar = CookieJar::from_headers(&parts.headers);
+
+    let session_id = jar
+        .get(&app_state.config.session.cookie_name)
+        .map(|c| c.value().to_string())
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponse {
+                    error: "authentication required".into(),
+                }),
+            )
+                .into_response()
+        })?;
+
+    app_state.sessions.get(&session_id).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                error: "session expired or invalid".into(),
+            }),
+        )
+            .into_response()
+    })
 }
 
 impl<S> FromRequestParts<S> for RequireAuth
@@ -27,35 +67,28 @@ where
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let app_state = AppState::from_ref(state);
+        Ok(RequireAuth(extract_session(parts, state).await?))
+    }
+}
 
-        // Extract the cookie jar from headers
-        let jar = CookieJar::from_headers(&parts.headers);
+impl<S> FromRequestParts<S> for RequireAdmin
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = Response;
 
-        let session_id = jar
-            .get(&app_state.config.session.cookie_name)
-            .map(|c| c.value().to_string());
-
-        let session_id = session_id.ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let session = extract_session(parts, state).await?;
+        if !session.is_admin() {
+            return Err((
+                StatusCode::FORBIDDEN,
                 Json(ErrorResponse {
-                    error: "authentication required".into(),
+                    error: "admin privileges required".into(),
                 }),
             )
-                .into_response()
-        })?;
-
-        let session = app_state.sessions.get(&session_id).ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "session expired or invalid".into(),
-                }),
-            )
-                .into_response()
-        })?;
-
-        Ok(RequireAuth(session))
+                .into_response());
+        }
+        Ok(RequireAdmin(session))
     }
 }

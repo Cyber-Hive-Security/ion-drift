@@ -4,7 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{Json, Response};
 use serde::Deserialize;
 
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 
 use super::internal_error;
@@ -21,7 +21,8 @@ pub async fn identity_stats(
         .get_identity_stats()
         .await
         .map_err(|e| internal_error("identity stats", e))?;
-    Ok(Json(serde_json::to_value(stats).unwrap()))
+    let json = serde_json::to_value(stats).map_err(|e| internal_error("serialize identity stats", e))?;
+    Ok(Json(json))
 }
 
 /// Query params for review queue.
@@ -44,7 +45,8 @@ pub async fn review_queue(
         .get_review_queue(limit, offset)
         .await
         .map_err(|e| internal_error("review queue", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize review queue", e))?;
+    Ok(Json(json))
 }
 
 /// Request body for updating an identity.
@@ -56,7 +58,7 @@ pub struct UpdateIdentityRequest {
 
 /// PUT /api/network/identities/{mac}
 pub async fn update_identity(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(mac): Path<String>,
     Json(body): Json<UpdateIdentityRequest>,
@@ -82,7 +84,7 @@ pub struct BulkConfirmRequest {
 
 /// POST /api/network/identities/bulk-confirm
 pub async fn bulk_confirm(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(body): Json<BulkConfirmRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -115,7 +117,8 @@ pub async fn observed_services(
         .get_observed_services(params.ip.as_deref())
         .await
         .map_err(|e| internal_error("observed services", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize observed services", e))?;
+    Ok(Json(json))
 }
 
 // ── Disposition ──────────────────────────────────────────────────
@@ -130,7 +133,7 @@ pub struct SetDispositionRequest {
 
 /// PUT /api/network/identities/{mac}/disposition
 pub async fn set_disposition(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(mac): Path<String>,
     Json(body): Json<SetDispositionRequest>,
@@ -155,7 +158,7 @@ pub struct BulkDispositionRequest {
 
 /// POST /api/network/identities/bulk-disposition
 pub async fn bulk_disposition(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(body): Json<BulkDispositionRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -189,7 +192,8 @@ pub async fn list_port_bindings(
         .get_port_bindings(params.device_id.as_deref())
         .await
         .map_err(|e| internal_error("list port bindings", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize port bindings", e))?;
+    Ok(Json(json))
 }
 
 /// GET /api/network/port-bindings/{device_id}
@@ -203,7 +207,8 @@ pub async fn list_device_port_bindings(
         .get_port_bindings(Some(&device_id))
         .await
         .map_err(|e| internal_error("device port bindings", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize device port bindings", e))?;
+    Ok(Json(json))
 }
 
 /// Request body for creating a port binding.
@@ -216,7 +221,7 @@ pub struct CreatePortBindingRequest {
 
 /// POST /api/network/port-bindings
 pub async fn create_port_binding(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(body): Json<CreatePortBindingRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -236,7 +241,7 @@ pub struct UpdatePortBindingRequest {
 
 /// PUT /api/network/port-bindings/{device_id}/{port}
 pub async fn update_port_binding(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path((device_id, port)): Path<(String, String)>,
     Json(body): Json<UpdatePortBindingRequest>,
@@ -251,7 +256,7 @@ pub async fn update_port_binding(
 
 /// DELETE /api/network/port-bindings/{device_id}/{port}
 pub async fn delete_port_binding(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path((device_id, port)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -281,7 +286,8 @@ pub async fn list_port_violations(
         .get_port_violations(params.device_id.as_deref())
         .await
         .map_err(|e| internal_error("list port violations", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize port violations", e))?;
+    Ok(Json(json))
 }
 
 /// GET /api/network/port-violations/{device_id}
@@ -295,12 +301,13 @@ pub async fn list_device_port_violations(
         .get_port_violations(Some(&device_id))
         .await
         .map_err(|e| internal_error("device port violations", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize device port violations", e))?;
+    Ok(Json(json))
 }
 
 /// PUT /api/network/port-violations/{id}/resolve
 pub async fn resolve_port_violation(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {

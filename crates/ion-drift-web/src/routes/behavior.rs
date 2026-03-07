@@ -4,7 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
 
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 use super::internal_error;
 
@@ -149,7 +149,7 @@ pub async fn anomalies(
 
 /// POST /api/behavior/anomalies/:id/resolve
 pub async fn resolve_anomaly(
-    RequireAuth(session): RequireAuth,
+    RequireAdmin(session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<ResolveRequest>,
@@ -244,7 +244,7 @@ pub async fn anomaly_links_by_device(
 
 /// POST /api/behavior/anomaly-links/:id/resolve — resolve an anomaly link.
 pub async fn resolve_anomaly_link(
-    RequireAuth(session): RequireAuth,
+    RequireAdmin(session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {

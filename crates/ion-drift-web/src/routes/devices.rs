@@ -9,7 +9,7 @@ use serde::Deserialize;
 use mikrotik_core::{MikrotikClient, MikrotikConfig};
 
 use crate::device_manager::{DeviceStatus, DeviceInfo};
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::secrets::{NewDevice, UpdateDevice};
 use crate::state::AppState;
 
@@ -57,7 +57,7 @@ pub struct CreateDeviceRequest {
 }
 
 pub async fn create_device(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(req): Json<CreateDeviceRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -135,7 +135,7 @@ pub async fn create_device(
 // ── PUT /api/devices/{id} ────────────────────────────────────────
 
 pub async fn update_device(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(update): Json<UpdateDevice>,
@@ -180,7 +180,7 @@ pub async fn update_device(
 // ── DELETE /api/devices/{id} ─────────────────────────────────────
 
 pub async fn delete_device(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -236,7 +236,7 @@ pub async fn delete_device(
 // ── POST /api/devices/{id}/test ──────────────────────────────────
 
 pub async fn test_device(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -285,7 +285,7 @@ pub struct TestConnectionRequest {
 }
 
 pub async fn test_connection(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(req): Json<TestConnectionRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {

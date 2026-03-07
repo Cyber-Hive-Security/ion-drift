@@ -8,6 +8,7 @@ port = 443
 tls = true
 ca_cert_path = "/app/certs/root_ca.crt"
 username = "ion-drift"
+dns_server = "10.20.25.6"
 
 [oidc]
 issuer_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet"
@@ -35,3 +36,7 @@ cookie_name = "ion_drift_session"
 max_age_seconds = 86400
 secure = true
 same_site = "lax"
+
+[syslog]
+port = 5514
+target_ip = "10.20.25.17"

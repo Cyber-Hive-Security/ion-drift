@@ -9,9 +9,11 @@ import type {
   PortRoleEntry,
   MacTableEntry,
   NetworkIdentity,
+  VlanMembershipEntry,
+  PortUtilization,
 } from "@/api/types";
 import { portSortKey, getPortPrimaryVlan } from "./utils";
-import type { VlanMembershipEntry } from "@/api/types";
+import { utilizationColor, utilizationLabel, formatBitrate } from "@/lib/utilization";
 
 interface PortRow {
   portName: string;
@@ -23,6 +25,9 @@ interface PortRow {
   txBytes: number;
   connectedDevice: string;
   role: string;
+  utilization: number;
+  rxRateBps: number;
+  txRateBps: number;
 }
 
 interface PortTrafficTableProps {
@@ -35,6 +40,7 @@ interface PortTrafficTableProps {
   selectedPort: string | null;
   onSelectPort: (port: string | null) => void;
   deviceId?: string;
+  utilization?: PortUtilization[];
 }
 
 export function PortTrafficTable({
@@ -45,6 +51,7 @@ export function PortTrafficTable({
   vlans = [],
   selectedPort,
   deviceId,
+  utilization: utilizationData,
 }: PortTrafficTableProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -82,6 +89,13 @@ export function PortTrafficTable({
     return map;
   }, [identities, deviceId]);
 
+  // Utilization lookup
+  const utilByPort = useMemo(() => {
+    const map = new Map<string, PortUtilization>();
+    for (const u of utilizationData ?? []) map.set(u.port_name, u);
+    return map;
+  }, [utilizationData]);
+
   // Build rows
   const rows = useMemo(() => {
     const allPortNames = new Set<string>();
@@ -98,6 +112,7 @@ export function PortTrafficTable({
       const identity = identityByPort.get(portName);
       const vlanId = getPortPrimaryVlan(portName, vlans);
       const vlanColor = vlanId !== null ? (VLAN_CONFIG[vlanId]?.color ?? "#666") : "transparent";
+      const util = utilByPort.get(portName);
 
       result.push({
         portName,
@@ -109,11 +124,14 @@ export function PortTrafficTable({
         txBytes: metrics ? metrics[2] : 0,
         connectedDevice: identity?.hostname ?? identity?.manufacturer ?? identity?.mac_address ?? "",
         role: roleMap.get(portName) ?? "",
+        utilization: util?.utilization ?? 0,
+        rxRateBps: util?.rx_rate_bps ?? 0,
+        txRateBps: util?.tx_rate_bps ?? 0,
       });
     }
 
     return result.sort((a, b) => portSortKey(a.portName) - portSortKey(b.portName));
-  }, [latestMetrics, interfaces, identityByPort, vlans, roleMap]);
+  }, [latestMetrics, interfaces, identityByPort, vlans, roleMap, utilByPort]);
 
   // Scroll to selected port row
   useEffect(() => {
@@ -180,6 +198,52 @@ export function PortTrafficTable({
       render: (r) => (
         <span className="text-xs font-mono">{r.txBytes > 0 ? formatBytes(r.txBytes) : "—"}</span>
       ),
+    },
+    {
+      key: "rxRate",
+      header: "Rx Rate",
+      sortValue: (r) => r.rxRateBps,
+      render: (r) => (
+        <span className="text-xs font-mono text-muted-foreground">
+          {r.running && r.rxRateBps > 0 ? formatBitrate(r.rxRateBps) : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "txRate",
+      header: "Tx Rate",
+      sortValue: (r) => r.txRateBps,
+      render: (r) => (
+        <span className="text-xs font-mono text-muted-foreground">
+          {r.running && r.txRateBps > 0 ? formatBitrate(r.txRateBps) : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "utilization",
+      header: "Utilization",
+      sortValue: (r) => r.utilization,
+      render: (r) => {
+        if (!r.running) return <span className="text-xs text-muted-foreground">—</span>;
+        const util = r.utilization;
+        const color = utilizationColor(util);
+        return (
+          <div className="flex items-center gap-2 min-w-[100px]">
+            <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${Math.max(util * 100, util > 0 ? 2 : 0)}%`,
+                  backgroundColor: color,
+                }}
+              />
+            </div>
+            <span className="text-[10px] font-medium whitespace-nowrap" style={{ color }}>
+              {utilizationLabel(util)}
+            </span>
+          </div>
+        );
+      },
     },
     {
       key: "device",

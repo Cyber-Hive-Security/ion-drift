@@ -12,24 +12,26 @@ use tokio::sync::RwLock;
 
 use crate::device_manager::DeviceManager;
 use crate::oui::OuiDb;
-
-/// Technitium internal DNS server for PTR lookups.
-const DNS_SERVER: IpAddr = {
-    // 10.20.25.6 — const IpAddr construction
-    use std::net::{IpAddr, Ipv4Addr};
-    IpAddr::V4(Ipv4Addr::new(10, 20, 25, 6))
-};
+use crate::task_supervisor::TaskSupervisor;
 
 /// Spawn the correlation engine that runs every 60s to:
 /// 1. Classify port roles (access/trunk/uplink/unused)
 /// 2. Build unified network identities from MAC/neighbor/OUI/ARP/DHCP data
 pub fn spawn_correlation_engine(
+    supervisor: &TaskSupervisor,
     switch_store: Arc<SwitchStore>,
     oui_db: Arc<OuiDb>,
     device_manager: Arc<RwLock<DeviceManager>>,
     router_client: MikrotikClient,
+    dns_server: Option<String>,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("correlation_engine", move || {
+        let switch_store = switch_store.clone();
+        let oui_db = oui_db.clone();
+        let device_manager = device_manager.clone();
+        let router_client = router_client.clone();
+        let dns_server = dns_server.clone();
+        Box::pin(async move {
         // 90-second startup delay — let switch pollers collect initial data
         tokio::time::sleep(Duration::from_secs(90)).await;
         tracing::info!("correlation engine starting (60s interval)");
@@ -40,11 +42,11 @@ pub fn spawn_correlation_engine(
         loop {
             interval.tick().await;
 
-            if let Err(e) = run_correlation(&switch_store, &oui_db, &device_manager, &router_client).await {
+            if let Err(e) = run_correlation(&switch_store, &oui_db, &device_manager, &router_client, dns_server.as_deref()).await {
                 tracing::warn!("correlation engine error: {e}");
             }
         }
-    });
+    })});
 }
 
 async fn run_correlation(
@@ -52,6 +54,7 @@ async fn run_correlation(
     oui_db: &OuiDb,
     device_manager: &Arc<RwLock<DeviceManager>>,
     router_client: &MikrotikClient,
+    dns_server: Option<&str>,
 ) -> anyhow::Result<()> {
     // ── 1. Port role classification ───────────────────────────────
     let dm_read = device_manager.read().await;
@@ -226,11 +229,11 @@ async fn run_correlation(
     let ips_needing_ptr: Vec<(String, String)> = identity_map
         .iter()
         .filter(|(_, b)| b.hostname.is_none() && b.best_ip.is_some())
-        .map(|(mac, b)| (mac.clone(), b.best_ip.clone().unwrap()))
+        .filter_map(|(mac, b)| b.best_ip.clone().map(|ip| (mac.clone(), ip)))
         .collect();
 
     if !ips_needing_ptr.is_empty() {
-        match build_ptr_resolver() {
+        match build_ptr_resolver(dns_server) {
             Ok(resolver) => {
                 let mut resolved = 0u32;
                 for (mac, ip) in &ips_needing_ptr {
@@ -590,10 +593,21 @@ fn is_switch_local_mac(mac: &str, local_set: &HashSet<u64>) -> bool {
     }
 }
 
-/// Build an async DNS resolver pointing at Technitium for PTR lookups.
-fn build_ptr_resolver() -> anyhow::Result<Resolver<TokioConnectionProvider>> {
-    let ns_group = NameServerConfigGroup::from_ips_clear(&[DNS_SERVER], 53, true);
-    let config = ResolverConfig::from_parts(None, Vec::new(), ns_group);
+/// Build an async DNS resolver for PTR lookups.
+///
+/// If `dns_server` is provided, it is used as the nameserver for PTR lookups.
+/// Otherwise, falls back to the system default resolver.
+fn build_ptr_resolver(dns_server: Option<&str>) -> anyhow::Result<Resolver<TokioConnectionProvider>> {
+    let config = if let Some(server) = dns_server {
+        let addr: IpAddr = server
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid dns_server IP {server:?}: {e}"))?;
+        let ns_group = NameServerConfigGroup::from_ips_clear(&[addr], 53, true);
+        ResolverConfig::from_parts(None, Vec::new(), ns_group)
+    } else {
+        tracing::debug!("no dns_server configured, using system resolver for PTR lookups");
+        ResolverConfig::default()
+    };
     let mut opts = ResolverOpts::default();
     opts.timeout = Duration::from_millis(500);
     opts.attempts = 1;

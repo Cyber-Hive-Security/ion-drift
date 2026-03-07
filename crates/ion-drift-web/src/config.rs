@@ -16,6 +16,8 @@ pub struct ServerConfig {
     pub tls: TlsSection,
     #[serde(default)]
     pub certwarden: CertWardenSection,
+    #[serde(default)]
+    pub syslog: SyslogSection,
 }
 
 // ── OIDC Bootstrap (nested under [oidc.bootstrap]) ──────────────
@@ -101,6 +103,7 @@ fn default_1() -> u32 {
 }
 
 /// Resolved CertWarden config (base_url and cert_name present).
+#[derive(Clone)]
 pub struct ResolvedCertWarden {
     pub base_url: String,
     pub cert_name: String,
@@ -119,6 +122,39 @@ impl CertWardenSection {
             check_interval_hours: self.check_interval_hours,
         })
     }
+}
+
+// ── Syslog Section ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SyslogSection {
+    /// UDP port to listen on for syslog messages from the router.
+    #[serde(default = "default_syslog_port")]
+    pub port: u16,
+    /// Bind address for the syslog listener.
+    #[serde(default = "default_syslog_bind")]
+    pub bind_address: String,
+    /// IP address of this server as seen by the router (for configuring remote logging).
+    /// If not set, router syslog forwarding setup is skipped.
+    pub target_ip: Option<String>,
+}
+
+impl Default for SyslogSection {
+    fn default() -> Self {
+        Self {
+            port: default_syslog_port(),
+            bind_address: default_syslog_bind(),
+            target_ip: None,
+        }
+    }
+}
+
+fn default_syslog_port() -> u16 {
+    5514
+}
+
+fn default_syslog_bind() -> String {
+    "0.0.0.0".into()
 }
 
 // ── Other sections (unchanged) ──────────────────────────────────
@@ -148,6 +184,11 @@ pub struct RouterSection {
     /// Loaded from `HIVE_ROUTER_PASSWORD` env var at runtime.
     #[serde(skip)]
     pub password: String,
+    /// WAN interface name for traffic tracking (default: "1-WAN").
+    #[serde(default = "default_wan_interface")]
+    pub wan_interface: String,
+    /// DNS server IP for resolution tasks (optional).
+    pub dns_server: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -202,11 +243,11 @@ fn default_listen_port() -> u16 {
 }
 
 fn default_router_host() -> String {
-    "10.20.25.1".into()
+    mikrotik_core::DEFAULT_ROUTER_HOST.into()
 }
 
 fn default_router_port() -> u16 {
-    443
+    mikrotik_core::DEFAULT_ROUTER_PORT
 }
 
 fn default_true() -> bool {
@@ -214,7 +255,11 @@ fn default_true() -> bool {
 }
 
 fn default_username() -> String {
-    "admin".into()
+    mikrotik_core::DEFAULT_ROUTER_USERNAME.into()
+}
+
+fn default_wan_interface() -> String {
+    "1-WAN".into()
 }
 
 fn default_cookie_name() -> String {
@@ -309,8 +354,39 @@ impl ServerConfig {
         if let Ok(ca) = std::env::var("HIVE_ROUTER_CA_CERT") {
             config.router.ca_cert_path = Some(ca);
         }
+        if let Ok(dns) = std::env::var("HIVE_ROUTER_DNS_SERVER") {
+            config.router.dns_server = Some(dns);
+        }
+
+        // Validate router host configuration
+        config.validate_router()?;
 
         Ok(config)
+    }
+
+    /// Validate router-related configuration, emitting warnings for defaults.
+    fn validate_router(&self) -> anyhow::Result<()> {
+        if self.router.host.is_empty() {
+            anyhow::bail!("router.host cannot be empty; set it in config or HIVE_ROUTER_HOST env var");
+        }
+
+        if self.router.host.trim().contains(' ') {
+            anyhow::bail!("router.host contains whitespace: {:?}", self.router.host);
+        }
+
+        if self.router.host == mikrotik_core::DEFAULT_ROUTER_HOST {
+            tracing::warn!(
+                "router.host is set to Mikrotik factory default ({}); \
+                 set router.host in config or HIVE_ROUTER_HOST for production",
+                mikrotik_core::DEFAULT_ROUTER_HOST
+            );
+        }
+
+        if self.router.port == 0 {
+            anyhow::bail!("router.port cannot be 0");
+        }
+
+        Ok(())
     }
 
     /// Resolve the config file path from: CLI arg → env var → default.

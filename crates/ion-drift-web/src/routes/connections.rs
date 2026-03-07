@@ -8,7 +8,7 @@ use crate::connection_store::{
     HistoryFilters, PaginatedHistory, PortBaselineStatus, PortSummaryEntry,
 };
 use crate::geo::{GeoCache, GeoInfo};
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 use super::{api_error, internal_error};
 
@@ -327,7 +327,7 @@ pub async fn port_baseline_status(
 
 /// POST /api/behavior/port-baseline/compute — trigger baseline computation.
 pub async fn compute_port_baselines(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
     let count = state
@@ -399,7 +399,7 @@ pub async fn syslog_status(
         .map_err(|e| internal_error("syslog counts", e))?;
 
     Ok(Json(SyslogStatus {
-        port: 5514,
+        port: state.config.syslog.port,
         enabled: true,
         events_today: today,
         events_week: week,

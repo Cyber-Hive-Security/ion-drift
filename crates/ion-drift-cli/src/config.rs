@@ -48,17 +48,29 @@ pub fn build_mikrotik_config(
     ca_cert: Option<&str>,
     port: Option<u16>,
 ) -> Result<MikrotikConfig, String> {
-    // Host: CLI flag > env > config file > default
+    // Host: CLI flag > env > config file > default (Mikrotik factory default)
     let host = host
         .map(String::from)
         .or_else(|| std::env::var("HIVE_ROUTER_HOST").ok())
         .or_else(|| file_cfg.router.host.clone())
-        .unwrap_or_else(|| "router.kaziik.xyz".into());
+        .unwrap_or_else(|| mikrotik_core::DEFAULT_ROUTER_HOST.into());
+
+    if host == mikrotik_core::DEFAULT_ROUTER_HOST {
+        eprintln!(
+            "warning: using Mikrotik factory-default host ({}); \
+             set --host, HIVE_ROUTER_HOST, or router.host in config for production",
+            mikrotik_core::DEFAULT_ROUTER_HOST
+        );
+    }
+
+    if host.is_empty() {
+        return Err("router host cannot be empty".into());
+    }
 
     // Port: CLI flag > config file > default
     let port = port
         .or(file_cfg.router.port)
-        .unwrap_or(443);
+        .unwrap_or(mikrotik_core::DEFAULT_ROUTER_PORT);
 
     // TLS: config file > default (true)
     let tls = file_cfg.router.tls.unwrap_or(true);
@@ -75,7 +87,7 @@ pub fn build_mikrotik_config(
         .map(String::from)
         .or_else(|| std::env::var("HIVE_ROUTER_USER").ok())
         .or_else(|| file_cfg.router.username.clone())
-        .unwrap_or_else(|| "admin".into());
+        .unwrap_or_else(|| mikrotik_core::DEFAULT_ROUTER_USERNAME.into());
 
     // Password: CLI flag > env var (required)
     let password = password

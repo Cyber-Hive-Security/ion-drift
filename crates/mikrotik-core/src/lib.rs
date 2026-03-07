@@ -9,7 +9,7 @@ pub mod vlan_flows;
 mod serde_helpers;
 
 pub use behavior::BehaviorStore;
-pub use client::{MikrotikClient, MikrotikConfig};
+pub use client::{MikrotikClient, MikrotikConfig, DEFAULT_ROUTER_HOST, DEFAULT_ROUTER_PORT, DEFAULT_ROUTER_USERNAME};
 pub use error::MikrotikError;
 pub use metrics::{
     ConnectionMetricsPoint, DropMetricsPoint, LogAggregate, MetricsPoint, MetricsStore,

@@ -13,6 +13,7 @@ use crate::live_traffic::LiveTrafficBuffer;
 use crate::oui::OuiDb;
 use crate::routes::network_map_status::NetworkMapStatusCache;
 use crate::secrets::SecretsManager;
+use crate::task_supervisor::TaskSupervisor;
 use crate::topology::NetworkTopology;
 
 /// Shared application state, passed to all Axum handlers via `State<AppState>`.
@@ -54,4 +55,6 @@ pub struct AppState {
     pub switch_store: Arc<SwitchStore>,
     /// Cached auto-generated network topology, recomputed every 120s.
     pub topology_cache: Arc<RwLock<Option<NetworkTopology>>>,
+    /// Background task supervisor — tracks health and restarts panicked tasks.
+    pub task_supervisor: TaskSupervisor,
 }
