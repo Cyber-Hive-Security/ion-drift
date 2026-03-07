@@ -16,29 +16,26 @@ use tokio::sync::RwLock;
 
 use crate::device_manager::DeviceManager;
 use crate::oui::OuiDb;
+use crate::task_supervisor::TaskSupervisor;
 
 /// Spawn the correlation engine that runs every 60s to:
 /// 1. Classify port roles (access/trunk/uplink/unused)
 /// 2. Build unified network identities from MAC/neighbor/OUI/ARP/DHCP data
 pub fn spawn_correlation_engine(
+    supervisor: &TaskSupervisor,
     switch_store: Arc<SwitchStore>,
     oui_db: Arc<OuiDb>,
     device_manager: Arc<RwLock<DeviceManager>>,
     router_client: MikrotikClient,
     dns_server: Option<String>,
 ) {
-    // Parse the DNS server IP once at spawn time.
-    let dns_server_ip: Option<IpAddr> = dns_server.as_deref().and_then(|s| {
-        match s.parse::<IpAddr>() {
-            Ok(ip) => Some(ip),
-            Err(e) => {
-                tracing::warn!("invalid dns_server IP '{s}': {e} — PTR lookups disabled");
-                None
-            }
-        }
-    });
-
-    tokio::spawn(async move {
+    supervisor.spawn("correlation_engine", move || {
+        let switch_store = switch_store.clone();
+        let oui_db = oui_db.clone();
+        let device_manager = device_manager.clone();
+        let router_client = router_client.clone();
+        let dns_server = dns_server.clone();
+        Box::pin(async move {
         // 90-second startup delay — let switch pollers collect initial data
         tokio::time::sleep(Duration::from_secs(90)).await;
         tracing::info!("correlation engine starting (60s interval)");
@@ -49,11 +46,11 @@ pub fn spawn_correlation_engine(
         loop {
             interval.tick().await;
 
-            if let Err(e) = run_correlation(&switch_store, &oui_db, &device_manager, &router_client, dns_server_ip).await {
+            if let Err(e) = run_correlation(&switch_store, &oui_db, &device_manager, &router_client, dns_server.as_deref()).await {
                 tracing::warn!("correlation engine error: {e}");
             }
         }
-    });
+    })});
 }
 
 async fn run_correlation(
@@ -61,7 +58,7 @@ async fn run_correlation(
     oui_db: &OuiDb,
     device_manager: &Arc<RwLock<DeviceManager>>,
     router_client: &MikrotikClient,
-    dns_server_ip: Option<IpAddr>,
+    dns_server: Option<&str>,
 ) -> anyhow::Result<()> {
     // ── 0. Prune stale entries ──────────────────────────────────
     // Entries older than 1 hour are leftovers from port renames or
@@ -788,11 +785,11 @@ async fn run_correlation(
     let ips_needing_ptr: Vec<(String, String)> = identity_map
         .iter()
         .filter(|(_, b)| b.hostname.is_none() && b.best_ip.is_some())
-        .map(|(mac, b)| (mac.clone(), b.best_ip.clone().unwrap()))
+        .filter_map(|(mac, b)| b.best_ip.clone().map(|ip| (mac.clone(), ip)))
         .collect();
 
-    if !ips_needing_ptr.is_empty() && dns_server_ip.is_some() {
-        match build_ptr_resolver(dns_server_ip.unwrap()) {
+    if !ips_needing_ptr.is_empty() {
+        match build_ptr_resolver(dns_server) {
             Ok(resolver) => {
                 let mut resolved = 0u32;
                 for (mac, ip) in &ips_needing_ptr {
@@ -1317,10 +1314,21 @@ fn build_wap_children(
     children
 }
 
-/// Build an async DNS resolver pointing at the given DNS server for PTR lookups.
-fn build_ptr_resolver(dns_server: IpAddr) -> anyhow::Result<Resolver<TokioConnectionProvider>> {
-    let ns_group = NameServerConfigGroup::from_ips_clear(&[dns_server], 53, true);
-    let config = ResolverConfig::from_parts(None, Vec::new(), ns_group);
+/// Build an async DNS resolver for PTR lookups.
+///
+/// If `dns_server` is provided, it is used as the nameserver for PTR lookups.
+/// Otherwise, falls back to the system default resolver.
+fn build_ptr_resolver(dns_server: Option<&str>) -> anyhow::Result<Resolver<TokioConnectionProvider>> {
+    let config = if let Some(server) = dns_server {
+        let addr: IpAddr = server
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid dns_server IP {server:?}: {e}"))?;
+        let ns_group = NameServerConfigGroup::from_ips_clear(&[addr], 53, true);
+        ResolverConfig::from_parts(None, Vec::new(), ns_group)
+    } else {
+        tracing::debug!("no dns_server configured, using system resolver for PTR lookups");
+        ResolverConfig::default()
+    };
     let mut opts = ResolverOpts::default();
     opts.timeout = Duration::from_millis(500);
     opts.attempts = 1;

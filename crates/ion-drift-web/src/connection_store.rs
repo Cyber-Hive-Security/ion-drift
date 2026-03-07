@@ -329,6 +329,11 @@ pub struct ConnectionHistoryStats {
 }
 
 impl ConnectionStore {
+    /// Acquire a lock on the underlying database connection.
+    pub fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, rusqlite::Connection>, String> {
+        self.db.lock().map_err(|e| format!("db lock: {e}"))
+    }
+
     /// Create a new ConnectionStore backed by SQLite at the given path.
     pub fn new(db_path: &Path) -> anyhow::Result<Self> {
         let conn = rusqlite::Connection::open(db_path)?;

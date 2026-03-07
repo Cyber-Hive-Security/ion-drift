@@ -59,9 +59,35 @@ async fn vlan_to_cidr(switch_store: &SwitchStore, vlan_id: u32) -> Option<String
         .and_then(|c| c.subnet.clone())
 }
 
+/// Resolve the nmap binary path: checks `NMAP_PATH` env var, then `PATH` lookup,
+/// then common fixed locations.
+fn resolve_nmap_path() -> Option<String> {
+    if let Ok(p) = std::env::var("NMAP_PATH") {
+        if std::path::Path::new(&p).exists() {
+            return Some(p);
+        }
+    }
+    // Try PATH-based lookup via `which`
+    if let Ok(output) = std::process::Command::new("which").arg("nmap").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    // Fallback to common locations
+    for candidate in &["/usr/bin/nmap", "/usr/local/bin/nmap"] {
+        if std::path::Path::new(candidate).exists() {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
 /// Check whether nmap is available on the system.
 pub fn nmap_available() -> bool {
-    std::path::Path::new("/usr/bin/nmap").exists()
+    resolve_nmap_path().is_some()
 }
 
 /// Whether this VLAN has "loose" or "monitor" sensitivity (e.g. IoT VLANs).
@@ -100,7 +126,7 @@ impl NmapScanner {
 
         // Check nmap availability
         if !nmap_available() {
-            return Err("nmap not found at /usr/bin/nmap".to_string());
+            return Err("nmap not found (checked NMAP_PATH, PATH, /usr/bin/nmap, /usr/local/bin/nmap)".to_string());
         }
 
         // Enforce single scan
@@ -148,23 +174,27 @@ impl NmapScanner {
 
             match result {
                 Ok(count) => {
-                    let _ = store.update_nmap_scan(
+                    if let Err(e) = store.update_nmap_scan(
                         &sid,
                         "completed",
                         count,
                         None,
                         Some(&chrono_now()),
-                    ).await;
+                    ).await {
+                        tracing::error!(scan_id = %sid, error = %e, "failed to update nmap scan status to completed");
+                    }
                     tracing::info!(scan_id = %sid, discovered = count, "nmap scan completed");
                 }
                 Err(e) => {
-                    let _ = store.update_nmap_scan(
+                    if let Err(db_err) = store.update_nmap_scan(
                         &sid,
                         "failed",
                         0,
                         Some(&e),
                         Some(&chrono_now()),
-                    ).await;
+                    ).await {
+                        tracing::error!(scan_id = %sid, error = %db_err, "failed to update nmap scan status to failed");
+                    }
                     tracing::error!(scan_id = %sid, error = %e, "nmap scan failed");
                 }
             }
@@ -198,8 +228,10 @@ async fn run_nmap_scan(
     let timeout = std::time::Duration::from_secs(profile.timeout_secs());
 
     // Run nmap in a blocking task
+    let nmap_bin = resolve_nmap_path()
+        .ok_or_else(|| "nmap binary not found".to_string())?;
     let output = tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || {
-        std::process::Command::new("/usr/bin/nmap")
+        std::process::Command::new(&nmap_bin)
             .args(&args)
             .output()
     }))
@@ -244,7 +276,7 @@ async fn run_nmap_scan(
         if let Some(ref mac) = host.mac {
             let device_type = host.device_type.as_deref();
             let dt_confidence = if device_type.is_some() { 0.85 } else { 0.0 };
-            let _ = store.upsert_network_identity(
+            if let Err(e) = store.upsert_network_identity(
                 mac,
                 Some(&host.ip),
                 host.hostname.as_deref(),
@@ -259,7 +291,9 @@ async fn run_nmap_scan(
                 device_type,
                 if device_type.is_some() { Some("nmap") } else { None },
                 dt_confidence,
-            ).await;
+            ).await {
+                tracing::warn!(mac = %mac, ip = %host.ip, "failed to upsert network identity from nmap: {e}");
+            }
         }
 
         count += 1;

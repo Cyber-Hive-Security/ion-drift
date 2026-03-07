@@ -62,6 +62,7 @@ pub fn spawn_all(state: &AppState) {
         state.vlan_registry.clone(),
     );
     crate::anomaly_correlator::spawn_anomaly_correlator(
+        &state.task_supervisor,
         state.connection_store.clone(),
         state.behavior_store.clone(),
         state.vlan_registry.clone(),
@@ -75,10 +76,11 @@ pub fn spawn_all(state: &AppState) {
         state.vlan_registry.clone(),
     );
     connections::spawn_connection_pruner(state.connection_store.clone());
-    crate::snapshots::spawn_snapshot_generator(state.connection_store.clone());
+    crate::snapshots::spawn_snapshot_generator(&state.task_supervisor, state.connection_store.clone());
 
     // Syslog listener
     crate::syslog::spawn_syslog_listener(
+        &state.task_supervisor,
         5514,
         state.connection_store.clone(),
         state.geo_cache.clone(),
@@ -88,15 +90,17 @@ pub fn spawn_all(state: &AppState) {
 
     // Multi-device pollers
     crate::switch_poller::spawn_switch_pollers(
+        &state.task_supervisor,
         state.device_manager.clone(),
         state.switch_store.clone(),
         state.poller_registry.clone(),
     );
     crate::switch_poller::spawn_neighbor_poller(
+        &state.task_supervisor,
         state.device_manager.clone(),
         state.switch_store.clone(),
     );
-    crate::switch_poller::spawn_device_health_check(state.device_manager.clone());
+    crate::switch_poller::spawn_device_health_check(&state.task_supervisor, state.device_manager.clone());
     crate::swos_poller::spawn_swos_pollers(
         state.device_manager.clone(),
         state.switch_store.clone(),
@@ -110,6 +114,7 @@ pub fn spawn_all(state: &AppState) {
 
     // Correlation and topology
     crate::correlation_engine::spawn_correlation_engine(
+        &state.task_supervisor,
         state.switch_store.clone(),
         state.oui_db.clone(),
         state.device_manager.clone(),
@@ -117,11 +122,13 @@ pub fn spawn_all(state: &AppState) {
         state.config.router.dns_server.clone(),
     );
     crate::topology::spawn_topology_updater(
+        &state.task_supervisor,
         state.switch_store.clone(),
         state.device_manager.clone(),
         state.topology_cache.clone(),
     );
     crate::passive_discovery::spawn_passive_discovery(
+        &state.task_supervisor,
         state.switch_store.clone(),
         state.mikrotik.clone(),
     );

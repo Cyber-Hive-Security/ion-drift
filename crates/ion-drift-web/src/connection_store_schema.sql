@@ -74,6 +74,18 @@ CREATE INDEX IF NOT EXISTS idx_ch_src
 CREATE INDEX IF NOT EXISTS idx_ch_flagged
     ON connection_history(flagged) WHERE flagged = 1;
 
+-- Sankey investigation: VLAN-level aggregation
+CREATE INDEX IF NOT EXISTS idx_ch_src_vlan_ts
+    ON connection_history(src_vlan, first_seen);
+
+-- Sankey investigation: device-level aggregation
+CREATE INDEX IF NOT EXISTS idx_ch_src_mac_ts
+    ON connection_history(src_mac, first_seen);
+
+-- Sankey investigation: destination peers
+CREATE INDEX IF NOT EXISTS idx_ch_dst_ip_ts
+    ON connection_history(dst_ip, first_seen);
+
 -- Port summary by direction
 CREATE INDEX IF NOT EXISTS idx_ch_port_direction
     ON connection_history(first_seen, dst_port, dst_is_external, src_vlan)

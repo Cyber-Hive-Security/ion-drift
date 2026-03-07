@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use mikrotik_core::resources::system::SystemResource;
 use mikrotik_core::resources::interface::Interface;
@@ -139,7 +141,8 @@ pub async fn device_interfaces(
     drop(dm);
 
     let interfaces: Vec<Interface> = client.interfaces().await.map_err(api_error)?;
-    Ok(Json(serde_json::to_value(interfaces).unwrap()))
+    let json = serde_json::to_value(interfaces).map_err(|e| internal_error("serialize interfaces", e))?;
+    Ok(Json(json))
 }
 
 // ── GET /api/devices/{id}/ports ──────────────────────────────────
@@ -156,7 +159,8 @@ pub async fn device_ports(
         .get_port_metrics(&id, since)
         .await
         .map_err(|e| internal_error("port metrics", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize port metrics", e))?;
+    Ok(Json(json))
 }
 
 // ── GET /api/devices/{id}/port-list ──────────────────────────────
@@ -186,7 +190,8 @@ pub async fn device_mac_table(
         .get_mac_table(Some(&id))
         .await
         .map_err(|e| internal_error("mac table", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize mac table", e))?;
+    Ok(Json(json))
 }
 
 // ── GET /api/devices/{id}/neighbors ──────────────────────────────
@@ -201,7 +206,8 @@ pub async fn device_neighbors(
         .get_neighbors(Some(&id))
         .await
         .map_err(|e| internal_error("neighbors", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize neighbors", e))?;
+    Ok(Json(json))
 }
 
 // ── GET /api/devices/{id}/vlans ──────────────────────────────────
@@ -216,7 +222,8 @@ pub async fn device_vlans(
         .get_vlan_membership(&id)
         .await
         .map_err(|e| internal_error("vlan membership", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize vlan membership", e))?;
+    Ok(Json(json))
 }
 
 // ── GET /api/devices/{id}/port-roles ─────────────────────────────
@@ -231,7 +238,8 @@ pub async fn device_port_roles(
         .get_port_roles(Some(&id))
         .await
         .map_err(|e| internal_error("port roles", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize port roles", e))?;
+    Ok(Json(json))
 }
 
 // ── Correlation data (cross-device) ──────────────────────────────
@@ -247,7 +255,8 @@ pub async fn network_identities(
         .get_network_identities()
         .await
         .map_err(|e| internal_error("network identities", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize network identities", e))?;
+    Ok(Json(json))
 }
 
 // GET /api/network/mac-table
@@ -261,7 +270,8 @@ pub async fn network_mac_table(
         .get_mac_table(None)
         .await
         .map_err(|e| internal_error("mac table", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize network mac table", e))?;
+    Ok(Json(json))
 }
 
 // GET /api/network/neighbors
@@ -275,7 +285,8 @@ pub async fn network_neighbors(
         .get_neighbors(None)
         .await
         .map_err(|e| internal_error("neighbors", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize network neighbors", e))?;
+    Ok(Json(json))
 }
 
 // GET /api/network/port-roles
@@ -289,5 +300,120 @@ pub async fn network_port_roles(
         .get_port_roles(None)
         .await
         .map_err(|e| internal_error("port roles", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    let json = serde_json::to_value(data).map_err(|e| internal_error("serialize network port roles", e))?;
+    Ok(Json(json))
+}
+
+// ── GET /api/devices/{id}/port-utilization ──────────────────────
+
+#[derive(Serialize)]
+pub struct PortUtilization {
+    pub port_name: String,
+    pub running: bool,
+    pub rx_rate_bps: f64,
+    pub tx_rate_bps: f64,
+    pub rx_utilization: f64,
+    pub tx_utilization: f64,
+    pub utilization: f64,
+    pub rated_speed_mbps: f64,
+    pub speed_source: String,
+    pub sample_age_secs: i64,
+}
+
+pub async fn device_port_utilization(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<PortUtilization>>, Response> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let since = now - 300; // last 5 minutes
+
+    let rows = state
+        .switch_store
+        .get_port_metrics(&id, since)
+        .await
+        .map_err(|e| internal_error("port metrics", e))?;
+
+    // Group by port_name, keep only 2 most recent samples per port
+    // Rows are already ordered timestamp DESC
+    let mut by_port: HashMap<String, Vec<(i64, i64, i64, Option<String>, bool)>> = HashMap::new();
+    for (port_name, rx_bytes, tx_bytes, ts, speed, running) in rows {
+        let samples = by_port.entry(port_name).or_default();
+        if samples.len() < 2 {
+            samples.push((ts, rx_bytes, tx_bytes, speed, running));
+        }
+    }
+
+    let mut result = Vec::new();
+    for (port_name, samples) in &by_port {
+        if samples.len() < 2 {
+            continue;
+        }
+        let (ts_new, rx_new, tx_new, speed_str, running) = &samples[0];
+        let (ts_old, rx_old, tx_old, _, _) = &samples[1];
+
+        let elapsed = ts_new - ts_old;
+        if elapsed <= 0 || elapsed > 120 {
+            continue;
+        }
+
+        let rx_delta = (rx_new - rx_old).max(0) as f64;
+        let tx_delta = (tx_new - tx_old).max(0) as f64;
+        let elapsed_f = elapsed as f64;
+
+        let rx_rate_bps = (rx_delta * 8.0) / elapsed_f;
+        let tx_rate_bps = (tx_delta * 8.0) / elapsed_f;
+
+        // Speed resolution: polled speed → default 1 Gbps
+        let (rated_speed_mbps, speed_source) = resolve_speed(speed_str.as_deref());
+        let rated_speed_bps = rated_speed_mbps * 1_000_000.0;
+
+        let rx_util = if rated_speed_bps > 0.0 { (rx_rate_bps / rated_speed_bps).clamp(0.0, 1.0) } else { 0.0 };
+        let tx_util = if rated_speed_bps > 0.0 { (tx_rate_bps / rated_speed_bps).clamp(0.0, 1.0) } else { 0.0 };
+        let utilization = rx_util.max(tx_util);
+
+        result.push(PortUtilization {
+            port_name: port_name.clone(),
+            running: *running,
+            rx_rate_bps,
+            tx_rate_bps,
+            rx_utilization: rx_util,
+            tx_utilization: tx_util,
+            utilization,
+            rated_speed_mbps,
+            speed_source,
+            sample_age_secs: now - ts_new,
+        });
+    }
+
+    result.sort_by(|a, b| a.port_name.cmp(&b.port_name));
+    Ok(Json(result))
+}
+
+fn resolve_speed(speed_str: Option<&str>) -> (f64, String) {
+    if let Some(s) = speed_str {
+        if let Some(mbps) = parse_speed_mbps(s) {
+            return (mbps, "polled".into());
+        }
+    }
+    (1000.0, "default".into())
+}
+
+fn parse_speed_mbps(s: &str) -> Option<f64> {
+    let s = s.trim().to_lowercase();
+    if let Some(rest) = s.strip_suffix("gbps") {
+        rest.trim().parse::<f64>().ok().map(|v| v * 1000.0)
+    } else if let Some(rest) = s.strip_suffix("mbps") {
+        rest.trim().parse::<f64>().ok()
+    } else if let Some(rest) = s.strip_suffix("g") {
+        rest.trim().parse::<f64>().ok().map(|v| v * 1000.0)
+    } else if let Some(rest) = s.strip_suffix("m") {
+        rest.trim().parse::<f64>().ok()
+    } else {
+        // Try parsing as raw number (assume Mbps)
+        s.parse::<f64>().ok()
+    }
 }

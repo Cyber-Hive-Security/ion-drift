@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::response::{Json, Response};
 use serde::Deserialize;
 
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 
 use super::internal_error;
@@ -16,7 +16,7 @@ pub async fn get_topology(
 ) -> Json<serde_json::Value> {
     let cache = state.topology_cache.read().await;
     match &*cache {
-        Some(topo) => Json(serde_json::to_value(topo).unwrap()),
+        Some(topo) => Json(serde_json::to_value(topo).unwrap_or_default()),
         None => Json(serde_json::json!({
             "nodes": [],
             "edges": [],
@@ -32,7 +32,7 @@ pub async fn get_topology(
 
 /// POST /api/network/topology/refresh — force recompute.
 pub async fn refresh_topology(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
     match crate::topology::compute_topology(&state.switch_store, &state.device_manager).await {
@@ -56,7 +56,8 @@ pub async fn get_positions(
         .get_topology_positions()
         .await
         .map_err(|e| internal_error("topology positions", e))?;
-    Ok(Json(serde_json::to_value(positions).unwrap()))
+    let json = serde_json::to_value(positions).map_err(|e| internal_error("serialize topology positions", e))?;
+    Ok(Json(json))
 }
 
 #[derive(Deserialize)]
@@ -67,7 +68,7 @@ pub struct PositionUpdate {
 
 /// PUT /api/network/topology/positions/{nodeId} — human position override.
 pub async fn update_position(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(node_id): Path<String>,
     Json(body): Json<PositionUpdate>,
@@ -113,7 +114,7 @@ pub async fn batch_update_positions(
 
 /// DELETE /api/network/topology/positions/{nodeId} — reset to auto.
 pub async fn reset_position(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(node_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {

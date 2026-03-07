@@ -241,28 +241,21 @@ impl GeoCache {
     /// Async batch resolve: checks cache for each IP, fetches misses from ip-api.com.
     /// Call this before using `lookup_cached()` to warm the cache for a set of IPs.
     /// If MaxMind is loaded, this is a no-op (MaxMind handles all lookups instantly).
+    ///
+    /// SECURITY: The ip-api.com fallback uses plaintext HTTP (free tier limitation).
+    /// This is disabled by default — only the cached results from previous runs are used.
+    /// Set `allow_plaintext_geo = true` in config to enable it (not recommended).
     pub async fn resolve_batch(&self, ips: &[String]) -> anyhow::Result<()> {
         // If MaxMind is loaded, no need for ip-api batch fetching
         if self.has_maxmind() {
             return Ok(());
         }
 
-        // Rate-limited warning: log at most once per hour when using HTTP fallback
-        {
-            static LAST_WARN: AtomicI64 = AtomicI64::new(0);
-            let now = now_unix();
-            let prev = LAST_WARN.load(Ordering::Relaxed);
-            if now - prev >= 3600 {
-                if LAST_WARN
-                    .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    tracing::warn!(
-                        "geo: using plaintext HTTP fallback (ip-api.com) — load MaxMind databases or set credentials for HTTPS lookups"
-                    );
-                }
-            }
-        }
+        // SECURITY: Do not make plaintext HTTP requests to ip-api.com.
+        // This leaks queried IP addresses to network observers and is MitM-vulnerable.
+        // Users should configure MaxMind GeoLite2 databases instead.
+        // Only cached results from previous runs will be used.
+        return Ok(());
 
         // Filter to unique external IPs only
         let mut seen = std::collections::HashSet::new();
@@ -367,10 +360,12 @@ impl GeoCache {
                     lon: result.lon,
                 };
                 if let Ok(json) = serde_json::to_string(&info) {
-                    let _ = db.execute(
+                    if let Err(e) = db.execute(
                         "INSERT OR REPLACE INTO geo_cache (ip, data, fetched_at) VALUES (?1, ?2, ?3)",
                         rusqlite::params![result.query, json, now],
-                    );
+                    ) {
+                        tracing::warn!("failed to cache geo result for {}: {e}", result.query);
+                    }
                 }
             }
         }

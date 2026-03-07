@@ -273,6 +273,73 @@ pub fn classify_direction(src_ip: &str, dst_ip: &str) -> &'static str {
     "internal"
 }
 
+// ── Confidence Scoring ───────────────────────────────────────
+
+/// Compute a confidence score (0.0–1.0) for an anomaly.
+///
+/// Higher confidence means the anomaly is more likely to be a real issue
+/// rather than noise. Factors include baseline maturity, observation count,
+/// baseline age, cross-correlation with firewall events, VLAN sensitivity,
+/// and anomaly type.
+pub fn compute_confidence(
+    anomaly_type: &str,
+    baseline_status: &str,
+    observation_count: i64,
+    baseline_age_days: f64,
+    is_correlated: bool,
+    vlan_sensitivity: VlanSensitivity,
+) -> f64 {
+    let mut score: f64 = 0.5;
+
+    // Baseline maturity
+    match baseline_status {
+        "baselined" => score += 0.15,
+        "sparse" => score -= 0.1,
+        "learning" => score -= 0.2,
+        _ => {}
+    }
+
+    // Observation count — more data means more reliable anomaly detection
+    if observation_count > 1000 {
+        score += 0.1;
+    } else if observation_count > 100 {
+        score += 0.05;
+    } else if observation_count < 10 {
+        score -= 0.1;
+    }
+
+    // Baseline age — older baselines are more trustworthy
+    if baseline_age_days > 30.0 {
+        score += 0.1;
+    } else if baseline_age_days > 7.0 {
+        score += 0.05;
+    }
+
+    // Cross-correlation boost (firewall rule matched)
+    if is_correlated {
+        score += 0.15;
+    }
+
+    // VLAN sensitivity — stricter VLANs produce higher-confidence anomalies
+    match vlan_sensitivity {
+        VlanSensitivity::Strictest => score += 0.1,
+        VlanSensitivity::Strict => score += 0.1,
+        VlanSensitivity::Moderate => {}
+        VlanSensitivity::Loose => score -= 0.05,
+        VlanSensitivity::Monitor => score -= 0.05,
+    }
+
+    // Anomaly type weight
+    match anomaly_type {
+        "blocked_attempt" => score += 0.1,
+        "new_destination" => score += 0.05,
+        "volume_spike" => {} // neutral — relies on other factors
+        _ => {}
+    }
+
+    score.clamp(0.0, 1.0)
+}
+
 // ── Data Structures ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -356,8 +423,8 @@ pub struct NewAnomaly {
 pub struct BehaviorOverview {
     pub total_devices: i64,
     pub baselined_devices: i64,
-    pub learning_devices: i64,
     pub sparse_devices: i64,
+    pub learning_devices: i64,
     pub pending_anomalies: i64,
     pub critical_anomalies: i64,
     pub warning_anomalies: i64,
@@ -474,14 +541,26 @@ impl BehaviorStore {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS scheduler_watermarks (
+                task_name TEXT PRIMARY KEY,
+                last_run INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             ",
         )
         .map_err(|e| format!("schema creation failed: {e}"))?;
 
-        // Migrations for existing databases
-        let _ = conn.execute_batch(
-            "ALTER TABLE device_anomalies ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5;"
-        );
+        // Migration: add confidence column to device_anomalies if missing
+        let has_confidence: bool = conn
+            .prepare("SELECT confidence FROM device_anomalies LIMIT 0")
+            .is_ok();
+        if !has_confidence {
+            conn.execute_batch(
+                "ALTER TABLE device_anomalies ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5;",
+            )
+            .map_err(|e| format!("migration (confidence column) failed: {e}"))?;
+        }
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -709,8 +788,14 @@ impl BehaviorStore {
             .map_err(|e| format!("row collect failed: {e}"))
     }
 
+    /// Minimum distinct baseline entries for a device to be considered "baselined".
+    /// Below this threshold, the device is promoted to "sparse" instead.
+    const MIN_BASELINE_ENTRIES: i64 = 3;
+    /// Minimum total observation count for a device to be considered "baselined".
+    const MIN_OBSERVATION_COUNT: i64 = 50;
+
     /// Recompute baselines for a single device from its observations.
-    /// If the device has passed its `learning_until` time, promotes to `baselined`.
+    /// Does NOT handle promotion — use `promote_eligible_devices()` instead.
     pub async fn recompute_baselines(&self, mac: &str, window_secs: i64) -> Result<(), String> {
         let db = self.db.lock().await;
         let now = now_unix();
@@ -764,71 +849,75 @@ impl BehaviorStore {
             .map_err(|e| format!("upsert baseline failed: {e}"))?;
         }
 
-        // Auto-promote learning → sparse or baselined if past learning_until.
-        // Minimum evidence thresholds for full "baselined" status:
-        //   - At least 50 observations
-        //   - At least 3 distinct flow patterns (baseline entries)
-        //   - At least 3 distinct active days
-        let profile: Option<String> = db
-            .query_row(
-                "SELECT baseline_status FROM device_profiles WHERE mac = ?1",
-                params![mac],
-                |row| row.get(0),
+        Ok(())
+    }
+
+    /// Promote eligible devices from `learning` to `baselined` or `sparse`.
+    ///
+    /// A device is eligible when `learning_until <= now`. It is promoted to:
+    /// - `baselined` if it has >= MIN_BASELINE_ENTRIES distinct baselines
+    ///   and >= MIN_OBSERVATION_COUNT total observations
+    /// - `sparse` otherwise (still monitored, but novelty anomalies are treated cautiously)
+    ///
+    /// This is decoupled from baseline recomputation so it can run on a
+    /// short cadence (e.g. every 5 minutes) independent of nightly maintenance.
+    pub async fn promote_eligible_devices(&self) -> Result<(usize, usize), String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+
+        // Find all learning devices past their learning_until
+        let mut stmt = db
+            .prepare(
+                "SELECT mac FROM device_profiles
+                 WHERE baseline_status = 'learning' AND learning_until <= ?1",
             )
-            .optional()
-            .map_err(|e| format!("check status failed: {e}"))?;
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let eligible_macs: Vec<String> = stmt
+            .query_map(params![now], |row| row.get(0))
+            .map_err(|e| format!("query failed: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect failed: {e}"))?;
 
-        if let Some(status) = profile {
-            if status == "learning" || status == "sparse" {
-                let past_learning: bool = db
-                    .query_row(
-                        "SELECT learning_until <= ?2 FROM device_profiles WHERE mac = ?1",
-                        params![mac, now],
-                        |row| row.get(0),
-                    )
-                    .unwrap_or(false);
+        let mut promoted_baselined = 0usize;
+        let mut promoted_sparse = 0usize;
 
-                if past_learning {
-                    let obs_count: i64 = db
-                        .query_row(
-                            "SELECT COUNT(*) FROM device_observations WHERE mac = ?1",
-                            params![mac],
-                            |row| row.get(0),
-                        )
-                        .unwrap_or(0);
+        for mac in &eligible_macs {
+            // Count distinct baseline entries
+            let baseline_count: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM device_baselines WHERE mac = ?1",
+                    params![mac],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("baseline count failed: {e}"))?;
 
-                    let baseline_count: i64 = db
-                        .query_row(
-                            "SELECT COUNT(*) FROM device_baselines WHERE mac = ?1",
-                            params![mac],
-                            |row| row.get(0),
-                        )
-                        .unwrap_or(0);
+            // Count total observations
+            let obs_count: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM device_observations WHERE mac = ?1",
+                    params![mac],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("observation count failed: {e}"))?;
 
-                    let active_days: i64 = db
-                        .query_row(
-                            "SELECT COUNT(DISTINCT timestamp / 86400) FROM device_observations WHERE mac = ?1",
-                            params![mac],
-                            |row| row.get(0),
-                        )
-                        .unwrap_or(0);
+            let new_status = if baseline_count >= Self::MIN_BASELINE_ENTRIES
+                && obs_count >= Self::MIN_OBSERVATION_COUNT
+            {
+                promoted_baselined += 1;
+                "baselined"
+            } else {
+                promoted_sparse += 1;
+                "sparse"
+            };
 
-                    let new_status = if obs_count >= 50 && baseline_count >= 3 && active_days >= 3 {
-                        "baselined"
-                    } else {
-                        "sparse"
-                    };
-
-                    db.execute(
-                        "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
-                        params![mac, new_status],
-                    )
-                    .map_err(|e| format!("promote status failed: {e}"))?;
-                }
-            }
+            db.execute(
+                "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
+                params![mac, new_status],
+            )
+            .map_err(|e| format!("promote failed: {e}"))?;
         }
 
-        Ok(())
+        Ok((promoted_baselined, promoted_sparse))
     }
 
     pub async fn recompute_all_baselines(&self, window_secs: i64) -> Result<usize, String> {
@@ -850,6 +939,34 @@ impl BehaviorStore {
         Ok(count)
     }
 
+    // ── Scheduler watermark methods ──
+
+    /// Get the last-run timestamp for a named task, or None if never run.
+    pub async fn get_watermark(&self, task_name: &str) -> Result<Option<i64>, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT last_run FROM scheduler_watermarks WHERE task_name = ?1",
+            params![task_name],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("get_watermark failed: {e}"))
+    }
+
+    /// Set the last-run timestamp for a named task.
+    pub async fn set_watermark(&self, task_name: &str, timestamp: i64) -> Result<(), String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        db.execute(
+            "INSERT INTO scheduler_watermarks (task_name, last_run, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(task_name) DO UPDATE SET last_run = ?2, updated_at = ?3",
+            params![task_name, timestamp, now],
+        )
+        .map_err(|e| format!("set_watermark failed: {e}"))?;
+        Ok(())
+    }
+
     // ── Anomaly methods ──
 
     pub async fn record_anomaly(&self, anomaly: &NewAnomaly) -> Result<i64, String> {
@@ -869,6 +986,7 @@ impl BehaviorStore {
                 anomaly.description,
                 anomaly.details,
                 anomaly.vlan,
+                anomaly.confidence,
                 anomaly.firewall_correlation,
                 anomaly.firewall_rule_id,
                 anomaly.firewall_rule_comment,
@@ -876,6 +994,58 @@ impl BehaviorStore {
         )
         .map_err(|e| format!("record_anomaly failed: {e}"))?;
         Ok(db.last_insert_rowid())
+    }
+
+    /// Get the total observation count and earliest baseline computed_at for a device.
+    /// Used for confidence scoring.
+    pub async fn get_baseline_stats(&self, mac: &str) -> Result<(i64, i64), String> {
+        let db = self.db.lock().await;
+        let total_obs: i64 = db
+            .query_row(
+                "SELECT COALESCE(SUM(observation_count), 0) FROM device_baselines WHERE mac = ?1",
+                params![mac],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("baseline stats obs count failed: {e}"))?;
+        let earliest_computed: i64 = db
+            .query_row(
+                "SELECT COALESCE(MIN(computed_at), 0) FROM device_baselines WHERE mac = ?1",
+                params![mac],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("baseline stats computed_at failed: {e}"))?;
+        Ok((total_obs, earliest_computed))
+    }
+
+    /// Check for recent elevated observations (multi-window persistence).
+    /// Returns the count of recent observations in the given flow that exceed
+    /// the specified byte threshold within the last `window_secs`.
+    pub async fn count_elevated_observations(
+        &self,
+        mac: &str,
+        protocol: &str,
+        dst_port: Option<i64>,
+        dst_subnet: &str,
+        direction: &str,
+        byte_threshold: f64,
+        window_secs: i64,
+    ) -> Result<i64, String> {
+        let db = self.db.lock().await;
+        let cutoff = now_unix() - window_secs;
+        let hourly_threshold = byte_threshold / 60.0; // convert hourly back to per-observation
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM device_observations
+                 WHERE mac = ?1 AND protocol = ?2
+                   AND dst_subnet = ?4 AND direction = ?5
+                   AND timestamp >= ?6
+                   AND (bytes_sent + bytes_recv) > ?7
+                   AND (dst_port = ?3 OR (?3 IS NULL AND dst_port IS NULL))",
+                params![mac, protocol, dst_port, dst_subnet, direction, cutoff, hourly_threshold],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("count_elevated_observations failed: {e}"))?;
+        Ok(count)
     }
 
     /// Check if a similar anomaly already exists and is pending for dedup.
@@ -1074,6 +1244,13 @@ impl BehaviorStore {
                 |row| row.get(0),
             )
             .map_err(|e| format!("count failed: {e}"))?;
+        let sparse_devices: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM device_profiles WHERE baseline_status = 'sparse'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("count failed: {e}"))?;
         let learning_devices: i64 = db
             .query_row(
                 "SELECT COUNT(*) FROM device_profiles WHERE baseline_status = 'learning'",
@@ -1141,8 +1318,8 @@ impl BehaviorStore {
         Ok(BehaviorOverview {
             total_devices,
             baselined_devices,
-            learning_devices,
             sparse_devices,
+            learning_devices,
             pending_anomalies: alerts.pending_count,
             critical_anomalies: alerts.critical_count,
             warning_anomalies: alerts.warning_count,

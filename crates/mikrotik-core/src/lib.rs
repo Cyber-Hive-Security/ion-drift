@@ -7,7 +7,7 @@ pub mod tracker;
 pub mod vlan_flows;
 mod serde_helpers;
 
-pub use client::{MikrotikClient, MikrotikConfig};
+pub use client::{MikrotikClient, MikrotikConfig, DEFAULT_ROUTER_HOST, DEFAULT_ROUTER_PORT, DEFAULT_ROUTER_USERNAME};
 pub use snmp_client::SnmpClient;
 pub use swos_client::SwosClient;
 pub use error::MikrotikError;

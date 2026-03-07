@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 
 use crate::connection_store::{ConnectionStore, SyslogEvent};
 use crate::geo::GeoCache;
+use crate::task_supervisor::TaskSupervisor;
 
 /// Parse a RouterOS syslog line into a SyslogEvent.
 ///
@@ -116,13 +117,19 @@ fn split_addr(s: &str) -> (&str, Option<&str>) {
 /// Listens on UDP and inserts parsed events into the connection store.
 /// Only accepts packets from `router_host` — all other sources are dropped.
 pub fn spawn_syslog_listener(
+    supervisor: &TaskSupervisor,
     port: u16,
     store: Arc<ConnectionStore>,
     geo_cache: Arc<GeoCache>,
     router_host: String,
     vlan_registry: Arc<RwLock<VlanRegistry>>,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("syslog_listener", move || {
+        let store = store.clone();
+        let geo_cache = geo_cache.clone();
+        let router_host = router_host.clone();
+        let vlan_registry = vlan_registry.clone();
+        Box::pin(async move {
         // Resolve the router host to an IP for source validation
         let allowed_ip: std::net::IpAddr = match router_host.parse() {
             Ok(ip) => ip,
@@ -232,5 +239,5 @@ pub fn spawn_syslog_listener(
                 last_stats = tokio::time::Instant::now();
             }
         }
-    });
+    })});
 }

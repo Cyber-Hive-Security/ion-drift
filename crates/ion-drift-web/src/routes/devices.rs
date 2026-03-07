@@ -8,7 +8,7 @@ use serde::Deserialize;
 use mikrotik_core::{MikrotikClient, MikrotikConfig, SnmpClient, SwosClient};
 
 use crate::device_manager::{DeviceClient, DeviceStatus, DeviceInfo};
-use crate::middleware::{RequireAuth, RequireAdmin};
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::secrets::{NewDevice, UpdateDevice};
 use crate::state::AppState;
 
@@ -412,7 +412,7 @@ pub async fn delete_device(
 // ── POST /api/devices/{id}/test ──────────────────────────────────
 
 pub async fn test_device(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {

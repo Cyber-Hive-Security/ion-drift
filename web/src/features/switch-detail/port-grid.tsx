@@ -9,6 +9,7 @@ import type {
   NetworkIdentity,
   PortMacBinding,
   PortViolation,
+  PortUtilization,
 } from "@/api/types";
 import {
   portToGridPosition,
@@ -20,6 +21,7 @@ import {
   vlanName,
 } from "./utils";
 import { formatBytes } from "@/lib/format";
+import { utilizationColor, utilizationLabel, formatBitrate } from "@/lib/utilization";
 
 interface PortGridProps {
   ports: PortMetricsTuple[];
@@ -32,6 +34,7 @@ interface PortGridProps {
   deviceId?: string;
   bindings?: PortMacBinding[];
   violations?: PortViolation[];
+  utilization?: PortUtilization[];
 }
 
 interface PortCellData {
@@ -52,6 +55,11 @@ interface PortCellData {
   connectedManufacturer: string | null;
   hasBound: boolean;
   hasViolation: boolean;
+  utilization: number;
+  rxRateBps: number;
+  txRateBps: number;
+  ratedSpeedMbps: number;
+  speedSource: string;
 }
 
 export function PortGrid({
@@ -65,6 +73,7 @@ export function PortGrid({
   deviceId,
   bindings = [],
   violations = [],
+  utilization = [],
 }: PortGridProps) {
   const vlan = useVlanLookup();
   const [hoveredPort, setHoveredPort] = useState<string | null>(null);
@@ -132,6 +141,13 @@ export function PortGrid({
     return map;
   }, [violations]);
 
+  // Utilization lookup by port name
+  const utilByPort = useMemo(() => {
+    const map = new Map<string, PortUtilization>();
+    for (const u of utilization) map.set(u.port_name, u);
+    return map;
+  }, [utilization]);
+
   // Build cell data for all known ports, filtering out families with no running ports
   const portCells = useMemo(() => {
     const allPortNames = new Set<string>();
@@ -146,6 +162,7 @@ export function PortGrid({
       const portVlans = vlans.filter((v) => v.port_name === portName);
       const role = roleMap.get(portName);
       const identity = identityByPort.get(portName);
+      const util = utilByPort.get(portName);
 
       allCells.push({
         portName,
@@ -165,6 +182,11 @@ export function PortGrid({
         connectedManufacturer: identity?.manufacturer ?? null,
         hasBound: bindingByPort.has(portName),
         hasViolation: violationByPort.has(portName),
+        utilization: util?.utilization ?? 0,
+        rxRateBps: util?.rx_rate_bps ?? 0,
+        txRateBps: util?.tx_rate_bps ?? 0,
+        ratedSpeedMbps: util?.rated_speed_mbps ?? 0,
+        speedSource: util?.speed_source ?? "",
       });
     }
 
@@ -187,7 +209,7 @@ export function PortGrid({
 
     const cells = allCells.filter((c) => activeFamilies.has(portFamily(c.portName)));
     return cells.sort((a, b) => portSortKey(a.portName) - portSortKey(b.portName));
-  }, [latestMetrics, vlans, portRoles, macCounts, roleMap, identityByPort, bindingByPort, violationByPort, vlan.configs]);
+  }, [latestMetrics, vlans, portRoles, macCounts, roleMap, identityByPort, bindingByPort, violationByPort, utilByPort, vlan.configs]);
 
   // Separate copper ports (with grid positions) from SFP and other ports
   const { topRow, bottomRow, sfpTop, sfpBottom, otherPorts } = useMemo(() => {
@@ -230,15 +252,6 @@ export function PortGrid({
     return { topRow: top, bottomRow: bottom, sfpTop: st, sfpBottom: sb, otherPorts: other };
   }, [portCells]);
 
-  // Find max traffic for normalization
-  const maxTraffic = useMemo(() => {
-    let max = 1;
-    for (const cell of portCells) {
-      max = Math.max(max, cell.rxBytes + cell.txBytes);
-    }
-    return max;
-  }, [portCells]);
-
   const hoveredCell = portCells.find((c) => c.portName === hoveredPort);
 
   function handleMouseEnter(portName: string, e: React.MouseEvent) {
@@ -259,11 +272,11 @@ export function PortGrid({
       return <div key={key} className="h-9 w-full rounded border border-border/20 bg-muted/20" />;
     }
 
-    const traffic = (cell.rxBytes + cell.txBytes) / maxTraffic;
-    const glowOpacity = cell.running ? Math.max(0.05, traffic * 0.5) : 0;
     const isSfp = cell.portName.startsWith("sfp");
     const isSelected = selectedPort === cell.portName;
     const isTrunk = cell.vlanCount > 1;
+    const util = cell.running ? cell.utilization : 0;
+    const utilColor = utilizationColor(util);
 
     return (
       <div
@@ -284,8 +297,8 @@ export function PortGrid({
           backgroundImage: isTrunk
             ? `repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.15) 3px, rgba(0,0,0,0.15) 6px)`
             : undefined,
-          boxShadow: glowOpacity > 0.1
-            ? `inset 0 0 12px rgba(255,255,255,${glowOpacity})`
+          boxShadow: util > 0.05
+            ? `inset 0 0 12px ${utilColor}40`
             : undefined,
         }}
         onClick={() => onSelectPort(isSelected ? null : cell.portName)}
@@ -316,6 +329,16 @@ export function PortGrid({
           <span className="absolute top-0 left-0.5 text-[8px] leading-none animate-pulse drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]">
             ⚠️
           </span>
+        )}
+        {/* Utilization bar */}
+        {cell.running && util > 0.01 && (
+          <div
+            className="absolute bottom-0 left-0 h-[3px] rounded-b transition-all"
+            style={{
+              width: `${Math.min(100, util * 100)}%`,
+              backgroundColor: utilColor,
+            }}
+          />
         )}
       </div>
     );
@@ -418,14 +441,36 @@ export function PortGrid({
                 <span className="text-foreground capitalize">{hoveredCell.role}</span>
               </div>
             )}
+            {hoveredCell.utilization > 0 && (
+              <>
+                <div className="flex justify-between gap-4">
+                  <span>Utilization</span>
+                  <span className="font-medium" style={{ color: utilizationColor(hoveredCell.utilization) }}>
+                    {utilizationLabel(hoveredCell.utilization)}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span>Rx Rate</span>
+                  <span className="text-foreground">{formatBitrate(hoveredCell.rxRateBps)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span>Tx Rate</span>
+                  <span className="text-foreground">{formatBitrate(hoveredCell.txRateBps)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span>Rated Speed</span>
+                  <span className="text-foreground">{hoveredCell.ratedSpeedMbps >= 1000 ? `${hoveredCell.ratedSpeedMbps / 1000} Gbps` : `${hoveredCell.ratedSpeedMbps} Mbps`}</span>
+                </div>
+              </>
+            )}
             {(hoveredCell.rxBytes > 0 || hoveredCell.txBytes > 0) && (
               <>
                 <div className="flex justify-between gap-4">
-                  <span>Rx</span>
+                  <span>Rx Total</span>
                   <span className="text-foreground">{formatBytes(hoveredCell.rxBytes)}</span>
                 </div>
                 <div className="flex justify-between gap-4">
-                  <span>Tx</span>
+                  <span>Tx Total</span>
                   <span className="text-foreground">{formatBytes(hoveredCell.txBytes)}</span>
                 </div>
               </>

@@ -26,7 +26,7 @@ impl VlanFlowManager {
     /// These rules have zero impact on routing — they just count bytes and pass through.
     ///
     /// Returns the number of new rules created.
-    pub async fn setup_flow_counters(client: &MikrotikClient) -> Result<usize, MikrotikError> {
+    pub async fn setup_flow_counters(client: &MikrotikClient, wan_interface: &str) -> Result<usize, MikrotikError> {
         // 1. Get all VLAN interface names
         let vlans = client.vlan_interfaces().await?;
         let vlan_names: Vec<String> = vlans.iter().map(|v| v.name.clone()).collect();
@@ -73,7 +73,7 @@ impl VlanFlowManager {
         }
 
         // 4. Create missing rules for WAN ↔ VLAN pairs
-        let wan = "1-WAN";
+        let wan = wan_interface;
         for vlan in &vlan_names {
             // WAN → VLAN (inbound from internet)
             let comment = format!("{}{wan}>{vlan}", Self::COMMENT_PREFIX);

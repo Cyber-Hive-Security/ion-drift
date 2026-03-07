@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde::{Deserialize, Serialize};
 
-use crate::middleware::{RequireAuth, RequireAdmin};
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::secrets;
 use crate::state::AppState;
 
@@ -41,7 +41,7 @@ pub struct SecretsStatusResponse {
 }
 
 pub async fn secrets_status(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
 ) -> Result<Json<SecretsStatusResponse>, Response> {
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
@@ -217,7 +217,7 @@ pub struct EncryptionStatusResponse {
 }
 
 pub async fn encryption_status(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
 ) -> Result<Json<EncryptionStatusResponse>, Response> {
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
@@ -260,7 +260,7 @@ pub struct CertStatusResponse {
 }
 
 pub async fn cert_status(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
 ) -> Result<Json<CertStatusResponse>, Response> {
     let cert_path = &state.config.tls.client_cert;

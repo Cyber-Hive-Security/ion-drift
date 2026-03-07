@@ -26,6 +26,9 @@ pub enum MikrotikError {
 
     #[error("SNMP error: {0}")]
     Snmp(String),
+
+    #[error("Configuration error: {0}")]
+    Config(String),
 }
 
 /// Raw error response from RouterOS REST API.

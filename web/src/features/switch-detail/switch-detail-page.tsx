@@ -14,12 +14,14 @@ import {
   useNetworkIdentities,
   usePortBindingsForDevice,
   usePortViolationsForDevice,
+  usePortUtilization,
 } from "@/api/queries";
 import { SystemInfoBar } from "./system-info-bar";
 import { PortGrid } from "./port-grid";
 import { PortTrafficTable } from "./port-traffic-table";
 import { MacTableSection } from "./mac-table-section";
 import { VlanAuditGrid } from "./vlan-audit-grid";
+import { SaturatedLinksCard } from "./saturated-links-card";
 
 function SwitchDetailPage({ deviceId }: { deviceId: string }) {
   const [selectedPort, setSelectedPort] = useState<string | null>(null);
@@ -36,6 +38,7 @@ function SwitchDetailPage({ deviceId }: { deviceId: string }) {
   const identities = useNetworkIdentities();
   const deviceBindings = usePortBindingsForDevice(deviceId);
   const deviceViolations = usePortViolationsForDevice(deviceId);
+  const portUtilization = usePortUtilization(deviceId);
 
   if (resources.isLoading) return <LoadingSpinner />;
 
@@ -59,6 +62,16 @@ function SwitchDetailPage({ deviceId }: { deviceId: string }) {
         <SystemInfoBar resource={resources.data} device={device} />
       )}
 
+      {/* Saturated Links Summary */}
+      {portUtilization.data && portUtilization.data.length > 0 && (
+        <div className="mt-4">
+          <SaturatedLinksCard
+            utilization={portUtilization.data}
+            onSelectPort={setSelectedPort}
+          />
+        </div>
+      )}
+
       {/* Port Grid */}
       <div className="mt-6">
         <PortGrid
@@ -72,6 +85,7 @@ function SwitchDetailPage({ deviceId }: { deviceId: string }) {
           deviceId={deviceId}
           bindings={deviceBindings.data}
           violations={deviceViolations.data}
+          utilization={portUtilization.data}
         />
       </div>
 
@@ -87,6 +101,7 @@ function SwitchDetailPage({ deviceId }: { deviceId: string }) {
           selectedPort={selectedPort}
           onSelectPort={setSelectedPort}
           deviceId={deviceId}
+          utilization={portUtilization.data}
         />
       </div>
 

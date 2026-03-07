@@ -20,6 +20,7 @@ import IdentityManagerPage from "@/features/identity/identity-manager-page";
 import BackboneLinksPage from "@/features/backbone/backbone-links-page";
 import { InferencePage } from "@/features/inference/inference-page";
 import { SetupWizard } from "@/features/provision/setup-wizard";
+import { SankeyInvestigationPage } from "@/features/sankey/sankey-investigation-page";
 
 // Lazy-load the auto-generated topology page (separate D3 chunk).
 const LazyTopologyPage = React.lazy(
@@ -145,6 +146,12 @@ const inferenceRoute = createRoute({
   component: InferencePage,
 });
 
+const sankeyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sankey",
+  component: SankeyInvestigationPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -171,6 +178,7 @@ const routeTree = rootRoute.addChildren([
   identitiesRoute,
   backboneRoute,
   inferenceRoute,
+  sankeyRoute,
   settingsRoute,
   setupWizardRoute,
 ]);

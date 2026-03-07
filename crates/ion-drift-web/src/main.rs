@@ -1,3 +1,4 @@
+mod alerting;
 mod anomaly_correlator;
 mod auth;
 mod behavior_engine;
@@ -26,6 +27,7 @@ mod state;
 mod switch_poller;
 mod swos_poller;
 mod syslog;
+mod task_supervisor;
 mod tasks;
 
 use std::sync::Arc;
@@ -37,6 +39,7 @@ use crate::config::ServerConfig;
 use crate::live_traffic::LiveTrafficBuffer;
 use crate::secrets::{DecryptedSecrets, SecretsManager};
 use crate::state::AppState;
+use crate::task_supervisor::TaskSupervisor;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -335,6 +338,9 @@ async fn main() -> anyhow::Result<()> {
         ))
     };
 
+    // Create task supervisor
+    let supervisor = TaskSupervisor::new();
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),
@@ -357,6 +363,7 @@ async fn main() -> anyhow::Result<()> {
         topology_cache: Arc::new(tokio::sync::RwLock::new(None)),
         vlan_registry: vlan_registry.clone(),
         poller_registry: Arc::new(tokio::sync::RwLock::new(poller_registry::PollerRegistry::new())),
+        task_supervisor: supervisor,
     };
 
     // Spawn all background tasks
@@ -431,5 +438,3 @@ fn parse_config_arg() -> Option<String> {
     }
     None
 }
-
-

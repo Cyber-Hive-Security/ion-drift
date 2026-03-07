@@ -10,14 +10,20 @@ use ion_drift_storage::behavior::{BehaviorStore, NewAnomaly, VlanRegistry};
 use tokio::sync::RwLock;
 
 use crate::connection_store::{ConnectionStore, FlowClassification, NewAnomalyLink};
+use crate::task_supervisor::TaskSupervisor;
 
 /// Spawn the anomaly correlator background task.
 pub fn spawn_anomaly_correlator(
+    supervisor: &TaskSupervisor,
     connection_store: Arc<ConnectionStore>,
     behavior_store: Arc<BehaviorStore>,
     vlan_registry: Arc<RwLock<VlanRegistry>>,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("anomaly_correlator", move || {
+        let connection_store = connection_store.clone();
+        let behavior_store = behavior_store.clone();
+        let vlan_registry = vlan_registry.clone();
+        Box::pin(async move {
         // Wait 5 minutes for behavior collector + baselines to have initial data
         tokio::time::sleep(Duration::from_secs(300)).await;
         tracing::info!("anomaly correlator starting");
@@ -41,7 +47,7 @@ pub fn spawn_anomaly_correlator(
                 }
             }
         }
-    });
+    })});
 }
 
 /// Run one correlation cycle. Returns (port_to_device_links, device_to_port_links).
@@ -146,7 +152,7 @@ async fn correlate_port_to_device(
                         .and_then(|v| v.trim().parse::<i64>().ok())
                         .unwrap_or(0);
 
-                    let _ = behavior_store
+                    if let Err(e) = behavior_store
                         .record_anomaly(&NewAnomaly {
                             mac: device.mac.clone(),
                             anomaly_type: classification_str.to_string(),
@@ -179,7 +185,10 @@ async fn correlate_port_to_device(
                             firewall_rule_id: None,
                             firewall_rule_comment: None,
                         })
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(mac = %device.mac, "failed to record anomaly from port flow correlation: {e}");
+                    }
                 }
             }
         }

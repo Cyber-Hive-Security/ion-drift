@@ -1389,3 +1389,205 @@ export interface ApplyResult {
   succeeded: number;
   failed: number;
 }
+
+// ── Sankey Investigation ─────────────────────────────────────
+
+export interface SankeyNetworkFlow {
+  src_vlan: string;
+  dst_vlan: string;
+  bytes: number;
+  connections: number;
+  anomaly_count: number;
+}
+
+export interface SankeyNetworkVlan {
+  vlan_id: string;
+  device_count: number;
+  total_bytes: number;
+  total_connections: number;
+}
+
+export interface SankeyNetworkResponse {
+  flows: SankeyNetworkFlow[];
+  vlans: SankeyNetworkVlan[];
+  range: string;
+}
+
+export interface SankeyVlanDevice {
+  mac: string;
+  hostname: string | null;
+  ip: string | null;
+  total_bytes: number;
+  total_connections: number;
+  baseline_status: string | null;
+}
+
+export interface SankeyVlanFlow {
+  src_mac: string;
+  dst_group: string;
+  bytes: number;
+  connections: number;
+  flow_state: string;
+}
+
+export interface SankeyVlanResponse {
+  vlan_id: string;
+  devices: SankeyVlanDevice[];
+  flows: SankeyVlanFlow[];
+  range: string;
+}
+
+export interface SankeyDeviceProtocol {
+  protocol: string;
+  dst_port: number;
+  service_name: string;
+  bytes: number;
+  connections: number;
+}
+
+export interface SankeyDeviceDestination {
+  dst_ip: string;
+  dst_hostname: string | null;
+  is_external: boolean;
+  bytes: number;
+  connections: number;
+}
+
+export interface SankeyDeviceFlow {
+  protocol: string;
+  dst_port: number;
+  dst_ip: string;
+  bytes: number;
+  connections: number;
+  flagged: boolean;
+}
+
+export interface SankeyDeviceResponse {
+  mac: string;
+  hostname: string | null;
+  ip: string | null;
+  baseline_status: string | null;
+  protocols: SankeyDeviceProtocol[];
+  destinations: SankeyDeviceDestination[];
+  flows: SankeyDeviceFlow[];
+  range: string;
+}
+
+export interface SankeyDestinationPeer {
+  mac: string;
+  hostname: string | null;
+  ip: string | null;
+  bytes: number;
+  connections: number;
+}
+
+export interface SankeyDestinationPeersResponse {
+  dst_ip: string;
+  peers: SankeyDestinationPeer[];
+  range: string;
+}
+
+// ── Port Utilization ─────────────────────────────────────────
+
+export interface PortUtilization {
+  port_name: string;
+  running: boolean;
+  rx_rate_bps: number;
+  tx_rate_bps: number;
+  rx_utilization: number;
+  tx_utilization: number;
+  utilization: number;
+  rated_speed_mbps: number;
+  speed_source: string;
+  sample_age_secs: number;
+}
+
+// ── Alerting ─────────────────────────────────────────────────
+
+export interface AlertRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  event_type: string;
+  severity_filter: string | null;
+  vlan_filter: string | null;
+  disposition_filter: string | null;
+  cooldown_seconds: number;
+  delivery_channels: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertHistoryEntry {
+  id: number;
+  rule_id: number;
+  event_type: string;
+  severity: string;
+  device_mac: string | null;
+  device_hostname: string | null;
+  device_ip: string | null;
+  vlan_id: number | null;
+  title: string;
+  body: string;
+  channels_attempted: string;
+  channels_succeeded: string;
+  fired_at: string;
+  anomaly_id: number | null;
+}
+
+export interface AlertStatus {
+  enabled_rules: number;
+  total_rules: number;
+  last_check: string | null;
+  alerts_fired_today: number;
+  unread_count_24h?: number;
+}
+
+// Sankey conversation detail types
+export interface ConversationSummary {
+  total_bytes: number;
+  total_connections: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  protocols: string[];
+  flagged_count: number;
+  blocked_count: number;
+}
+
+export interface ConversationTimelineBucket {
+  bucket: string;
+  bytes: number;
+  connections: number;
+}
+
+export interface ConversationConnection {
+  id: number;
+  protocol: string;
+  src_port: number | null;
+  dst_port: number | null;
+  bytes_tx: number;
+  bytes_rx: number;
+  first_seen: string;
+  last_seen: string;
+  flagged: boolean;
+}
+
+export interface ConversationDetailResponse {
+  src_mac: string;
+  dst_ip: string;
+  src_hostname: string | null;
+  dst_hostname: string | null;
+  baseline_status: string | null;
+  summary: ConversationSummary;
+  timeline: ConversationTimelineBucket[];
+  connections: ConversationConnection[];
+  total_pages: number;
+  current_page: number;
+  range: string;
+}
+
+export interface DeliveryChannelConfig {
+  channel: string;
+  enabled: boolean;
+  config_json: Record<string, unknown>;
+}

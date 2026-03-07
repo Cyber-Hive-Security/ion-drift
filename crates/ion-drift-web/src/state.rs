@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use mikrotik_core::{MikrotikClient, TrafficTracker};
+use mikrotik_core::MikrotikClient;
 use ion_drift_storage::{BehaviorStore, MetricsStore, SwitchStore};
+use mikrotik_core::TrafficTracker;
 use ion_drift_storage::behavior::VlanRegistry;
 use mikrotik_core::resources::firewall::FilterRule;
 use crate::auth::{OidcClient, SessionStore};
@@ -16,6 +17,7 @@ use crate::oui::OuiDb;
 use crate::poller_registry::PollerRegistry;
 use crate::routes::network_map_status::NetworkMapStatusCache;
 use crate::secrets::SecretsManager;
+use crate::task_supervisor::TaskSupervisor;
 use crate::topology::NetworkTopology;
 
 /// Shared application state, passed to all Axum handlers via `State<AppState>`.
@@ -62,4 +64,6 @@ pub struct AppState {
     pub vlan_registry: Arc<RwLock<VlanRegistry>>,
     /// Registry of running per-device poller tasks for dynamic start/stop.
     pub poller_registry: Arc<RwLock<PollerRegistry>>,
+    /// Background task supervisor — tracks health and restarts panicked tasks.
+    pub task_supervisor: TaskSupervisor,
 }

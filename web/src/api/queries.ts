@@ -92,6 +92,16 @@ import type {
   InferenceMacDetail,
   ObservationStats,
   ProvisionInterface,
+  SankeyNetworkResponse,
+  SankeyVlanResponse,
+  SankeyDeviceResponse,
+  SankeyDestinationPeersResponse,
+  ConversationDetailResponse,
+  PortUtilization,
+  AlertRule,
+  AlertHistoryEntry,
+  AlertStatus,
+  DeliveryChannelConfig,
 } from "./types";
 
 // Auth
@@ -1515,6 +1525,16 @@ export function useInferenceStatus() {
   });
 }
 
+// ── Sankey Investigation ─────────────────────────────────────
+
+export function useSankeyNetwork(range = "24h") {
+  return useQuery({
+    queryKey: ["sankey", "network", range],
+    queryFn: () => apiFetch<SankeyNetworkResponse>(`/api/sankey/network?range=${range}`),
+    refetchInterval: 30_000,
+  });
+}
+
 export function useInferenceMacDetail(mac: string | null) {
   return useQuery({
     queryKey: ["network", "inference", "mac", mac],
@@ -1522,6 +1542,26 @@ export function useInferenceMacDetail(mac: string | null) {
       apiFetch<InferenceMacDetail>(
         `/api/network/inference/mac/${encodeURIComponent(mac!)}`,
       ),
+    enabled: !!mac,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useSankeyVlan(vlanId: string | undefined, range = "24h", destVlan?: string) {
+  const params = new URLSearchParams({ range });
+  if (destVlan) params.set("dest_vlan", destVlan);
+  return useQuery({
+    queryKey: ["sankey", "vlan", vlanId, range, destVlan],
+    queryFn: () => apiFetch<SankeyVlanResponse>(`/api/sankey/vlan/${encodeURIComponent(vlanId!)}?${params}`),
+    enabled: !!vlanId,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useSankeyDevice(mac: string | undefined, range = "24h") {
+  return useQuery({
+    queryKey: ["sankey", "device", mac, range],
+    queryFn: () => apiFetch<SankeyDeviceResponse>(`/api/sankey/device/${encodeURIComponent(mac!)}?range=${range}`),
     enabled: !!mac,
     refetchInterval: 30_000,
   });
@@ -1536,6 +1576,53 @@ export function useInferenceObservations() {
   });
 }
 
+export function useSankeyDestinationPeers(ip: string | undefined, range = "24h") {
+  return useQuery({
+    queryKey: ["sankey", "destination", ip, range],
+    queryFn: () => apiFetch<SankeyDestinationPeersResponse>(`/api/sankey/destination/${encodeURIComponent(ip!)}/devices?range=${range}`),
+    enabled: !!ip,
+  });
+}
+
+export function useSankeyConversation(mac: string, destIp: string, range = "24h", page = 1) {
+  return useQuery({
+    queryKey: ["sankey", "conversation", mac, destIp, range, page],
+    queryFn: () => apiFetch<ConversationDetailResponse>(
+      `/api/sankey/device/${encodeURIComponent(mac)}/destination/${encodeURIComponent(destIp)}?range=${range}&page=${page}`,
+    ),
+    enabled: !!mac && !!destIp,
+  });
+}
+
+// ── Port Utilization ─────────────────────────────────────────
+
+export function usePortUtilization(deviceId: string | undefined) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "port-utilization"],
+    queryFn: () => apiFetch<PortUtilization[]>(`/api/devices/${encodeURIComponent(deviceId!)}/port-utilization`),
+    enabled: !!deviceId,
+    refetchInterval: 10_000,
+    staleTime: 8_000,
+  });
+}
+
+// ── Alerting ─────────────────────────────────────────────────
+
+export function useAlertRules() {
+  return useQuery({
+    queryKey: ["alerts", "rules"],
+    queryFn: () => apiFetch<AlertRule[]>("/api/alerts/rules"),
+  });
+}
+
+export function useAlertStatus() {
+  return useQuery({
+    queryKey: ["alerts", "status"],
+    queryFn: () => apiFetch<AlertStatus>("/api/alerts/status"),
+    refetchInterval: 30_000,
+  });
+}
+
 // ── Provision / Setup Wizard ────────────────────────────────────
 
 export function useProvisionInterfaces(deviceId: string | null) {
@@ -1546,5 +1633,97 @@ export function useProvisionInterfaces(deviceId: string | null) {
         `/api/devices/${encodeURIComponent(deviceId!)}/provision/interfaces`,
       ),
     enabled: !!deviceId,
+  });
+}
+
+export function useAlertHistory(limit = 50) {
+  return useQuery({
+    queryKey: ["alerts", "history", limit],
+    queryFn: () => apiFetch<AlertHistoryEntry[]>(`/api/alerts/history?limit=${limit}`),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useAlertChannels() {
+  return useQuery({
+    queryKey: ["alerts", "channels"],
+    queryFn: () => apiFetch<DeliveryChannelConfig[]>("/api/alerts/channels"),
+  });
+}
+
+export function useUpdateAlertRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: number } & Record<string, unknown>) =>
+      apiFetch<{ ok: boolean }>(`/api/alerts/rules/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alerts", "rules"] });
+    },
+  });
+}
+
+export function useCreateAlertRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      apiFetch<AlertRule>("/api/alerts/rules", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alerts", "rules"] });
+    },
+  });
+}
+
+export function useDeleteAlertRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiFetch<{ ok: boolean }>(`/api/alerts/rules/${id}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alerts", "rules"] });
+    },
+  });
+}
+
+export function useDeleteAlertHistory() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ deleted: number }>("/api/alerts/history", {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alerts", "history"] });
+    },
+  });
+}
+
+export function useUpdateAlertChannel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ channel, ...data }: { channel: string } & Record<string, unknown>) =>
+      apiFetch<{ ok: boolean }>(`/api/alerts/channels/${encodeURIComponent(channel)}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alerts", "channels"] });
+    },
+  });
+}
+
+export function useTestAlertChannel() {
+  return useMutation({
+    mutationFn: (channel: string) =>
+      apiFetch<{ ok: boolean }>(`/api/alerts/channels/${encodeURIComponent(channel)}/test`, {
+        method: "POST",
+      }),
   });
 }

@@ -367,6 +367,11 @@ fn now_unix() -> i64 {
 }
 
 impl SwitchStore {
+    /// Acquire a lock on the underlying database connection.
+    pub async fn db(&self) -> tokio::sync::MutexGuard<'_, Connection> {
+        self.db.lock().await
+    }
+
     /// Create a new store, opening (or creating) the SQLite database at `db_path`.
     pub fn new(db_path: &Path) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(db_path)?;
@@ -631,6 +636,57 @@ impl SwitchStore {
                 updated_at INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS alert_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                event_type TEXT NOT NULL,
+                severity_filter TEXT,
+                vlan_filter TEXT,
+                disposition_filter TEXT,
+                cooldown_seconds INTEGER NOT NULL DEFAULT 300,
+                delivery_channels TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS alert_delivery_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel TEXT NOT NULL UNIQUE,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                config_json TEXT NOT NULL DEFAULT '{}'
+            );
+
+            CREATE TABLE IF NOT EXISTS alert_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id INTEGER NOT NULL REFERENCES alert_rules(id),
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                device_mac TEXT,
+                device_hostname TEXT,
+                device_ip TEXT,
+                vlan_id INTEGER,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                channels_attempted TEXT NOT NULL DEFAULT '[]',
+                channels_succeeded TEXT NOT NULL DEFAULT '[]',
+                fired_at TEXT NOT NULL DEFAULT (datetime('now')),
+                anomaly_id INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS alert_cooldowns (
+                rule_id INTEGER NOT NULL,
+                subject TEXT NOT NULL,
+                last_fired_at TEXT NOT NULL,
+                PRIMARY KEY (rule_id, subject)
+            );
+
+            CREATE TABLE IF NOT EXISTS alert_state_cache (
+                key TEXT NOT NULL PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             PRAGMA journal_mode=WAL;",
         )?;
 
@@ -645,7 +701,48 @@ impl SwitchStore {
             "ALTER TABLE network_identities ADD COLUMN is_infrastructure INTEGER",
             "ALTER TABLE network_identities ADD COLUMN switch_binding_source TEXT DEFAULT 'auto'",
         ] {
-            let _ = conn.execute(alter, []);
+            if let Err(e) = conn.execute(alter, []) {
+                tracing::debug!("migration may already be applied: {e}");
+            }
+        }
+
+        // Seed alert delivery config rows (idempotent)
+        for sql in &[
+            "INSERT OR IGNORE INTO alert_delivery_config (channel, enabled, config_json) VALUES ('ntfy', 0, '{\"url\": \"https://ntfy.sh\", \"topic\": \"\", \"token\": \"\"}')",
+            "INSERT OR IGNORE INTO alert_delivery_config (channel, enabled, config_json) VALUES ('webhook', 0, '{\"url\": \"\", \"secret\": \"\"}')",
+            "INSERT OR IGNORE INTO alert_delivery_config (channel, enabled, config_json) VALUES ('smtp', 0, '{\"host\": \"\", \"port\": 587, \"username\": \"\", \"from\": \"\", \"to\": []}')",
+        ] {
+            if let Err(e) = conn.execute(sql, []) {
+                tracing::warn!("failed to seed alert delivery config: {e}");
+            }
+        }
+
+        // Seed default alert rules (idempotent — check by event_type)
+        for (name, event_type, severity_filter, cooldown) in &[
+            ("Critical Anomaly", "anomaly_critical", Some("critical"), 300),
+            ("Correlated Anomaly", "anomaly_correlated", Some("critical"), 300),
+            ("New Unknown Device", "device_new", None, 3600),
+            ("Flagged Device", "device_flagged", None, 300),
+            ("Port Violation", "port_violation", None, 600),
+            ("Warning Anomaly", "anomaly_warning", Some("warning"), 600),
+            ("Interface Down", "interface_down", None, 300),
+            ("Registered Device Offline", "device_offline", None, 3600),
+            ("DHCP Pool Exhaustion", "dhcp_pool_exhausted", None, 3600),
+            ("Firewall Drop Spike", "firewall_drop_spike", None, 600),
+        ] {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM alert_rules WHERE event_type = ?1",
+                params![event_type],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            if count == 0 {
+                if let Err(e) = conn.execute(
+                    "INSERT INTO alert_rules (name, enabled, event_type, severity_filter, cooldown_seconds, delivery_channels) VALUES (?1, 1, ?2, ?3, ?4, '[\"ntfy\"]')",
+                    params![name, event_type, severity_filter, cooldown],
+                ) {
+                    tracing::warn!("failed to seed alert rule {name}: {e}");
+                }
+            }
         }
 
         // Idempotent schema migrations — add previous binding columns to mac_attachment_state

@@ -36,3 +36,7 @@ cookie_name = "ion_drift_session"
 max_age_seconds = 86400
 secure = true
 same_site = "lax"
+
+[syslog]
+port = 5514
+target_ip = "10.20.25.17"

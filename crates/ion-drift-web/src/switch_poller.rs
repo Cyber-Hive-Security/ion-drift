@@ -7,6 +7,7 @@ use ion_drift_storage::switch::{PortMetricEntry, VlanMembershipEntry};
 use tokio::sync::{watch, RwLock};
 
 use crate::device_manager::{DeviceClient, DeviceManager, DeviceStatus};
+use crate::task_supervisor::TaskSupervisor;
 
 /// Spawn switch pollers for all enabled RouterOS devices (switches + router).
 ///
@@ -14,12 +15,17 @@ use crate::device_manager::{DeviceClient, DeviceManager, DeviceStatus};
 /// from its `poll_interval_secs` configuration. Uses the PollerRegistry
 /// for lifecycle management so pollers can be started/stopped dynamically.
 pub fn spawn_switch_pollers(
+    supervisor: &TaskSupervisor,
     device_manager: Arc<RwLock<DeviceManager>>,
     switch_store: Arc<SwitchStore>,
     poller_registry: Arc<RwLock<crate::poller_registry::PollerRegistry>>,
 ) {
+    supervisor.spawn("switch_pollers", move || {
+        let device_manager = device_manager.clone();
+        let switch_store = switch_store.clone();
+        let poller_registry = poller_registry.clone();
+        Box::pin(async move {
     let dm = device_manager.clone();
-    tokio::spawn(async move {
         // 30-second startup delay to let the server stabilize
         tokio::time::sleep(Duration::from_secs(30)).await;
 
@@ -42,7 +48,7 @@ pub fn spawn_switch_pollers(
         }
         drop(registry);
         drop(dm_read);
-    });
+    })});
 }
 
 /// Run the polling loop for a single RouterOS switch device.
@@ -264,10 +270,14 @@ async fn poll_switch(
 ///
 /// SwOS devices are skipped — they don't support LLDP/neighbor discovery.
 pub fn spawn_neighbor_poller(
+    supervisor: &TaskSupervisor,
     device_manager: Arc<RwLock<DeviceManager>>,
     switch_store: Arc<SwitchStore>,
 ) {
-    tokio::spawn(async move {
+    supervisor.spawn("neighbor_poller", move || {
+        let device_manager = device_manager.clone();
+        let switch_store = switch_store.clone();
+        Box::pin(async move {
         // 60-second startup delay
         tokio::time::sleep(Duration::from_secs(60)).await;
         tracing::info!("neighbor discovery poller starting (RouterOS devices, 120s interval)");
@@ -323,7 +333,7 @@ pub fn spawn_neighbor_poller(
                 }
             }
         }
-    });
+    })});
 }
 
 /// Spawn a device health check that pings all devices every 60s.
@@ -331,8 +341,10 @@ pub fn spawn_neighbor_poller(
 /// Works with both RouterOS and SwOS devices via `DeviceClient::test_connection()`.
 /// Skips devices that have been polled recently by their own per-device poller
 /// (i.e. within the last `poll_interval_secs`), to avoid redundant connectivity checks.
-pub fn spawn_device_health_check(device_manager: Arc<RwLock<DeviceManager>>) {
-    tokio::spawn(async move {
+pub fn spawn_device_health_check(supervisor: &TaskSupervisor, device_manager: Arc<RwLock<DeviceManager>>) {
+    supervisor.spawn("device_health_check", move || {
+        let device_manager = device_manager.clone();
+        Box::pin(async move {
         // Brief startup delay to let device clients initialize
         tokio::time::sleep(Duration::from_secs(5)).await;
         tracing::info!("device health check starting (60s interval)");
@@ -381,5 +393,5 @@ pub fn spawn_device_health_check(device_manager: Arc<RwLock<DeviceManager>>) {
                 dm_w.set_status(device_id, status);
             }
         }
-    });
+    })});
 }

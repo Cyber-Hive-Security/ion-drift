@@ -109,7 +109,7 @@ pub async fn fetch_or_generate_kek(
     Err(anyhow::anyhow!(
         "Keycloak unreachable after {max_attempts} attempts and no local KEK cache available. \
          Ion-drift is sealed. Last error: {}",
-        last_err.unwrap()
+        last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown".to_string())
     ))
 }
 

@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use crate::connection_store::ConnectionStore;
+use crate::task_supervisor::TaskSupervisor;
 
 /// Compute and store weekly snapshots. Called by the background task every Sunday.
 pub fn generate_weekly_snapshots(store: &ConnectionStore) -> anyhow::Result<()> {
@@ -52,8 +53,10 @@ pub fn generate_weekly_snapshots(store: &ConnectionStore) -> anyhow::Result<()> 
 }
 
 /// Spawn the weekly snapshot generator background task.
-pub fn spawn_snapshot_generator(store: Arc<ConnectionStore>) {
-    tokio::spawn(async move {
+pub fn spawn_snapshot_generator(supervisor: &TaskSupervisor, store: Arc<ConnectionStore>) {
+    supervisor.spawn("snapshot_generator", move || {
+        let store = store.clone();
+        Box::pin(async move {
         // Wait 6 hours before first check (avoid startup load)
         tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
 
@@ -78,7 +81,7 @@ pub fn spawn_snapshot_generator(store: Arc<ConnectionStore>) {
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }
         }
-    });
+    })});
 }
 
 /// Get current ISO week string: "2026-W09"

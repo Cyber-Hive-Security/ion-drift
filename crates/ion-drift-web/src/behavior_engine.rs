@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use ion_drift_storage::behavior::{
     self, BehaviorStore, DeviceObservation, NewAnomaly, VlanRegistry,
+    compute_confidence,
 };
 use mikrotik_core::resources::firewall::FilterRule;
 use mikrotik_core::MikrotikClient;
@@ -50,49 +51,6 @@ impl SpikeCandidates {
         let mut map = self.candidates.lock().unwrap();
         map.clear();
     }
-}
-
-/// Compute anomaly confidence score based on evidence quality.
-fn compute_confidence(
-    baseline_status: &str,
-    observation_count: i64,
-    vlan: i64,
-    anomaly_type: &str,
-    registry: &VlanRegistry,
-) -> f64 {
-    let mut score: f64 = 0.5;
-
-    // Baseline maturity factor
-    match baseline_status {
-        "baselined" => score += 0.3,
-        "sparse" => score += 0.1,
-        _ => {} // learning: no bonus
-    }
-
-    // Observation evidence factor (more data = higher confidence)
-    if observation_count >= 100 {
-        score += 0.15;
-    } else if observation_count >= 50 {
-        score += 0.1;
-    } else if observation_count >= 20 {
-        score += 0.05;
-    }
-
-    // VLAN strictness factor — stricter VLANs have more reliable baselines
-    let sens = registry.sensitivity(if vlan >= 0 { vlan as u16 } else { 0 });
-    match sens {
-        behavior::VlanSensitivity::Strictest => score += 0.05,
-        behavior::VlanSensitivity::Strict => score += 0.04,
-        behavior::VlanSensitivity::Moderate => score += 0.02,
-        _ => {}
-    }
-
-    // Blocked attempts are always high confidence (firewall evidence)
-    if anomaly_type == "blocked_attempt" {
-        score = f64::max(score, 0.85);
-    }
-
-    f64::min(score, 1.0)
 }
 
 /// Normalize RouterOS protocol numbers to names.
@@ -265,7 +223,7 @@ pub async fn detect_anomalies(
     let mut anomaly_count = 0;
 
     for profile in &profiles {
-        // Only detect anomalies for devices past their learning period
+        // Detect on both baselined and sparse devices
         if profile.baseline_status != "baselined" && profile.baseline_status != "sparse" {
             continue;
         }
@@ -285,6 +243,18 @@ pub async fn detect_anomalies(
         let recent_obs = store.get_observations(&profile.mac, 120).await?;
         let vlan = profile.current_vlan.unwrap_or(0);
 
+        // Fetch baseline stats for confidence scoring
+        let (total_obs_count, earliest_computed) = store.get_baseline_stats(&profile.mac).await?;
+        let baseline_age_days = if earliest_computed > 0 {
+            (BehaviorStore::now_unix_pub() - earliest_computed) as f64 / 86400.0
+        } else {
+            0.0
+        };
+        let vlan_sens = registry.sensitivity(if vlan >= 0 { vlan as u16 } else { 0 });
+
+        // Absolute byte floor for volume spikes: 5 MB/hr projected
+        const VOLUME_SPIKE_FLOOR: f64 = 5_000_000.0;
+
         for obs in &recent_obs {
             let key = (
                 obs.protocol.clone(),
@@ -294,63 +264,88 @@ pub async fn detect_anomalies(
             );
 
             if let Some(baseline) = baseline_map.get(&key) {
-                // Check volume spike: project to hourly rate, compare to 3x max
+                // Check volume spike with hardened logic:
+                // 1. Absolute floor: projected hourly > 5 MB
+                // 2. Exceeds max * 3.0 AND avg * 5.0
+                // 3. Multi-window persistence: at least 2 elevated observations in last 5 minutes
                 let total_bytes = (obs.bytes_sent + obs.bytes_recv) as f64;
                 let hourly_projected = total_bytes * 60.0; // 60s observation → hourly
+
+                let exceeds_max = baseline.max_bytes_per_hour > 0.0
+                    && hourly_projected > baseline.max_bytes_per_hour * 3.0;
+                let exceeds_avg = baseline.avg_bytes_per_hour > 0.0
+                    && hourly_projected > baseline.avg_bytes_per_hour * 5.0;
+                let above_floor = hourly_projected > VOLUME_SPIKE_FLOOR;
+
                 let dedup_key = format!("{}:{}", obs.dst_subnet, obs.dst_port.unwrap_or(-1));
-                if baseline.max_bytes_per_hour > 0.0
-                    && hourly_projected > baseline.max_bytes_per_hour * 3.0
-                {
-                    // Multi-cycle persistence: require 2 consecutive detections
-                    let persistent = spike_candidates.record(&profile.mac, &dedup_key);
-                    if persistent
-                        && !store
+                if above_floor && exceeds_max && exceeds_avg {
+                    // Multi-window persistence: require at least 2 elevated
+                    // observations in the last 5 minutes (300s)
+                    let elevated_count = store
+                        .count_elevated_observations(
+                            &profile.mac,
+                            &obs.protocol,
+                            obs.dst_port,
+                            &obs.dst_subnet,
+                            &obs.direction,
+                            baseline.max_bytes_per_hour * 3.0,
+                            300,
+                        )
+                        .await?;
+
+                    if elevated_count >= 2 {
+                        if !store
                             .has_recent_anomaly(&profile.mac, "volume_spike", &dedup_key, 3600)
                             .await?
-                    {
-                        let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "volume_spike");
-                        let confidence = compute_confidence(
-                            &profile.baseline_status,
-                            baseline.observation_count,
-                            vlan,
-                            "volume_spike",
-                            registry,
-                        );
-                        let dst_vlan_val = registry.ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
-                        store
-                            .record_anomaly(&NewAnomaly {
-                                mac: profile.mac.clone(),
-                                anomaly_type: "volume_spike".to_string(),
-                                severity: severity.to_string(),
-                                confidence,
-                                description: format!(
-                                    "Traffic volume spike to {} ({} {}): {:.0} bytes/hr projected vs {:.0} baseline max",
-                                    obs.dst_subnet,
-                                    obs.protocol,
-                                    obs.dst_port.map(|p| p.to_string()).unwrap_or_default(),
-                                    hourly_projected,
-                                    baseline.max_bytes_per_hour,
-                                ),
-                                details: Some(serde_json::json!({
-                                    "src_ip": profile.current_ip,
-                                    "src_hostname": profile.hostname,
-                                    "src_manufacturer": profile.manufacturer,
-                                    "dst_subnet": obs.dst_subnet,
-                                    "dst_vlan": dst_vlan_val,
-                                    "dst_vlan_name": dst_vlan_val.map(|v| registry.vlan_name(v as i64)),
-                                    "protocol": obs.protocol,
-                                    "dst_port": obs.dst_port,
-                                    "direction": obs.direction,
-                                    "projected_hourly": hourly_projected,
-                                    "baseline_max": baseline.max_bytes_per_hour,
-                                }).to_string()),
-                                vlan,
-                                firewall_correlation: None,
-                                firewall_rule_id: None,
-                                firewall_rule_comment: None,
-                            })
-                            .await?;
-                        anomaly_count += 1;
+                        {
+                            let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "volume_spike");
+                            let dst_vlan_val = registry.ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
+                            let confidence = compute_confidence(
+                                "volume_spike",
+                                &profile.baseline_status,
+                                total_obs_count,
+                                baseline_age_days,
+                                false, // no firewall correlation for volume spikes
+                                vlan_sens,
+                            );
+                            store
+                                .record_anomaly(&NewAnomaly {
+                                    mac: profile.mac.clone(),
+                                    anomaly_type: "volume_spike".to_string(),
+                                    severity: severity.to_string(),
+                                    confidence,
+                                    description: format!(
+                                        "Traffic volume spike to {} ({} {}): {:.0} bytes/hr projected vs {:.0} baseline max / {:.0} baseline avg",
+                                        obs.dst_subnet,
+                                        obs.protocol,
+                                        obs.dst_port.map(|p| p.to_string()).unwrap_or_default(),
+                                        hourly_projected,
+                                        baseline.max_bytes_per_hour,
+                                        baseline.avg_bytes_per_hour,
+                                    ),
+                                    details: Some(serde_json::json!({
+                                        "src_ip": profile.current_ip,
+                                        "src_hostname": profile.hostname,
+                                        "src_manufacturer": profile.manufacturer,
+                                        "dst_subnet": obs.dst_subnet,
+                                        "dst_vlan": dst_vlan_val,
+                                        "dst_vlan_name": dst_vlan_val.map(|v| registry.vlan_name(v as i64)),
+                                        "protocol": obs.protocol,
+                                        "dst_port": obs.dst_port,
+                                        "direction": obs.direction,
+                                        "projected_hourly": hourly_projected,
+                                        "baseline_max": baseline.max_bytes_per_hour,
+                                        "baseline_avg": baseline.avg_bytes_per_hour,
+                                        "elevated_observation_count": elevated_count,
+                                    }).to_string()),
+                                    vlan,
+                                    firewall_correlation: None,
+                                    firewall_rule_id: None,
+                                    firewall_rule_comment: None,
+                                })
+                                .await?;
+                            anomaly_count += 1;
+                        }
                     }
                 } else {
                     // Not spiking this cycle — reset persistence counter
@@ -379,16 +374,16 @@ pub async fn detect_anomalies(
                     .await?
                 {
                     let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, anomaly_type);
-                    let total_obs: i64 = baselines.iter().map(|b| b.observation_count).sum();
-                    let confidence = compute_confidence(
-                        &profile.baseline_status,
-                        total_obs,
-                        vlan,
-                        anomaly_type,
-                        registry,
-                    );
                     let hostname = profile.hostname.as_deref().unwrap_or(&profile.mac);
                     let dst_vlan_val = registry.ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
+                    let confidence = compute_confidence(
+                        anomaly_type,
+                        &profile.baseline_status,
+                        total_obs_count,
+                        baseline_age_days,
+                        false,
+                        vlan_sens,
+                    );
                     store
                         .record_anomaly(&NewAnomaly {
                             mac: profile.mac.clone(),
@@ -530,15 +525,40 @@ pub async fn detect_blocked_attempts(
             String::new()
         };
 
-        // Blocked attempts always have high confidence (firewall evidence)
-        let confidence = compute_confidence("baselined", 100, vlan, "blocked_attempt", registry);
+        // Compute confidence for blocked attempts — use device profile if available
+        let blocked_confidence = if let Ok(Some(prof)) = store.get_profile(&mac).await {
+            let (obs_count, earliest) = store.get_baseline_stats(&mac).await.unwrap_or((0, 0));
+            let age_days = if earliest > 0 {
+                (BehaviorStore::now_unix_pub() - earliest) as f64 / 86400.0
+            } else {
+                0.0
+            };
+            compute_confidence(
+                "blocked_attempt",
+                &prof.baseline_status,
+                obs_count,
+                age_days,
+                true, // firewall correlated by definition
+                registry.sensitivity(if vlan >= 0 { vlan as u16 } else { 0 }),
+            )
+        } else {
+            // Unknown device — moderate confidence
+            compute_confidence(
+                "blocked_attempt",
+                "learning",
+                0,
+                0.0,
+                true,
+                registry.sensitivity(if vlan >= 0 { vlan as u16 } else { 0 }),
+            )
+        };
 
         store
             .record_anomaly(&NewAnomaly {
                 mac: mac.clone(),
                 anomaly_type: "blocked_attempt".to_string(),
                 severity: severity.to_string(),
-                confidence,
+                confidence: blocked_confidence,
                 description: format!(
                     "Blocked {} connection to {dst_ip}:{dst_port}{dst_country} via {protocol}",
                     fields.direction.as_deref().unwrap_or("unknown"),
