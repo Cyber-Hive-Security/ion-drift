@@ -253,23 +253,6 @@ export function InferencePage() {
   const identitiesQuery = useNetworkIdentities();
   const [expandedMac, setExpandedMac] = useState<string | null>(null);
 
-  if (status.isLoading) {
-    return (
-      <PageShell title="Topology Inference">
-        <LoadingSpinner />
-      </PageShell>
-    );
-  }
-
-  if (status.error || !status.data) {
-    return (
-      <PageShell title="Topology Inference">
-        <ErrorDisplay message={status.error ? String(status.error) : "No data available"} />
-      </PageShell>
-    );
-  }
-
-  const s = status.data;
   const states = statesQuery.data ?? [];
   const identities = identitiesQuery.data ?? [];
 
@@ -391,6 +374,24 @@ export function InferencePage() {
     ],
     [expandedMac],
   );
+
+  if (status.isLoading) {
+    return (
+      <PageShell title="Topology Inference">
+        <LoadingSpinner />
+      </PageShell>
+    );
+  }
+
+  if (status.error || !status.data) {
+    return (
+      <PageShell title="Topology Inference">
+        <ErrorDisplay message={status.error ? String(status.error) : "No data available"} />
+      </PageShell>
+    );
+  }
+
+  const s = status.data;
 
   return (
     <PageShell title="Topology Inference">
