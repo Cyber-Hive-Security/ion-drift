@@ -8,6 +8,7 @@ use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOp
 use hickory_resolver::name_server::TokioConnectionProvider;
 use mikrotik_core::{MikrotikClient, SwitchStore};
 use mikrotik_core::switch_store::{BackboneLink, MacTableEntry, PortRoleProbability};
+use crate::topology_inference::canonicalize_port_name;
 use crate::topology_inference::graph::{DeviceResolutionMaps, InfrastructureGraph};
 use crate::topology_inference::resolver::{self, InferenceMode};
 use tokio::sync::RwLock;
@@ -143,19 +144,26 @@ async fn run_correlation(
         Err(e) => tracing::warn!("correlation: router bridge_hosts fetch failed: {e}"),
     }
 
-    let device_ids: Vec<String> = switch_ids.clone();
+    // Include the router in device_ids — its ports need role probability
+    // computation so the inference engine can suppress router candidates
+    // (e.g. rb4011:1-sfp-sfpplus sees all MACs via ARP gateway).
+    let mut device_ids: Vec<String> = switch_ids.clone();
+    if !device_ids.contains(&router_id) {
+        device_ids.push(router_id.clone());
+    }
 
     // Load backbone links early — needed for port role probability computation.
     let backbone_links = store.get_backbone_links().await.unwrap_or_default();
 
     // Build a set of backbone port pairs for quick lookup during probability computation.
+    // Uses canonical port names to match aggregated evidence.
     let mut backbone_port_set: HashSet<(String, String)> = HashSet::new();
     for link in &backbone_links {
         if let Some(ref port) = link.port_a {
-            backbone_port_set.insert((link.device_a.clone(), port.to_lowercase()));
+            backbone_port_set.insert((link.device_a.clone(), canonicalize_port_name(port)));
         }
         if let Some(ref port) = link.port_b {
-            backbone_port_set.insert((link.device_b.clone(), port.to_lowercase()));
+            backbone_port_set.insert((link.device_b.clone(), canonicalize_port_name(port)));
         }
     }
 
@@ -165,35 +173,46 @@ async fn run_correlation(
         let mac_entries = store.get_mac_table(Some(device_id)).await?;
         let vlan_entries = store.get_vlan_membership(device_id).await?;
 
-        // Count MACs per port (skip switch-local MACs — they're the switch's own port addresses)
+        // Count MACs per canonical port name (skip switch-local MACs).
+        // Canonicalization merges SNMP aliases (e.g. mg5/port5/twopointfivegigabitethernet5)
+        // so evidence aggregates on the real physical port.
         let mut mac_counts: HashMap<String, u32> = HashMap::new();
         for entry in &mac_entries {
             if entry.is_local {
                 continue;
             }
-            *mac_counts.entry(entry.port_name.clone()).or_default() += 1;
+            let canonical = canonicalize_port_name(&entry.port_name);
+            *mac_counts.entry(canonical).or_default() += 1;
         }
 
-        // Count VLANs per port
+        // Count VLANs per canonical port
         let mut vlan_counts: HashMap<String, u32> = HashMap::new();
         for entry in &vlan_entries {
-            *vlan_counts.entry(entry.port_name.clone()).or_default() += 1;
+            let canonical = canonicalize_port_name(&entry.port_name);
+            *vlan_counts.entry(canonical).or_default() += 1;
         }
 
-        // Track which VLAN IDs are on each port (for wireless detection)
+        // Track which VLAN IDs are on each canonical port (for wireless detection)
         let mut port_vlan_ids: HashMap<String, Vec<u32>> = HashMap::new();
         for entry in &vlan_entries {
-            port_vlan_ids.entry(entry.port_name.clone()).or_default().push(entry.vlan_id);
+            let canonical = canonicalize_port_name(&entry.port_name);
+            port_vlan_ids.entry(canonical).or_default().push(entry.vlan_id);
         }
 
-        // Check LLDP neighbors per port
+        // Deduplicate VLAN IDs per port (aliases may have contributed duplicates)
+        for vids in port_vlan_ids.values_mut() {
+            vids.sort_unstable();
+            vids.dedup();
+        }
+
+        // Check LLDP neighbors per canonical port
         let neighbors = store.get_neighbors(Some(device_id)).await?;
         let mut has_neighbor: HashSet<String> = HashSet::new();
         for nb in &neighbors {
-            has_neighbor.insert(nb.interface.clone());
+            has_neighbor.insert(canonicalize_port_name(&nb.interface));
         }
 
-        // Collect all known port names
+        // Collect all known canonical port names
         let mut all_ports: HashSet<String> = HashSet::new();
         all_ports.extend(mac_counts.keys().cloned());
         all_ports.extend(vlan_counts.keys().cloned());
@@ -203,10 +222,10 @@ async fn run_correlation(
             let vlan_count = vlan_counts.get(port_name).copied().unwrap_or(0);
             let has_lldp = has_neighbor.contains(port_name);
             let is_backbone = backbone_port_set.contains(
-                &(device_id.clone(), port_name.to_lowercase())
+                &(device_id.clone(), port_name.clone())
             );
 
-            // Discrete role (existing behavior, kept for backward compat)
+            // Discrete role (stored under canonical name)
             let role = classify_port_role(mac_count, vlan_count, has_lldp);
 
             if let Err(e) = store
@@ -221,7 +240,7 @@ async fn run_correlation(
             let probs = compute_port_role_probabilities(mac_count, vlan_count, has_lldp, is_backbone, port_vlans, &wireless_vlans);
             all_role_probs.push(PortRoleProbability {
                 device_id: device_id.clone(),
-                port_name: port_name.to_lowercase(),
+                port_name: port_name.clone(),
                 trunk_prob: probs.0,
                 uplink_prob: probs.1,
                 access_prob: probs.2,
@@ -340,6 +359,12 @@ async fn run_correlation(
         .as_secs() as i64;
     let mut pending_observations: Vec<mikrotik_core::switch_store::MacObservation> = Vec::new();
 
+    // Deduplicate MAC table entries per (device_id, mac_address) to avoid
+    // double-counting from SNMP port alias duplication (e.g. Netgear returns
+    // the same MAC on both "mg5" and "port5" in the same poll).
+    // Keep the first port name seen — typically the one with role data.
+    let mut seen_mac_device: HashSet<(String, String)> = HashSet::new();
+
     for entry in &all_macs {
         if entry.is_local {
             continue;
@@ -348,10 +373,16 @@ async fn run_correlation(
             continue;
         }
 
-        let port_lower = entry.port_name.to_lowercase();
-        let key = (entry.device_id.clone(), port_lower.clone());
+        let mac_upper = entry.mac_address.to_uppercase();
+        let dedup_key = (entry.device_id.clone(), mac_upper.clone());
+        if !seen_mac_device.insert(dedup_key) {
+            continue; // Already recorded an observation for this MAC on this device
+        }
 
-        // Look up role probabilities for this port
+        let canonical_port = canonicalize_port_name(&entry.port_name);
+        let key = (entry.device_id.clone(), canonical_port.clone());
+
+        // Look up role probabilities for this port (using canonical name)
         let (obs_confidence, edge_lk, transit_lk) = if let Some(probs) = role_prob_map.get(&key) {
             // Observation confidence: high for access, medium for wireless, low for trunk/uplink
             let confidence = probs.access_prob * 0.9
@@ -368,9 +399,9 @@ async fn run_correlation(
 
         pending_observations.push(mikrotik_core::switch_store::MacObservation {
             id: 0, // auto-assigned by DB
-            mac_address: entry.mac_address.to_uppercase(),
+            mac_address: mac_upper,
             device_id: entry.device_id.clone(),
-            port_name: port_lower,
+            port_name: canonical_port,
             vlan_id: entry.vlan_id,
             timestamp: now_ts,
             observation_confidence: obs_confidence,
@@ -395,8 +426,13 @@ async fn run_correlation(
     // ── 2c. Run topology inference engine ─────────────────────────
     let inference_mode = InferenceMode::from_env();
     if inference_mode != InferenceMode::Legacy {
+        // Build AP feeder map for wireless attribution
+        let infra_identities_for_map = store.get_infrastructure_identities().await.unwrap_or_default();
+        let wap_ids_for_map = crate::topology_inference::build_wap_identifier_set(&infra_identities_for_map);
+        let ap_feeder_map = crate::topology_inference::build_ap_feeder_map(&backbone_links, &wap_ids_for_map);
+
         let results = resolver::run_inference_cycle(
-            store, &infra_graph, &wireless_vlans, now_ts,
+            store, &infra_graph, &wireless_vlans, &ap_feeder_map, now_ts,
         ).await;
 
         if !results.is_empty() {
@@ -432,9 +468,46 @@ async fn run_correlation(
                     divergences = divergences, "inference cycle"
                 );
             } else {
-                // Active mode: log results (binding already applied by resolver)
+                // Active mode: write back binding changes to identity store
+                let mut written = 0u32;
+                let mut router_skipped = 0u32;
+                for r in &results {
+                    if r.binding_changed && r.confidence > 0.5 {
+                        if let Some(ref winner) = r.winner {
+                            // Gate: never write router bindings back
+                            if infra_graph.nodes.get(&winner.device_id)
+                                .map(|n| n.is_router)
+                                .unwrap_or(false)
+                            {
+                                tracing::debug!(
+                                    mac = %r.mac,
+                                    "inference: skipping router binding writeback"
+                                );
+                                router_skipped += 1;
+                                continue;
+                            }
+                            match store
+                                .update_identity_binding(
+                                    &r.mac,
+                                    &winner.device_id,
+                                    &winner.port_name,
+                                    "inference",
+                                )
+                                .await
+                            {
+                                Ok(true) => written += 1,
+                                Ok(false) => {} // human-confirmed, skipped
+                                Err(e) => tracing::warn!(
+                                    mac = %r.mac,
+                                    "inference binding writeback: {e}"
+                                ),
+                            }
+                        }
+                    }
+                }
                 tracing::info!(
                     mode = "active", total = total, changed = changed,
+                    written = written, router_skipped = router_skipped,
                     "inference cycle"
                 );
             }
@@ -455,7 +528,8 @@ async fn run_correlation(
             continue;
         }
 
-        let is_trunk = trunk_ports.contains(&(entry.device_id.clone(), entry.port_name.to_lowercase()));
+        let canonical_port = canonicalize_port_name(&entry.port_name);
+        let is_trunk = trunk_ports.contains(&(entry.device_id.clone(), canonical_port.clone()));
         let is_router = entry.device_id == router_id;
         let known_depth = switch_depths.get(&entry.device_id).copied();
         // Priority formula:
@@ -495,7 +569,7 @@ async fn run_correlation(
         // Equal priority → no change (eliminates flapping between same-class ports).
         if new_priority > builder.binding_priority {
             builder.switch_device_id = Some(entry.device_id.clone());
-            builder.switch_port = Some(entry.port_name.clone());
+            builder.switch_port = Some(canonical_port);
             builder.binding_priority = new_priority;
             builder.binding_last_seen = entry.last_seen;
         }
@@ -516,10 +590,10 @@ async fn run_correlation(
             let dev = builder.switch_device_id.clone();
             let port = builder.switch_port.clone();
             if let (Some(dev), Some(port)) = (dev, port) {
-                if trunk_ports.contains(&(dev.clone(), port.to_lowercase())) {
-                    let normalized = port.split(',').next().unwrap_or(&port).to_lowercase();
+                if trunk_ports.contains(&(dev.clone(), canonicalize_port_name(&port))) {
+                    let canonical = canonicalize_port_name(port.split(',').next().unwrap_or(&port));
                     if let Some(peer_id) =
-                        trunk_peer.get(&(dev.clone(), normalized))
+                        trunk_peer.get(&(dev.clone(), canonical))
                     {
                         let current_depth = switch_depths.get(&dev).copied().unwrap_or(0);
                         let peer_depth = switch_depths.get(peer_id.as_str()).copied().unwrap_or(0);

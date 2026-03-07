@@ -7,6 +7,7 @@ pub mod devices;
 pub mod firewall;
 pub mod history;
 pub mod identity;
+pub mod inference;
 pub mod interfaces;
 pub mod ip;
 pub mod logs;
@@ -255,6 +256,11 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         // Neighbor aliases (topology neighbor mapping/hiding)
         .route("/network/neighbor-aliases", get(neighbor_aliases::list_neighbor_aliases).post(neighbor_aliases::create_neighbor_alias))
         .route("/network/neighbor-aliases/{id}", delete(neighbor_aliases::delete_neighbor_alias))
+        // Topology inference diagnostics
+        .route("/network/inference/status", get(inference::inference_status))
+        .route("/network/inference/states", get(inference::all_attachment_states))
+        .route("/network/inference/mac/{mac}", get(inference::inference_mac_detail))
+        .route("/network/inference/observations", get(inference::observation_stats))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer));
 

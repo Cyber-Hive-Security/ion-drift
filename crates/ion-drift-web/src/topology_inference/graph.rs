@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use mikrotik_core::switch_store::{BackboneLink, NeighborEntry};
 use serde::Serialize;
 
+use super::canonicalize_port_name;
+
 /// A node in the infrastructure graph (a managed switch or router).
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphNode {
@@ -84,17 +86,17 @@ impl InfrastructureGraph {
         // Trunk ports from discrete role classification
         for (dev_id, port_name, role) in port_roles {
             if role == "trunk" || role == "uplink" {
-                graph.trunk_ports.insert((dev_id.clone(), port_name.to_lowercase()));
+                graph.trunk_ports.insert((dev_id.clone(), canonicalize_port_name(port_name)));
             }
         }
 
         // Force backbone-linked ports to trunk
         for link in backbone_links {
             if let Some(ref port) = link.port_a {
-                graph.trunk_ports.insert((link.device_a.clone(), port.to_lowercase()));
+                graph.trunk_ports.insert((link.device_a.clone(), canonicalize_port_name(port)));
             }
             if let Some(ref port) = link.port_b {
-                graph.trunk_ports.insert((link.device_b.clone(), port.to_lowercase()));
+                graph.trunk_ports.insert((link.device_b.clone(), canonicalize_port_name(port)));
             }
         }
 
@@ -112,7 +114,7 @@ impl InfrastructureGraph {
             if let Some(peer_id) = resolved {
                 let port = nb.interface.split(',').next().unwrap_or(&nb.interface);
                 graph.trunk_peers.insert(
-                    (nb.device_id.clone(), port.to_lowercase()),
+                    (nb.device_id.clone(), canonicalize_port_name(port)),
                     peer_id,
                 );
             }
@@ -122,12 +124,12 @@ impl InfrastructureGraph {
         for link in backbone_links {
             if let Some(ref port) = link.port_a {
                 graph.trunk_peers
-                    .entry((link.device_a.clone(), port.to_lowercase()))
+                    .entry((link.device_a.clone(), canonicalize_port_name(port)))
                     .or_insert_with(|| link.device_b.clone());
             }
             if let Some(ref port) = link.port_b {
                 graph.trunk_peers
-                    .entry((link.device_b.clone(), port.to_lowercase()))
+                    .entry((link.device_b.clone(), canonicalize_port_name(port)))
                     .or_insert_with(|| link.device_a.clone());
             }
         }
@@ -210,14 +212,14 @@ impl InfrastructureGraph {
 
     /// Check if a (device_id, port_name) pair is a trunk port.
     pub fn is_trunk_port(&self, device_id: &str, port_name: &str) -> bool {
-        self.trunk_ports.contains(&(device_id.to_string(), port_name.to_lowercase()))
+        self.trunk_ports.contains(&(device_id.to_string(), canonicalize_port_name(port_name)))
     }
 
     /// Get the peer device on the other end of a trunk port.
     #[allow(dead_code)]
     pub fn trunk_peer_of(&self, device_id: &str, port_name: &str) -> Option<&str> {
         self.trunk_peers
-            .get(&(device_id.to_string(), port_name.to_lowercase()))
+            .get(&(device_id.to_string(), canonicalize_port_name(port_name)))
             .map(|s| s.as_str())
     }
 

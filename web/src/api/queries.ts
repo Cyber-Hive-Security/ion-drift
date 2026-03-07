@@ -87,6 +87,9 @@ import type {
   TopologyPosition,
   SectorPosition,
   VlanConfig,
+  InferenceStatus,
+  InferenceMacDetail,
+  ObservationStats,
 } from "./types";
 
 // Auth
@@ -1489,5 +1492,36 @@ export function useUpdateVlanConfig() {
       queryClient.invalidateQueries({ queryKey: ["network", "vlan-config"] });
       queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
     },
+  });
+}
+
+// ── Topology Inference ──────────────────────────────────────────
+
+export function useInferenceStatus() {
+  return useQuery({
+    queryKey: ["network", "inference", "status"],
+    queryFn: () => apiFetch<InferenceStatus>("/api/network/inference/status"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useInferenceMacDetail(mac: string | null) {
+  return useQuery({
+    queryKey: ["network", "inference", "mac", mac],
+    queryFn: () =>
+      apiFetch<InferenceMacDetail>(
+        `/api/network/inference/mac/${encodeURIComponent(mac!)}`,
+      ),
+    enabled: !!mac,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useInferenceObservations() {
+  return useQuery({
+    queryKey: ["network", "inference", "observations"],
+    queryFn: () =>
+      apiFetch<ObservationStats>("/api/network/inference/observations"),
+    refetchInterval: 30_000,
   });
 }

@@ -1256,3 +1256,76 @@ export interface VlanConfig {
   subnet: string | null;
   color: string | null;
 }
+
+// ── Topology Inference ──────────────────────────────────────────
+
+export interface InferenceStatus {
+  mode: string;
+  total_macs: number;
+  state_distribution: Record<string, number>;
+  avg_confidence: number;
+  divergence_count: number;
+  divergence_categories: Record<string, number>;
+  last_cycle_ts: number;
+}
+
+export interface CandidateFeatures {
+  edge_likelihood: number;
+  persistence: number;
+  vlan_consistency: number;
+  downstream_preference: number;
+  recency: number;
+  graph_depth_score: number;
+  device_class_fit: number;
+  transit_penalty: number;
+  contradiction_penalty: number;
+  router_penalty: number;
+  wireless_attachment_likelihood: number;
+  wap_path_consistency: number;
+  ap_feeder_penalty: number;
+}
+
+export interface ScoredCandidate {
+  mac: string;
+  device_id: string;
+  port_name: string;
+  vlan_id: number | null;
+  candidate_type: string;
+  observation_count: number;
+  suppressed: boolean;
+  suppression_reason: string | null;
+  features: CandidateFeatures;
+  score: number;
+}
+
+export interface AttachmentStateRow {
+  mac_address: string;
+  state: string;
+  current_device_id: string | null;
+  current_port_name: string | null;
+  previous_device_id: string | null;
+  previous_port_name: string | null;
+  current_score: number;
+  confidence: number;
+  consecutive_wins: number;
+  consecutive_losses: number;
+  updated_at: number;
+}
+
+export interface InferenceMacDetail {
+  mac: string;
+  state: AttachmentStateRow;
+  current_binding: {
+    device_id: string;
+    port: string;
+    source: string;
+  } | null;
+  candidates: ScoredCandidate[];
+  explanation: string[];
+}
+
+export interface ObservationStats {
+  total_observations: number;
+  unique_macs: number;
+  observations_per_device: Record<string, number>;
+}

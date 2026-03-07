@@ -1,11 +1,12 @@
 //! Weighted scoring engine for MAC attachment candidates.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use mikrotik_core::switch_store::{MacObservation, PortRoleProbability};
 use serde::Serialize;
 
-use super::candidates::AttachmentCandidate;
+use super::ApFeederMap;
+use super::candidates::{AttachmentCandidate, CandidateType};
 use super::graph::InfrastructureGraph;
 
 /// Breakdown of all feature scores for a candidate.
@@ -20,6 +21,12 @@ pub struct CandidateFeatures {
     pub device_class_fit: f64,
     pub transit_penalty: f64,
     pub contradiction_penalty: f64,
+    // Workstream B: Router suppression
+    pub router_penalty: f64,
+    // Workstream D: Wireless-aware scoring
+    pub wireless_attachment_likelihood: f64,
+    pub wap_path_consistency: f64,
+    pub ap_feeder_penalty: f64,
 }
 
 /// A scored candidate with feature breakdown.
@@ -32,6 +39,8 @@ pub struct ScoredCandidate {
     pub candidate_type: String,
     pub observation_count: u32,
     pub suppressed: bool,
+    /// Why this candidate was suppressed (from pruning).
+    pub suppression_reason: Option<String>,
     pub features: CandidateFeatures,
     pub score: f64,
 }
@@ -46,6 +55,12 @@ const W_GRAPH_DEPTH: f64 = 0.6;
 const W_DEVICE_CLASS_FIT: f64 = 0.6;
 const W_TRANSIT_PENALTY: f64 = -2.0;
 const W_CONTRADICTION_PENALTY: f64 = -1.5;
+// Workstream B
+const W_ROUTER_PENALTY: f64 = -3.0;
+// Workstream D
+const W_WIRELESS_ATTACHMENT: f64 = 1.3;
+const W_WAP_PATH_CONSISTENCY: f64 = 0.8;
+const W_AP_FEEDER_PENALTY: f64 = -1.0;
 
 /// Score all candidates for a MAC address.
 ///
@@ -60,6 +75,8 @@ pub fn score_candidates(
     device_type: Option<&str>,
     now_ts: i64,
     window_secs: i64,
+    wireless_vlans: &HashSet<u32>,
+    ap_feeder_map: &ApFeederMap,
 ) -> Vec<ScoredCandidate> {
     let _total_obs = observations.len() as f64;
     let window_start = now_ts - window_secs;
@@ -70,6 +87,9 @@ pub fn score_candidates(
         .map(|o| o.timestamp)
         .collect();
     let polls_in_window = unique_timestamps.len().max(1) as f64;
+
+    // Determine if endpoint appears wireless-capable
+    let is_wireless_endpoint = classify_wireless_likelihood(device_type, identity_vlan, wireless_vlans);
 
     let mut scored: Vec<ScoredCandidate> = candidates
         .iter()
@@ -137,6 +157,48 @@ pub fn score_candidates(
             // will feed back contradictions from previous cycles)
             let contradiction_penalty = 0.0;
 
+            // ── Workstream B: Router penalty ─────────────────────
+            let router_penalty = if graph.nodes.get(&c.device_id)
+                .map(|n| n.is_router)
+                .unwrap_or(false)
+            {
+                1.0
+            } else {
+                0.0
+            };
+
+            // ── Workstream D: Wireless features ──────────────────
+            let is_wap_candidate = c.candidate_type == CandidateType::WirelessParent;
+            let is_feeder_port = super::port_feeds_ap(ap_feeder_map, &c.device_id, &c.port_name);
+
+            let wireless_attachment_likelihood = if is_wap_candidate {
+                is_wireless_endpoint
+            } else {
+                0.0
+            };
+
+            let wap_path_consistency = if is_wap_candidate {
+                // Check if the feeder port for this WAP is among candidates
+                let feeder_in_candidates = candidates.iter().any(|other| {
+                    other.candidate_type == CandidateType::WiredPort
+                        && !super::fed_waps(ap_feeder_map, &other.device_id, &other.port_name).is_empty()
+                        && super::fed_waps(ap_feeder_map, &other.device_id, &other.port_name)
+                            .contains(&c.device_id)
+                });
+                if feeder_in_candidates { 1.0 } else { 0.3 }
+            } else {
+                0.5
+            };
+
+            let ap_feeder_penalty = if is_feeder_port
+                && c.candidate_type == CandidateType::WiredPort
+                && is_wireless_endpoint > 0.3
+            {
+                1.0
+            } else {
+                0.0
+            };
+
             let features = CandidateFeatures {
                 edge_likelihood,
                 persistence,
@@ -147,6 +209,10 @@ pub fn score_candidates(
                 device_class_fit,
                 transit_penalty,
                 contradiction_penalty,
+                router_penalty,
+                wireless_attachment_likelihood,
+                wap_path_consistency,
+                ap_feeder_penalty,
             };
 
             let score = W_EDGE_LIKELIHOOD * edge_likelihood
@@ -157,7 +223,11 @@ pub fn score_candidates(
                 + W_GRAPH_DEPTH * graph_depth_score
                 + W_DEVICE_CLASS_FIT * device_class_fit
                 + W_TRANSIT_PENALTY * transit_penalty
-                + W_CONTRADICTION_PENALTY * contradiction_penalty;
+                + W_CONTRADICTION_PENALTY * contradiction_penalty
+                + W_ROUTER_PENALTY * router_penalty
+                + W_WIRELESS_ATTACHMENT * wireless_attachment_likelihood
+                + W_WAP_PATH_CONSISTENCY * wap_path_consistency
+                + W_AP_FEEDER_PENALTY * ap_feeder_penalty;
 
             ScoredCandidate {
                 mac: c.mac.clone(),
@@ -167,6 +237,7 @@ pub fn score_candidates(
                 candidate_type: format!("{:?}", c.candidate_type),
                 observation_count: c.observation_count,
                 suppressed: c.suppressed,
+                suppression_reason: c.suppression_reason.clone(),
                 features,
                 score,
             }
@@ -282,4 +353,31 @@ fn compute_device_class_fit(
         _ => 0.5, // Unknown — neutral
     }
     .clamp(0.0, 1.0)
+}
+
+/// Classify how likely an endpoint is wireless.
+///
+/// Returns a value 0.0–1.0:
+///   1.0 = phone/tablet (strongly wireless)
+///   0.8 = wireless VLAN detected
+///   0.3 = unknown device type
+///   0.0 = clearly wired
+fn classify_wireless_likelihood(
+    device_type: Option<&str>,
+    identity_vlan: Option<u32>,
+    wireless_vlans: &HashSet<u32>,
+) -> f64 {
+    match device_type {
+        Some("phone") | Some("tablet") => 1.0,
+        Some("laptop") => 0.8,
+        Some("camera") | Some("printer") | Some("server") | Some("switch") | Some("router") => 0.0,
+        _ => {
+            // Check if on a wireless VLAN
+            if identity_vlan.map(|v| wireless_vlans.contains(&v)).unwrap_or(false) {
+                0.8
+            } else {
+                0.3
+            }
+        }
+    }
 }

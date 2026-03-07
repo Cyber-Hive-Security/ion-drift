@@ -142,7 +142,10 @@ impl AttachmentState {
             true
         } else {
             // Different binding — check hysteresis
-            let (multiplier, loss_threshold) = if is_wireless {
+            // Roaming state uses relaxed thresholds so moves resolve faster
+            let (multiplier, loss_threshold) = if self.state == AttachmentStateKind::Roaming {
+                (1.0, 1)
+            } else if is_wireless {
                 (WIRELESS_HYSTERESIS_MULTIPLIER, WIRELESS_LOSS_THRESHOLD)
             } else {
                 (WIRED_HYSTERESIS_MULTIPLIER, WIRED_LOSS_THRESHOLD)
@@ -157,15 +160,30 @@ impl AttachmentState {
 
                 if self.consecutive_losses >= loss_threshold {
                     // Binding changes — save previous for roaming detection
-                    self.previous_device_id = self.current_device_id.take();
-                    self.previous_port_name = self.current_port_name.take();
+                    let prev_device = self.current_device_id.take();
+                    let prev_port = self.current_port_name.take();
+
+                    // Detect roaming: previous device exists and differs from new
+                    let is_roaming = prev_device.as_deref()
+                        .map(|pd| pd != winner_device)
+                        .unwrap_or(false);
+
+                    self.previous_device_id = prev_device;
+                    self.previous_port_name = prev_port;
                     self.current_device_id = Some(winner_device.to_string());
                     self.current_port_name = Some(winner_port.to_string());
                     self.current_score = winner_score;
                     self.confidence = confidence;
                     self.consecutive_wins = 1;
                     self.consecutive_losses = 0;
-                    self.state = AttachmentStateKind::Candidate;
+
+                    // Roaming state uses relaxed thresholds so subsequent
+                    // moves resolve faster
+                    self.state = if is_roaming {
+                        AttachmentStateKind::Roaming
+                    } else {
+                        AttachmentStateKind::Candidate
+                    };
                     true
                 } else {
                     // Not enough consecutive losses — retain current binding

@@ -18,6 +18,7 @@ import { NotFoundPage } from "./__root";
 import { SwitchDetailPageWrapper } from "@/features/switch-detail/switch-detail-page";
 import IdentityManagerPage from "@/features/identity/identity-manager-page";
 import BackboneLinksPage from "@/features/backbone/backbone-links-page";
+import { InferencePage } from "@/features/inference/inference-page";
 
 // Lazy-load the network map page — it pulls in D3 and heavy SVG rendering
 // that benefits from being in a separate chunk.
@@ -185,6 +186,12 @@ const backboneRoute = createRoute({
   component: BackboneLinksPage,
 });
 
+const inferenceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/network/inference",
+  component: InferencePage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -205,6 +212,7 @@ const routeTree = rootRoute.addChildren([
   switchDetailRoute,
   identitiesRoute,
   backboneRoute,
+  inferenceRoute,
   settingsRoute,
 ]);
 

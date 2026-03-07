@@ -1920,6 +1920,28 @@ impl SwitchStore {
         Ok(())
     }
 
+    /// Update the switch binding on a network identity from inference.
+    ///
+    /// Never overrides human-confirmed bindings (double safety with HumanPinned state).
+    /// Returns true if a row was actually updated.
+    pub async fn update_identity_binding(
+        &self,
+        mac: &str,
+        device_id: &str,
+        port: &str,
+        source: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let changed = db.execute(
+            "UPDATE network_identities
+             SET switch_device_id = ?2, switch_port = ?3, switch_binding_source = ?4
+             WHERE mac_address = ?1
+               AND (human_confirmed = 0 OR human_confirmed IS NULL)",
+            params![mac, device_id, port, source],
+        )?;
+        Ok(changed > 0)
+    }
+
     // ── Cleanup ─────────────────────────────────────────────────
 
     /// Prune old port metrics data.

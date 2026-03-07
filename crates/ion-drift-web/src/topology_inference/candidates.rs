@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use mikrotik_core::switch_store::{MacObservation, PortRoleProbability};
 use serde::Serialize;
 
+use super::ApFeederMap;
 use super::graph::InfrastructureGraph;
 
 /// The type of candidate attachment.
@@ -25,7 +26,12 @@ pub struct AttachmentCandidate {
     pub candidate_type: CandidateType,
     pub observation_count: u32,
     pub suppressed: bool,
+    /// Why this candidate was suppressed (populated by `prune_candidates`).
+    pub suppression_reason: Option<String>,
 }
+
+/// Device types that are clearly wired — never generate WAP candidates for these.
+const WIRED_DEVICE_TYPES: &[&str] = &["camera", "printer", "server", "switch", "router"];
 
 /// Generate candidates from recent observations for a MAC address.
 ///
@@ -40,6 +46,8 @@ pub fn generate_candidates(
     identity_port: Option<&str>,
     human_confirmed: bool,
     wireless_vlans: &HashSet<u32>,
+    ap_feeder_map: &ApFeederMap,
+    device_type: Option<&str>,
 ) -> Vec<AttachmentCandidate> {
     let mut seen: HashMap<(String, String), (Option<u32>, u32)> = HashMap::new();
 
@@ -59,6 +67,7 @@ pub fn generate_candidates(
             candidate_type: CandidateType::WiredPort,
             observation_count: count,
             suppressed: false,
+            suppression_reason: None,
         })
         .collect();
 
@@ -85,10 +94,47 @@ pub fn generate_candidates(
                         candidate_type: CandidateType::WirelessParent,
                         observation_count: 0,
                         suppressed: false,
+                        suppression_reason: None,
                     });
                 }
             }
         }
+    }
+
+    // ── AP feeder → WirelessParent candidate generation ──────────────
+    // For each WiredPort candidate on an AP feeder port, generate
+    // WirelessParent candidates for the downstream WAPs — unless the
+    // endpoint is clearly a wired device type.
+    let is_clearly_wired = device_type
+        .map(|dt| WIRED_DEVICE_TYPES.contains(&dt))
+        .unwrap_or(false);
+
+    if !is_clearly_wired {
+        let mut wap_candidates: Vec<AttachmentCandidate> = Vec::new();
+        for c in &candidates {
+            if c.candidate_type != CandidateType::WiredPort {
+                continue;
+            }
+            let fed = super::fed_waps(ap_feeder_map, &c.device_id, &c.port_name);
+            for wap_id in fed {
+                // Don't add if this WAP is already a candidate
+                let already = candidates.iter().any(|existing| existing.device_id == *wap_id)
+                    || wap_candidates.iter().any(|existing| existing.device_id == *wap_id);
+                if !already {
+                    wap_candidates.push(AttachmentCandidate {
+                        mac: mac.to_string(),
+                        device_id: wap_id.clone(),
+                        port_name: String::new(), // WAPs don't have port-level resolution
+                        vlan_id: c.vlan_id,
+                        candidate_type: CandidateType::WirelessParent,
+                        observation_count: c.observation_count,
+                        suppressed: false,
+                        suppression_reason: None,
+                    });
+                }
+            }
+        }
+        candidates.extend(wap_candidates);
     }
 
     // Human override: always a candidate if confirmed
@@ -104,6 +150,7 @@ pub fn generate_candidates(
                     candidate_type: CandidateType::HumanOverride,
                     observation_count: 0,
                     suppressed: false,
+                    suppression_reason: None,
                 });
             }
         }
@@ -118,29 +165,45 @@ pub fn generate_candidates(
 /// 1. Remove candidates that violate basic constraints (unknown devices).
 /// 2. Upstream suppression: when a downstream edge-plausible candidate exists,
 ///    suppress ancestor transit candidates from winning.
+///
+/// Each suppressed candidate records a `suppression_reason`.
 pub fn prune_candidates(
     candidates: &mut Vec<AttachmentCandidate>,
     graph: &InfrastructureGraph,
     role_probs: &HashMap<(String, String), PortRoleProbability>,
 ) {
     // Layer 1: Remove candidates for unknown devices (not in graph)
+    // WirelessParent candidates may reference WAPs not in the managed graph —
+    // keep them since they're downstream by definition.
+    let mut removed_devices: Vec<String> = Vec::new();
     candidates.retain(|c| {
-        c.candidate_type == CandidateType::HumanOverride || graph.nodes.contains_key(&c.device_id)
+        if c.candidate_type == CandidateType::HumanOverride
+            || c.candidate_type == CandidateType::WirelessParent
+            || graph.nodes.contains_key(&c.device_id)
+        {
+            true
+        } else {
+            removed_devices.push(c.device_id.clone());
+            false
+        }
     });
 
     // Layer 2: Upstream suppression
     // For each pair (A, B): if B is descendant of A, and A is transit-like,
     // and B is edge-plausible, mark A as suppressed.
-    let suppress_indices: Vec<usize> = (0..candidates.len())
-        .filter(|&i| {
-            if candidates[i].candidate_type == CandidateType::HumanOverride {
-                return false;
+    // WirelessParent candidates are downstream by definition — don't suppress them.
+    let suppress_info: Vec<(usize, String)> = (0..candidates.len())
+        .filter_map(|i| {
+            if candidates[i].candidate_type == CandidateType::HumanOverride
+                || candidates[i].candidate_type == CandidateType::WirelessParent
+            {
+                return None;
             }
             let a_dev = &candidates[i].device_id;
-            candidates.iter().enumerate().any(|(j, b)| {
-                if i == j { return false; }
+            for (j, b) in candidates.iter().enumerate() {
+                if i == j { continue; }
                 let b_dev = &b.device_id;
-                if !graph.is_descendant_of(b_dev, a_dev) { return false; }
+                if !graph.is_descendant_of(b_dev, a_dev) { continue; }
 
                 let a_key = (candidates[i].device_id.clone(), candidates[i].port_name.clone());
                 let b_key = (b.device_id.clone(), b.port_name.clone());
@@ -152,14 +215,23 @@ pub fn prune_candidates(
 
                 let b_edge = role_probs.get(&b_key)
                     .map(|p| p.access_prob > 0.3 || p.wireless_prob > 0.3)
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    || b.candidate_type == CandidateType::WirelessParent;
 
-                a_transit && b_edge
-            })
+                if a_transit && b_edge {
+                    let reason = format!(
+                        "upstream_of_edge: {} has edge-plausible port",
+                        b.device_id,
+                    );
+                    return Some((i, reason));
+                }
+            }
+            None
         })
         .collect();
 
-    for idx in suppress_indices {
+    for (idx, reason) in suppress_info {
         candidates[idx].suppressed = true;
+        candidates[idx].suppression_reason = Some(reason);
     }
 }
