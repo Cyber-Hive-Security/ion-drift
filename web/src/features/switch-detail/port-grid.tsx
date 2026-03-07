@@ -368,7 +368,7 @@ export function PortGrid({
             <div key={id} className="flex items-center gap-1.5">
               <span
                 className="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ backgroundColor: cfg.color }}
+                style={{ backgroundColor: cfg.color ?? undefined }}
               />
               <span className="text-[10px] text-muted-foreground">
                 {id} {cfg.name}
