@@ -63,8 +63,9 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| tracing::warn!("failed to load OpenSSL legacy provider (DES may not work): {e}"))
         .ok();
 
-    // Parse CLI args (just --config for now)
-    let config_path = parse_config_arg();
+    // Parse CLI args.
+    let args = parse_args();
+    let config_path = args.config_path.clone();
     let config_file = ServerConfig::resolve_path(config_path.as_deref());
 
     tracing::info!("loading config from {}", config_file.display());
@@ -151,6 +152,24 @@ async fn main() -> anyhow::Result<()> {
     // Warn if session cookies will be sent over HTTP on a non-localhost bind
     if !config.session.secure && config.server.listen_addr != "127.0.0.1" && config.server.listen_addr != "localhost" {
         tracing::warn!("Session cookie 'secure' flag is disabled on a non-localhost bind address. Cookies will be sent over HTTP.");
+    }
+
+    tracing::info!(
+        listen = %config.server.listen_addr,
+        port = config.server.listen_port,
+        router_host = %config.router.host,
+        router_port = config.router.port,
+        router_tls = config.router.tls,
+        wan_interface = %config.router.wan_interface,
+        oidc_issuer = %config.oidc.issuer_url,
+        session_max_age = config.session.max_age_seconds,
+        syslog_port = config.syslog.port,
+        "resolved configuration"
+    );
+
+    if args.dump_config {
+        println!("{}", config.masked_toml()?);
+        return Ok(());
     }
 
     let config = Arc::new(config);
@@ -428,13 +447,26 @@ async fn run_setup_mode(
     Ok(())
 }
 
-/// Parse `--config <path>` from CLI args.
-fn parse_config_arg() -> Option<String> {
+struct CliArgs {
+    config_path: Option<String>,
+    dump_config: bool,
+}
+
+/// Parse `--config <path>` and `--dump-config` from CLI args.
+fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
+    let mut config_path = None;
+    let mut dump_config = false;
     for i in 0..args.len() {
         if args[i] == "--config" {
-            return args.get(i + 1).cloned();
+            config_path = args.get(i + 1).cloned();
+        }
+        if args[i] == "--dump-config" {
+            dump_config = true;
         }
     }
-    None
+    CliArgs {
+        config_path,
+        dump_config,
+    }
 }

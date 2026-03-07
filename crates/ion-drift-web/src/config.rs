@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Top-level server configuration, loaded from TOML then overlaid with env vars.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerConfig {
     pub server: ServerSection,
     pub router: RouterSection,
@@ -22,7 +22,7 @@ pub struct ServerConfig {
 
 // ── OIDC Bootstrap (nested under [oidc.bootstrap]) ──────────────
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct OidcBootstrapSection {
     /// Bootstrap client ID (e.g., "ion-drift-bootstrap").
     pub client_id: Option<String>,
@@ -51,7 +51,7 @@ pub struct ResolvedBootstrap {
 
 // ── TLS Section ─────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TlsSection {
     /// Path to PEM-encoded mTLS client certificate.
     #[serde(default = "default_client_cert_path")]
@@ -80,7 +80,7 @@ fn default_client_key_path() -> String {
 
 // ── CertWarden Section ──────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct CertWardenSection {
     /// CertWarden API base URL (e.g., https://certwarden.example.com:4051).
     pub base_url: Option<String>,
@@ -126,7 +126,7 @@ impl CertWardenSection {
 
 // ── Syslog Section ─────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SyslogSection {
     /// UDP port to listen on for syslog messages from the router.
     #[serde(default = "default_syslog_port")]
@@ -159,10 +159,10 @@ fn default_syslog_bind() -> String {
 
 // ── Other sections (unchanged) ──────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct DataSection {}
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerSection {
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
@@ -176,7 +176,7 @@ pub struct ServerSection {
     pub home_country: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RouterSection {
     #[serde(default = "default_router_host")]
     pub host: String,
@@ -197,7 +197,7 @@ pub struct RouterSection {
     pub dns_server: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OidcSection {
     pub issuer_url: String,
     pub client_id: String,
@@ -211,7 +211,7 @@ pub struct OidcSection {
     pub bootstrap: Option<OidcBootstrapSection>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SessionSection {
     #[serde(default = "default_cookie_name")]
     pub cookie_name: String,
@@ -416,5 +416,34 @@ impl ServerConfig {
             username: self.router.username.clone(),
             password: self.router.password.clone(),
         }
+    }
+
+    /// Render resolved config as TOML with secrets explicitly redacted.
+    pub fn masked_toml(&self) -> anyhow::Result<String> {
+        let mut value = toml::Value::try_from(self)
+            .map_err(|e| anyhow::anyhow!("failed to serialize config: {e}"))?;
+
+        let Some(root) = value.as_table_mut() else {
+            anyhow::bail!("unexpected config structure");
+        };
+
+        if let Some(router) = root.get_mut("router").and_then(|v| v.as_table_mut()) {
+            router.insert("password".to_string(), toml::Value::String("[REDACTED]".to_string()));
+        }
+        if let Some(oidc) = root.get_mut("oidc").and_then(|v| v.as_table_mut()) {
+            oidc.insert(
+                "client_secret".to_string(),
+                toml::Value::String("[REDACTED]".to_string()),
+            );
+        }
+        if let Some(session) = root.get_mut("session").and_then(|v| v.as_table_mut()) {
+            session.insert(
+                "session_secret".to_string(),
+                toml::Value::String("[REDACTED]".to_string()),
+            );
+        }
+
+        toml::to_string_pretty(&value)
+            .map_err(|e| anyhow::anyhow!("failed to format masked config: {e}"))
     }
 }
