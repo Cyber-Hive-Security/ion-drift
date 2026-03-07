@@ -407,7 +407,7 @@ function EditableRow({
           <button
             onClick={onSave}
             disabled={isSaving}
-            className="rounded p-1 text-green-500 hover:bg-green-500/20 disabled:opacity-40"
+            className="rounded p-1 text-success hover:bg-success/20 disabled:opacity-40"
             title="Save changes"
           >
             <Check className="h-3.5 w-3.5" />

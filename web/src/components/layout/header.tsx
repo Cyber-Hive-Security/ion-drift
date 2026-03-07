@@ -22,7 +22,7 @@ export function Header({ onMenuToggle, pendingAnomalies = 0 }: HeaderProps) {
         >
           <Menu className="h-6 w-6" />
           {pendingAnomalies > 0 && (
-            <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-0.5 text-[9px] font-bold text-white">
+            <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-warning px-0.5 text-[9px] font-bold text-background">
               {pendingAnomalies > 99 ? "99+" : pendingAnomalies}
             </span>
           )}

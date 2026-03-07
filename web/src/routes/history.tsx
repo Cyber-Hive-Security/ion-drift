@@ -154,10 +154,10 @@ const historyColumns: Column<ConnectionHistoryEntry>[] = [
         className={cn(
           "rounded px-1.5 py-0.5 text-[10px] font-medium",
           r.data_source === "poll"
-            ? "bg-blue-500/15 text-blue-400"
+            ? "bg-primary/15 text-primary"
             : r.data_source === "syslog"
-              ? "bg-amber-500/15 text-amber-400"
-              : "bg-green-500/15 text-green-400",
+              ? "bg-warning/15 text-warning"
+              : "bg-success/15 text-success",
         )}
       >
         {r.data_source}
@@ -178,7 +178,7 @@ const historyColumns: Column<ConnectionHistoryEntry>[] = [
     header: "",
     render: (r) =>
       r.flagged ? (
-        <span className="h-2 w-2 rounded-full bg-red-500 inline-block" />
+        <span className="h-2 w-2 rounded-full bg-destructive inline-block" />
       ) : null,
   },
 ];
@@ -252,7 +252,7 @@ const countryColumns: Column<GeoSummaryEntry>[] = [
     header: "Flagged",
     render: (r) =>
       r.flagged_count > 0 ? (
-        <span className="font-mono text-xs text-red-500">{formatNumber(r.flagged_count)}</span>
+        <span className="font-mono text-xs text-destructive">{formatNumber(r.flagged_count)}</span>
       ) : (
         <span className="font-mono text-xs text-muted-foreground">0</span>
       ),
@@ -429,7 +429,7 @@ export function HistoryPage() {
                     searchPlaceholder="Search countries..."
                     rowStyle={(r) =>
                       r.flagged_count > 0
-                        ? { borderLeft: "3px solid oklch(0.6 0.2 25)" }
+                        ? { borderLeft: "3px solid #FF4D4F" }
                         : undefined
                     }
                   />

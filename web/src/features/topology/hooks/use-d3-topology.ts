@@ -78,12 +78,12 @@ interface SpeedStyle {
 }
 
 function speedStyle(mbps: number | null): SpeedStyle {
-  if (mbps == null) return { color: "#00f0ff", width: 1.2, label: "" };
-  if (mbps >= 10000) return { color: "#ffd700", width: 3.5, label: "10G" };
-  if (mbps >= 5000) return { color: "#ff8c00", width: 2.5, label: "5G" };
-  if (mbps >= 2500) return { color: "#c0c0c0", width: 2.0, label: "2.5G" };
-  if (mbps >= 1000) return { color: "#00f0ff", width: 1.2, label: "1G" };
-  return { color: "#666666", width: 0.8, label: `${mbps}M` };
+  if (mbps == null) return { color: "#00E5FF", width: 1.2, label: "" };
+  if (mbps >= 10000) return { color: "#2FA4FF", width: 3.5, label: "10G" };
+  if (mbps >= 5000) return { color: "#FF4FD8", width: 2.5, label: "5G" };
+  if (mbps >= 2500) return { color: "#7A5CFF", width: 2.0, label: "2.5G" };
+  if (mbps >= 1000) return { color: "#00E5FF", width: 1.2, label: "1G" };
+  return { color: "#6B7785", width: 0.8, label: `${mbps}M` };
 }
 
 // ─── Public Types ───────────────────────────────────────
@@ -135,16 +135,16 @@ export function createTopologyMapInstance(
   // ── All helpers scoped inside factory ──
 
   function nodeColor(node: TopologyNode): string {
-    if (node.kind === "router") return "#ffd700";
-    if (node.kind === "managed_switch") return "#00e5ff";
-    if (node.kind === "unmanaged_switch") return "#00b4d8";
-    if (node.kind === "access_point") return "#00f0ff";
-    if (node.kind === "server") return "#0088cc";
-    if (node.kind === "camera") return "#666666";
-    if (node.kind === "media_player") return "#ff8c00";
+    if (node.kind === "router") return "#2FA4FF";
+    if (node.kind === "managed_switch") return "#00E5FF";
+    if (node.kind === "unmanaged_switch") return "#7A5CFF";
+    if (node.kind === "access_point") return "#7A5CFF";
+    if (node.kind === "server") return "#2FA4FF";
+    if (node.kind === "camera") return "#6B7785";
+    if (node.kind === "media_player") return "#FF4FD8";
     if (node.vlan_id != null && VLAN_COLORS[node.vlan_id]) return VLAN_COLORS[node.vlan_id];
-    if (node.is_infrastructure) return "#00e5ff";
-    return "#aaaaaa";
+    if (node.is_infrastructure) return "#00E5FF";
+    return "#E6EDF3";
   }
 
   function hexRadius(node: TopologyNode): number {
@@ -187,10 +187,10 @@ export function createTopologyMapInstance(
 
   function edgeColor(edge: TopologyEdge): string {
     if (edge.speed_mbps != null) return speedStyle(edge.speed_mbps).color;
-    if (edge.kind === "uplink") return "#ffd700";
-    if (edge.kind === "trunk") return "#00e5ff";
+    if (edge.kind === "uplink") return "#2FA4FF";
+    if (edge.kind === "trunk") return "#00E5FF";
     if (edge.vlans.length === 1 && VLAN_COLORS[edge.vlans[0]]) return VLAN_COLORS[edge.vlans[0]];
-    return "#666666";
+    return "#6B7785";
   }
 
   function edgeSpeedLabel(edge: TopologyEdge): string {
@@ -264,9 +264,9 @@ export function createTopologyMapInstance(
     m.append("feMergeNode").attr("in", "SourceGraphic");
   }
 
-  addGlowFilter("glow-active", "#00ff88", 0.4, 4);
-  addGlowFilter("glow-inactive", "#ff4444", 0.4, 4);
-  addGlowFilter("glow-anomaly", "#ffaa00", 0.5, 5);
+  addGlowFilter("glow-active", "#21D07A", 0.4, 4);
+  addGlowFilter("glow-inactive", "#FF4D4F", 0.4, 4);
+  addGlowFilter("glow-anomaly", "#FFC857", 0.5, 5);
   addGlowFilter("glow-selected", "#ffffff", 0.6, 6);
 
   // Soft glow for general hex nodes
@@ -363,9 +363,9 @@ export function createTopologyMapInstance(
     if (tooltip) return tooltip;
     const div = document.createElement("div");
     div.style.cssText =
-      "position:fixed;pointer-events:none;z-index:9999;background:rgba(8,16,32,0.95);" +
-      "border:1px solid rgba(0,240,255,0.4);border-radius:6px;padding:8px 12px;" +
-      "font-size:12px;color:#e0e0e0;max-width:300px;display:none;" +
+      "position:fixed;pointer-events:none;z-index:9999;background:rgba(11,15,20,0.95);" +
+      "border:1px solid rgba(42,50,61,0.8);border-radius:6px;padding:8px 12px;" +
+      "font-size:12px;color:#E6EDF3;max-width:300px;display:none;" +
       "font-family:'Share Tech Mono',monospace;box-shadow:0 4px 20px rgba(0,0,0,0.5);backdrop-filter:blur(8px);";
     document.body.appendChild(div);
     tooltip = div;
@@ -376,16 +376,16 @@ export function createTopologyMapInstance(
     const tip = createTooltip();
     const lines: string[] = [];
     lines.push(`<strong style="color:${nodeColor(node)}">${escHtml(node.label)}</strong>`);
-    if (node.kind) lines.push(`<span style="color:#5a7080">Kind:</span> ${escHtml(node.kind)}`);
-    if (node.ip) lines.push(`<span style="color:#5a7080">IP:</span> ${escHtml(node.ip)}`);
-    if (node.mac) lines.push(`<span style="color:#5a7080">MAC:</span> ${escHtml(node.mac)}`);
-    if (node.vlan_id != null) lines.push(`<span style="color:#5a7080">VLAN:</span> ${node.vlan_id}`);
-    if (node.device_type) lines.push(`<span style="color:#5a7080">Type:</span> ${escHtml(node.device_type)}`);
-    if (node.manufacturer) lines.push(`<span style="color:#5a7080">Mfg:</span> ${escHtml(node.manufacturer)}`);
+    if (node.kind) lines.push(`<span style="color:#6B7785">Kind:</span> ${escHtml(node.kind)}`);
+    if (node.ip) lines.push(`<span style="color:#6B7785">IP:</span> ${escHtml(node.ip)}`);
+    if (node.mac) lines.push(`<span style="color:#6B7785">MAC:</span> ${escHtml(node.mac)}`);
+    if (node.vlan_id != null) lines.push(`<span style="color:#6B7785">VLAN:</span> ${node.vlan_id}`);
+    if (node.device_type) lines.push(`<span style="color:#6B7785">Type:</span> ${escHtml(node.device_type)}`);
+    if (node.manufacturer) lines.push(`<span style="color:#6B7785">Mfg:</span> ${escHtml(node.manufacturer)}`);
     if (node.switch_port) {
-      lines.push(`<span style="color:#5a7080">Port:</span> ${escHtml(node.switch_port)}`);
+      lines.push(`<span style="color:#6B7785">Port:</span> ${escHtml(node.switch_port)}`);
     } else if (node.parent_id) {
-      lines.push(`<span style="color:#5a7080">Port:</span> <em style="color:#444">downstream of ${escHtml(node.parent_id)}</em>`);
+      lines.push(`<span style="color:#6B7785">Port:</span> <em style="color:#2A323D">downstream of ${escHtml(node.parent_id)}</em>`);
     }
     tip.innerHTML = lines.join("<br>");
     tip.style.display = "block";
@@ -399,11 +399,11 @@ export function createTopologyMapInstance(
     const tgt = nodeMap.get(edge.target);
     const speedLbl = edgeSpeedLabel(edge);
     const lines: string[] = [];
-    lines.push(`<span style="color:#00f0ff;font-weight:600">${escHtml(edge.kind)}</span>`);
-    lines.push(`<span style="color:#5a7080">${escHtml(src?.label || edge.source)} &harr; ${escHtml(tgt?.label || edge.target)}</span>`);
-    if (speedLbl) lines.push(`<span style="color:#ffd700">${escHtml(speedLbl)}</span>`);
+    lines.push(`<span style="color:#00E5FF;font-weight:600">${escHtml(edge.kind)}</span>`);
+    lines.push(`<span style="color:#6B7785">${escHtml(src?.label || edge.source)} &harr; ${escHtml(tgt?.label || edge.target)}</span>`);
+    if (speedLbl) lines.push(`<span style="color:#2FA4FF">${escHtml(speedLbl)}</span>`);
     if (edge.source_port || edge.target_port) {
-      lines.push(`<span style="color:#5a7080">${escHtml(edge.source_port || "?")} → ${escHtml(edge.target_port || "?")}</span>`);
+      lines.push(`<span style="color:#6B7785">${escHtml(edge.source_port || "?")} → ${escHtml(edge.target_port || "?")}</span>`);
     }
     tip.innerHTML = lines.join("<br>");
     tip.style.display = "block";
@@ -833,7 +833,7 @@ export function createTopologyMapInstance(
             .attr("x", src.x + dx * 0.15)
             .attr("y", src.y + dy * 0.15 - 6)
             .attr("text-anchor", "middle")
-            .attr("fill", "#5a7080")
+            .attr("fill", "#6B7785")
             .attr("font-size", 8)
             .attr("font-family", "'Share Tech Mono', monospace")
             .text(edge.source_port);
@@ -843,7 +843,7 @@ export function createTopologyMapInstance(
             .attr("x", src.x + dx * 0.85)
             .attr("y", src.y + dy * 0.85 - 6)
             .attr("text-anchor", "middle")
-            .attr("fill", "#5a7080")
+            .attr("fill", "#6B7785")
             .attr("font-size", 8)
             .attr("font-family", "'Share Tech Mono', monospace")
             .text(edge.target_port);
@@ -957,7 +957,7 @@ export function createTopologyMapInstance(
           .attr("cx", r + 4)
           .attr("cy", -(r + 4))
           .attr("r", 5)
-          .attr("fill", "#ffaa00")
+          .attr("fill", "#FFC857")
           .attr("stroke", "#000")
           .attr("stroke-width", 0.5);
         g.append("text")
@@ -975,7 +975,7 @@ export function createTopologyMapInstance(
         g.append("path")
           .attr("d", hexPath(r + 4))
           .attr("fill", "none")
-          .attr("stroke", "#ef4444")
+          .attr("stroke", "#FF4D4F")
           .attr("stroke-width", 2)
           .attr("stroke-dasharray", "4,2");
         g.append("text")
@@ -990,7 +990,7 @@ export function createTopologyMapInstance(
         g.append("path")
           .attr("d", hexPath(r + 3))
           .attr("fill", "none")
-          .attr("stroke", "#3b82f6")
+          .attr("stroke", "#2FA4FF")
           .attr("stroke-width", 1)
           .attr("stroke-dasharray", "3,3")
           .attr("opacity", 0.6);
@@ -1001,7 +1001,7 @@ export function createTopologyMapInstance(
         g.append("path")
           .attr("d", hexPath(r + 5))
           .attr("fill", "none")
-          .attr("stroke", "#f97316")
+          .attr("stroke", "#FFC857")
           .attr("stroke-width", 1.5)
           .attr("stroke-dasharray", "4,3")
           .attr("opacity", 0.7);
@@ -1009,7 +1009,7 @@ export function createTopologyMapInstance(
           .attr("cx", r + 6)
           .attr("cy", -(r + 4))
           .attr("r", 6)
-          .attr("fill", "#f97316")
+          .attr("fill", "#FFC857")
           .attr("stroke", "#000")
           .attr("stroke-width", 0.5)
           .attr("cursor", "pointer");
@@ -1143,7 +1143,7 @@ export function createTopologyMapInstance(
             .attr("x", node.x + labelX)
             .attr("y", node.y + labelY + 13)
             .attr("text-anchor", anchor)
-            .attr("fill", "#5a7080")
+            .attr("fill", "#6B7785")
             .attr("font-size", 9)
             .attr("font-family", "'Share Tech Mono', monospace")
             .text(node.ip);

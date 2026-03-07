@@ -180,15 +180,15 @@ export function WorldMap({
 
   // Country fill color
   function countryColor(code: string, entry: GeoSummaryEntry | undefined): string {
-    if (!entry || entry.connection_count === 0) return "oklch(0.2 0.01 285)";
-    if (code === HOME_COUNTRY) return "oklch(0.35 0.15 145)";
-    if (entry.flagged_count > 0) return "oklch(0.4 0.18 25)";
-    return "oklch(0.35 0.12 200)";
+    if (!entry || entry.connection_count === 0) return "#141A21";
+    if (code === HOME_COUNTRY) return "#21D07A";
+    if (entry.flagged_count > 0) return "#FF4D4F";
+    return "#2FA4FF";
   }
 
   function arcColor(entry: { flagged_count: number }): string {
-    if (entry.flagged_count > 0) return "oklch(0.6 0.2 25)";
-    return "oklch(0.6 0.15 200)";
+    if (entry.flagged_count > 0) return "#FF4D4F";
+    return "#2FA4FF";
   }
 
   // Cache the TopoJSON so we don't re-fetch on every effect run
@@ -297,8 +297,8 @@ export function WorldMap({
         .append("path")
         .datum({ type: "Sphere" } as any)
         .attr("d", path as any)
-        .attr("fill", "oklch(0.15 0.01 285)")
-        .attr("stroke", "oklch(0.25 0.01 285)");
+        .attr("fill", "#0B0F14")
+        .attr("stroke", "#1C232C");
 
       const countries = topojson.feature(
         world,
@@ -361,16 +361,16 @@ export function WorldMap({
           const alpha2 = numericToAlpha2[d.id] || "";
           return countryColor(alpha2, countryIndex.get(alpha2));
         })
-        .attr("stroke", "oklch(0.25 0.01 285)")
+        .attr("stroke", "#1C232C")
         .attr("stroke-width", 0.5)
         .attr("cursor", "pointer")
         .on("mouseenter", function (_event: MouseEvent, d: any) {
-          d3.select(this).attr("stroke", "oklch(0.7 0.15 200)").attr("stroke-width", 1.5);
+          d3.select(this).attr("stroke", "#00E5FF").attr("stroke-width", 1.5);
           const alpha2 = numericToAlpha2[(d as any).id] || "";
           const entry = countryIndex.get(alpha2);
           if (entry) {
             const flagged = entry.flagged_count > 0
-              ? `<div style="color:oklch(0.7 0.2 25);margin-top:2px">Flagged: ${formatNumber(entry.flagged_count)}</div>`
+              ? `<div style="color:#FF4D4F;margin-top:2px">Flagged: ${formatNumber(entry.flagged_count)}</div>`
               : "";
             showTooltip(`
               <div style="font-weight:600;margin-bottom:4px">${countryFlag(entry.country_code)} ${esc(entry.country)} (${esc(entry.country_code)})</div>
@@ -378,13 +378,13 @@ export function WorldMap({
               <div>Sources: ${formatNumber(entry.unique_sources)} / Destinations: ${formatNumber(entry.unique_destinations)}</div>
               <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
               ${flagged}
-              ${entry.top_orgs.length > 0 ? `<div style="margin-top:4px;font-size:10px;color:oklch(0.6 0.01 285)">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
+              ${entry.top_orgs.length > 0 ? `<div style="margin-top:4px;font-size:10px;color:#6B7785">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
             `);
           }
         })
         .on("mousemove", (event: MouseEvent) => moveTooltip(event))
         .on("mouseleave", function () {
-          d3.select(this).attr("stroke", "oklch(0.25 0.01 285)").attr("stroke-width", 0.5);
+          d3.select(this).attr("stroke", "#1C232C").attr("stroke-width", 0.5);
           hideTooltip();
         })
         .on("click", (_event: any, d: any) => {
@@ -432,8 +432,8 @@ export function WorldMap({
               <div style="font-weight:600;margin-bottom:4px">Ogden, UT &rarr; ${countryFlag(entry.country_code)} ${esc(entry.country)}</div>
               <div>Connections: ${formatNumber(entry.connection_count)}</div>
               <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
-              ${entry.flagged_count > 0 ? `<div style="color:oklch(0.7 0.2 25)">Flagged: ${formatNumber(entry.flagged_count)}</div>` : ""}
-              ${entry.top_orgs.length > 0 ? `<div style="font-size:10px;color:oklch(0.6 0.01 285)">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
+              ${entry.flagged_count > 0 ? `<div style="color:#FF4D4F">Flagged: ${formatNumber(entry.flagged_count)}</div>` : ""}
+              ${entry.top_orgs.length > 0 ? `<div style="font-size:10px;color:#6B7785">Top: ${entry.top_orgs.slice(0, 3).map(esc).join(", ")}</div>` : ""}
             `);
             moveTooltip(event);
           })
@@ -467,7 +467,7 @@ export function WorldMap({
                 <div>Connections: ${formatNumber(entry.connection_count)}</div>
                 <div>Sources: ${formatNumber(entry.unique_sources)} / Destinations: ${formatNumber(entry.unique_destinations)}</div>
                 <div>TX: ${formatBytes(entry.total_tx)} / RX: ${formatBytes(entry.total_rx)}</div>
-                ${entry.flagged_count > 0 ? `<div style="color:oklch(0.7 0.2 25)">Flagged: ${formatNumber(entry.flagged_count)}</div>` : ""}
+                ${entry.flagged_count > 0 ? `<div style="color:#FF4D4F">Flagged: ${formatNumber(entry.flagged_count)}</div>` : ""}
               `);
               moveTooltip(event);
             })
@@ -548,13 +548,13 @@ export function WorldMap({
           .on("mouseenter", function (event: MouseEvent) {
             d3.select(this).attr("r", radius + 1.5).attr("fill-opacity", 0.9);
             const orgsLine = city.top_orgs.length > 0
-              ? `<div style="font-size:10px;color:oklch(0.6 0.01 285)">Top: ${city.top_orgs.slice(0, 3).map(esc).join(" &middot; ")}</div>`
+              ? `<div style="font-size:10px;color:#6B7785">Top: ${city.top_orgs.slice(0, 3).map(esc).join(" &middot; ")}</div>`
               : "";
             showTooltip(`
               <div style="font-weight:600;margin-bottom:4px">${esc(city.city)}, ${esc(city.country_code)}</div>
               <div>${formatNumber(city.connection_count)} connections &middot; ${formatNumber(city.unique_ips)} unique IPs</div>
               <div>${formatBytes(city.bytes_tx)} tx &middot; ${formatBytes(city.bytes_rx)} rx</div>
-              ${city.flagged_count > 0 ? `<div style="color:oklch(0.7 0.2 25)">Flagged: ${formatNumber(city.flagged_count)}</div>` : ""}
+              ${city.flagged_count > 0 ? `<div style="color:#FF4D4F">Flagged: ${formatNumber(city.flagged_count)}</div>` : ""}
               ${orgsLine}
             `);
             moveTooltip(event);
@@ -574,8 +574,8 @@ export function WorldMap({
           .attr("cx", homeProj[0])
           .attr("cy", homeProj[1])
           .attr("r", 4.5)
-          .attr("fill", "oklch(0.7 0.2 145)")
-          .attr("stroke", "oklch(0.9 0.1 145)")
+          .attr("fill", "#21D07A")
+          .attr("stroke", "#21D07A")
           .attr("stroke-width", 1.5);
       }
     }
@@ -658,7 +658,7 @@ export function WorldMap({
       </div>
 
       {/* Map */}
-      <div className="relative overflow-hidden rounded-lg border border-border bg-[oklch(0.13_0.01_285)]">
+      <div className="relative overflow-hidden rounded-lg border border-border bg-[#0B0F14]">
         {isLoading && data.length === 0 ? (
           <div
             className="flex items-center justify-center text-sm text-muted-foreground"
@@ -714,9 +714,9 @@ export function WorldMap({
           position: "fixed",
           pointerEvents: "none",
           zIndex: 50,
-          backgroundColor: "oklch(0.175 0.015 285)",
-          border: "1px solid oklch(0.3 0.015 285)",
-          color: "oklch(0.95 0.01 285)",
+          backgroundColor: "#141A21",
+          border: "1px solid #2A323D",
+          color: "#E6EDF3",
           borderRadius: "6px",
           padding: "8px 12px",
           fontSize: "12px",
@@ -730,21 +730,21 @@ export function WorldMap({
         <div className="flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-2.5 rounded-full"
-            style={{ background: "oklch(0.7 0.2 145)" }}
+            style={{ background: "#21D07A" }}
           />
           Home (US)
         </div>
         <div className="flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-2.5 rounded-full"
-            style={{ background: "oklch(0.6 0.15 200)" }}
+            style={{ background: "#2FA4FF" }}
           />
           Normal
         </div>
         <div className="flex items-center gap-1.5">
           <span
             className="inline-block h-2.5 w-2.5 rounded-full"
-            style={{ background: "oklch(0.6 0.2 25)" }}
+            style={{ background: "#FF4D4F" }}
           />
           Flagged
         </div>
@@ -752,7 +752,7 @@ export function WorldMap({
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block h-1.5 w-1.5 rounded-full ring-1"
-              style={{ background: "oklch(0.6 0.15 200)", boxShadow: "0 0 0 2px oklch(0.6 0.15 200 / 0.3)" }}
+              style={{ background: "#2FA4FF", boxShadow: "0 0 0 2px rgba(47, 164, 255, 0.3)" }}
             />
             City
           </div>

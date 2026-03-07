@@ -339,9 +339,9 @@ function NetworkDevicesSection() {
                   <span
                     className={`inline-block h-2 w-2 rounded-full ${
                       device.status === "Online"
-                        ? "bg-green-500"
+                        ? "bg-success"
                         : device.status === "Offline"
-                          ? "bg-red-500"
+                          ? "bg-destructive"
                           : "bg-gray-400"
                     }`}
                   />
@@ -463,7 +463,7 @@ function NetworkDevicesSection() {
                 </div>
 
                 {updateDevice.error && (
-                  <div className="rounded bg-red-500/10 px-3 py-2 text-xs text-red-400">
+                  <div className="rounded bg-destructive/10 px-3 py-2 text-xs text-destructive">
                     {updateDevice.error instanceof Error ? updateDevice.error.message : "Failed to update device"}
                   </div>
                 )}
@@ -701,8 +701,8 @@ function NetworkDevicesSection() {
             <div
               className={`rounded px-3 py-2 text-xs ${
                 testResult.status === "online"
-                  ? "bg-green-500/10 text-green-400"
-                  : "bg-red-500/10 text-red-400"
+                  ? "bg-success/10 text-success"
+                  : "bg-destructive/10 text-destructive"
               }`}
             >
               {testResult.status === "online"
@@ -712,7 +712,7 @@ function NetworkDevicesSection() {
           )}
 
           {createDevice.error && (
-            <div className="rounded bg-red-500/10 px-3 py-2 text-xs text-red-400">
+            <div className="rounded bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {createDevice.error instanceof Error
                 ? createDevice.error.message
                 : "Failed to add device"}
@@ -855,7 +855,7 @@ function SecretsSection() {
                   {secretLabels[secret.name] || secret.name}
                 </span>
                 {secret.auto_generated && (
-                  <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-400">
+                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
                     auto-generated
                   </span>
                 )}
@@ -870,7 +870,7 @@ function SecretsSection() {
                   </>
                 ) : secret.key_current ? (
                   <>
-                    <Check className="h-3 w-3 text-green-500" />
+                    <Check className="h-3 w-3 text-success" />
                     <span className="text-xs text-muted-foreground">
                       Encrypted &middot; Updated{" "}
                       {new Date(secret.updated_at * 1000).toLocaleDateString(
@@ -887,7 +887,7 @@ function SecretsSection() {
                   </>
                 ) : (
                   <>
-                    <AlertTriangle className="h-3 w-3 text-amber-500" />
+                    <AlertTriangle className="h-3 w-3 text-warning" />
                     <span className="text-xs text-muted-foreground">
                       Key mismatch &middot; Updated{" "}
                       {new Date(secret.updated_at * 1000).toLocaleDateString(
@@ -910,13 +910,13 @@ function SecretsSection() {
               {secret.name === "session_secret" ? (
                 confirmRegenerate ? (
                   <div className="flex items-center gap-1">
-                    <span className="text-xs text-amber-400 mr-1">
+                    <span className="text-xs text-warning mr-1">
                       This will log out all users
                     </span>
                     <button
                       onClick={handleRegenerate}
                       disabled={regenerateSession.isPending}
-                      className="rounded bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-50"
+                      className="rounded bg-warning px-2.5 py-1 text-xs font-medium text-background hover:bg-warning/80 disabled:opacity-50"
                     >
                       {regenerateSession.isPending ? "..." : "Confirm"}
                     </button>
@@ -1050,13 +1050,13 @@ function CertWardenSection() {
           <div className="flex items-center gap-1.5">
             {isExpired ? (
               <>
-                <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
-                <span className="text-sm text-red-500">Expired</span>
+                <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                <span className="text-sm text-destructive">Expired</span>
               </>
             ) : isExpiringSoon ? (
               <>
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-                <span className="text-sm text-amber-500">
+                <AlertTriangle className="h-3.5 w-3.5 text-warning" />
+                <span className="text-sm text-warning">
                   {new Date(data.not_after * 1000).toLocaleDateString(undefined, {
                     month: "short",
                     day: "numeric",
@@ -1067,7 +1067,7 @@ function CertWardenSection() {
               </>
             ) : (
               <>
-                <Check className="h-3.5 w-3.5 text-green-500" />
+                <Check className="h-3.5 w-3.5 text-success" />
                 <span className="text-sm">
                   {new Date(data.not_after * 1000).toLocaleDateString(undefined, {
                     month: "short",
@@ -1089,8 +1089,8 @@ function CertWardenSection() {
           <div className="flex items-center gap-1.5">
             {data.auto_renewal_enabled ? (
               <>
-                <Check className="h-3.5 w-3.5 text-green-500" />
-                <span className="text-sm text-green-500">
+                <Check className="h-3.5 w-3.5 text-success" />
+                <span className="text-sm text-success">
                   Enabled (every {data.check_interval_hours}h, renew within {data.renewal_threshold_days}d)
                 </span>
               </>
@@ -1141,15 +1141,15 @@ function EncryptionSection() {
           <div className="flex items-center gap-1.5">
             {data.all_secrets_current ? (
               <>
-                <Check className="h-3.5 w-3.5 text-green-500" />
-                <span className="text-sm text-green-500">
+                <Check className="h-3.5 w-3.5 text-success" />
+                <span className="text-sm text-success">
                   All secrets current
                 </span>
               </>
             ) : (
               <>
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-                <span className="text-sm text-amber-500">
+                <AlertTriangle className="h-3.5 w-3.5 text-warning" />
+                <span className="text-sm text-warning">
                   Key mismatch detected
                 </span>
               </>
@@ -1182,8 +1182,8 @@ function SyslogSection() {
           <div className="flex items-center gap-1.5">
             {data.listening ? (
               <>
-                <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-                <span className="text-sm text-green-500">Listening</span>
+                <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
+                <span className="text-sm text-success">Listening</span>
               </>
             ) : (
               <>
@@ -1244,13 +1244,13 @@ function GeoIpSection() {
           <div className="flex items-center gap-1.5">
             {data.has_maxmind ? (
               <>
-                <Check className="h-3.5 w-3.5 text-green-500" />
-                <span className="text-sm text-green-500">Loaded</span>
+                <Check className="h-3.5 w-3.5 text-success" />
+                <span className="text-sm text-success">Loaded</span>
               </>
             ) : (
               <>
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-                <span className="text-sm text-amber-500">Not loaded</span>
+                <AlertTriangle className="h-3.5 w-3.5 text-warning" />
+                <span className="text-sm text-warning">Not loaded</span>
               </>
             )}
           </div>
@@ -1260,8 +1260,8 @@ function GeoIpSection() {
           <div className="flex items-center gap-1.5">
             {data.has_credentials ? (
               <>
-                <Check className="h-3.5 w-3.5 text-green-500" />
-                <span className="text-sm text-green-500">Configured</span>
+                <Check className="h-3.5 w-3.5 text-success" />
+                <span className="text-sm text-success">Configured</span>
               </>
             ) : (
               <span className="text-sm text-muted-foreground">Not configured</span>

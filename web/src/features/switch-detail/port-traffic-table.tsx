@@ -152,7 +152,7 @@ export function PortTrafficTable({
       header: "Status",
       sortValue: (r) => (r.running ? 1 : 0),
       render: (r) => (
-        <span className={cn("text-xs font-medium", r.running ? "text-green-400" : "text-red-400")}>
+        <span className={cn("text-xs font-medium", r.running ? "text-success" : "text-destructive")}>
           {r.running ? "Up" : "Down"}
         </span>
       ),
@@ -201,11 +201,11 @@ export function PortTrafficTable({
             className={cn(
               "inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase",
               r.role === "trunk"
-                ? "bg-yellow-500/20 text-yellow-400"
+                ? "bg-warning/20 text-warning"
                 : r.role === "uplink"
-                  ? "bg-blue-500/20 text-blue-400"
+                  ? "bg-primary/20 text-primary"
                   : r.role === "access"
-                    ? "bg-green-500/20 text-green-400"
+                    ? "bg-success/20 text-success"
                     : "bg-muted text-muted-foreground",
             )}
           >
@@ -229,7 +229,7 @@ export function PortTrafficTable({
         searchPlaceholder="Search ports..."
         rowStyle={(r) =>
           selectedPort === r.portName
-            ? { backgroundColor: "oklch(0.65 0.18 250 / 0.08)" }
+            ? { backgroundColor: "#2FA4FF14" }
             : undefined
         }
       />

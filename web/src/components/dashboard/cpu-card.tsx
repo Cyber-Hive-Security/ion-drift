@@ -39,14 +39,14 @@ export function CpuCard({ data }: { data: SystemResource }) {
             <AreaChart data={chartData}>
               <defs>
                 <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#21D07A" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#21D07A" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <Area
                 type="monotone"
                 dataKey="v"
-                stroke="oklch(0.65 0.2 145)"
+                stroke="#21D07A"
                 strokeWidth={1.5}
                 fill="url(#cpuGrad)"
                 dot={false}

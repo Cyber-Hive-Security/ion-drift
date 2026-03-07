@@ -7,8 +7,6 @@ import {
   useConnectionSummary,
   useFirewallDrops,
 } from "@/api/queries";
-import { CpuCard } from "@/components/dashboard/cpu-card";
-import { MemoryCard } from "@/components/dashboard/memory-card";
 import { UptimeCard } from "@/components/dashboard/uptime-card";
 import { TrafficCard } from "@/components/dashboard/traffic-card";
 import { DhcpCard } from "@/components/dashboard/dhcp-card";
@@ -214,15 +212,12 @@ export function DashboardPage() {
   return (
     <PageShell title="Dashboard">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {system.data && <CpuCard data={system.data} />}
-        {system.data && <MemoryCard data={system.data} />}
-        {system.data && <UptimeCard data={system.data} />}
-        {drops.data ? <FirewallDropsCard data={drops.data} /> : <CardSkeleton title="Firewall Drops" />}
-        {traffic.data ? <TrafficCard data={traffic.data} /> : <CardSkeleton title="WAN Traffic" />}
-        {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
         {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
         <NetworkDevicesCard />
         <IdentityOverviewCard />
+        {drops.data ? <FirewallDropsCard data={drops.data} /> : <CardSkeleton title="Firewall Drops" />}
+        {traffic.data ? <TrafficCard data={traffic.data} /> : <CardSkeleton title="WAN Traffic" />}
+        {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
       </div>
 
       <VlanActivitySection />
@@ -235,6 +230,10 @@ export function DashboardPage() {
 
       <div className="mt-6">
         <DirectionalPortSankeys days={1} />
+      </div>
+
+      <div className="mt-6 flex justify-end">
+        {system.data && <div className="w-full md:w-1/2 xl:w-1/3"><UptimeCard data={system.data} /></div>}
       </div>
     </PageShell>
   );

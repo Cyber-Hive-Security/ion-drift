@@ -99,24 +99,24 @@ function Row({ label, value }: { label: string; value: string }) {
 // ─── Legend ──────────────────────────────────────────────
 
 const LEGEND_NODES = [
-  { color: "#ffd700", label: "Router" },
-  { color: "#00e5ff", label: "Switch" },
-  { color: "#00c853", label: "Access Point" },
-  { color: "#90a4ae", label: "Endpoint" },
+  { color: "#2FA4FF", label: "Router" },
+  { color: "#00E5FF", label: "Switch" },
+  { color: "#7A5CFF", label: "Access Point" },
+  { color: "#E6EDF3", label: "Endpoint" },
 ] as const;
 
 const LEGEND_SPEEDS = [
-  { width: 3.5, color: "#ffd700", label: "10 Gbps" },
-  { width: 2.5, color: "#ff8c00", label: "5 Gbps" },
-  { width: 2.0, color: "#00e5ff", label: "2.5 Gbps" },
-  { width: 1.2, color: "#00f0ff", label: "1 Gbps" },
+  { width: 3.5, color: "#2FA4FF", label: "10 Gbps" },
+  { width: 2.5, color: "#FF4FD8", label: "5 Gbps" },
+  { width: 2.0, color: "#7A5CFF", label: "2.5 Gbps" },
+  { width: 1.2, color: "#00E5FF", label: "1 Gbps" },
 ] as const;
 
 const LEGEND_EDGES = [
-  { color: "#00e5ff", width: 2, dash: false, label: "Trunk" },
-  { color: "#ffd700", width: 2, dash: false, label: "Uplink" },
-  { color: "#666", width: 1, dash: false, label: "Access" },
-  { color: "#666", width: 1, dash: true, label: "Wireless" },
+  { color: "#00E5FF", width: 2, dash: false, label: "Trunk" },
+  { color: "#2FA4FF", width: 2, dash: false, label: "Uplink" },
+  { color: "#6B7785", width: 1, dash: false, label: "Access" },
+  { color: "#6B7785", width: 1, dash: true, label: "Wireless" },
 ] as const;
 
 function LegendSection({ title, children }: { title: string; children: React.ReactNode }) {
@@ -124,7 +124,7 @@ function LegendSection({ title, children }: { title: string; children: React.Rea
     <div className="mt-2 first:mt-0">
       <div
         className="mb-1 text-[9px] font-bold tracking-[2px]"
-        style={{ color: "#ffd700", fontFamily: "'Orbitron', monospace" }}
+        style={{ color: "#2FA4FF", fontFamily: "'Orbitron', monospace" }}
       >
         {title}
       </div>
@@ -190,13 +190,13 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
         onPointerUp={handlePointerUp}
         onClick={handleToggleClick}
         className="flex w-full cursor-grab items-center justify-between gap-2 px-3 py-1.5 text-xs font-semibold select-none hover:text-foreground active:cursor-grabbing"
-        style={{ color: "#ffd700", fontFamily: "'Orbitron', monospace", fontSize: "10px", letterSpacing: "2px" }}
+        style={{ color: "#2FA4FF", fontFamily: "'Orbitron', monospace", fontSize: "10px", letterSpacing: "2px" }}
       >
         LEGEND
         {collapsed ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
       </div>
       {!collapsed && (
-        <div className="border-t px-3 py-2 text-[10px]" style={{ borderColor: "rgba(0, 240, 255, 0.08)", color: "#c0d0e0" }}>
+        <div className="border-t px-3 py-2 text-[10px]" style={{ borderColor: "rgba(42, 50, 61, 0.5)", color: "#9AA6B2" }}>
           {/* Nodes */}
           <LegendSection title="NODES">
             {LEGEND_NODES.map((n) => (
@@ -251,7 +251,7 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
                   style={{ background: color, opacity: 0.6 }}
                 />
                 <span>
-                  <span style={{ color: "#5a7080" }}>{vid}:</span> {VLAN_NAMES[Number(vid)] ?? ""}
+                  <span style={{ color: "#6B7785" }}>{vid}:</span> {VLAN_NAMES[Number(vid)] ?? ""}
                 </span>
               </div>
             ))}
@@ -260,11 +260,11 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
           {/* Status */}
           <LegendSection title="STATUS">
             <div className="flex items-center gap-2">
-              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full bg-green-500 shadow-[0_0_4px_#00ff88]" />
+              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full bg-success shadow-[0_0_4px_#21D07A]" />
               Online
             </div>
             <div className="flex items-center gap-2">
-              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full bg-red-500 shadow-[0_0_4px_#ff4444]" />
+              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full bg-destructive shadow-[0_0_4px_#FF4D4F]" />
               Offline
             </div>
             <div className="flex items-center gap-2">
@@ -286,7 +286,7 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
                   className="inline-block min-w-[50px] rounded px-1 py-px text-center text-[9px]"
                   style={{
                     fontFamily: "'Share Tech Mono', monospace",
-                    color: "#5a7080",
+                    color: "#6B7785",
                     background: "rgba(255,255,255,0.04)",
                     border: "1px solid rgba(255,255,255,0.08)",
                   }}
@@ -461,7 +461,7 @@ function NodeContextMenu({
                 }}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
               >
-                <span className="text-yellow-500">⚠</span>
+                <span className="text-warning">⚠</span>
                 Flag device
               </button>
             )}
@@ -721,7 +721,7 @@ export function TopologyPage() {
         <svg
           ref={svgRef}
           className="topology-root h-full w-full"
-          style={{ background: "#0d0d24" }}
+          style={{ background: "#0B0F14" }}
         />
 
         {/* Detail Panel */}

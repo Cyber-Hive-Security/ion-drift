@@ -18,24 +18,24 @@ const CLASSIFICATION_COLORS: Record<
   { udp: string; tcp: string }
 > = {
   normal: {
-    udp: "oklch(0.65 0.2 145)", // green
-    tcp: "oklch(0.65 0.18 250)", // blue
+    udp: "#21D07A", // green
+    tcp: "#2FA4FF", // blue
   },
   new_port: {
-    udp: "#ef4444", // red
-    tcp: "#ef4444",
+    udp: "#FF4D4F", // critical red
+    tcp: "#FF4D4F",
   },
   volume_spike: {
-    udp: "#f59e0b", // amber
-    tcp: "#f59e0b",
+    udp: "#FFC857", // warning amber
+    tcp: "#FFC857",
   },
   source_anomaly: {
-    udp: "#f59e0b", // amber
-    tcp: "#f59e0b",
+    udp: "#FFC857", // warning amber
+    tcp: "#FFC857",
   },
   disappeared: {
-    udp: "#6b7280", // gray
-    tcp: "#6b7280",
+    udp: "#6B7785", // muted
+    tcp: "#6B7785",
   },
 };
 
@@ -49,14 +49,14 @@ function getFlowColor(
 
 // Distinct colors for source protocol groupings (normal mode)
 const PROTOCOL_COLORS: Record<string, string> = {
-  tcp: "oklch(0.65 0.18 250)", // blue
-  udp: "oklch(0.65 0.2 145)", // green
-  icmp: "oklch(0.65 0.2 30)", // orange
-  other: "oklch(0.65 0.2 330)", // pink
+  tcp: "#2FA4FF", // blue
+  udp: "#21D07A", // green
+  icmp: "#FF4FD8", // orange
+  other: "#FF4FD8", // pink
 };
 
 function getProtocolColor(protocol: string): string {
-  return PROTOCOL_COLORS[protocol] ?? "oklch(0.65 0.15 0)";
+  return PROTOCOL_COLORS[protocol] ?? "#FF4D4F";
 }
 
 const MIN_SCALED_VALUE = 2;
@@ -128,11 +128,11 @@ function CustomNode(props: SankeyNodePayload) {
 
   const badgeColor =
     cls === "new_port"
-      ? "#ef4444"
+      ? "#FF4D4F"
       : cls === "volume_spike" || cls === "source_anomaly"
-        ? "#f59e0b"
+        ? "#FFC857"
         : cls === "disappeared"
-          ? "#6b7280"
+          ? "#6B7785"
           : undefined;
 
   return (
@@ -150,7 +150,7 @@ function CustomNode(props: SankeyNodePayload) {
         y={y + height / 2}
         textAnchor={isLeft ? "end" : "start"}
         dominantBaseline="central"
-        fill={isAnomaly ? badgeColor : "oklch(0.85 0.01 285)"}
+        fill={isAnomaly ? badgeColor : "#E6EDF3"}
         fontSize={11}
         fontWeight={isAnomaly ? 600 : 400}
       >
@@ -162,7 +162,7 @@ function CustomNode(props: SankeyNodePayload) {
         y={y + height / 2 + 14}
         textAnchor={isLeft ? "end" : "start"}
         dominantBaseline="central"
-        fill="oklch(0.55 0.01 285)"
+        fill="#6B7785"
         fontSize={10}
       >
         {cls === "disappeared" && payload.baselineAvg
@@ -272,10 +272,10 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
           const badge = document.createElement("span");
           badge.style.color =
             cls === "new_port"
-              ? "#ef4444"
+              ? "#FF4D4F"
               : cls === "disappeared"
-                ? "#6b7280"
-                : "#f59e0b";
+                ? "#6B7785"
+                : "#FFC857";
           badge.textContent =
             cls === "new_port"
               ? "NEW PORT"
@@ -293,7 +293,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
           if (devices.length > 0) {
             el.appendChild(document.createElement("br"));
             const devHeader = document.createElement("span");
-            devHeader.style.color = "#94a3b8";
+            devHeader.style.color = "#9AA6B2";
             devHeader.style.fontSize = "11px";
             devHeader.textContent = `Devices (${devices.length}):`;
             el.appendChild(devHeader);
@@ -312,7 +312,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
               el.appendChild(document.createElement("br"));
               const more = document.createElement("span");
               more.style.fontSize = "10px";
-              more.style.color = "#64748b";
+              more.style.color = "#6B7785";
               more.textContent = `  +${devices.length - 5} more`;
               el.appendChild(more);
             }
@@ -475,9 +475,9 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
           position: "fixed",
           pointerEvents: "none",
           zIndex: 50,
-          backgroundColor: "oklch(0.175 0.015 285)",
-          border: "1px solid oklch(0.3 0.015 285)",
-          color: "oklch(0.95 0.01 285)",
+          backgroundColor: "#141A21",
+          border: "1px solid #2A323D",
+          color: "#E6EDF3",
           borderRadius: "6px",
           padding: "6px 12px",
           fontSize: "12px",
@@ -537,8 +537,8 @@ function AnomalyBanner({
   }
 
   const bgClass = hasCritical
-    ? "bg-red-500/10 border-red-500/30 text-red-300"
-    : "bg-amber-500/10 border-amber-500/30 text-amber-300";
+    ? "bg-destructive/10 border-destructive/30 text-destructive"
+    : "bg-warning/10 border-warning/30 text-warning";
 
   return (
     <div

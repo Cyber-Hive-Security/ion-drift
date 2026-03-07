@@ -26,10 +26,10 @@ import {
 import type { ConnectionEntry, ConnectionsPageResponse } from "@/api/types";
 
 const PROTOCOL_COLORS: Record<string, string> = {
-  tcp: "oklch(0.65 0.18 250)",
-  udp: "oklch(0.65 0.2 145)",
-  icmp: "oklch(0.65 0.2 60)",
-  other: "oklch(0.55 0.05 285)",
+  tcp: "#2FA4FF",
+  udp: "#21D07A",
+  icmp: "#FFC857",
+  other: "#6B7785",
 };
 
 type FilterMode = "all" | "flagged" | "tcp" | "udp" | "external";
@@ -155,10 +155,10 @@ function SummaryBar({ data }: { data: ConnectionsPageResponse }) {
         {summary.flagged_count > 0 ? (
           <div className="mt-1 flex items-center gap-2">
             <span className="relative flex h-3 w-3">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-              <span className="relative inline-flex h-3 w-3 rounded-full bg-red-500" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
+              <span className="relative inline-flex h-3 w-3 rounded-full bg-destructive" />
             </span>
-            <span className="text-2xl font-bold text-red-500">
+            <span className="text-2xl font-bold text-destructive">
               {summary.flagged_count}
             </span>
           </div>
@@ -345,20 +345,20 @@ function GeoDistribution({
       </p>
       <ResponsiveContainer width="100%" height={Math.max(200, countryData.length * 24)}>
         <BarChart data={countryData} layout="vertical" margin={{ left: 60 }}>
-          <XAxis type="number" tick={{ fontSize: 10, fill: "oklch(0.55 0.01 285)" }} />
+          <XAxis type="number" tick={{ fontSize: 10, fill: "#6B7785" }} />
           <YAxis
             type="category"
             dataKey="code"
-            tick={{ fontSize: 11, fill: "oklch(0.75 0.01 285)" }}
+            tick={{ fontSize: 11, fill: "#9AA6B2" }}
             width={50}
             tickFormatter={(code: string) => `${countryFlag(code)} ${code}`}
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: "oklch(0.175 0.015 285)",
-              border: "1px solid oklch(0.3 0.015 285)",
+              backgroundColor: "#141A21",
+              border: "1px solid #2A323D",
               borderRadius: "6px",
-              color: "oklch(0.95 0.01 285)",
+              color: "#E6EDF3",
               fontSize: "12px",
             }}
             formatter={(value: number, _: string, props: { payload?: { name?: string } }) => [
@@ -378,7 +378,7 @@ function GeoDistribution({
             {countryData.map((entry) => (
               <Cell
                 key={entry.code}
-                fill={entry.flagged ? "oklch(0.6 0.2 25)" : "oklch(0.55 0.15 250)"}
+                fill={entry.flagged ? "#FF4D4F" : "#2FA4FF"}
               />
             ))}
           </Bar>
@@ -477,7 +477,7 @@ const connectionColumns: Column<ConnectionEntry>[] = [
     header: "Flag",
     render: (r) =>
       r.flagged ? (
-        <span className="inline-flex rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-500">
+        <span className="inline-flex rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-medium text-destructive">
           Flagged
         </span>
       ) : null,
@@ -658,7 +658,7 @@ function GroupRows({
               {formatBytes(group.totalRepl, 1)} \u2193
             </span>
             {group.flaggedCount > 0 && (
-              <span className="inline-flex rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-red-500">
+              <span className="inline-flex rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-destructive">
                 {group.flaggedCount} flagged
               </span>
             )}
@@ -892,34 +892,34 @@ function ConnectionHistoryChart() {
         <AreaChart data={chartData}>
           <defs>
             <linearGradient id="connTcpGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0} />
+              <stop offset="5%" stopColor="#2FA4FF" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#2FA4FF" stopOpacity={0} />
             </linearGradient>
             <linearGradient id="connUdpGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0} />
+              <stop offset="5%" stopColor="#21D07A" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#21D07A" stopOpacity={0} />
             </linearGradient>
             <linearGradient id="connOtherGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="oklch(0.55 0.05 285)" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="oklch(0.55 0.05 285)" stopOpacity={0} />
+              <stop offset="5%" stopColor="#6B7785" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#6B7785" stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.3 0.015 285)" />
+          <CartesianGrid strokeDasharray="3 3" stroke="#2A323D" />
           <XAxis
             dataKey="time"
-            tick={{ fill: "oklch(0.65 0.01 285)", fontSize: 11 }}
+            tick={{ fill: "#6B7785", fontSize: 11 }}
             interval="preserveStartEnd"
           />
           <YAxis
-            tick={{ fill: "oklch(0.65 0.01 285)", fontSize: 11 }}
+            tick={{ fill: "#6B7785", fontSize: 11 }}
             tickFormatter={(v: number) => formatNumber(v)}
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: "oklch(0.175 0.015 285)",
-              border: "1px solid oklch(0.3 0.015 285)",
+              backgroundColor: "#141A21",
+              border: "1px solid #2A323D",
               borderRadius: "6px",
-              color: "oklch(0.95 0.01 285)",
+              color: "#E6EDF3",
               fontSize: "12px",
             }}
             formatter={(value: number, name: string) => [
@@ -931,7 +931,7 @@ function ConnectionHistoryChart() {
             type="monotone"
             dataKey="tcp"
             stackId="1"
-            stroke="oklch(0.65 0.18 250)"
+            stroke="#2FA4FF"
             strokeWidth={1.5}
             fill="url(#connTcpGrad)"
             isAnimationActive={false}
@@ -940,7 +940,7 @@ function ConnectionHistoryChart() {
             type="monotone"
             dataKey="udp"
             stackId="1"
-            stroke="oklch(0.65 0.2 145)"
+            stroke="#21D07A"
             strokeWidth={1.5}
             fill="url(#connUdpGrad)"
             isAnimationActive={false}
@@ -949,7 +949,7 @@ function ConnectionHistoryChart() {
             type="monotone"
             dataKey="other"
             stackId="1"
-            stroke="oklch(0.55 0.05 285)"
+            stroke="#6B7785"
             strokeWidth={1.5}
             fill="url(#connOtherGrad)"
             isAnimationActive={false}
@@ -1143,7 +1143,7 @@ export function ConnectionsPage() {
           >
             {f.label}
             {f.mode === "flagged" && data.summary.flagged_count > 0 && (
-              <span className="ml-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white">
+              <span className="ml-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-destructive-foreground">
                 {data.summary.flagged_count}
               </span>
             )}
@@ -1276,7 +1276,7 @@ export function ConnectionsPage() {
           defaultSort={{ key: "flagged" }}
           rowStyle={(r) =>
             r.flagged
-              ? { borderLeft: "3px solid oklch(0.6 0.2 25)" }
+              ? { borderLeft: "3px solid #FF4D4F" }
               : undefined
           }
         />
@@ -1287,7 +1287,7 @@ export function ConnectionsPage() {
           columns={connectionColumns}
           rowStyle={(r) =>
             r.flagged
-              ? { borderLeft: "3px solid oklch(0.6 0.2 25)" }
+              ? { borderLeft: "3px solid #FF4D4F" }
               : undefined
           }
         />

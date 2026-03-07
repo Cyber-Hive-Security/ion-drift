@@ -37,10 +37,10 @@ export function TopBar({
   return (
     <div className="nm-top-bar">
       <div className="nm-top-bar-left">
-        <span style={{ fontSize: 18, color: "#ffd700", filter: "drop-shadow(0 0 6px rgba(255,215,0,0.5))" }}>
+        <span style={{ fontSize: 18, color: "#2FA4FF", filter: "drop-shadow(0 0 6px rgba(47,164,255,0.5))" }}>
           &#x2B22;
         </span>
-        <span style={{ fontFamily: "'Orbitron', monospace", fontSize: 13, fontWeight: 700, color: "#00f0ff", letterSpacing: 2 }}>
+        <span style={{ fontFamily: "'Orbitron', monospace", fontSize: 13, fontWeight: 700, color: "#00E5FF", letterSpacing: 2 }}>
           TACTICAL MAP
         </span>
       </div>

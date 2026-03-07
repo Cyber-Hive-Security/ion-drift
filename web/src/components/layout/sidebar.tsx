@@ -71,10 +71,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               <Icon className="h-4 w-4" />
               {label}
               {showDot && (
-                <span className="ml-auto h-2 w-2 rounded-full bg-red-500" />
+                <span className="ml-auto h-2 w-2 rounded-full bg-destructive" />
               )}
               {showBehaviorBadge && (
-                <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-white">
+                <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-warning px-1 text-[10px] font-bold text-background">
                   {pendingAnomalies}
                 </span>
               )}
@@ -137,10 +137,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                     className={cn(
                       "inline-block h-2 w-2 rounded-full flex-shrink-0",
                       device.status === "Online"
-                        ? "bg-green-500"
+                        ? "bg-success"
                         : device.status === "Offline"
-                          ? "bg-red-500"
-                          : "bg-gray-400",
+                          ? "bg-destructive"
+                          : "bg-muted-foreground",
                     )}
                   />
                   <span className="truncate">{device.name}</span>

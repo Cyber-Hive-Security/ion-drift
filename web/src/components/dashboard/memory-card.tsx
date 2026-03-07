@@ -40,14 +40,14 @@ export function MemoryCard({ data }: { data: SystemResource }) {
             <AreaChart data={chartData}>
               <defs>
                 <linearGradient id="memGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#2FA4FF" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#2FA4FF" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <Area
                 type="monotone"
                 dataKey="v"
-                stroke="oklch(0.65 0.18 250)"
+                stroke="#2FA4FF"
                 strokeWidth={1.5}
                 fill="url(#memGrad)"
                 dot={false}

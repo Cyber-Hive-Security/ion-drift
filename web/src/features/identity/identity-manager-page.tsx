@@ -69,21 +69,21 @@ const DEVICE_TYPE_LABELS: Record<string, string> = {
 };
 
 const SOURCE_COLORS: Record<string, string> = {
-  human: "bg-green-500/20 text-green-400 border-green-500/30",
-  lldp: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+  human: "bg-success/20 text-success border-success/30",
+  lldp: "bg-primary/20 text-primary border-primary/30",
   nmap: "bg-purple-500/20 text-purple-400 border-purple-500/30",
   conntrack: "bg-teal-500/20 text-teal-400 border-teal-500/30",
-  traffic_pattern: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+  traffic_pattern: "bg-warning/20 text-warning border-warning/30",
   oui: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
   none: "bg-muted text-muted-foreground border-border",
 };
 
 const DISPOSITION_OPTIONS: { value: DeviceDisposition; label: string; color: string }[] = [
   { value: "unknown", label: "Unknown", color: "bg-muted text-muted-foreground border-border" },
-  { value: "my_device", label: "My Device", color: "bg-green-500/20 text-green-400 border-green-500/30" },
-  { value: "external", label: "External", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
+  { value: "my_device", label: "My Device", color: "bg-success/20 text-success border-success/30" },
+  { value: "external", label: "External", color: "bg-primary/20 text-primary border-primary/30" },
   { value: "ignored", label: "Ignored", color: "bg-muted/50 text-muted-foreground/50 border-border/50" },
-  { value: "flagged", label: "Flagged", color: "bg-red-500/20 text-red-400 border-red-500/30" },
+  { value: "flagged", label: "Flagged", color: "bg-destructive/20 text-destructive border-destructive/30" },
 ];
 
 const DISPOSITION_COLORS: Record<string, string> = Object.fromEntries(
@@ -105,10 +105,10 @@ function formatTimeAgo(unixSecs: number): string {
 }
 
 function statusDot(identity: NetworkIdentity): string {
-  if (identity.human_confirmed) return "bg-green-500"; // confirmed
-  if (identity.device_type_source === "lldp") return "bg-blue-500"; // LLDP
+  if (identity.human_confirmed) return "bg-success"; // confirmed
+  if (identity.device_type_source === "lldp") return "bg-primary"; // LLDP
   if (identity.device_type && identity.device_type_confidence >= 0.6)
-    return "bg-amber-500"; // automated
+    return "bg-warning"; // automated
   if (identity.device_type) return "bg-orange-500"; // low confidence
   return "bg-muted-foreground/30"; // no type
 }
@@ -131,7 +131,7 @@ function ResetButton({
         resetField.mutate({ mac, field });
       }}
       disabled={resetField.isPending}
-      className="ml-1 inline-flex rounded p-0.5 text-muted-foreground hover:bg-amber-500/20 hover:text-amber-400"
+      className="ml-1 inline-flex rounded p-0.5 text-muted-foreground hover:bg-warning/20 hover:text-warning"
       title="Reset to auto-detected"
     >
       <RotateCcw className="h-3 w-3" />
@@ -318,7 +318,7 @@ function SwitchBindingCell({
             setPort(identity.switch_port || "");
             setEditing(true);
           }}
-          className={cn("rounded px-1.5 py-0.5 text-left text-xs hover:bg-muted/50", isHuman && "text-green-400")}
+          className={cn("rounded px-1.5 py-0.5 text-left text-xs hover:bg-muted/50", isHuman && "text-success")}
           title={isHuman ? "Human override" : "Auto-detected"}
         >
           {deviceName || identity.switch_device_id || "—"}
@@ -386,7 +386,7 @@ function InfrastructureCell({
   const color = val === null
     ? "bg-muted text-muted-foreground border-border"
     : val
-      ? "bg-blue-500/20 text-blue-400 border-blue-500/30"
+      ? "bg-primary/20 text-primary border-primary/30"
       : "bg-muted/50 text-muted-foreground/50 border-border/50";
 
   return (
@@ -708,7 +708,7 @@ export default function IdentityManagerPage() {
       render: (row) => {
         const isHuman = row.switch_binding_source === "human";
         return (
-          <span className={cn("text-xs", isHuman && "text-green-400")} title={isHuman ? "Human override" : undefined}>
+          <span className={cn("text-xs", isHuman && "text-success")} title={isHuman ? "Human override" : undefined}>
             {row.switch_port || "—"}
           </span>
         );
@@ -797,13 +797,13 @@ export default function IdentityManagerPage() {
         !row.human_confirmed ? (
           <button
             onClick={() => handleConfirm(row.mac_address)}
-            className="rounded p-1 text-muted-foreground hover:bg-green-500/10 hover:text-green-500"
+            className="rounded p-1 text-muted-foreground hover:bg-success/10 hover:text-success"
             title="Confirm identity"
           >
             <Check className="h-3.5 w-3.5" />
           </button>
         ) : (
-          <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+          <CheckCircle2 className="h-3.5 w-3.5 text-success" />
         ),
     },
   ];
@@ -818,12 +818,12 @@ export default function IdentityManagerPage() {
     >
       {/* Port violation banner */}
       {violations.length > 0 && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2">
-          <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
-          <span className="text-sm font-medium text-red-400">
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2">
+          <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />
+          <span className="text-sm font-medium text-destructive">
             {violations.length} port violation{violations.length !== 1 ? "s" : ""} detected
           </span>
-          <span className="text-xs text-red-400/70">
+          <span className="text-xs text-destructive/70">
             — {violations.filter(v => v.violation_type === "mac_mismatch").length} MAC mismatch, {violations.filter(v => v.violation_type === "device_missing").length} device missing
           </span>
         </div>
@@ -836,9 +836,9 @@ export default function IdentityManagerPage() {
         </StatCard>
         <StatCard
           title="Confirmed"
-          icon={<CheckCircle2 className="h-4 w-4 text-green-500" />}
+          icon={<CheckCircle2 className="h-4 w-4 text-success" />}
         >
-          <div className="text-2xl font-bold text-green-500">
+          <div className="text-2xl font-bold text-success">
             {stats?.confirmed ?? "—"}
             {stats && stats.total > 0 && (
               <span className="ml-1 text-sm font-normal text-muted-foreground">
@@ -849,9 +849,9 @@ export default function IdentityManagerPage() {
         </StatCard>
         <StatCard
           title="Needs Review"
-          icon={<AlertCircle className="h-4 w-4 text-amber-500" />}
+          icon={<AlertCircle className="h-4 w-4 text-warning" />}
         >
-          <div className="text-2xl font-bold text-amber-500">
+          <div className="text-2xl font-bold text-warning">
             {stats?.unconfirmed ?? "—"}
           </div>
         </StatCard>
@@ -903,7 +903,7 @@ export default function IdentityManagerPage() {
           className={cn(
             "rounded-md border px-3 py-1.5 text-xs transition-colors",
             filterConfirmed === "unconfirmed"
-              ? "border-amber-500/50 bg-amber-500/10 text-amber-500"
+              ? "border-amber-500/50 bg-amber-500/10 text-warning"
               : "border-border text-muted-foreground hover:bg-muted"
           )}
         >
@@ -1044,7 +1044,7 @@ export default function IdentityManagerPage() {
           <button
             onClick={handleBulkConfirm}
             disabled={bulkConfirm.isPending}
-            className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+            className="rounded-md bg-success px-3 py-1.5 text-xs font-medium text-background hover:bg-success/80 disabled:opacity-50"
           >
             Confirm All
           </button>

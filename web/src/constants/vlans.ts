@@ -3,15 +3,15 @@
 // Source of truth mirrors the tactical map's VLAN_CONFIG.
 
 export const VLAN_COLORS: Record<number, string> = {
-  2: "#00f0ff",
-  6: "#888888",
-  10: "#ff4444",
-  25: "#00b4d8",
-  30: "#22cc88",
-  35: "#44ddaa",
-  40: "#ffaa00",
-  90: "#f97316",
-  99: "#7FFF00",
+  2: "#00E5FF",
+  6: "#6B7785",
+  10: "#FF4D4F",
+  25: "#2FA4FF",
+  30: "#21D07A",
+  35: "#32FF9C",
+  40: "#FFC857",
+  90: "#7A5CFF",
+  99: "#FF4FD8",
 };
 
 export const VLAN_NAMES: Record<number, string> = {

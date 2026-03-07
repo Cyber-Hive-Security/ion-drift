@@ -54,21 +54,21 @@ function statusBadge(status: string) {
   switch (status) {
     case "running":
       return (
-        <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/20 px-2 py-0.5 text-[10px] font-medium text-blue-400">
+        <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/20 px-2 py-0.5 text-[10px] font-medium text-primary">
           <Loader2 className="h-3 w-3 animate-spin" />
           Running
         </span>
       );
     case "completed":
       return (
-        <span className="inline-flex items-center gap-1 rounded-full border border-green-500/30 bg-green-500/20 px-2 py-0.5 text-[10px] font-medium text-green-400">
+        <span className="inline-flex items-center gap-1 rounded-full border border-success/30 bg-success/20 px-2 py-0.5 text-[10px] font-medium text-success">
           <CheckCircle2 className="h-3 w-3" />
           Completed
         </span>
       );
     case "failed":
       return (
-        <span className="inline-flex items-center gap-1 rounded-full border border-red-500/30 bg-red-500/20 px-2 py-0.5 text-[10px] font-medium text-red-400">
+        <span className="inline-flex items-center gap-1 rounded-full border border-destructive/30 bg-destructive/20 px-2 py-0.5 text-[10px] font-medium text-destructive">
           <XCircle className="h-3 w-3" />
           Failed
         </span>
@@ -220,7 +220,7 @@ export default function NetworkScansPage() {
             {viewingScanId === row.id ? "Hide" : "Results"}
           </button>
         ) : row.error ? (
-          <span className="text-xs text-red-400" title={row.error}>
+          <span className="text-xs text-destructive" title={row.error}>
             Error
           </span>
         ) : null,
@@ -314,7 +314,7 @@ export default function NetworkScansPage() {
       render: (row) => (
         <button
           onClick={() => removeExclusion.mutate(row.ip_address)}
-          className="rounded p-1 text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+          className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
           title="Remove exclusion"
         >
           <Trash2 className="h-3.5 w-3.5" />
@@ -336,7 +336,7 @@ export default function NetworkScansPage() {
         </div>
 
         {!nmapAvailable && (
-          <div className="mb-4 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
+          <div className="mb-4 flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
             <AlertTriangle className="h-4 w-4" />
             nmap is not installed on the server. Scanning is unavailable.
           </div>
@@ -397,7 +397,7 @@ export default function NetworkScansPage() {
 
         {/* IoT warning */}
         {isIoTVlan && (
-          <div className="mt-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
             <AlertTriangle className="h-4 w-4 shrink-0" />
             IoT VLANs may contain fragile devices. Scanning could disrupt their operation.
             Use Quick scan profile for safer discovery.
@@ -406,8 +406,8 @@ export default function NetworkScansPage() {
 
         {/* Running scan progress */}
         {runningScan && (
-          <div className="mt-4 flex items-center gap-3 rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2">
-            <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+          <div className="mt-4 flex items-center gap-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
             <div className="text-sm">
               <span className="font-medium">Scanning VLAN {runningScan.vlan_id}</span>
               <span className="ml-2 text-muted-foreground">

@@ -52,9 +52,9 @@ const TOPIC_LABELS: Record<string, string> = {
 
 const SEVERITY_COLORS: Record<string, string> = {
   info: "bg-emerald-500",
-  warning: "bg-yellow-500",
-  error: "bg-red-500",
-  critical: "bg-red-600",
+  warning: "bg-warning",
+  error: "bg-destructive",
+  critical: "bg-destructive",
 };
 
 
@@ -195,7 +195,7 @@ export function LogsPage() {
               className={cn(
                 "flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
                 liveTail
-                  ? "border-red-500/50 bg-red-500/10 text-red-400"
+                  ? "border-destructive/50 bg-destructive/10 text-destructive"
                   : "border-border text-muted-foreground hover:bg-muted"
               )}
             >
@@ -268,7 +268,7 @@ export function LogsPage() {
               onChange={(e) => setFlaggedOnly(e.target.checked)}
               className="rounded"
             />
-            <ShieldAlert className="h-3.5 w-3.5 text-red-500" />
+            <ShieldAlert className="h-3.5 w-3.5 text-destructive" />
             Flagged Only
           </label>
 
@@ -335,14 +335,14 @@ function SummaryBar({ analytics }: { analytics: LogAnalytics }) {
       key: "warning",
       label: "Warn",
       icon: AlertTriangle,
-      color: "text-yellow-400",
+      color: "text-warning",
     },
-    { key: "error", label: "Error", icon: XCircle, color: "text-red-400" },
+    { key: "error", label: "Error", icon: XCircle, color: "text-destructive" },
     {
       key: "critical",
       label: "Crit",
       icon: ShieldAlert,
-      color: "text-red-500",
+      color: "text-destructive",
     },
   ];
 
@@ -376,8 +376,8 @@ function SummaryBar({ analytics }: { analytics: LogAnalytics }) {
       <div className="h-6 w-px bg-border" />
 
       <div className="flex items-center gap-1.5">
-        <Shield className="h-3.5 w-3.5 text-red-400" />
-        <span className="text-xs font-medium text-red-400">
+        <Shield className="h-3.5 w-3.5 text-destructive" />
+        <span className="text-xs font-medium text-destructive">
           {analytics.by_action["drop"] ?? 0}
         </span>
         <span className="text-xs text-muted-foreground">Drops</span>
@@ -408,7 +408,7 @@ function PillButton({
 }) {
   const activeColors =
     variant === "danger"
-      ? "border-red-500/50 bg-red-500/10 text-red-400"
+      ? "border-destructive/50 bg-destructive/10 text-destructive"
       : variant === "success"
         ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
         : "border-primary/50 bg-primary/10 text-primary";
@@ -594,8 +594,8 @@ function LogRow({
         className={cn(
           "border-b border-border/50 border-l-2 cursor-pointer transition-colors hover:bg-muted/30",
           borderColor,
-          isDrop && "bg-red-500/5",
-          isFlagged && "bg-red-500/10",
+          isDrop && "bg-destructive/5",
+          isFlagged && "bg-destructive/10",
           isNew && "animate-in fade-in duration-300"
         )}
       >
@@ -639,7 +639,7 @@ function LogRow({
               className={cn(
                 "inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase",
                 isDrop
-                  ? "bg-red-500/15 text-red-400"
+                  ? "bg-destructive/15 text-destructive"
                   : isAccept
                     ? "bg-emerald-500/15 text-emerald-400"
                     : "bg-muted text-muted-foreground"
@@ -654,7 +654,7 @@ function LogRow({
             </span>
           )}
           {entry.paired_messages && entry.paired_messages.length > 0 && (
-            <span className="ml-1 inline-flex items-center rounded bg-blue-500/15 px-1 py-0.5 text-[10px] font-medium text-blue-400">
+            <span className="ml-1 inline-flex items-center rounded bg-primary/15 px-1 py-0.5 text-[10px] font-medium text-primary">
               {1 + entry.paired_messages.length} rules
             </span>
           )}
@@ -676,7 +676,7 @@ function LogRow({
         {/* Source */}
         <td className="px-2 py-1.5 font-mono">
           {p?.src_ip && (
-            <span className={cn(p.src_flagged && "text-red-400")}>
+            <span className={cn(p.src_flagged && "text-destructive")}>
               {p.src_ip}
               {p.src_port != null && (
                 <span className="text-muted-foreground">:{p.src_port}</span>
@@ -698,7 +698,7 @@ function LogRow({
         {/* Destination */}
         <td className="px-2 py-1.5 font-mono">
           {p?.dst_ip && (
-            <span className={cn(p.dst_flagged && "text-red-400")}>
+            <span className={cn(p.dst_flagged && "text-destructive")}>
               {p.dst_ip}
               {p.dst_port != null && (
                 <span className="text-muted-foreground">:{p.dst_port}</span>
@@ -760,7 +760,7 @@ function ExpandedDetail({ entry }: { entry: StructuredLogEntry }) {
   return (
     <div className="space-y-2">
       {hasPaired && (
-        <div className="text-[10px] font-medium text-blue-400 uppercase tracking-wider">
+        <div className="text-[10px] font-medium text-primary uppercase tracking-wider">
           Terminating rule
         </div>
       )}
@@ -907,15 +907,15 @@ function LogTrendsSection() {
             <BarChart data={chartData}>
               <XAxis
                 dataKey="time"
-                tick={{ fill: "oklch(0.55 0.01 285)", fontSize: 9 }}
+                tick={{ fill: "#6B7785", fontSize: 9 }}
                 interval="preserveStartEnd"
                 axisLine={false}
                 tickLine={false}
               />
               <Tooltip
                 contentStyle={{
-                  background: "oklch(0.2 0 0)",
-                  border: "1px solid oklch(0.3 0 0)",
+                  background: "#141A21",
+                  border: "1px solid #2A323D",
                   borderRadius: 6,
                   fontSize: 11,
                 }}
@@ -924,8 +924,8 @@ function LogTrendsSection() {
                   name.charAt(0).toUpperCase() + name.slice(1),
                 ]}
               />
-              <Bar dataKey="drops" fill="oklch(0.6 0.2 25)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
-              <Bar dataKey="accepts" fill="oklch(0.6 0.18 145)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
+              <Bar dataKey="drops" fill="#FF4D4F" radius={[2, 2, 0, 0]} isAnimationActive={false} />
+              <Bar dataKey="accepts" fill="#21D07A" radius={[2, 2, 0, 0]} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -1001,14 +1001,14 @@ function AnalyticsPanel({ analytics }: { analytics: LogAnalytics }) {
                 type="category"
                 dataKey="interface"
                 width={100}
-                tick={{ fontSize: 10, fill: "oklch(0.7 0 0)" }}
+                tick={{ fontSize: 10, fill: "#9AA6B2" }}
                 axisLine={false}
                 tickLine={false}
               />
               <Tooltip
                 contentStyle={{
-                  background: "oklch(0.2 0 0)",
-                  border: "1px solid oklch(0.3 0 0)",
+                  background: "#141A21",
+                  border: "1px solid #2A323D",
                   borderRadius: 6,
                   fontSize: 11,
                 }}
@@ -1018,7 +1018,7 @@ function AnalyticsPanel({ analytics }: { analytics: LogAnalytics }) {
                 {analytics.drops_per_interface.map((_, i) => (
                   <Cell
                     key={i}
-                    fill={`oklch(0.65 0.2 ${30 + (i * 20) % 60})`}
+                    fill={["#FF4FD8", "#FF4D4F", "#FFC857"][i % 3]}
                   />
                 ))}
               </Bar>
@@ -1037,13 +1037,13 @@ function AnalyticsPanel({ analytics }: { analytics: LogAnalytics }) {
             >
               <defs>
                 <linearGradient id="volGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="oklch(0.65 0.15 250)" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="oklch(0.65 0.15 250)" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#2FA4FF" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#2FA4FF" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <XAxis
                 dataKey="minute"
-                tick={{ fontSize: 9, fill: "oklch(0.5 0 0)" }}
+                tick={{ fontSize: 9, fill: "#6B7785" }}
                 tickFormatter={(v: string) => (v.length > 11 ? v.slice(11) : v)}
                 interval="preserveStartEnd"
                 axisLine={false}
@@ -1051,8 +1051,8 @@ function AnalyticsPanel({ analytics }: { analytics: LogAnalytics }) {
               />
               <Tooltip
                 contentStyle={{
-                  background: "oklch(0.2 0 0)",
-                  border: "1px solid oklch(0.3 0 0)",
+                  background: "#141A21",
+                  border: "1px solid #2A323D",
                   borderRadius: 6,
                   fontSize: 11,
                 }}
@@ -1062,7 +1062,7 @@ function AnalyticsPanel({ analytics }: { analytics: LogAnalytics }) {
               <Area
                 type="monotone"
                 dataKey="count"
-                stroke="oklch(0.65 0.15 250)"
+                stroke="#2FA4FF"
                 strokeWidth={1.5}
                 fill="url(#volGrad)"
                 dot={false}
@@ -1102,7 +1102,7 @@ function DroppedSourceRow({ item }: { item: IpCount }) {
       <span
         className={cn(
           "font-mono flex-1 truncate",
-          item.flagged ? "text-red-400" : "text-foreground"
+          item.flagged ? "text-destructive" : "text-foreground"
         )}
       >
         {item.ip}
@@ -1142,7 +1142,7 @@ function TargetedPortRow({
       </div>
       <div className="h-1 w-full rounded-full bg-muted">
         <div
-          className="h-1 rounded-full bg-red-500/60"
+          className="h-1 rounded-full bg-destructive/60"
           style={{ width: `${pct}%` }}
         />
       </div>

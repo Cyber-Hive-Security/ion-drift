@@ -232,7 +232,7 @@ export function createMapInstance(
     // Tint the glow green
     fActive
       .append("feFlood")
-      .attr("flood-color", "#00ff88")
+      .attr("flood-color", "#21D07A")
       .attr("flood-opacity", 0.3)
       .attr("result", "color");
     fActive
@@ -255,7 +255,7 @@ export function createMapInstance(
     fInactive.append("feGaussianBlur").attr("stdDeviation", 4).attr("result", "blur");
     fInactive
       .append("feFlood")
-      .attr("flood-color", "#ff4444")
+      .attr("flood-color", "#FF4D4F")
       .attr("flood-opacity", 0.3)
       .attr("result", "color");
     fInactive
@@ -279,7 +279,7 @@ export function createMapInstance(
     fAnomaly.append("feGaussianBlur").attr("stdDeviation", 5).attr("result", "blur");
     fAnomaly
       .append("feFlood")
-      .attr("flood-color", "#ffaa00")
+      .attr("flood-color", "#FFC857")
       .attr("flood-opacity", 0.45)
       .attr("result", "color");
     fAnomaly
@@ -731,7 +731,7 @@ export function createMapInstance(
           .attr("y1", host.y)
           .attr("x2", startX - 4)
           .attr("y2", host.y)
-          .attr("stroke", "#b388ff")
+          .attr("stroke", "#7A5CFF")
           .attr("stroke-width", 0.5)
           .attr("stroke-dasharray", "3,3")
           .attr("opacity", 0.4);
@@ -934,7 +934,7 @@ export function createMapInstance(
               .classed("nm-node-active", false)
               .classed("nm-node-inactive", false)
               .classed("nm-node-unknown", false);
-            hex.attr("stroke", "#ffaa00").attr("filter", "url(#glow-anomaly)");
+            hex.attr("stroke", "#FFC857").attr("filter", "url(#glow-anomaly)");
           } else if (status) {
             g.classed("nm-node-anomaly", false);
             if (status.in_arp) {
@@ -942,14 +942,14 @@ export function createMapInstance(
               g.classed("nm-node-active", true)
                 .classed("nm-node-inactive", false)
                 .classed("nm-node-unknown", false);
-              hex.attr("stroke", "#00ff88").attr("filter", "url(#glow-active)");
+              hex.attr("stroke", "#21D07A").attr("filter", "url(#glow-active)");
             } else {
               // In DHCP but not in ARP — red glow
               g.classed("nm-node-active", false)
                 .classed("nm-node-inactive", true)
                 .classed("nm-node-unknown", false);
               hex
-                .attr("stroke", "#ff4444")
+                .attr("stroke", "#FF4D4F")
                 .attr("filter", "url(#glow-inactive)");
             }
           } else {
@@ -1011,7 +1011,7 @@ export function createMapInstance(
             .attr("class", "node-port-label")
             .attr("y", HEX_RADIUS + 38)
             .attr("text-anchor", "middle")
-            .attr("fill", "#00f0ff")
+            .attr("fill", "#00E5FF")
             .attr("font-size", "8px")
             .attr("font-family", "'Share Tech Mono', monospace")
             .attr("opacity", 0.8)

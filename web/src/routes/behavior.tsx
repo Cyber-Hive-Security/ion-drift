@@ -64,13 +64,13 @@ function parseDetails(details: string | null): Record<string, any> {
 function severityColor(severity: string): string {
   switch (severity) {
     case "critical":
-      return "text-red-500";
+      return "text-destructive";
     case "alert":
       return "text-orange-500";
     case "warning":
-      return "text-amber-500";
+      return "text-warning";
     case "info":
-      return "text-blue-400";
+      return "text-primary";
     default:
       return "text-muted-foreground";
   }
@@ -79,13 +79,13 @@ function severityColor(severity: string): string {
 function severityBg(severity: string): string {
   switch (severity) {
     case "critical":
-      return "bg-red-500/10 border-red-500/30";
+      return "bg-destructive/10 border-destructive/30";
     case "alert":
       return "bg-orange-500/10 border-orange-500/30";
     case "warning":
-      return "bg-amber-500/10 border-amber-500/30";
+      return "bg-warning/10 border-warning/30";
     case "info":
-      return "bg-blue-500/10 border-blue-500/30";
+      return "bg-primary/10 border-primary/30";
     default:
       return "bg-muted border-border";
   }
@@ -120,31 +120,31 @@ function StatsRow({ data }: { data: BehaviorOverview }) {
       </div>
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+          <CheckCircle2 className="h-3.5 w-3.5 text-success" />
           Baselined
         </div>
-        <p className="text-2xl font-bold text-emerald-500">
+        <p className="text-2xl font-bold text-success">
           {data.baselined_devices}
         </p>
       </div>
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Brain className="h-3.5 w-3.5 text-blue-500" />
+          <Brain className="h-3.5 w-3.5 text-primary" />
           Learning
         </div>
-        <p className="text-2xl font-bold text-blue-500">
+        <p className="text-2xl font-bold text-primary">
           {data.learning_devices}
         </p>
       </div>
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+          <AlertTriangle className="h-3.5 w-3.5 text-warning" />
           Pending Anomalies
         </div>
         <p
           className={cn(
             "text-2xl font-bold",
-            data.pending_anomalies > 0 ? "text-amber-500" : "text-emerald-500",
+            data.pending_anomalies > 0 ? "text-warning" : "text-success",
           )}
         >
           {data.pending_anomalies}
@@ -164,24 +164,24 @@ function AlertBanners({ data }: { data: BehaviorOverview }) {
   return (
     <>
       {learningCount > 0 && (
-        <div className="mb-3 flex items-start gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm text-blue-400">
+        <div className="mb-3 flex items-start gap-2 rounded-md border border-primary/30 bg-primary/10 px-4 py-2 text-sm text-primary">
           <Brain className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             Baseline learning in progress — {learningCount} device
             {learningCount !== 1 ? "s" : ""} building profiles (7 days).
-            <span className="ml-1 text-blue-400/70">
+            <span className="ml-1 text-primary/70">
               Blocked connection attempts are flagged immediately. Behavioral anomalies will activate after learning completes.
             </span>
           </div>
         </div>
       )}
       {(hasCritical || hasWarning) && (
-        <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-400">
+        <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-4 py-2 text-sm text-warning">
           <AlertTriangle className="h-4 w-4" />
           {data.pending_anomalies} anomal
           {data.pending_anomalies !== 1 ? "ies" : "y"} require review
           {hasCritical && (
-            <span className="ml-1 text-red-500">
+            <span className="ml-1 text-destructive">
               — {data.critical_anomalies} critical
             </span>
           )}
@@ -237,13 +237,13 @@ function VlanSection({
         <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
           <span>{summary.device_count} devices</span>
           {summary.pending_anomaly_count > 0 && (
-            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-amber-500">
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-warning">
               {summary.pending_anomaly_count} anomal
               {summary.pending_anomaly_count !== 1 ? "ies" : "y"}
             </span>
           )}
           {summary.learning_count > 0 && (
-            <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-blue-400">
+            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-primary">
               {summary.learning_count} learning
             </span>
           )}
@@ -370,8 +370,8 @@ function AnomalyCard({
 
           {/* Network context from port flow correlator */}
           {d.source === "port_flow" && (
-            <div className="mt-1 rounded border border-amber-500/20 bg-amber-500/5 px-2 py-1 text-xs">
-              <span className="font-medium text-amber-400">Network Context:</span>{" "}
+            <div className="mt-1 rounded border border-warning/20 bg-warning/5 px-2 py-1 text-xs">
+              <span className="font-medium text-warning">Network Context:</span>{" "}
               Detected at network level
               {d.total_devices_on_port != null && d.total_devices_on_port > 1 && (
                 <span className="ml-1 text-muted-foreground">
@@ -394,7 +394,7 @@ function AnomalyCard({
         {isPending && (
           <div className="flex shrink-0 items-center gap-1">
             <button
-              className="flex h-11 w-11 items-center justify-center rounded text-emerald-500 hover:bg-emerald-500/15 md:h-auto md:w-auto md:p-1"
+              className="flex h-11 w-11 items-center justify-center rounded text-success hover:bg-emerald-500/15 md:h-auto md:w-auto md:p-1"
               title="Accept"
               onClick={() =>
                 resolveMutation.mutate({ id: anomaly.id, action: "accepted" })
@@ -403,7 +403,7 @@ function AnomalyCard({
               <Check className="h-5 w-5 md:h-3.5 md:w-3.5" />
             </button>
             <button
-              className="flex h-11 w-11 items-center justify-center rounded text-amber-500 hover:bg-amber-500/15 md:h-auto md:w-auto md:p-1"
+              className="flex h-11 w-11 items-center justify-center rounded text-warning hover:bg-amber-500/15 md:h-auto md:w-auto md:p-1"
               title="Flag for review"
               onClick={() =>
                 resolveMutation.mutate({ id: anomaly.id, action: "flagged" })
@@ -519,7 +519,7 @@ const anomalyColumns: Column<DeviceAnomaly>[] = [
         className={cn(
           "rounded px-1.5 py-0.5 text-xs",
           r.status === "pending"
-            ? "bg-amber-500/15 text-amber-500"
+            ? "bg-amber-500/15 text-warning"
             : "bg-muted text-muted-foreground",
         )}
       >
@@ -609,7 +609,7 @@ export function BehaviorPage() {
           >
             {t.label}
             {t.mode === "anomalies" && data.pending_anomalies > 0 && (
-              <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] text-white">
+              <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-warning px-1 text-[10px] text-background">
                 {data.pending_anomalies}
               </span>
             )}
@@ -671,9 +671,9 @@ export function BehaviorPage() {
             defaultSort={{ key: "severity" }}
             rowStyle={(r) =>
               r.severity === "critical"
-                ? { borderLeft: "3px solid oklch(0.6 0.2 25)" }
+                ? { borderLeft: "3px solid #FF4D4F" }
                 : r.severity === "alert" || r.severity === "warning"
-                  ? { borderLeft: "3px solid oklch(0.7 0.2 70)" }
+                  ? { borderLeft: "3px solid #FFC857" }
                   : undefined
             }
           />

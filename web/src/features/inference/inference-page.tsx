@@ -43,18 +43,18 @@ function useAttachmentStates() {
 
 const STATE_COLORS: Record<string, string> = {
   unknown: "bg-gray-500/20 text-gray-400",
-  candidate: "bg-blue-500/20 text-blue-400",
+  candidate: "bg-primary/20 text-primary",
   probable: "bg-cyan-500/20 text-cyan-400",
-  stable: "bg-green-500/20 text-green-400",
+  stable: "bg-success/20 text-success",
   roaming: "bg-purple-500/20 text-purple-400",
-  conflicted: "bg-red-500/20 text-red-400",
-  human_pinned: "bg-amber-500/20 text-amber-400",
+  conflicted: "bg-destructive/20 text-destructive",
+  human_pinned: "bg-warning/20 text-warning",
 };
 
 const MODE_COLORS: Record<string, string> = {
   legacy: "bg-gray-600 text-gray-200",
-  shadow: "bg-amber-600 text-amber-100",
-  active: "bg-green-600 text-green-100",
+  shadow: "bg-warning text-background",
+  active: "bg-success text-background",
 };
 
 function StateBadge({ state }: { state: string }) {
@@ -86,7 +86,7 @@ function ModeBadge({ mode }: { mode: string }) {
 function ConfidenceBar({ value }: { value: number }) {
   const pct = Math.round(value * 100);
   const color =
-    pct >= 70 ? "bg-green-500" : pct >= 40 ? "bg-amber-500" : "bg-red-500";
+    pct >= 70 ? "bg-success" : pct >= 40 ? "bg-warning" : "bg-destructive";
   return (
     <div className="flex items-center gap-2">
       <div className="h-1.5 w-16 rounded-full bg-muted">
@@ -137,7 +137,7 @@ function FeatureBreakdown({ candidate }: { candidate: ScoredCandidate }) {
         <span className="font-mono">
           Score: {candidate.score.toFixed(2)}
           {candidate.suppressed && (
-            <span className="ml-2 text-red-400">
+            <span className="ml-2 text-destructive">
               (suppressed{candidate.suppression_reason ? `: ${candidate.suppression_reason}` : ""})
             </span>
           )}
@@ -384,7 +384,7 @@ export function InferencePage() {
         headerTitle: "Divergent from legacy binding",
         render: (row: MacRow) =>
           row.divergent ? (
-            <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" />
+            <span className="inline-block h-2.5 w-2.5 rounded-full bg-warning" />
           ) : null,
         sortValue: (row: MacRow) => (row.divergent ? 1 : 0),
       },

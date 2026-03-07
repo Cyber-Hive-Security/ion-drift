@@ -41,10 +41,10 @@ export function FirewallDropsCard({ data }: { data: FirewallDropsSummary }) {
       : 0;
   const sparkColor =
     avg > 1000
-      ? "oklch(0.65 0.2 30)"
+      ? "#FF4FD8"
       : avg > 100
-        ? "oklch(0.7 0.18 85)"
-        : "oklch(0.65 0.2 145)";
+        ? "#FFC857"
+        : "#21D07A";
 
   return (
     <StatCard title="Firewall Drops" icon={<Shield className="h-4 w-4" />}>
@@ -81,7 +81,7 @@ export function FirewallDropsCard({ data }: { data: FirewallDropsSummary }) {
                 <span className="text-muted-foreground"> &middot; </span>
               )}
               <span
-                className={c.flagged ? "text-red-500" : "text-muted-foreground"}
+                className={c.flagged ? "text-destructive" : "text-muted-foreground"}
               >
                 {countryFlag(c.code)} {c.code} ({compactNumber(c.count)})
               </span>
@@ -108,10 +108,10 @@ export function FirewallDropsCard({ data }: { data: FirewallDropsSummary }) {
               <XAxis dataKey="time" hide />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: "oklch(0.175 0.015 285)",
-                  border: "1px solid oklch(0.3 0.015 285)",
+                  backgroundColor: "#141A21",
+                  border: "1px solid #2A323D",
                   borderRadius: "6px",
-                  color: "oklch(0.95 0.01 285)",
+                  color: "#E6EDF3",
                   fontSize: "11px",
                 }}
                 formatter={(value: number) => [

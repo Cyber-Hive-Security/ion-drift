@@ -50,20 +50,20 @@ export function TrafficCard({ data }: { data: LifetimeTraffic }) {
               <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="rxGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#21D07A" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#21D07A" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="txGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#2FA4FF" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#2FA4FF" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: "oklch(0.175 0.015 285)",
-                    border: "1px solid oklch(0.3 0.015 285)",
+                    backgroundColor: "#141A21",
+                    border: "1px solid #2A323D",
                     borderRadius: "6px",
-                    color: "oklch(0.95 0.01 285)",
+                    color: "#E6EDF3",
                     fontSize: "12px",
                   }}
                   formatter={(value: number, name: string) => [
@@ -75,7 +75,7 @@ export function TrafficCard({ data }: { data: LifetimeTraffic }) {
                 <Area
                   type="monotone"
                   dataKey="rx"
-                  stroke="oklch(0.65 0.2 145)"
+                  stroke="#21D07A"
                   strokeWidth={1.5}
                   fill="url(#rxGrad)"
                   dot={false}
@@ -84,7 +84,7 @@ export function TrafficCard({ data }: { data: LifetimeTraffic }) {
                 <Area
                   type="monotone"
                   dataKey="tx"
-                  stroke="oklch(0.65 0.18 250)"
+                  stroke="#2FA4FF"
                   strokeWidth={1.5}
                   fill="url(#txGrad)"
                   dot={false}

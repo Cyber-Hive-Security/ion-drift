@@ -103,7 +103,7 @@ const arpColumns: Column<ArpEntry>[] = [
     render: (r) => {
       if (r.complete === false) {
         return (
-          <span className="inline-flex rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-500">
+          <span className="inline-flex rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive">
             Incomplete
           </span>
         );
@@ -185,8 +185,8 @@ const dhcpStatusColumns: Column<DhcpLeaseStatus>[] = [
       }
       if (r.arp_status === "stale") {
         return (
-          <span className="inline-flex items-center gap-1 text-xs text-amber-500">
-            <span className="h-2 w-2 rounded-full bg-amber-500" />
+          <span className="inline-flex items-center gap-1 text-xs text-warning">
+            <span className="h-2 w-2 rounded-full bg-warning" />
             Stale
           </span>
         );

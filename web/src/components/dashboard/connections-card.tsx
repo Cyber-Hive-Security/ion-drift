@@ -5,8 +5,8 @@ import { formatNumber } from "@/lib/format";
 import type { ConnectionSummary } from "@/api/types";
 
 function progressColor(pct: number): string {
-  if (pct >= 90) return "bg-red-500";
-  if (pct >= 70) return "bg-yellow-500";
+  if (pct >= 90) return "bg-destructive";
+  if (pct >= 70) return "bg-warning";
   return "bg-emerald-500";
 }
 
@@ -24,7 +24,7 @@ export function ConnectionsCard({ data }: { data: ConnectionSummary }) {
           <span className="relative">
             <Plug2 className="h-4 w-4" />
             {data.flagged_count > 0 && (
-              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-500" />
+              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-destructive" />
             )}
           </span>
         }
@@ -39,7 +39,7 @@ export function ConnectionsCard({ data }: { data: ConnectionSummary }) {
           {formatNumber(data.other_count)}
         </p>
         {data.flagged_count > 0 && (
-          <p className="mt-1 text-xs font-medium text-red-500">
+          <p className="mt-1 text-xs font-medium text-destructive">
             {data.flagged_count} flagged connection{data.flagged_count !== 1 ? "s" : ""}
           </p>
         )}

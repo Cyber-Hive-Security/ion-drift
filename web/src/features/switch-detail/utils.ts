@@ -72,10 +72,10 @@ export function getPortVlanColor(
   vlans: VlanMembershipEntry[],
 ): string {
   const portVlans = vlans.filter((v) => v.port_name === portName);
-  if (portVlans.length === 0) return "oklch(0.2 0.01 285)";
+  if (portVlans.length === 0) return "#141A21";
   const untagged = portVlans.find((v) => !v.tagged);
   const primaryVlanId = untagged?.vlan_id ?? portVlans[0].vlan_id;
-  return VLAN_CONFIG[primaryVlanId]?.color ?? "#666666";
+  return VLAN_CONFIG[primaryVlanId]?.color ?? "#6B7785";
 }
 
 /** Get the primary VLAN ID for a port (untagged preferred). */

@@ -284,7 +284,7 @@ export function PortGrid({
           <span
             className={cn(
               "absolute bottom-0.5 right-0.5 h-1 w-1 rounded-full",
-              cell.speed.includes("10G") ? "bg-yellow-400" : cell.speed.includes("1G") ? "bg-green-400" : "bg-blue-400",
+              cell.speed.includes("10G") ? "bg-warning" : cell.speed.includes("1G") ? "bg-success" : "bg-primary",
             )}
           />
         )}
@@ -376,7 +376,7 @@ export function PortGrid({
           <div className="space-y-1 text-xs text-muted-foreground">
             <div className="flex justify-between gap-4">
               <span>Status</span>
-              <span className={hoveredCell.running ? "text-green-400" : "text-red-400"}>
+              <span className={hoveredCell.running ? "text-success" : "text-destructive"}>
                 {hoveredCell.running ? "Link Up" : "Link Down"}
               </span>
             </div>

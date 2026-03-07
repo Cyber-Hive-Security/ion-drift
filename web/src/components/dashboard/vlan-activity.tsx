@@ -68,9 +68,9 @@ function VlanRow({
                 <Area
                   type="monotone"
                   dataKey="rx"
-                  stroke="oklch(0.65 0.2 145)"
+                  stroke="#21D07A"
                   strokeWidth={1}
-                  fill="oklch(0.65 0.2 145)"
+                  fill="#21D07A"
                   fillOpacity={0.15}
                   dot={false}
                   isAnimationActive={false}
@@ -87,7 +87,7 @@ function VlanRow({
             {formatBps(entry.rx_bps)}
           </span>
           <span>
-            <span className="text-blue-400">&#x25BC;</span>{" "}
+            <span className="text-primary">&#x25BC;</span>{" "}
             {formatBps(entry.tx_bps)}
           </span>
         </div>
@@ -98,23 +98,23 @@ function VlanRow({
             <AreaChart data={sparkData}>
               <defs>
                 <linearGradient id={`vlanRx-${entry.name}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="oklch(0.65 0.2 145)" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#21D07A" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#21D07A" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id={`vlanTx-${entry.name}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="oklch(0.65 0.18 250)" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#2FA4FF" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#2FA4FF" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <XAxis
                 dataKey="time"
-                tick={{ fill: "oklch(0.55 0.01 285)", fontSize: 9 }}
+                tick={{ fill: "#6B7785", fontSize: 9 }}
                 interval="preserveStartEnd"
                 axisLine={false}
                 tickLine={false}
               />
               <YAxis
-                tick={{ fill: "oklch(0.55 0.01 285)", fontSize: 9 }}
+                tick={{ fill: "#6B7785", fontSize: 9 }}
                 tickFormatter={(v: number) => formatBps(v)}
                 width={60}
                 axisLine={false}
@@ -122,10 +122,10 @@ function VlanRow({
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: "oklch(0.175 0.015 285)",
-                  border: "1px solid oklch(0.3 0.015 285)",
+                  backgroundColor: "#141A21",
+                  border: "1px solid #2A323D",
                   borderRadius: "6px",
-                  color: "oklch(0.95 0.01 285)",
+                  color: "#E6EDF3",
                   fontSize: "11px",
                 }}
                 formatter={(value: number, name: string) => [
@@ -136,7 +136,7 @@ function VlanRow({
               <Area
                 type="monotone"
                 dataKey="rx"
-                stroke="oklch(0.65 0.2 145)"
+                stroke="#21D07A"
                 strokeWidth={1.5}
                 fill={`url(#vlanRx-${entry.name})`}
                 dot={false}
@@ -145,7 +145,7 @@ function VlanRow({
               <Area
                 type="monotone"
                 dataKey="tx"
-                stroke="oklch(0.65 0.18 250)"
+                stroke="#2FA4FF"
                 strokeWidth={1.5}
                 fill={`url(#vlanTx-${entry.name})`}
                 dot={false}

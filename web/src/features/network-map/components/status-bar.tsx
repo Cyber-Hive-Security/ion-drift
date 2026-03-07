@@ -54,9 +54,9 @@ export function StatusBar({ status, isLoading, anomalyCount = 0 }: StatusBarProp
             style={{ cursor: "pointer" }}
             onClick={() => navigate({ to: "/behavior" })}
           >
-            <span className="nm-status-dot-indicator" style={{ background: "#f59e0b" }} />
-            <span className="nm-status-label" style={{ color: "#f59e0b" }}>ANOMALIES</span>
-            <span className="nm-status-value" style={{ color: "#f59e0b" }}>{anomalyCount}</span>
+            <span className="nm-status-dot-indicator" style={{ background: "#FFC857" }} />
+            <span className="nm-status-label" style={{ color: "#FFC857" }}>ANOMALIES</span>
+            <span className="nm-status-value" style={{ color: "#FFC857" }}>{anomalyCount}</span>
           </div>
         </>
       )}

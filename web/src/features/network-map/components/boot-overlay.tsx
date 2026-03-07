@@ -13,10 +13,10 @@ export function BootOverlay({ phase, visibleLines, progress, bootLines }: BootOv
       <div className="nm-boot-content">
         <div className="nm-boot-logo">
           <svg viewBox="0 0 120 120" width="120" height="120">
-            <polygon points="60,10 110,90 10,90" fill="none" stroke="#00f0ff" strokeWidth="2" opacity="0.6" />
-            <polygon points="60,25 95,82 25,82" fill="none" stroke="#00f0ff" strokeWidth="1.5" opacity="0.4" />
-            <circle cx="60" cy="58" r="12" fill="none" stroke="#ffd700" strokeWidth="2" />
-            <circle cx="60" cy="58" r="4" fill="#ffd700" />
+            <polygon points="60,10 110,90 10,90" fill="none" stroke="#00E5FF" strokeWidth="2" opacity="0.6" />
+            <polygon points="60,25 95,82 25,82" fill="none" stroke="#00E5FF" strokeWidth="1.5" opacity="0.4" />
+            <circle cx="60" cy="58" r="12" fill="none" stroke="#2FA4FF" strokeWidth="2" />
+            <circle cx="60" cy="58" r="4" fill="#2FA4FF" />
           </svg>
         </div>
         <div className="nm-boot-text">
@@ -26,9 +26,9 @@ export function BootOverlay({ phase, visibleLines, progress, bootLines }: BootOv
               className="line"
               style={{
                 color: line.includes("DONE")
-                  ? "#00ff88"
+                  ? "#21D07A"
                   : line.includes("AUTH")
-                    ? "#ffd700"
+                    ? "#2FA4FF"
                     : undefined,
               }}
             >

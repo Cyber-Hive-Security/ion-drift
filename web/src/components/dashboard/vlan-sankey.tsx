@@ -5,16 +5,16 @@ import { Sankey, Rectangle, Layer } from "recharts";
 
 // Distinct colors for VLAN sources
 const VLAN_COLORS = [
-  "oklch(0.65 0.2 145)",   // green
-  "oklch(0.65 0.18 250)",  // blue
-  "oklch(0.65 0.2 30)",    // orange
-  "oklch(0.65 0.2 330)",   // pink
-  "oklch(0.65 0.2 200)",   // teal
-  "oklch(0.65 0.2 90)",    // yellow-green
-  "oklch(0.65 0.18 280)",  // purple
-  "oklch(0.65 0.2 60)",    // gold
-  "oklch(0.65 0.2 170)",   // cyan
-  "oklch(0.65 0.15 0)",    // red
+  "#21D07A",   // green
+  "#2FA4FF",  // blue
+  "#FF4FD8",    // orange
+  "#FF4FD8",   // pink
+  "#00E5FF",   // teal
+  "#FFC857",    // yellow-green
+  "#7A5CFF",  // purple
+  "#FFC857",    // gold
+  "#00E5FF",   // cyan
+  "#FF4D4F",    // red
 ];
 
 function getColor(index: number): string {
@@ -59,7 +59,7 @@ function CustomNode(props: SankeyNodePayload) {
         y={y + height / 2}
         textAnchor={isLeft ? "end" : "start"}
         dominantBaseline="central"
-        fill="oklch(0.85 0.01 285)"
+        fill="#E6EDF3"
         fontSize={11}
       >
         {payload.name}
@@ -69,7 +69,7 @@ function CustomNode(props: SankeyNodePayload) {
         y={y + height / 2 + 14}
         textAnchor={isLeft ? "end" : "start"}
         dominantBaseline="central"
-        fill="oklch(0.55 0.01 285)"
+        fill="#6B7785"
         fontSize={10}
       >
         {formatBytes(payload.rawValue)}
@@ -282,9 +282,9 @@ export function VlanTrafficBreakdown() {
           position: "fixed",
           pointerEvents: "none",
           zIndex: 50,
-          backgroundColor: "oklch(0.175 0.015 285)",
-          border: "1px solid oklch(0.3 0.015 285)",
-          color: "oklch(0.95 0.01 285)",
+          backgroundColor: "#141A21",
+          border: "1px solid #2A323D",
+          color: "#E6EDF3",
           borderRadius: "6px",
           padding: "6px 12px",
           fontSize: "12px",

@@ -32,14 +32,14 @@ export function IdentityOverviewCard() {
           <span className="text-xs text-muted-foreground">monitored devices</span>
         </div>
         <div className="flex flex-wrap gap-1.5 text-[10px]">
-          <span className="rounded-full border border-green-500/30 bg-green-500/20 px-2 py-0.5 text-green-400">
+          <span className="rounded-full border border-success/30 bg-success/20 px-2 py-0.5 text-success">
             {myDevices} confirmed
           </span>
           <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-muted-foreground">
             {unknown} unknown
           </span>
           {external > 0 && (
-            <span className="rounded-full border border-blue-500/30 bg-blue-500/20 px-2 py-0.5 text-blue-400">
+            <span className="rounded-full border border-primary/30 bg-primary/20 px-2 py-0.5 text-primary">
               {external} external
             </span>
           )}
@@ -49,14 +49,14 @@ export function IdentityOverviewCard() {
             </span>
           )}
           {flagged > 0 && (
-            <span className="flex items-center gap-1 rounded-full border border-red-500/30 bg-red-500/20 px-2 py-0.5 font-medium text-red-400">
+            <span className="flex items-center gap-1 rounded-full border border-destructive/30 bg-destructive/20 px-2 py-0.5 font-medium text-destructive">
               <ShieldAlert className="h-3 w-3" />
               {flagged} flagged
             </span>
           )}
         </div>
         {violations.length > 0 && (
-          <div className="flex items-center gap-1.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-400">
+          <div className="flex items-center gap-1.5 rounded border border-warning/30 bg-warning/10 px-2 py-1 text-[10px] text-warning">
             <AlertTriangle className="h-3 w-3" />
             {violations.length} port violation{violations.length !== 1 ? "s" : ""}
           </div>

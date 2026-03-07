@@ -35,9 +35,9 @@ export function SystemInfoBar({ resource, device }: SystemInfoBarProps) {
             className={cn(
               "inline-block h-2 w-2 rounded-full",
               device?.status === "Online"
-                ? "bg-green-500"
+                ? "bg-success"
                 : device?.status === "Offline"
-                  ? "bg-red-500"
+                  ? "bg-destructive"
                   : "bg-gray-400",
             )}
           />
