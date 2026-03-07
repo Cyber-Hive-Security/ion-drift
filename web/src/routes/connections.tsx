@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useConnectionsPage, useConnectionsHistory } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
+import { ConnectionsHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
@@ -1109,6 +1110,7 @@ export function ConnectionsPage() {
       title="Connections"
       onRefresh={() => refetch()}
       isRefreshing={isFetching}
+      help={<ConnectionsHelp />}
     >
       <SummaryBar data={data} />
 

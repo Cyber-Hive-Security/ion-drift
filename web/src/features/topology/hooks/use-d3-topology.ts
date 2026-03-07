@@ -109,6 +109,7 @@ export interface TopologyMapInstance {
   setKindFilter: (kinds: Set<string> | null) => void;
   setEndpointsVisible: (visible: boolean) => void;
   clearDraggedPosition: (nodeId: string) => void;
+  snapToGrid: () => { node_id: string; x: number; y: number }[];
 }
 
 // ─── Helpers ───────────────────────────────────────────
@@ -1259,7 +1260,7 @@ export function createTopologyMapInstance(
       if (g.bbox_x + g.bbox_w > maxX) maxX = g.bbox_x + g.bbox_w;
       if (g.bbox_y + g.bbox_h > maxY) maxY = g.bbox_y + g.bbox_h;
     });
-    const pad = 80;
+    const pad = 0;
     minX -= pad; minY -= pad; maxX += pad; maxY += pad;
     const w = maxX - minX;
     const h = maxY - minY;
@@ -1406,6 +1407,73 @@ export function createTopologyMapInstance(
 
     clearDraggedPosition(nodeId: string) {
       draggedPositions.delete(nodeId);
+    },
+
+    snapToGrid() {
+      if (!currentData) return [];
+      const spacing = 60;
+      const movedPositions: { node_id: string; x: number; y: number }[] = [];
+
+      // Group nodes by VLAN sector so we snap within sectors
+      const vlanNodes = new Map<number | null, TopologyNode[]>();
+      for (const node of currentData.nodes) {
+        const vlan = node.vlan_id;
+        const list = vlanNodes.get(vlan) ?? [];
+        list.push(node);
+        vlanNodes.set(vlan, list);
+      }
+
+      // For each VLAN group, snap nodes to grid relative to the sector origin
+      for (const [, nodes] of vlanNodes) {
+        // Track occupied grid cells to avoid overlaps
+        const occupied = new Set<string>();
+
+        // Sort by infrastructure first (they get priority), then by layer
+        const sorted = [...nodes].sort((a, b) => {
+          if (a.is_infrastructure !== b.is_infrastructure) return a.is_infrastructure ? -1 : 1;
+          return a.layer - b.layer;
+        });
+
+        for (const node of sorted) {
+          let snapX = Math.round(node.x / spacing) * spacing;
+          let snapY = Math.round(node.y / spacing) * spacing;
+
+          // Resolve collisions by spiraling outward
+          let key = `${snapX},${snapY}`;
+          if (occupied.has(key)) {
+            let found = false;
+            for (let radius = 1; radius <= 10 && !found; radius++) {
+              for (let dx = -radius; dx <= radius && !found; dx++) {
+                for (let dy = -radius; dy <= radius && !found; dy++) {
+                  if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue;
+                  const cx = snapX + dx * spacing;
+                  const cy = snapY + dy * spacing;
+                  const ck = `${cx},${cy}`;
+                  if (!occupied.has(ck)) {
+                    snapX = cx;
+                    snapY = cy;
+                    key = ck;
+                    found = true;
+                  }
+                }
+              }
+            }
+          }
+          occupied.add(key);
+
+          node.x = snapX;
+          node.y = snapY;
+          draggedPositions.set(node.id, { x: snapX, y: snapY });
+          movedPositions.push({ node_id: node.id, x: snapX, y: snapY });
+        }
+      }
+
+      // Re-render with snapped positions
+      renderAll(currentData);
+      updateVisibility();
+      zoomToFit(true);
+
+      return movedPositions;
     },
   };
 }

@@ -8,6 +8,7 @@ import {
   useNetworkIdentities,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
+import { InferenceHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
@@ -377,7 +378,7 @@ export function InferencePage() {
 
   if (status.isLoading) {
     return (
-      <PageShell title="Topology Inference">
+      <PageShell title="Topology Inference" help={<InferenceHelp />}>
         <LoadingSpinner />
       </PageShell>
     );
@@ -385,7 +386,7 @@ export function InferencePage() {
 
   if (status.error || !status.data) {
     return (
-      <PageShell title="Topology Inference">
+      <PageShell title="Topology Inference" help={<InferenceHelp />}>
         <ErrorDisplay message={status.error ? String(status.error) : "No data available"} />
       </PageShell>
     );
@@ -394,7 +395,7 @@ export function InferencePage() {
   const s = status.data;
 
   return (
-    <PageShell title="Topology Inference">
+    <PageShell title="Topology Inference" help={<InferenceHelp />}>
       {/* Mode banner */}
       <div className="mb-4 flex items-center gap-3">
         <Brain className="h-5 w-5 text-primary" />

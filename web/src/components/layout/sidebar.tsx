@@ -41,7 +41,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const behaviorAlerts = useBehaviorAlerts();
   const pendingAnomalies = behaviorAlerts.data?.pending_count ?? 0;
   const { data: devices = [] } = useDevices();
-  const switchDevices = devices.filter((d) => d.device_type === "switch" || d.device_type === "swos_switch" || d.device_type === "snmp_switch");
+  const sidebarDevices = devices.filter((d) => d.device_type !== "router");
 
   const navContent = (
     <>
@@ -50,6 +50,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <span className="text-[10px] leading-tight text-muted-foreground">by Cyber Hive Security</span>
       </div>
       <nav className="flex-1 space-y-1 p-3">
+        <span className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Router
+        </span>
         {navItems.map(({ to, label, icon: Icon }) => {
           const active = to === "/" ? currentPath === "/" : currentPath.startsWith(to);
           const showDot = to === "/connections" && hasFlagged;
@@ -111,13 +114,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           })}
         </div>
       </div>
-      {switchDevices.length > 0 && (
+      {sidebarDevices.length > 0 && (
         <div className="border-t border-border px-3 py-2">
           <span className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Switches
+            Devices
           </span>
           <div className="mt-1 space-y-0.5">
-            {switchDevices.map((device) => {
+            {sidebarDevices.map((device) => {
               const active = currentPath === `/switches/${device.id}`;
               return (
                 <Link

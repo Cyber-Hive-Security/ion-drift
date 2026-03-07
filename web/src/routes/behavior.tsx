@@ -5,6 +5,7 @@ import {
   useResolveAnomaly,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
+import { BehaviorHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
@@ -585,6 +586,7 @@ export function BehaviorPage() {
   return (
     <PageShell
       title="Behavior"
+      help={<BehaviorHelp />}
       onRefresh={() => {
         overview.refetch();
         anomaliesQuery.refetch();

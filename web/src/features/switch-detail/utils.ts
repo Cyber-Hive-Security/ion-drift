@@ -44,6 +44,17 @@ export function portToGridPosition(
   };
 }
 
+/**
+ * Extract the family/prefix of a port name for grouping.
+ * e.g. "g1" → "g", "ether5" → "ether", "Port-channel1" → "port-channel",
+ *      "sfp-sfpplus1" → "sfp-sfpplus", "ch3" → "ch"
+ */
+export function portFamily(portName: string): string {
+  const m = portName.match(/^([a-zA-Z][a-zA-Z\-]*?)(\d+)$/);
+  if (m) return m[1].toLowerCase();
+  return portName.toLowerCase();
+}
+
 /** Abbreviate port name for display inside the port cell. */
 export function portShortName(portName: string): string {
   const etherMatch = portName.match(/^ether(\d+)$/);

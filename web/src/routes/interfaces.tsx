@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useInterfaces, useVlans } from "@/api/queries";
 import { DataTable, type Column } from "@/components/data-table";
 import { PageShell } from "@/components/layout/page-shell";
+import { InterfacesHelp } from "@/components/help-content";
+import { RouterPortGrid } from "@/components/router-port-grid";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { formatBytes } from "@/lib/format";
@@ -66,7 +68,7 @@ const vlanColumns: Column<VlanInterface>[] = [
 
 export function InterfacesPage() {
   const [tab, setTab] = useState<"all" | "vlans">("all");
-  const ifaces = useInterfaces({ enabled: tab === "all" });
+  const ifaces = useInterfaces();
   const vlans = useVlans({ enabled: tab === "vlans" });
 
   const query = tab === "all" ? ifaces : vlans;
@@ -76,7 +78,10 @@ export function InterfacesPage() {
       title="Interfaces"
       onRefresh={() => query.refetch()}
       isRefreshing={query.isFetching}
+      help={<InterfacesHelp />}
     >
+      {ifaces.data && <RouterPortGrid interfaces={ifaces.data} />}
+
       <div className="mb-4 flex gap-2">
         {(["all", "vlans"] as const).map((t) => (
           <button

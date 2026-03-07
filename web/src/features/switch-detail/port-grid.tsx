@@ -14,6 +14,7 @@ import {
   portToGridPosition,
   portShortName,
   portSortKey,
+  portFamily,
   getPortVlanColor,
   getPortPrimaryVlan,
   vlanName,
@@ -130,21 +131,22 @@ export function PortGrid({
     return map;
   }, [violations]);
 
-  // Build cell data for all known ports
+  // Build cell data for all known ports, filtering out families with no running ports
   const portCells = useMemo(() => {
     const allPortNames = new Set<string>();
     for (const [name] of latestMetrics) allPortNames.add(name);
     for (const v of vlans) allPortNames.add(v.port_name);
     for (const r of portRoles) allPortNames.add(r.port_name);
 
-    const cells: PortCellData[] = [];
+    // Build all cells first
+    const allCells: PortCellData[] = [];
     for (const portName of allPortNames) {
       const metrics = latestMetrics.get(portName);
       const portVlans = vlans.filter((v) => v.port_name === portName);
       const role = roleMap.get(portName);
       const identity = identityByPort.get(portName);
 
-      cells.push({
+      allCells.push({
         portName,
         shortName: portShortName(portName),
         running: metrics ? metrics[5] : false,
@@ -165,49 +167,62 @@ export function PortGrid({
       });
     }
 
+    // Group by port family prefix and filter out families with no running ports
+    const familyMap = new Map<string, PortCellData[]>();
+    for (const cell of allCells) {
+      const family = portFamily(cell.portName);
+      const list = familyMap.get(family) ?? [];
+      list.push(cell);
+      familyMap.set(family, list);
+    }
+
+    const activeFamilies = new Set<string>();
+    for (const [family, members] of familyMap) {
+      if (members.some((c) => c.running)) {
+        activeFamilies.add(family);
+      }
+    }
+
+    const cells = allCells.filter((c) => activeFamilies.has(portFamily(c.portName)));
     return cells.sort((a, b) => portSortKey(a.portName) - portSortKey(b.portName));
   }, [latestMetrics, vlans, portRoles, macCounts, roleMap, identityByPort, bindingByPort, violationByPort]);
 
   // Separate copper ports (with grid positions) from SFP and other ports
   const { topRow, bottomRow, sfpTop, sfpBottom, otherPorts } = useMemo(() => {
-    const top: (PortCellData | null)[] = [];
-    const bottom: (PortCellData | null)[] = [];
     let st: PortCellData | null = null;
     let sb: PortCellData | null = null;
     const other: PortCellData[] = [];
-
-    // Determine max columns for copper ports
-    let maxCol = 11; // Default CRS326 = 12 columns (0-11)
-    for (const cell of portCells) {
-      const pos = portToGridPosition(cell.portName);
-      if (pos && pos.col >= 0) {
-        maxCol = Math.max(maxCol, pos.col);
-      }
-    }
-
-    // Initialize arrays
-    for (let i = 0; i <= maxCol; i++) {
-      top.push(null);
-      bottom.push(null);
-    }
+    const gridded: { cell: PortCellData; col: number; row: "top" | "bottom" }[] = [];
 
     for (const cell of portCells) {
       const pos = portToGridPosition(cell.portName);
       if (!pos) {
-        // Skip bridge interface and similar
         if (cell.portName !== "bridge") {
           other.push(cell);
         }
         continue;
       }
       if (pos.col === -1) {
-        // SFP port
         if (pos.row === "top") st = cell;
         else sb = cell;
-      } else if (pos.col <= maxCol) {
-        if (pos.row === "top") top[pos.col] = cell;
-        else bottom[pos.col] = cell;
+      } else {
+        gridded.push({ cell, col: pos.col, row: pos.row });
       }
+    }
+
+    // Build compact grid: remap columns to remove gaps
+    const usedCols = [...new Set(gridded.map((g) => g.col))].sort((a, b) => a - b);
+    const colRemap = new Map<number, number>();
+    usedCols.forEach((col, idx) => colRemap.set(col, idx));
+
+    const numCols = usedCols.length;
+    const top: (PortCellData | null)[] = Array(numCols).fill(null);
+    const bottom: (PortCellData | null)[] = Array(numCols).fill(null);
+
+    for (const { cell, col, row } of gridded) {
+      const mappedCol = colRemap.get(col)!;
+      if (row === "top") top[mappedCol] = cell;
+      else bottom[mappedCol] = cell;
     }
 
     return { topRow: top, bottomRow: bottom, sfpTop: st, sfpBottom: sb, otherPorts: other };

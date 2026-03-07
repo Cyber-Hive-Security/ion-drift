@@ -8,6 +8,7 @@ import {
 } from "@/api/queries";
 import { DataTable, type Column } from "@/components/data-table";
 import { PageShell } from "@/components/layout/page-shell";
+import { IpHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { Badge } from "@/components/badge";
@@ -285,6 +286,7 @@ export function IpPage() {
       title="IP"
       onRefresh={() => query.refetch()}
       isRefreshing={query.isFetching}
+      help={<IpHelp />}
     >
       <div className="mb-4 flex gap-2">
         {([

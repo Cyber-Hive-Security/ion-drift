@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from "react";
 import { PageShell } from "@/components/layout/page-shell";
+import { SetupWizardHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { cn } from "@/lib/utils";
@@ -788,7 +789,7 @@ export function SetupWizard() {
   };
 
   return (
-    <PageShell title="Setup Wizard">
+    <PageShell title="Setup Wizard" help={<SetupWizardHelp />}>
       <StepIndicator current={step} />
 
       {error && step !== 2 && (

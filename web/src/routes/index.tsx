@@ -20,6 +20,7 @@ import { IdentityOverviewCard } from "@/components/dashboard/identity-overview-c
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { PageShell } from "@/components/layout/page-shell";
+import { DashboardHelp } from "@/components/help-content";
 import { StatCard } from "@/components/stat-card";
 import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
@@ -210,13 +211,13 @@ export function DashboardPage() {
     );
 
   return (
-    <PageShell title="Dashboard">
+    <PageShell title="Dashboard" help={<DashboardHelp />}>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
-        <NetworkDevicesCard />
-        <IdentityOverviewCard />
         {drops.data ? <FirewallDropsCard data={drops.data} /> : <CardSkeleton title="Firewall Drops" />}
         {traffic.data ? <TrafficCard data={traffic.data} /> : <CardSkeleton title="WAN Traffic" />}
+        <NetworkDevicesCard />
+        {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
+        <IdentityOverviewCard />
         {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
       </div>
 

@@ -26,6 +26,7 @@ import {
 } from "recharts";
 import { useStructuredLogs, useLogTrends } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
+import { LogsHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { cn } from "@/lib/utils";
@@ -147,6 +148,7 @@ export function LogsPage() {
       title="Logs"
       onRefresh={() => logs.refetch()}
       isRefreshing={logs.isFetching}
+      help={<LogsHelp />}
     >
       {/* Summary Bar */}
       {analytics && <SummaryBar analytics={analytics} />}

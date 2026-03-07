@@ -7,6 +7,7 @@ import {
   useConnectionHistory,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
+import { HistoryHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
@@ -322,7 +323,7 @@ export function HistoryPage() {
   }
 
   return (
-    <PageShell title="History">
+    <PageShell title="History" help={<HistoryHelp />}>
       {/* Controls row */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         {/* Tabs */}

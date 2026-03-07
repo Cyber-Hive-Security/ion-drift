@@ -6,6 +6,7 @@ import {
 } from "@/api/queries";
 import { DataTable, type Column } from "@/components/data-table";
 import { PageShell } from "@/components/layout/page-shell";
+import { FirewallHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { formatBytes, formatNumber } from "@/lib/format";
@@ -175,6 +176,7 @@ export function FirewallPage() {
       title="Firewall"
       onRefresh={() => query.refetch()}
       isRefreshing={query.isFetching}
+      help={<FirewallHelp />}
     >
       <div className="mb-4 flex items-center gap-4">
         <div className="flex gap-2">

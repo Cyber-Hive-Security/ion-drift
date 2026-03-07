@@ -25,6 +25,7 @@ import {
   Eye,
   EyeOff,
   Maximize2,
+  Grid3x3,
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
@@ -148,7 +149,6 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
       origLeft: el.offsetLeft,
       origTop: el.offsetTop,
     };
-    el.setPointerCapture(e.pointerId);
   }, []);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
@@ -157,14 +157,20 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
     if (!d || !el) return;
     const dx = e.clientX - d.startX;
     const dy = e.clientY - d.startY;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDragRef.current = true;
+    if (!didDragRef.current && Math.abs(dx) <= 3 && Math.abs(dy) <= 3) return;
+    if (!didDragRef.current) {
+      didDragRef.current = true;
+      el.setPointerCapture(e.pointerId);
+    }
     el.style.left = `${d.origLeft + dx}px`;
     el.style.top = `${d.origTop + dy}px`;
   }, []);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (!dragRef.current) return;
-    containerRef.current?.releasePointerCapture(e.pointerId);
+    if (didDragRef.current) {
+      containerRef.current?.releasePointerCapture(e.pointerId);
+    }
     dragRef.current = null;
   }, []);
 
@@ -189,7 +195,7 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onClick={handleToggleClick}
-        className="flex w-full cursor-grab items-center justify-between gap-2 px-3 py-1.5 text-xs font-semibold select-none hover:text-foreground active:cursor-grabbing"
+        className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-1.5 text-xs font-semibold select-none hover:text-foreground active:cursor-grabbing"
         style={{ color: "#2FA4FF", fontFamily: "'Orbitron', monospace", fontSize: "10px", letterSpacing: "2px" }}
       >
         LEGEND
@@ -649,6 +655,13 @@ export function TopologyPage() {
     mapRef.current?.clearSelection();
   }, []);
 
+  const handleSnapToGrid = useCallback(() => {
+    const positions = mapRef.current?.snapToGrid();
+    if (positions && positions.length > 0) {
+      batchPositionMutation.mutate(positions);
+    }
+  }, [batchPositionMutation]);
+
   const data = topology.data;
   const ago = data?.computed_at
     ? formatAgo(data.computed_at)
@@ -691,6 +704,15 @@ export function TopologyPage() {
         >
           {showEndpoints ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
           Endpoints
+        </button>
+
+        {/* Snap to grid */}
+        <button
+          onClick={handleSnapToGrid}
+          className="rounded-md border border-border p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          title="Snap all nodes to grid"
+        >
+          <Grid3x3 className="h-3.5 w-3.5" />
         </button>
 
         {/* Reset view */}

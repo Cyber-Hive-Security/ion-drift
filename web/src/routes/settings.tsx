@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { PageShell } from "@/components/layout/page-shell";
+import { SettingsHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import {
@@ -42,7 +43,7 @@ import { formatBytes, formatNumber } from "@/lib/format";
 
 export function SettingsPage() {
   return (
-    <PageShell title="Settings">
+    <PageShell title="Settings" help={<SettingsHelp />}>
       <div className="space-y-6">
         <NetworkDevicesSection />
         <VlanConfigSection />

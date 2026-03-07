@@ -10,6 +10,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { PageShell } from "@/components/layout/page-shell";
+import { IdentityManagerHelp } from "@/components/help-content";
 import { StatCard } from "@/components/stat-card";
 import { DataTable, type Column } from "@/components/data-table";
 import { cn } from "@/lib/utils";
@@ -815,6 +816,7 @@ export default function IdentityManagerPage() {
       title="Identity Manager"
       onRefresh={() => refetch()}
       isRefreshing={isLoading}
+      help={<IdentityManagerHelp />}
     >
       {/* Port violation banner */}
       {violations.length > 0 && (
