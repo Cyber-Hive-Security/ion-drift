@@ -147,7 +147,7 @@ pub fn check_cert_status(cert_path: &str) -> anyhow::Result<CertStatus> {
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
     let seconds_until_expiry = not_after - now;
 

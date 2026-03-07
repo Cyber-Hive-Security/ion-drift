@@ -61,7 +61,7 @@ pub fn spawn_snapshot_generator(store: Arc<ConnectionStore>) {
             // Check if it's Sunday (day of week = 0)
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs();
             // Day of week: 0=Thursday for epoch, so (days + 4) % 7: 0=Sun, 1=Mon, ..., 6=Sat
             let days = now / 86400;
@@ -85,7 +85,7 @@ pub fn spawn_snapshot_generator(store: Arc<ConnectionStore>) {
 fn current_iso_week() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
     let days = now / 86400;
     // ISO week calculation

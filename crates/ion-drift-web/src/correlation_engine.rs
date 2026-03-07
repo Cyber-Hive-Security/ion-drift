@@ -355,7 +355,7 @@ async fn run_correlation(
 
     let now_ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
     let mut pending_observations: Vec<mikrotik_core::switch_store::MacObservation> = Vec::new();
 

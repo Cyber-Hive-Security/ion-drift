@@ -12,6 +12,7 @@ use crate::device_manager::DeviceManager;
 use crate::geo::GeoCache;
 use crate::live_traffic::LiveTrafficBuffer;
 use crate::oui::OuiDb;
+use crate::poller_registry::PollerRegistry;
 use crate::routes::network_map_status::NetworkMapStatusCache;
 use crate::secrets::SecretsManager;
 use crate::topology::NetworkTopology;
@@ -58,4 +59,6 @@ pub struct AppState {
     /// VLAN registry built from database VlanConfig entries.
     /// Refreshed when VLAN configs change.
     pub vlan_registry: Arc<RwLock<VlanRegistry>>,
+    /// Registry of running per-device poller tasks for dynamic start/stop.
+    pub poller_registry: Arc<RwLock<PollerRegistry>>,
 }

@@ -127,8 +127,25 @@ pub fn spawn_syslog_listener(
         let allowed_ip: std::net::IpAddr = match router_host.parse() {
             Ok(ip) => ip,
             Err(_) => {
-                tracing::error!("syslog: cannot parse router host '{router_host}' as IP — listener disabled");
-                return;
+                // Try DNS resolution for hostnames
+                use std::net::ToSocketAddrs;
+                match (router_host.as_str(), 0u16).to_socket_addrs() {
+                    Ok(mut addrs) => match addrs.next() {
+                        Some(addr) => {
+                            let ip = addr.ip();
+                            tracing::info!("syslog: resolved router host '{router_host}' to {ip}");
+                            ip
+                        }
+                        None => {
+                            tracing::error!("syslog: DNS returned no addresses for '{router_host}' — listener disabled");
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("syslog: cannot resolve router host '{router_host}': {e} — listener disabled");
+                        return;
+                    }
+                }
             }
         };
         tracing::info!("syslog: will only accept packets from {allowed_ip}");

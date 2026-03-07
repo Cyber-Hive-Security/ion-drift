@@ -14,6 +14,7 @@ mod log_parser;
 mod middleware;
 mod oui;
 mod passive_discovery;
+mod poller_registry;
 mod provision;
 mod routes;
 mod secrets;
@@ -357,6 +358,7 @@ async fn main() -> anyhow::Result<()> {
         switch_store: switch_store.clone(),
         topology_cache: Arc::new(tokio::sync::RwLock::new(None)),
         vlan_registry: vlan_registry.clone(),
+        poller_registry: Arc::new(tokio::sync::RwLock::new(poller_registry::PollerRegistry::new())),
     };
 
     // Spawn background tasks
@@ -405,11 +407,11 @@ async fn main() -> anyhow::Result<()> {
     syslog::spawn_syslog_listener(5514, connection_store, geo_cache, config.router.host.clone(), vlan_registry.clone());
 
     // Spawn multi-device background tasks
-    switch_poller::spawn_switch_pollers(device_manager.clone(), switch_store.clone());
+    switch_poller::spawn_switch_pollers(device_manager.clone(), switch_store.clone(), app_state.poller_registry.clone());
     switch_poller::spawn_neighbor_poller(device_manager.clone(), switch_store.clone());
     switch_poller::spawn_device_health_check(device_manager.clone());
-    swos_poller::spawn_swos_pollers(device_manager.clone(), switch_store.clone());
-    snmp_poller::spawn_snmp_pollers(device_manager.clone(), switch_store.clone());
+    swos_poller::spawn_swos_pollers(device_manager.clone(), switch_store.clone(), app_state.poller_registry.clone());
+    snmp_poller::spawn_snmp_pollers(device_manager.clone(), switch_store.clone(), app_state.poller_registry.clone());
     correlation_engine::spawn_correlation_engine(
         switch_store.clone(),
         app_state.oui_db.clone(),
@@ -638,7 +640,7 @@ fn spawn_traffic_poller(
                         let tx_bps = ((current_tx - ptx) as f64 / elapsed) * 8.0;
                         let timestamp = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
+                            .unwrap_or_default()
                             .as_secs() as i64;
                         live_buf
                             .push(TrafficSample {
@@ -843,7 +845,7 @@ fn spawn_log_aggregation(
         loop {
             let period_end = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs() as i64;
             let period_start = period_end - 3600;
 
@@ -1026,7 +1028,7 @@ fn spawn_behavior_maintenance(
                 let last: u64 = ts.parse().unwrap_or(0);
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs();
                 let age = now.saturating_sub(last);
                 if age < 6 * 3600 {
@@ -1094,7 +1096,7 @@ async fn run_behavior_maintenance(
     // Persist maintenance watermark
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
     if let Err(e) = store.set_metadata("last_maintenance", &now.to_string()).await {
         tracing::warn!("failed to persist maintenance watermark: {e}");
@@ -1104,7 +1106,7 @@ async fn run_behavior_maintenance(
 /// Compute seconds until the next occurrence of `target_hour` (0-23) in local time.
 fn secs_until_hour(target_hour: u32) -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     // Determine local UTC offset by comparing libc localtime with UTC
     let local_offset_secs: i64 = {
         let t = now_secs as libc::time_t;

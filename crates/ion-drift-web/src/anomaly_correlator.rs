@@ -409,7 +409,7 @@ fn chrono_like_age_seconds(iso: &str) -> Result<i64, ()> {
     // Simplified: just use the day difference as an approximation
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
 
     // Rough epoch calculation (not accounting for leap years, good enough for 7-day threshold)

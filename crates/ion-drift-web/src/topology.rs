@@ -166,7 +166,7 @@ pub async fn compute_topology(
 ) -> anyhow::Result<NetworkTopology> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
 
     // Load DB-backed VLAN configs for name/color/subnet resolution

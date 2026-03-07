@@ -11,6 +11,7 @@
 
 use std::net::IpAddr;
 use std::path::Path;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
@@ -246,6 +247,23 @@ impl GeoCache {
             return Ok(());
         }
 
+        // Rate-limited warning: log at most once per hour when using HTTP fallback
+        {
+            static LAST_WARN: AtomicI64 = AtomicI64::new(0);
+            let now = now_unix();
+            let prev = LAST_WARN.load(Ordering::Relaxed);
+            if now - prev >= 3600 {
+                if LAST_WARN
+                    .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    tracing::warn!(
+                        "geo: using plaintext HTTP fallback (ip-api.com) — load MaxMind databases or set credentials for HTTPS lookups"
+                    );
+                }
+            }
+        }
+
         // Filter to unique external IPs only
         let mut seen = std::collections::HashSet::new();
         let external: Vec<&str> = ips
@@ -398,7 +416,7 @@ fn non_empty(s: Option<String>) -> Option<String> {
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64
 }
 

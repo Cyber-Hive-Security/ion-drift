@@ -24,7 +24,7 @@ fn default_since(since: Option<i64>) -> i64 {
     since.unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64
             - 3600
     })

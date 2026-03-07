@@ -1696,7 +1696,7 @@ fn now_iso() -> String {
 pub fn now_iso_pub() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
     let secs_per_day = 86400i64;
     let days_since_epoch = now / secs_per_day;
@@ -1711,7 +1711,7 @@ pub fn now_iso_pub() -> String {
 fn today_iso() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
     let days_since_epoch = now / 86400;
     let (y, m, d) = days_to_ymd(days_since_epoch);
@@ -1721,7 +1721,7 @@ fn today_iso() -> String {
 fn now_iso_minus_secs(secs: i64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
     let ts = now - secs;
     // Convert unix timestamp to ISO 8601

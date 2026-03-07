@@ -5,17 +5,19 @@ use std::time::Duration;
 use mikrotik_core::SwitchStore;
 use mikrotik_core::snmp_client::SnmpClient;
 use mikrotik_core::switch_store::{PortMetricEntry, VlanMembershipEntry};
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 
 use crate::device_manager::{DeviceManager, DeviceStatus};
 
 /// Spawn SNMP pollers for all enabled SNMP switch devices.
 ///
 /// Each switch gets its own tokio task with an independent polling interval
-/// from its `poll_interval_secs` configuration (default 30s).
+/// from its `poll_interval_secs` configuration (default 30s). Uses the
+/// PollerRegistry for lifecycle management.
 pub fn spawn_snmp_pollers(
     device_manager: Arc<RwLock<DeviceManager>>,
     switch_store: Arc<SwitchStore>,
+    poller_registry: Arc<RwLock<crate::poller_registry::PollerRegistry>>,
 ) {
     let dm = device_manager.clone();
     tokio::spawn(async move {
@@ -30,35 +32,41 @@ pub fn spawn_snmp_pollers(
             return;
         }
 
+        let mut registry = poller_registry.write().await;
         for entry in switches {
-            let device_id = entry.record.id.clone();
-            let device_name = entry.record.name.clone();
-            let poll_interval = entry.record.poll_interval_secs as u64;
-            let client = entry.client.as_snmp().cloned().expect("device type verified by filter");
-            let store = switch_store.clone();
-            let dm_ref = device_manager.clone();
-
-            tracing::info!(
-                id = %device_id,
-                name = %device_name,
-                interval_secs = poll_interval,
-                "starting SNMP poller"
-            );
-
-            tokio::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(Duration::from_secs(poll_interval.max(10)));
-                let mut cycle: u32 = 0;
-
-                loop {
-                    poll_snmp_switch(&device_id, &client, &store, &dm_ref, cycle).await;
-                    cycle = cycle.wrapping_add(1);
-                    interval.tick().await;
-                }
-            });
+            registry.start_poller(entry, device_manager.clone(), switch_store.clone());
         }
+        drop(registry);
         drop(dm_read);
     });
+}
+
+/// Run the polling loop for a single SNMP switch device.
+///
+/// Called by the PollerRegistry. Exits when the cancellation signal is received.
+pub async fn run_snmp_poller(
+    device_id: String,
+    client: SnmpClient,
+    store: Arc<SwitchStore>,
+    dm: Arc<RwLock<DeviceManager>>,
+    poll_interval: u64,
+    mut cancel_rx: watch::Receiver<bool>,
+) {
+    let mut interval = tokio::time::interval(Duration::from_secs(poll_interval.max(10)));
+    let mut cycle: u32 = 0;
+
+    loop {
+        tokio::select! {
+            _ = cancel_rx.changed() => {
+                tracing::info!(device = %device_id, "SNMP poller cancelled");
+                break;
+            }
+            _ = interval.tick() => {
+                poll_snmp_switch(&device_id, &client, &store, &dm, cycle).await;
+                cycle = cycle.wrapping_add(1);
+            }
+        }
+    }
 }
 
 /// Run one poll cycle for an SNMP switch device.

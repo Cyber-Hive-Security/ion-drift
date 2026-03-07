@@ -269,6 +269,16 @@ pub async fn create_device(
         DeviceStatus::Online { identity: identity.clone() },
     );
 
+    // Start the poller for this device immediately (no server restart needed)
+    if let Some(entry) = dm.get_device(&req.device.id) {
+        let mut registry = state.poller_registry.write().await;
+        registry.start_poller(
+            entry,
+            state.device_manager.clone(),
+            state.switch_store.clone(),
+        );
+    }
+
     Ok(Json(serde_json::json!({
         "id": req.device.id,
         "identity": identity,
@@ -312,12 +322,28 @@ pub async fn update_device(
         })?;
     drop(sm_read);
 
-    let mut dm = state.device_manager.write().await;
-    dm.update_record(&id, record);
+    {
+        let mut dm = state.device_manager.write().await;
+        dm.update_record(&id, record);
+    }
+
+    // Restart the poller with updated configuration if one is running
+    {
+        let dm = state.device_manager.read().await;
+        if let Some(entry) = dm.get_device(&id) {
+            let mut registry = state.poller_registry.write().await;
+            if registry.has_poller(&id) {
+                registry.start_poller(
+                    entry,
+                    state.device_manager.clone(),
+                    state.switch_store.clone(),
+                );
+            }
+        }
+    }
 
     Ok(Json(serde_json::json!({
-        "message": "device updated",
-        "note": "restart server to apply client changes"
+        "message": "device updated"
     })))
 }
 
@@ -363,6 +389,12 @@ pub async fn delete_device(
         .await
         .map_err(|e| internal_error("remove device", e))?;
     drop(sm_read);
+
+    // Stop the poller for this device
+    {
+        let mut registry = state.poller_registry.write().await;
+        registry.stop_poller(&id);
+    }
 
     // Remove from device manager
     let mut dm = state.device_manager.write().await;
@@ -434,7 +466,7 @@ pub struct TestConnectionRequest {
 }
 
 pub async fn test_connection(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(req): Json<TestConnectionRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -539,5 +571,58 @@ pub async fn test_connection(
                 "error": e.to_string()
             }))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssrf_blocks_loopback() {
+        assert!(is_blocked_host("127.0.0.1"));
+        assert!(is_blocked_host("127.0.0.2"));
+    }
+
+    #[test]
+    fn ssrf_blocks_link_local() {
+        assert!(is_blocked_host("169.254.169.254")); // AWS metadata
+        assert!(is_blocked_host("169.254.1.1"));
+    }
+
+    #[test]
+    fn ssrf_blocks_zero_prefix() {
+        assert!(is_blocked_host("0.0.0.0"));
+    }
+
+    #[test]
+    fn ssrf_allows_private_rfc1918() {
+        // Private IPs are allowed — this tool is for managing LAN devices
+        assert!(!is_blocked_host("10.20.25.1"));
+        assert!(!is_blocked_host("192.168.1.1"));
+        assert!(!is_blocked_host("172.16.0.1"));
+    }
+
+    #[test]
+    fn ssrf_allows_public_ip() {
+        assert!(!is_blocked_host("8.8.8.8"));
+    }
+
+    #[test]
+    fn ssrf_blocks_ipv6_loopback() {
+        assert!(is_blocked_host("::1"));
+    }
+
+    #[test]
+    fn ca_cert_path_rejects_traversal() {
+        assert!(validate_ca_cert_path("../../etc/passwd").is_err());
+        assert!(validate_ca_cert_path("/etc/shadow").is_err());
+        assert!(validate_ca_cert_path("/app/data/certs/../../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn ca_cert_path_accepts_valid() {
+        assert!(validate_ca_cert_path("/app/data/certs/ca.pem").is_ok());
+        assert!(validate_ca_cert_path("/app/certs/custom-ca.crt").is_ok());
     }
 }

@@ -165,7 +165,7 @@ impl SecretsManager {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let db = self.db.lock().await;
@@ -307,7 +307,7 @@ impl SecretsManager {
         let cipher = Aes256Gcm::new(&self.kek);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         let mut encrypted: Vec<(&str, Vec<u8>, [u8; 12])> = Vec::new();
@@ -324,17 +324,17 @@ impl SecretsManager {
             encrypted.push((name, ciphertext, nonce_bytes));
         }
 
-        // Store in a single transaction
+        // Store in a single transaction (RAII — auto-rollback on error)
         let db = self.db.lock().await;
-        db.execute_batch("BEGIN TRANSACTION")?;
+        let tx = db.unchecked_transaction()?;
         for (name, ciphertext, nonce_bytes) in &encrypted {
-            db.execute(
+            tx.execute(
                 "INSERT OR REPLACE INTO encrypted_secrets (name, ciphertext, nonce, key_fingerprint, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![name, ciphertext, nonce_bytes.as_slice(), self.key_fingerprint, now],
             )?;
         }
-        db.execute_batch("COMMIT")?;
+        tx.commit()?;
 
         tracing::info!(
             fingerprint = %self.key_fingerprint,
@@ -677,6 +677,6 @@ fn open_db(db_path: &Path) -> anyhow::Result<rusqlite::Connection> {
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64
 }

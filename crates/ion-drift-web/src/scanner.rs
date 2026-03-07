@@ -525,7 +525,7 @@ fn chrono_now() -> String {
     use std::time::SystemTime;
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
     // Simple ISO format without chrono dependency
     let secs_per_day = 86400u64;

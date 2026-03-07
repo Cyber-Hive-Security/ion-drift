@@ -362,7 +362,7 @@ fn parse_speed_mbps(s: &str) -> Option<u32> {
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64
 }
 
@@ -2036,14 +2036,14 @@ impl SwitchStore {
     /// Remove all data for a device (when device is deleted).
     pub async fn remove_device_data(&self, device_id: &str) -> Result<(), rusqlite::Error> {
         let db = self.db.lock().await;
-        db.execute_batch(&format!(
-            "DELETE FROM switch_port_metrics WHERE device_id = '{device_id}';
-             DELETE FROM switch_mac_table WHERE device_id = '{device_id}';
-             DELETE FROM neighbor_discovery WHERE device_id = '{device_id}';
-             DELETE FROM switch_vlan_membership WHERE device_id = '{device_id}';
-             DELETE FROM switch_port_roles WHERE device_id = '{device_id}';
-             DELETE FROM network_identities WHERE switch_device_id = '{device_id}';"
-        ))?;
+        let tx = db.unchecked_transaction()?;
+        tx.execute("DELETE FROM switch_port_metrics WHERE device_id = ?1", params![device_id])?;
+        tx.execute("DELETE FROM switch_mac_table WHERE device_id = ?1", params![device_id])?;
+        tx.execute("DELETE FROM neighbor_discovery WHERE device_id = ?1", params![device_id])?;
+        tx.execute("DELETE FROM switch_vlan_membership WHERE device_id = ?1", params![device_id])?;
+        tx.execute("DELETE FROM switch_port_roles WHERE device_id = ?1", params![device_id])?;
+        tx.execute("DELETE FROM network_identities WHERE switch_device_id = ?1", params![device_id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -2782,4 +2782,95 @@ fn map_attachment_state_row(row: &rusqlite::Row<'_>) -> Result<AttachmentStateRo
         consecutive_losses: row.get::<_, i64>(9)? as u32,
         updated_at: row.get(10)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn remove_device_data_with_sqli_payload() {
+        // Verify that SQL injection payloads in device_id are safely handled
+        // by parameterized queries (no SQL breakout).
+        let store = SwitchStore::new(std::path::Path::new(":memory:")).unwrap();
+
+        // Insert test data for a legitimate device
+        store
+            .record_port_metrics(
+                "legit-device",
+                &[PortMetricEntry {
+                    port_name: "ether1".into(),
+                    rx_bytes: 100,
+                    tx_bytes: 200,
+                    rx_packets: 10,
+                    tx_packets: 20,
+                    speed: None,
+                    running: true,
+                }],
+            )
+            .await
+            .unwrap();
+
+        // Attempt SQL injection via device_id — with format! this would
+        // delete ALL rows; with parameterized queries it deletes nothing.
+        let sqli_id = "'; DELETE FROM switch_port_metrics WHERE '1'='1";
+        store.remove_device_data(sqli_id).await.unwrap();
+
+        // Verify legitimate data is still intact
+        let db = store.db.lock().await;
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM switch_port_metrics WHERE device_id = 'legit-device'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(count > 0, "legitimate device data should not be deleted by SQLi payload");
+    }
+
+    #[tokio::test]
+    async fn remove_device_data_deletes_correct_device() {
+        let store = SwitchStore::new(std::path::Path::new(":memory:")).unwrap();
+
+        // Insert data for two devices
+        for dev in &["dev-a", "dev-b"] {
+            store
+                .record_port_metrics(
+                    dev,
+                    &[PortMetricEntry {
+                        port_name: "ether1".into(),
+                        rx_bytes: 100,
+                        tx_bytes: 200,
+                        rx_packets: 10,
+                        tx_packets: 20,
+                        speed: None,
+                        running: true,
+                    }],
+                )
+                .await
+                .unwrap();
+        }
+
+        // Remove dev-a only
+        store.remove_device_data("dev-a").await.unwrap();
+
+        let db = store.db.lock().await;
+        let count_a: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM switch_port_metrics WHERE device_id = ?1",
+                params!["dev-a"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let count_b: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM switch_port_metrics WHERE device_id = ?1",
+                params!["dev-b"],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(count_a, 0, "dev-a data should be deleted");
+        assert!(count_b > 0, "dev-b data should be untouched");
+    }
 }

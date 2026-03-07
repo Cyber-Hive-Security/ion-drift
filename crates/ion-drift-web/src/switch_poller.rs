@@ -3,17 +3,19 @@ use std::time::Duration;
 
 use mikrotik_core::{MikrotikClient, SwitchStore};
 use mikrotik_core::switch_store::{PortMetricEntry, VlanMembershipEntry};
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 
 use crate::device_manager::{DeviceClient, DeviceManager, DeviceStatus};
 
 /// Spawn switch pollers for all enabled RouterOS devices (switches + router).
 ///
 /// Each device gets its own tokio task with an independent polling interval
-/// from its `poll_interval_secs` configuration.
+/// from its `poll_interval_secs` configuration. Uses the PollerRegistry
+/// for lifecycle management so pollers can be started/stopped dynamically.
 pub fn spawn_switch_pollers(
     device_manager: Arc<RwLock<DeviceManager>>,
     switch_store: Arc<SwitchStore>,
+    poller_registry: Arc<RwLock<crate::poller_registry::PollerRegistry>>,
 ) {
     let dm = device_manager.clone();
     tokio::spawn(async move {
@@ -33,34 +35,39 @@ pub fn spawn_switch_pollers(
             return;
         }
 
+        let mut registry = poller_registry.write().await;
         for entry in routeros_devices {
-            let device_id = entry.record.id.clone();
-            let device_name = entry.record.name.clone();
-            let poll_interval = entry.record.poll_interval_secs as u64;
-            // get_switches() only returns RouterOS switches, so unwrap is safe
-            let client = entry.client.as_routeros().cloned().expect("device type verified by filter");
-            let store = switch_store.clone();
-            let dm_ref = device_manager.clone();
-
-            tracing::info!(
-                id = %device_id,
-                name = %device_name,
-                interval_secs = poll_interval,
-                "starting switch poller"
-            );
-
-            tokio::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(Duration::from_secs(poll_interval.max(10)));
-
-                loop {
-                    poll_switch(&device_id, &client, &store, &dm_ref).await;
-                    interval.tick().await;
-                }
-            });
+            registry.start_poller(entry, device_manager.clone(), switch_store.clone());
         }
+        drop(registry);
         drop(dm_read);
     });
+}
+
+/// Run the polling loop for a single RouterOS switch device.
+///
+/// Called by the PollerRegistry. Exits when the cancellation signal is received.
+pub async fn run_switch_poller(
+    device_id: String,
+    client: MikrotikClient,
+    store: Arc<SwitchStore>,
+    dm: Arc<RwLock<DeviceManager>>,
+    poll_interval: u64,
+    mut cancel_rx: watch::Receiver<bool>,
+) {
+    let mut interval = tokio::time::interval(Duration::from_secs(poll_interval.max(10)));
+
+    loop {
+        tokio::select! {
+            _ = cancel_rx.changed() => {
+                tracing::info!(device = %device_id, "switch poller cancelled");
+                break;
+            }
+            _ = interval.tick() => {
+                poll_switch(&device_id, &client, &store, &dm).await;
+            }
+        }
+    }
 }
 
 /// Run one poll cycle for a switch device.
@@ -321,6 +328,8 @@ pub fn spawn_neighbor_poller(
 /// Spawn a device health check that pings all devices every 60s.
 ///
 /// Works with both RouterOS and SwOS devices via `DeviceClient::test_connection()`.
+/// Skips devices that have been polled recently by their own per-device poller
+/// (i.e. within the last `poll_interval_secs`), to avoid redundant connectivity checks.
 pub fn spawn_device_health_check(device_manager: Arc<RwLock<DeviceManager>>) {
     tokio::spawn(async move {
         // Brief startup delay to let device clients initialize
@@ -332,15 +341,34 @@ pub fn spawn_device_health_check(device_manager: Arc<RwLock<DeviceManager>>) {
         loop {
             interval.tick().await;
 
+            let now = tokio::time::Instant::now();
             let dm_read = device_manager.read().await;
-            let devices: Vec<(String, DeviceClient)> = dm_read
+            let devices: Vec<(String, DeviceClient, Option<tokio::time::Instant>, u64)> = dm_read
                 .all_devices()
                 .into_iter()
-                .map(|d| (d.record.id.clone(), d.client.clone()))
+                .map(|d| {
+                    (
+                        d.record.id.clone(),
+                        d.client.clone(),
+                        d.last_poll,
+                        d.record.poll_interval_secs as u64,
+                    )
+                })
                 .collect();
             drop(dm_read);
 
-            for (device_id, client) in &devices {
+            for (device_id, client, last_poll, poll_interval_secs) in &devices {
+                // Skip if this device was polled recently by its own poller
+                if let Some(last) = last_poll {
+                    if now.duration_since(*last) < Duration::from_secs(*poll_interval_secs) {
+                        tracing::trace!(
+                            device = %device_id,
+                            "health check: skipping, recently polled"
+                        );
+                        continue;
+                    }
+                }
+
                 let status = match client.test_connection().await {
                     Ok(identity) => DeviceStatus::Online { identity },
                     Err(e) => DeviceStatus::Offline {

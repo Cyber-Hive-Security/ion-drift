@@ -207,7 +207,7 @@ pub async fn inference_mac_detail(
     // Load recent observations for this MAC
     let now_ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
     let window_start = now_ts - OBSERVATION_WINDOW_SECS;
 
@@ -328,7 +328,7 @@ pub async fn observation_stats(
 
     let now_ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64;
     let window_start = now_ts - OBSERVATION_WINDOW_SECS;
 
