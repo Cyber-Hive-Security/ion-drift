@@ -3,30 +3,30 @@ listen_addr = "0.0.0.0"
 listen_port = 3000
 
 [router]
-host = "router.kaziik.xyz"
+host = "192.168.88.1"
 port = 443
 tls = true
 ca_cert_path = "/app/certs/root_ca.crt"
-username = "ion-drift"
+username = "admin"
 
 [oidc]
-issuer_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet"
+issuer_url = "https://your-keycloak.example.com/realms/YourRealm"
 client_id = "ion-drift"
-redirect_uri = "https://hiverouter.kaziik.xyz/auth/callback"
+redirect_uri = "https://your-ion-drift.example.com/auth/callback"
 ca_cert_path = "/app/certs/root_ca.crt"
 
 [oidc.bootstrap]
 client_id = "ion-drift-bootstrap"
-token_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet/protocol/openid-connect/token"
-admin_url = "https://holonetid.kaziik.xyz:8443/admin/realms/TheHolonet"
+token_url = "https://your-keycloak.example.com/realms/YourRealm/protocol/openid-connect/token"
+admin_url = "https://your-keycloak.example.com/admin/realms/YourRealm"
 
 [tls]
 client_cert = "/app/data/certs/client.crt"
 client_key = "/app/data/certs/client.key"
 
 [certwarden]
-base_url = "https://certwarden.kaziik.xyz:4051/certwarden"
-cert_name = "hiverouter"
+base_url = "https://your-certwarden.example.com:4051/certwarden"
+cert_name = "your-cert-name"
 renewal_threshold_days = 30
 check_interval_hours = 1
 

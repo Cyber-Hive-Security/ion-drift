@@ -50,31 +50,19 @@ pub struct NetworkMapStatusCache {
 }
 
 /// Compute hop count and internet path for a device IP.
-/// - Router (10.20.25.1): 0 hops, direct ISP connection
-/// - VLAN 99 (192.168.99.0/24): blocked by firewall policy
-/// - All other VLANs: 1 hop through the RB4011 router
+/// All internal (RFC1918) addresses are 1 hop through the router.
 fn compute_hops(ip: &str) -> (Option<u8>, Option<String>) {
     let parts: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
     if parts.len() != 4 {
         return (None, None);
     }
 
-    // Router itself
-    if ip == "10.20.25.1" {
-        return (Some(0), Some("\u{2192} ISP (direct)".into()));
-    }
-
-    // VLAN 99 — IoT No-Internet (firewall blocks WAN access)
-    if parts[0] == 192 && parts[1] == 168 && parts[2] == 99 {
-        return (None, Some("blocked by policy".into()));
-    }
-
-    // All other internal VLANs route through the RB4011
+    // All internal VLANs route through the router (1 hop)
     if parts[0] == 10
         || (parts[0] == 172 && (16..=31).contains(&parts[1]))
         || (parts[0] == 192 && parts[1] == 168)
     {
-        return (Some(1), Some("\u{2192} RB4011 \u{2192} ISP".into()));
+        return (Some(1), Some("\u{2192} Router \u{2192} ISP".into()));
     }
 
     (None, None)

@@ -16,7 +16,7 @@ import {
   createTopologyMapInstance,
   type TopologyMapInstance,
 } from "./hooks/use-d3-topology";
-import { VLAN_COLORS, VLAN_NAMES } from "@/constants/vlans";
+import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import "../topology/topology-map.css";
 import {
   RefreshCw,
@@ -39,7 +39,8 @@ function DetailPanel({
   node: TopologyNode;
   onClose: () => void;
 }) {
-  const vlanColor = node.vlan_id != null ? VLAN_COLORS[node.vlan_id] ?? "#888" : "#888";
+  const vlan = useVlanLookup();
+  const vlanColor = node.vlan_id != null ? vlan.color(node.vlan_id) : "#888";
 
   return (
     <div className="absolute right-0 top-0 z-20 flex h-full w-80 flex-col border-l border-border bg-card/95 backdrop-blur">
@@ -66,7 +67,7 @@ function DetailPanel({
           {node.vlan_id != null && (
             <Row
               label="VLAN"
-              value={`${node.vlan_id} — ${VLAN_NAMES[node.vlan_id] ?? ""}`}
+              value={`${node.vlan_id} — ${vlan.name(node.vlan_id)}`}
             />
           )}
           {node.device_type && <Row label="Device Type" value={node.device_type} />}
@@ -135,6 +136,7 @@ function LegendSection({ title, children }: { title: string; children: React.Rea
 }
 
 function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const vlan = useVlanLookup();
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; origLeft: number; origTop: number } | null>(null);
   const didDragRef = useRef(false);
@@ -250,14 +252,14 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
 
           {/* VLAN Sectors */}
           <LegendSection title="VLAN SECTORS">
-            {Object.entries(VLAN_COLORS).map(([vid, color]) => (
+            {Object.entries(vlan.colors).map(([vid, color]) => (
               <div key={vid} className="flex items-center gap-2">
                 <span
                   className="inline-block h-2.5 w-2.5 flex-shrink-0 rounded-sm"
                   style={{ background: color, opacity: 0.6 }}
                 />
                 <span>
-                  <span style={{ color: "#8A929D" }}>{vid}:</span> {VLAN_NAMES[Number(vid)] ?? ""}
+                  <span style={{ color: "#8A929D" }}>{vid}:</span> {vlan.name(Number(vid))}
                 </span>
               </div>
             ))}
@@ -534,10 +536,11 @@ function VlanFilterBar({
   onToggle: (vlan: number) => void;
   dataVlans: number[];
 }) {
+  const vlan = useVlanLookup();
   // Only show VLANs that actually have data, sorted by ID
   const vlans = dataVlans.length > 0
     ? [...dataVlans].sort((a, b) => a - b)
-    : Object.keys(VLAN_COLORS).map(Number).sort((a, b) => a - b);
+    : Object.keys(vlan.colors).map(Number).sort((a, b) => a - b);
 
   return (
     <div className="flex flex-wrap gap-1">
@@ -549,9 +552,9 @@ function VlanFilterBar({
             onClick={() => onToggle(v)}
             className="rounded-full border px-2 py-0.5 text-[10px] font-mono transition-colors"
             style={{
-              borderColor: VLAN_COLORS[v],
-              backgroundColor: active ? VLAN_COLORS[v] + "22" : "transparent",
-              color: active ? VLAN_COLORS[v] : "#555",
+              borderColor: vlan.color(v),
+              backgroundColor: active ? vlan.color(v) + "22" : "transparent",
+              color: active ? vlan.color(v) : "#555",
               opacity: active ? 1 : 0.4,
             }}
           >
@@ -566,6 +569,7 @@ function VlanFilterBar({
 // ─── Main Page ──────────────────────────────────────────
 
 export function TopologyPage() {
+  const vlan = useVlanLookup();
   const svgRef = useRef<SVGSVGElement>(null);
   const mapRef = useRef<TopologyMapInstance | null>(null);
   const prevDataRef = useRef<NetworkTopologyResponse | null>(null);
@@ -599,7 +603,7 @@ export function TopologyPage() {
   useEffect(() => {
     if (!svgRef.current) return;
 
-    const instance = createTopologyMapInstance(svgRef.current, {
+    const instance = createTopologyMapInstance(svgRef.current, vlan.colors, {
       onNodeClick: (node) => setSelectedNode(node),
       onContextMenu: (node, screenX, screenY) => {
         setContextMenu({ node, x: screenX, y: screenY });

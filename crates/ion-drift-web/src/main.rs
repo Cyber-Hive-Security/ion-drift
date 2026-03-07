@@ -328,6 +328,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Build VlanRegistry from database VLAN configs
+    let vlan_registry = {
+        let configs = switch_store.get_vlan_configs().await.unwrap_or_default();
+        Arc::new(tokio::sync::RwLock::new(
+            mikrotik_core::behavior::VlanRegistry::from_configs(&configs),
+        ))
+    };
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),
@@ -348,6 +356,7 @@ async fn main() -> anyhow::Result<()> {
         device_manager: device_manager.clone(),
         switch_store: switch_store.clone(),
         topology_cache: Arc::new(tokio::sync::RwLock::new(None)),
+        vlan_registry: vlan_registry.clone(),
     };
 
     // Spawn background tasks
@@ -369,20 +378,23 @@ async fn main() -> anyhow::Result<()> {
         app_state.oui_db.clone(),
         app_state.geo_cache.clone(),
         app_state.firewall_rules_cache.clone(),
+        vlan_registry.clone(),
     );
     spawn_behavior_maintenance(
         behavior_store.clone(),
         connection_store.clone(),
         app_state.switch_store.clone(),
+        vlan_registry.clone(),
     );
-    spawn_behavior_auto_classifier(behavior_store.clone());
-    anomaly_correlator::spawn_anomaly_correlator(connection_store.clone(), behavior_store);
+    spawn_behavior_auto_classifier(behavior_store.clone(), vlan_registry.clone());
+    anomaly_correlator::spawn_anomaly_correlator(connection_store.clone(), behavior_store, vlan_registry.clone());
 
     // Spawn connection history persistence + pruning
     spawn_connection_persister(
         connection_store.clone(),
         mikrotik.clone(),
         geo_cache.clone(),
+        vlan_registry.clone(),
     );
     spawn_connection_pruner(connection_store.clone());
 
@@ -390,7 +402,7 @@ async fn main() -> anyhow::Result<()> {
     snapshots::spawn_snapshot_generator(connection_store.clone());
 
     // Spawn syslog listener (UDP 5514 by default) — only accepts packets from configured router
-    syslog::spawn_syslog_listener(5514, connection_store, geo_cache, config.router.host.clone());
+    syslog::spawn_syslog_listener(5514, connection_store, geo_cache, config.router.host.clone(), vlan_registry.clone());
 
     // Spawn multi-device background tasks
     switch_poller::spawn_switch_pollers(device_manager.clone(), switch_store.clone());
@@ -936,21 +948,29 @@ fn spawn_behavior_collector(
     oui_db: Arc<oui::OuiDb>,
     geo_cache: Arc<geo::GeoCache>,
     firewall_cache: Arc<tokio::sync::RwLock<(Vec<mikrotik_core::resources::firewall::FilterRule>, std::time::Instant)>>,
+    vlan_registry: Arc<tokio::sync::RwLock<mikrotik_core::behavior::VlanRegistry>>,
 ) {
     tokio::spawn(async move {
         // Wait 3 minutes before first collection
         tokio::time::sleep(Duration::from_secs(180)).await;
         tracing::info!("behavior collector starting");
 
+        let spike_candidates = behavior_engine::SpikeCandidates::new();
+        let mut cycle_count: u64 = 0;
+
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
+            cycle_count += 1;
+
+            // Snapshot the current VlanRegistry for this cycle
+            let registry = vlan_registry.read().await.clone();
 
             // Refresh firewall rules cache
             behavior_engine::refresh_firewall_cache(&client, &firewall_cache).await;
 
             // Collect observations
-            match behavior_engine::collect_observations(&client, &store, &oui_db).await {
+            match behavior_engine::collect_observations(&client, &store, &oui_db, &registry).await {
                 Ok(count) => {
                     tracing::debug!("behavior: collected {count} observations");
                 }
@@ -961,7 +981,7 @@ fn spawn_behavior_collector(
             }
 
             // Detect anomalies
-            match behavior_engine::detect_anomalies(&store).await {
+            match behavior_engine::detect_anomalies(&store, &spike_candidates, &registry).await {
                 Ok(count) => {
                     if count > 0 {
                         tracing::info!("behavior: detected {count} anomalies");
@@ -971,7 +991,7 @@ fn spawn_behavior_collector(
             }
 
             // Detect blocked attempts
-            match behavior_engine::detect_blocked_attempts(&client, &store, &oui_db, &geo_cache).await
+            match behavior_engine::detect_blocked_attempts(&client, &store, &oui_db, &geo_cache, &registry).await
             {
                 Ok(count) => {
                     if count > 0 {
@@ -979,6 +999,11 @@ fn spawn_behavior_collector(
                     }
                 }
                 Err(e) => tracing::warn!("behavior: blocked attempt detection failed: {e}"),
+            }
+
+            // Prune spike candidates every 10 minutes to avoid memory growth
+            if cycle_count % 10 == 0 {
+                spike_candidates.prune();
             }
         }
     });
@@ -991,11 +1016,31 @@ fn spawn_behavior_maintenance(
     store: Arc<mikrotik_core::BehaviorStore>,
     connection_store: Arc<connection_store::ConnectionStore>,
     switch_store: Arc<mikrotik_core::SwitchStore>,
+    vlan_registry: Arc<tokio::sync::RwLock<mikrotik_core::behavior::VlanRegistry>>,
 ) {
     tokio::spawn(async move {
-        // Run once after 5 minutes to catch up on any missed promotions
+        // Check if maintenance ran recently (within 6 hours) — skip startup run if so
         tokio::time::sleep(Duration::from_secs(300)).await;
-        run_behavior_maintenance(&store, &connection_store, &switch_store).await;
+        let should_run = match store.get_metadata("last_maintenance").await {
+            Ok(Some(ts)) => {
+                let last: u64 = ts.parse().unwrap_or(0);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                let age = now.saturating_sub(last);
+                if age < 6 * 3600 {
+                    tracing::info!("behavior maintenance: last ran {}h ago, skipping startup run", age / 3600);
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        };
+        if should_run {
+            run_behavior_maintenance(&store, &connection_store, &switch_store, &vlan_registry).await;
+        }
 
         loop {
             // Sleep until next 3 AM local time
@@ -1003,7 +1048,7 @@ fn spawn_behavior_maintenance(
             tracing::info!("behavior maintenance: next run in {sleep_secs}s (~{:.1}h)", sleep_secs as f64 / 3600.0);
             tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
 
-            run_behavior_maintenance(&store, &connection_store, &switch_store).await;
+            run_behavior_maintenance(&store, &connection_store, &switch_store, &vlan_registry).await;
         }
     });
 }
@@ -1012,6 +1057,7 @@ async fn run_behavior_maintenance(
     store: &mikrotik_core::BehaviorStore,
     connection_store: &connection_store::ConnectionStore,
     switch_store: &mikrotik_core::SwitchStore,
+    vlan_registry: &tokio::sync::RwLock<mikrotik_core::behavior::VlanRegistry>,
 ) {
     tracing::info!("behavior maintenance: recomputing baselines");
     match store.recompute_all_baselines(7 * 86400).await {
@@ -1024,6 +1070,17 @@ async fn run_behavior_maintenance(
         Err(e) => tracing::warn!("behavior: observation prune failed: {e}"),
     }
 
+    // Auto-resolve stale anomalies
+    let registry = vlan_registry.read().await;
+    match store.auto_resolve_stale(&registry).await {
+        Ok(count) => {
+            if count > 0 {
+                tracing::info!("behavior: auto-resolved {count} stale anomalies");
+            }
+        }
+        Err(e) => tracing::warn!("behavior: auto-resolve failed: {e}"),
+    }
+
     // Compute port flow baselines for Sankey anomaly detection
     tracing::info!("computing port flow baselines");
     match connection_store.compute_port_flow_baselines() {
@@ -1033,6 +1090,15 @@ async fn run_behavior_maintenance(
 
     // Classify devices by traffic patterns
     classify_traffic_patterns(store, switch_store).await;
+
+    // Persist maintenance watermark
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    if let Err(e) = store.set_metadata("last_maintenance", &now.to_string()).await {
+        tracing::warn!("failed to persist maintenance watermark: {e}");
+    }
 }
 
 /// Compute seconds until the next occurrence of `target_hour` (0-23) in local time.
@@ -1177,12 +1243,16 @@ async fn classify_traffic_patterns(
 }
 
 /// Auto-resolve stale anomalies every hour based on per-VLAN timeout rules.
-fn spawn_behavior_auto_classifier(store: Arc<mikrotik_core::BehaviorStore>) {
+fn spawn_behavior_auto_classifier(
+    store: Arc<mikrotik_core::BehaviorStore>,
+    vlan_registry: Arc<tokio::sync::RwLock<mikrotik_core::behavior::VlanRegistry>>,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(3600));
         loop {
             interval.tick().await;
-            match store.auto_resolve_stale().await {
+            let registry = vlan_registry.read().await;
+            match store.auto_resolve_stale(&registry).await {
                 Ok(count) => {
                     if count > 0 {
                         tracing::info!("behavior: auto-resolved {count} stale anomalies");
@@ -1199,6 +1269,7 @@ fn spawn_connection_persister(
     store: Arc<connection_store::ConnectionStore>,
     client: mikrotik_core::MikrotikClient,
     geo_cache: Arc<geo::GeoCache>,
+    vlan_registry: Arc<tokio::sync::RwLock<mikrotik_core::behavior::VlanRegistry>>,
 ) {
     tokio::spawn(async move {
         // Wait 1 minute before starting (let server stabilize)
@@ -1217,6 +1288,7 @@ fn spawn_connection_persister(
                 }
             };
 
+            let conn_registry = vlan_registry.read().await.clone();
             let mut inserted = 0usize;
             let mut updated = 0usize;
             let mut active_ids: Vec<String> = Vec::with_capacity(connections.len());
@@ -1256,7 +1328,7 @@ fn spawn_connection_persister(
                     bytes_rx: c.repl_bytes.unwrap_or(0) as i64,
                 };
 
-                match store.upsert_from_poll(&poll_conn, &geo_cache) {
+                match store.upsert_from_poll(&poll_conn, &geo_cache, &conn_registry) {
                     Ok(true) => inserted += 1,
                     Ok(false) => updated += 1,
                     Err(e) => tracing::debug!("connection persist error: {e}"),

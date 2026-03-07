@@ -27,7 +27,7 @@ import {
   useDevices,
 } from "@/api/queries";
 import type { NetworkIdentity, ObservedService, DeviceDisposition } from "@/api/types";
-import { VLAN_CONFIG } from "@/constants/vlans";
+import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 
 // ── Device type options ─────────────────────────────────────────
 
@@ -407,6 +407,7 @@ function InfrastructureCell({
 // ── Main page ───────────────────────────────────────────────────
 
 export default function IdentityManagerPage() {
+  const vlan = useVlanLookup();
   const { data: identities = [], isLoading, refetch } = useNetworkIdentities();
   const { data: stats } = useIdentityStats();
   const { data: allServices = [] } = useObservedServices();
@@ -677,7 +678,7 @@ export default function IdentityManagerPage() {
       header: "VLAN",
       render: (row) => {
         if (!row.vlan_id) return "—";
-        const config = VLAN_CONFIG[row.vlan_id];
+        const config = vlan.configs[row.vlan_id];
         return (
           <span className="flex items-center gap-1.5">
             <span
@@ -987,7 +988,7 @@ export default function IdentityManagerPage() {
               <option value="">All</option>
               {uniqueVlans.map((v) => (
                 <option key={v} value={String(v)}>
-                  VLAN {v} — {VLAN_CONFIG[v]?.name || "Unknown"}
+                  VLAN {v} — {vlan.name(v)}
                 </option>
               ))}
             </select>

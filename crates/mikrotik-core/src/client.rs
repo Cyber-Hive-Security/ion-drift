@@ -10,7 +10,7 @@ use crate::error::{MikrotikError, RouterOsErrorResponse};
 /// Configuration for connecting to a RouterOS device.
 #[derive(Clone)]
 pub struct MikrotikConfig {
-    /// Router address (IP or hostname), e.g. "10.20.25.1"
+    /// Router address (IP or hostname), e.g. "192.168.88.1"
     pub host: String,
     /// REST API port (default 443 for HTTPS)
     pub port: u16,
@@ -27,7 +27,7 @@ pub struct MikrotikConfig {
 impl Default for MikrotikConfig {
     fn default() -> Self {
         Self {
-            host: "10.20.25.1".into(),
+            host: "192.168.88.1".into(),
             port: 443,
             tls: true,
             ca_cert_path: None,

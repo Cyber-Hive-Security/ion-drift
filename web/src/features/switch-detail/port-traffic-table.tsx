@@ -1,7 +1,7 @@
 import { useMemo, useRef, useEffect } from "react";
 import { DataTable, type Column } from "@/components/data-table";
 import { cn } from "@/lib/utils";
-import { VLAN_CONFIG } from "@/constants/vlans";
+import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import { formatBytes } from "@/lib/format";
 import type {
   PortMetricsTuple,
@@ -46,6 +46,7 @@ export function PortTrafficTable({
   selectedPort,
   deviceId,
 }: PortTrafficTableProps) {
+  const vlan = useVlanLookup();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Build latest metrics per port
@@ -97,7 +98,7 @@ export function PortTrafficTable({
       const metrics = latestMetrics.get(portName);
       const identity = identityByPort.get(portName);
       const vlanId = getPortPrimaryVlan(portName, vlans);
-      const vlanColor = vlanId !== null ? (VLAN_CONFIG[vlanId]?.color ?? "#666") : "transparent";
+      const vlanColor = vlanId !== null ? vlan.color(vlanId) : "transparent";
 
       result.push({
         portName,
@@ -113,7 +114,7 @@ export function PortTrafficTable({
     }
 
     return result.sort((a, b) => portSortKey(a.portName) - portSortKey(b.portName));
-  }, [latestMetrics, interfaces, identityByPort, vlans, roleMap]);
+  }, [latestMetrics, interfaces, identityByPort, vlans, roleMap, vlan]);
 
   // Scroll to selected port row
   useEffect(() => {

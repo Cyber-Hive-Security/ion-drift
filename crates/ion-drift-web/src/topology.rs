@@ -116,20 +116,9 @@ pub struct NetworkTopology {
 
 // ── VLAN config ─────────────────────────────────────────────────
 
-/// Hardcoded fallback when DB has no entry for a VLAN.
-fn vlan_config_fallback(id: u32) -> (&'static str, &'static str, &'static str) {
-    match id {
-        2 => ("Network Mgmt", "#00f0ff", "10.2.2.0/24"),
-        6 => ("Employer Isolated", "#888888", "172.20.6.0/24"),
-        10 => ("Cyber Hive Security", "#ff4444", "172.20.10.0/24"),
-        25 => ("Trusted Services", "#00b4d8", "10.20.25.0/24"),
-        30 => ("Trusted Wired", "#22cc88", "10.20.30.0/24"),
-        35 => ("Trusted Wireless", "#44ddaa", "10.20.35.0/24"),
-        40 => ("Guest", "#ffaa00", "10.20.40.0/24"),
-        90 => ("IoT Internet", "#f97316", "192.168.90.0/24"),
-        99 => ("IoT Restricted", "#7FFF00", "192.168.99.0/24"),
-        _ => ("Unknown", "#888888", ""),
-    }
+/// Generic fallback when DB has no entry for a VLAN.
+fn vlan_config_fallback(id: u32) -> (String, &'static str, &'static str) {
+    (format!("VLAN {id}"), "#888888", "")
 }
 
 use mikrotik_core::switch_store::VlanConfig;
@@ -147,7 +136,7 @@ fn resolve_vlan_config(
         )
     } else {
         let (n, c, s) = vlan_config_fallback(id);
-        (n.to_string(), c.to_string(), s.to_string())
+        (n, c.to_string(), s.to_string())
     }
 }
 

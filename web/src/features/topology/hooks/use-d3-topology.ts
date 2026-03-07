@@ -11,7 +11,6 @@ import type {
   TopologyVlanGroup,
   NetworkTopologyResponse,
 } from "@/api/types";
-import { VLAN_COLORS } from "@/constants/vlans";
 import { escHtml } from "@/lib/utils";
 
 // ─── Constants ──────────────────────────────────────────
@@ -133,6 +132,7 @@ function hexPath(r: number): string {
 
 export function createTopologyMapInstance(
   svgElement: SVGSVGElement,
+  vlanColors: Record<number, string>,
   callbacks: TopologyCallbacks,
 ): TopologyMapInstance {
   // ── All helpers scoped inside factory ──
@@ -145,7 +145,7 @@ export function createTopologyMapInstance(
     if (node.kind === "server") return "#2FA4FF";
     if (node.kind === "camera") return "#8A929D";
     if (node.kind === "media_player") return "#FF4FD8";
-    if (node.vlan_id != null && VLAN_COLORS[node.vlan_id]) return VLAN_COLORS[node.vlan_id];
+    if (node.vlan_id != null && vlanColors[node.vlan_id]) return vlanColors[node.vlan_id];
     if (node.is_infrastructure) return "#00E5FF";
     return "#E6EDF3";
   }
@@ -192,7 +192,7 @@ export function createTopologyMapInstance(
     if (edge.speed_mbps != null) return speedStyle(edge.speed_mbps).color;
     if (edge.kind === "uplink") return "#2FA4FF";
     if (edge.kind === "trunk") return "#00E5FF";
-    if (edge.vlans.length === 1 && VLAN_COLORS[edge.vlans[0]]) return VLAN_COLORS[edge.vlans[0]];
+    if (edge.vlans.length === 1 && vlanColors[edge.vlans[0]]) return vlanColors[edge.vlans[0]];
     return "#8A929D";
   }
 
@@ -508,7 +508,7 @@ export function createTopologyMapInstance(
     layerSectorDrag.selectAll("*").remove();
 
     groups.forEach((group) => {
-      const color = group.color || VLAN_COLORS[group.vlan_id] || "#555";
+      const color = group.color || vlanColors[group.vlan_id] || "#555";
 
       const g = layerVlanBg.append("g")
         .attr("class", `vlan-bg-${group.vlan_id}`)

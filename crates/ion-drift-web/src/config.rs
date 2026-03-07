@@ -80,7 +80,7 @@ fn default_client_key_path() -> String {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct CertWardenSection {
-    /// CertWarden API base URL (e.g., https://certwarden.kaziik.xyz:4051).
+    /// CertWarden API base URL (e.g., https://certwarden.example.com:4051).
     pub base_url: Option<String>,
     /// Certificate name in CertWarden.
     pub cert_name: Option<String>,
@@ -202,7 +202,7 @@ fn default_listen_port() -> u16 {
 }
 
 fn default_router_host() -> String {
-    "10.20.25.1".into()
+    "192.168.88.1".into()
 }
 
 fn default_router_port() -> u16 {

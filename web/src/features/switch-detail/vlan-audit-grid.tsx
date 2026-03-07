@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { VLAN_CONFIG } from "@/constants/vlans";
+import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import type { VlanMembershipEntry, PortRoleEntry } from "@/api/types";
 import { portSortKey, portShortName } from "./utils";
 
@@ -9,6 +9,7 @@ interface VlanAuditGridProps {
 }
 
 export function VlanAuditGrid({ vlans }: VlanAuditGridProps) {
+  const vlan = useVlanLookup();
   // Build unique sorted port names and VLAN IDs
   const { portNames, vlanIds, membershipMap } = useMemo(() => {
     const ports = new Set<string>();
@@ -60,7 +61,7 @@ export function VlanAuditGrid({ vlans }: VlanAuditGridProps) {
           </thead>
           <tbody>
             {vlanIds.map((vlanId) => {
-              const vlanCfg = VLAN_CONFIG[vlanId];
+              const vlanCfg = vlan.configs[vlanId];
               const color = vlanCfg?.color ?? "#666";
 
               return (

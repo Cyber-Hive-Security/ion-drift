@@ -1,5 +1,4 @@
-import { VLAN_CONFIG } from "@/constants/vlans";
-import type { VlanMembershipEntry } from "@/api/types";
+import type { VlanConfig, VlanMembershipEntry } from "@/api/types";
 
 /**
  * Extract the numeric port index from various naming conventions.
@@ -126,12 +125,13 @@ export function portSortKey(portName: string): number {
 export function getPortVlanColor(
   portName: string,
   vlans: VlanMembershipEntry[],
+  vlanConfigs?: Record<number, VlanConfig>,
 ): string {
   const portVlans = vlans.filter((v) => v.port_name === portName);
   if (portVlans.length === 0) return "#2C3038";
   const untagged = portVlans.find((v) => !v.tagged);
   const primaryVlanId = untagged?.vlan_id ?? portVlans[0].vlan_id;
-  return VLAN_CONFIG[primaryVlanId]?.color ?? "#8A929D";
+  return vlanConfigs?.[primaryVlanId]?.color ?? "#8A929D";
 }
 
 /** Get the primary VLAN ID for a port (untagged preferred). */
@@ -146,8 +146,8 @@ export function getPortPrimaryVlan(
 }
 
 /** Get VLAN name for display. */
-export function vlanName(vlanId: number): string {
-  return VLAN_CONFIG[vlanId]?.name ?? `VLAN ${vlanId}`;
+export function vlanName(vlanId: number, vlanConfigs?: Record<number, VlanConfig>): string {
+  return vlanConfigs?.[vlanId]?.name ?? `VLAN ${vlanId}`;
 }
 
 /** Format bytes per second as a human-readable rate. */

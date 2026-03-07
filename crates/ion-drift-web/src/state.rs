@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use mikrotik_core::{BehaviorStore, MikrotikClient, MetricsStore, SwitchStore, TrafficTracker};
+use mikrotik_core::behavior::VlanRegistry;
 use mikrotik_core::resources::firewall::FilterRule;
 use crate::auth::{OidcClient, SessionStore};
 use crate::config::ServerConfig;
@@ -54,4 +55,7 @@ pub struct AppState {
     pub switch_store: Arc<SwitchStore>,
     /// Cached auto-generated network topology, recomputed every 120s.
     pub topology_cache: Arc<RwLock<Option<NetworkTopology>>>,
+    /// VLAN registry built from database VlanConfig entries.
+    /// Refreshed when VLAN configs change.
+    pub vlan_registry: Arc<RwLock<VlanRegistry>>,
 }

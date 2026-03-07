@@ -50,20 +50,13 @@ impl ScanProfile {
     }
 }
 
-/// Known VLANs and their subnets.
-fn vlan_to_cidr(vlan_id: u32) -> Option<&'static str> {
-    match vlan_id {
-        2 => Some("10.2.2.0/24"),
-        6 => Some("172.20.6.0/24"),
-        10 => Some("172.20.10.0/24"),
-        25 => Some("10.20.25.0/24"),
-        30 => Some("10.20.30.0/24"),
-        35 => Some("10.20.35.0/24"),
-        40 => Some("10.20.40.0/24"),
-        90 => Some("192.168.90.0/24"),
-        99 => Some("192.168.99.0/24"),
-        _ => None,
-    }
+/// Look up CIDR for a VLAN from the DB config.
+async fn vlan_to_cidr(switch_store: &SwitchStore, vlan_id: u32) -> Option<String> {
+    let configs = switch_store.get_vlan_configs().await.ok()?;
+    configs
+        .iter()
+        .find(|c| c.vlan_id == vlan_id as u16)
+        .and_then(|c| c.subnet.clone())
 }
 
 /// Check whether nmap is available on the system.
@@ -71,9 +64,15 @@ pub fn nmap_available() -> bool {
     std::path::Path::new("/usr/bin/nmap").exists()
 }
 
-/// Whether this VLAN is an IoT VLAN (warning for scan).
-pub fn is_iot_vlan(vlan_id: u32) -> bool {
-    matches!(vlan_id, 90 | 99)
+/// Whether this VLAN has "loose" or "monitor" sensitivity (e.g. IoT VLANs).
+pub async fn is_iot_vlan(switch_store: &SwitchStore, vlan_id: u32) -> bool {
+    let configs = switch_store.get_vlan_configs().await.unwrap_or_default();
+    configs
+        .iter()
+        .find(|c| c.vlan_id == vlan_id as u16)
+        .and_then(|c| c.sensitivity.as_deref())
+        .map(|s| matches!(s, "loose" | "monitor"))
+        .unwrap_or(false)
 }
 
 impl NmapScanner {
@@ -95,9 +94,9 @@ impl NmapScanner {
         vlan_id: u32,
         profile: ScanProfile,
     ) -> Result<String, String> {
-        // Validate VLAN
-        let cidr = vlan_to_cidr(vlan_id)
-            .ok_or_else(|| format!("unknown VLAN {vlan_id}"))?;
+        // Validate VLAN — look up subnet from DB
+        let cidr = vlan_to_cidr(&self.switch_store, vlan_id).await
+            .ok_or_else(|| format!("unknown VLAN {vlan_id} — no subnet configured"))?;
 
         // Check nmap availability
         if !nmap_available() {
@@ -142,7 +141,6 @@ impl NmapScanner {
         let store = Arc::clone(&self.switch_store);
         let scanning = Arc::clone(&self.scanning);
         let sid = scan_id.clone();
-        let cidr = cidr.to_string();
 
         tokio::spawn(async move {
             let result = run_nmap_scan(&store, &sid, &cidr, profile, &exclusions).await;

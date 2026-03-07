@@ -3,20 +3,20 @@ listen_addr = "0.0.0.0"
 listen_port = 3000
 
 [router]
-host = "10.20.25.1"
+host = "192.168.88.1"
 port = 443
 tls = true
-ca_cert_path = "/certs/root_ca.crt"
+ca_cert_path = "/path/to/ca.crt"
 username = "admin"
 # password from HIVE_ROUTER_PASSWORD env var (legacy mode only)
 
 [oidc]
-issuer_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet"
+issuer_url = "https://your-keycloak.example.com/realms/YourRealm"
 client_id = "ion-drift"
 # client_secret from HIVE_ROUTER_OIDC_SECRET env var (legacy mode only)
-redirect_uri = "https://hiverouter.kaziik.xyz/auth/callback"
-# Smallstep root CA for verifying Keycloak's TLS cert
-ca_cert_path = "/certs/root_ca.crt"
+redirect_uri = "https://your-ion-drift.example.com/auth/callback"
+# CA cert for verifying your OIDC provider's TLS cert (optional)
+# ca_cert_path = "/path/to/ca.crt"
 
 [session]
 # secret from HIVE_ROUTER_SESSION_SECRET env var (legacy mode; auto-generated in bootstrap mode)
@@ -31,8 +31,8 @@ same_site = "lax"
 
 # [oidc.bootstrap]
 # client_id = "ion-drift-bootstrap"
-# token_url = "https://holonetid.kaziik.xyz:8443/realms/TheHolonet/protocol/openid-connect/token"
-# admin_url = "https://holonetid.kaziik.xyz:8443/admin/realms/TheHolonet"
+# token_url = "https://your-keycloak.example.com/realms/YourRealm/protocol/openid-connect/token"
+# admin_url = "https://your-keycloak.example.com/admin/realms/YourRealm"
 # kek_attribute = "ion_drift_kek"
 
 # [tls]
@@ -40,7 +40,7 @@ same_site = "lax"
 # client_key = "/app/data/certs/client.key"
 
 # [certwarden]
-# base_url = "https://certwarden.kaziik.xyz:4051"
-# cert_name = "hiverouter"
+# base_url = "https://your-certwarden.example.com:4051"
+# cert_name = "your-cert-name"
 # renewal_threshold_days = 30
 # check_interval_hours = 1

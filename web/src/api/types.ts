@@ -546,6 +546,7 @@ export interface DeviceAnomaly {
   timestamp: number;
   anomaly_type: string;
   severity: string;
+  confidence: number;
   description: string;
   details: string | null;
   vlan: number;
@@ -562,6 +563,7 @@ export interface VlanBehaviorSummary {
   device_count: number;
   baselined_count: number;
   learning_count: number;
+  sparse_count: number;
   pending_anomaly_count: number;
 }
 
@@ -569,6 +571,7 @@ export interface BehaviorOverview {
   total_devices: number;
   baselined_devices: number;
   learning_devices: number;
+  sparse_devices: number;
   pending_anomalies: number;
   critical_anomalies: number;
   warning_anomalies: number;
@@ -1255,6 +1258,7 @@ export interface VlanConfig {
   media_type: "wired" | "wireless" | "mixed";
   subnet: string | null;
   color: string | null;
+  sensitivity: string | null;
 }
 
 // ── Topology Inference ──────────────────────────────────────────

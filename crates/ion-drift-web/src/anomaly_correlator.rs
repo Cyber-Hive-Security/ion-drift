@@ -6,7 +6,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::behavior::{self, BehaviorStore, NewAnomaly};
+use mikrotik_core::behavior::{BehaviorStore, NewAnomaly, VlanRegistry};
+use tokio::sync::RwLock;
 
 use crate::connection_store::{ConnectionStore, FlowClassification, NewAnomalyLink};
 
@@ -14,6 +15,7 @@ use crate::connection_store::{ConnectionStore, FlowClassification, NewAnomalyLin
 pub fn spawn_anomaly_correlator(
     connection_store: Arc<ConnectionStore>,
     behavior_store: Arc<BehaviorStore>,
+    vlan_registry: Arc<RwLock<VlanRegistry>>,
 ) {
     tokio::spawn(async move {
         // Wait 5 minutes for behavior collector + baselines to have initial data
@@ -24,7 +26,8 @@ pub fn spawn_anomaly_correlator(
         loop {
             interval.tick().await;
 
-            match run_correlation(&connection_store, &behavior_store).await {
+            let registry = vlan_registry.read().await.clone();
+            match run_correlation(&connection_store, &behavior_store, &registry).await {
                 Ok((port_links, device_links)) => {
                     if port_links > 0 || device_links > 0 {
                         tracing::info!(
@@ -45,8 +48,9 @@ pub fn spawn_anomaly_correlator(
 async fn run_correlation(
     conn_store: &ConnectionStore,
     behavior_store: &BehaviorStore,
+    registry: &VlanRegistry,
 ) -> anyhow::Result<(usize, usize)> {
-    let port_links = correlate_port_to_device(conn_store, behavior_store).await?;
+    let port_links = correlate_port_to_device(conn_store, behavior_store, registry).await?;
     let device_links = correlate_device_to_port(conn_store, behavior_store).await?;
     auto_resolve_links(conn_store, behavior_store).await?;
     Ok((port_links, device_links))
@@ -56,6 +60,7 @@ async fn run_correlation(
 async fn correlate_port_to_device(
     conn_store: &ConnectionStore,
     behavior_store: &BehaviorStore,
+    registry: &VlanRegistry,
 ) -> anyhow::Result<usize> {
     let mut total_links = 0;
 
@@ -107,6 +112,7 @@ async fn correlate_port_to_device(
                     !flow.days_in_baseline > 0,
                     device_count,
                     device.vlan.as_deref(),
+                    registry,
                 );
 
                 conn_store.insert_anomaly_link(&NewAnomalyLink {
@@ -145,6 +151,7 @@ async fn correlate_port_to_device(
                             mac: device.mac.clone(),
                             anomaly_type: classification_str.to_string(),
                             severity: severity.to_string(),
+                            confidence: 0.6, // port flow correlation — moderate confidence
                             description: format!(
                                 "{} detected at network level: {} {}/{}",
                                 classification_str.replace('_', " "),
@@ -352,6 +359,7 @@ fn escalated_severity(
     port_is_baselined: bool,
     device_count: usize,
     device_vlan: Option<&str>,
+    registry: &VlanRegistry,
 ) -> &'static str {
     // Multiple devices on a new port = critical (lateral movement pattern)
     if classification == "new_port" && !port_is_baselined && device_count > 1 {
@@ -373,7 +381,7 @@ fn escalated_severity(
                 .and_then(|v| v.split(':').next())
                 .and_then(|v| v.trim().parse::<u16>().ok())
                 .unwrap_or(0);
-            return behavior::anomaly_severity(vlan_num, "new_port");
+            return registry.anomaly_severity(vlan_num, "new_port");
         }
         return "warning";
     }

@@ -53,7 +53,7 @@ pub fn build_mikrotik_config(
         .map(String::from)
         .or_else(|| std::env::var("HIVE_ROUTER_HOST").ok())
         .or_else(|| file_cfg.router.host.clone())
-        .unwrap_or_else(|| "router.kaziik.xyz".into());
+        .unwrap_or_else(|| "192.168.88.1".into());
 
     // Port: CLI flag > config file > default
     let port = port

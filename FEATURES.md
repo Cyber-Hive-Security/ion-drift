@@ -1,10 +1,10 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-06 — commit `131ecdf` (topology inference engine in active mode)
+> **Last updated:** 2026-03-07 — environment-agnostic refactor (all hardcoded IPs/VLANs/hostnames removed)
 
 ## Overview
 
-ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network discovery platform. Manages a primary RB4011 router plus multiple managed switches with automatic device discovery, identity correlation, and topology visualization. Dual interface: CLI tool + Axum web server serving a React frontend. Authenticates via Keycloak OIDC. Deployed as Docker container behind Traefik.
+ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network discovery platform. Manages a primary router plus multiple managed switches with automatic device discovery, identity correlation, and topology visualization. Dual interface: CLI tool + Axum web server serving a React frontend. Authenticates via OIDC (Keycloak or compatible). Deployed as Docker container behind a reverse proxy. All network configuration (VLANs, subnets, sensitivity levels) is stored in the database and configurable via UI — no hardcoded environment references in source code.
 
 **Tech Stack:**
 - Backend: Rust (Axum, Tokio async runtime, SQLite)
@@ -30,13 +30,13 @@ ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network 
 - 3-stage Dockerfile (Rust build, Node build, Debian slim runtime)
 - Docker Compose with health check (`GET /health`)
 - Persistent volume for SQLite databases, certs, GeoIP data
-- Reverse proxy: Traefik (commnet, 10.20.25.8)
+- Designed for deployment behind any reverse proxy (Traefik, nginx, etc.)
 
 ---
 
 ## Authentication & Security
 
-- **OIDC:** Keycloak (TheHolonet realm), PKCE flow, server-side sessions (DashMap + cookie)
+- **OIDC:** Keycloak (or any OIDC provider), PKCE flow, server-side sessions (DashMap + cookie)
 - **mTLS Bootstrap:** Client cert to Keycloak for KEK (Key Encryption Key) retrieval
 - **Secrets Encryption:** AES-256-GCM encrypted SQLite store, per-secret IVs, key fingerprint tracking
 - **Managed Secrets:** Router credentials, device credentials, OIDC client secret, session secret, CertWarden API keys, MaxMind credentials
@@ -169,8 +169,7 @@ This requires backbone links from edge switches to WAPs (configured via the Back
 
 ### 6. VLAN Inference from IP
 
-When VLAN not set by switch port, infers from IP subnet:
-`10.2.2.x → VLAN 2`, `172.20.6.x → VLAN 6`, `10.20.25.x → VLAN 25`, `192.168.90.x → VLAN 90`, etc.
+When VLAN not set by switch port, infers from IP subnet using CIDR matching against `vlan_config` entries. Each configured VLAN's subnet is parsed and matched (longest prefix first) against the device's IP address.
 
 ### 7. Port Binding Enforcement
 
@@ -390,7 +389,7 @@ Endpoints without switch_device_id assigned to orphan layer.
 
 ### Deterministic Layout
 
-- **Center-spine model:** VLAN 2 (Network Mgmt) rendered as vertical center spine; other VLANs balanced into left/right columns using greedy assignment by device count
+- **Center-spine model:** Lowest VLAN ID rendered as vertical center spine; other VLANs balanced into left/right columns using greedy assignment by device count
 - VLAN sectors sized proportionally to endpoint count per VLAN
 - Infrastructure nodes centered across their served VLAN sectors
 - Endpoints arranged in square grids within VLAN sectors below parent switch
@@ -399,19 +398,20 @@ Endpoints without switch_device_id assigned to orphan layer.
 
 ### VLAN Configuration
 
-VLAN metadata (name, color, subnet, media type) is stored in the `vlan_config` SQLite table, editable via Settings UI and API. Synced from router on startup (pulls VLAN interfaces with subnets), with defaults for known VLANs. Topology and correlation engine read from DB; hardcoded fallback for unknown VLANs.
+VLAN metadata (name, color, subnet, media type, sensitivity) is stored in the `vlan_config` SQLite table, editable via Settings UI and API. Synced from router on startup (pulls VLAN interfaces with subnets). No hardcoded VLAN data in source code — unknown VLANs get a generic "VLAN N" label with gray color.
 
-| VLAN | Name | Media Type | Color | Subnet |
-|------|------|------------|-------|--------|
-| 2 | Network Mgmt | wired | `#00f0ff` | 10.2.2.0/24 |
-| 6 | Employer Isolated | wired | `#888888` | 172.20.6.0/24 |
-| 10 | Cyber Hive Security | wired | `#ff4444` | 172.20.10.0/24 |
-| 25 | Trusted Services | wired | `#00b4d8` | 10.20.25.0/24 |
-| 30 | Trusted Wired | wired | `#22cc88` | 10.20.30.0/24 |
-| 35 | Trusted Wireless | wireless | `#44ddaa` | 10.20.35.0/24 |
-| 40 | Guest | wireless | `#ffaa00` | — |
-| 90 | IoT Internet | wireless | `#f97316` | 192.168.90.0/24 |
-| 99 | IoT Restricted | wired | `#7FFF00` | 192.168.99.0/24 |
+**Fields per VLAN:**
+| Field | Description |
+|-------|-------------|
+| `name` | Display name (e.g. "Trusted Services") |
+| `media_type` | `wired`, `wireless`, or `mixed` — controls WAP attribution |
+| `subnet` | CIDR notation (e.g. "10.20.25.0/24") — used for IP→VLAN matching |
+| `color` | Hex color for UI rendering |
+| `sensitivity` | Behavior engine sensitivity: `strictest`, `strict`, `moderate`, `loose`, `monitor` |
+
+**Runtime Architecture:**
+- **Backend:** `VlanRegistry` (in `mikrotik-core/src/behavior.rs`) loaded from `vlan_config` table at startup, stored as `Arc<RwLock<VlanRegistry>>` in `AppState`. Provides CIDR-based IP→VLAN matching, sensitivity lookups, anomaly severity, and auto-resolve timeouts. Shared across all background tasks (behavior engine, connection store, syslog, anomaly correlator, scanner).
+- **Frontend:** `useVlanLookup()` hook (in `hooks/use-vlan-lookup.ts`) fetches from `/api/network/vlan-config` via TanStack Query. Provides `configs`, `colors`, `names`, `subnets` maps plus `color()`, `name()`, `subnet()`, and `ipToVlanLabel()` helper functions with CIDR matching. All components use this hook — no hardcoded VLAN constants.
 
 **VLAN Config APIs:**
 - `GET /api/network/vlan-config` — List all VLAN configs
@@ -596,7 +596,7 @@ Manual switch-to-switch interconnect configuration for devices without LLDP supp
 ### World Map Visualization
 
 - D3.js orthographic projection with Natural Earth TopoJSON
-- Country-level arcs from home (Ogden, UT) to destination countries, width scaled by bytes
+- Country-level arcs from home location to destination countries, width scaled by bytes
 - City-level arcs to individual U.S. cities with log-scaled width
 - City dots sized by connection count, colored by flagged status
 - Zoom/pan controls (scroll zoom 1-12x, drag pan, +/-/reset buttons)
@@ -693,8 +693,8 @@ Bridges the two independent anomaly systems (port flow baselines + device behavi
 
 - **Baseline Window:** 7 days of observations
 - **Anomaly Types:** `new_port`, `volume_spike`, `source_anomaly`, `blocked_attempt`, `direction_anomaly`
-- **Severity:** Based on VLAN sensitivity (IoT Restricted = critical, Trusted Services = warning, Loose VLANs = info)
-- **Auto-Resolution:** TTL-based (Strict = never, Moderate = 48h, Loose = 24h)
+- **Severity:** Based on per-VLAN `sensitivity` setting in `vlan_config` table (strictest/strict → critical, moderate → warning, loose/monitor → info)
+- **Auto-Resolution:** TTL-based per sensitivity level (strictest = never, strict = 72h, moderate = 48h, loose = 24h, monitor = 12h)
 - **Blocked Attempts:** Detected from firewall drop rules, correlated with GeoIP
 
 ### APIs

@@ -1293,6 +1293,7 @@ async fn sync_vlan_config_from_router(
             media_type: media_type.to_string(),
             subnet,
             color: Some(auto_color(vlan.vlan_id).to_string()),
+            sensitivity: "monitor".to_string(),
         };
 
         match store.insert_vlan_config_if_missing(&config).await {

@@ -351,7 +351,7 @@ function StepConfigure({
             type="text"
             value={syslogHost}
             onChange={(e) => setSyslogHost(e.target.value)}
-            placeholder="e.g. 10.20.25.27"
+            placeholder="e.g. 192.168.1.100"
             className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
           />
           <p className="text-[10px] text-muted-foreground mt-0.5">
@@ -384,7 +384,7 @@ function StepConfigure({
               type="text"
               value={routerSourceIp}
               onChange={(e) => setRouterSourceIp(e.target.value)}
-              placeholder="e.g. 10.20.25.1"
+              placeholder="e.g. 192.168.88.1"
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
             />
             <p className="text-[10px] text-muted-foreground mt-0.5">

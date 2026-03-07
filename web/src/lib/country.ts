@@ -20,23 +20,12 @@ export function isPrivateIp(ip: string): boolean {
   );
 }
 
-/** Map private IP subnets to VLAN labels. */
-const VLAN_MAP: Record<string, string> = {
-  "10.20.25": "VLAN 25 \u00b7 Services",
-  "10.20.30": "VLAN 30 \u00b7 Trusted Wired",
-  "10.20.35": "VLAN 35 \u00b7 Trusted Wireless",
-  "172.20.10": "VLAN 10 \u00b7 Cyber Hive",
-  "172.20.6": "VLAN 6 \u00b7 Employer",
-  "192.168.90": "VLAN 90 \u00b7 IoT Internet",
-  "192.168.99": "VLAN 99 \u00b7 IoT Restricted",
-  "10.2.2": "VLAN 2 \u00b7 Management",
-};
-
-/** Get a VLAN label for a private IP address. */
-export function vlanLabel(ip: string): string | null {
-  const parts = ip.split(".");
-  if (parts.length !== 4) return null;
-  // Try 3-octet match first, then 2-octet
-  const key3 = `${parts[0]}.${parts[1]}.${parts[2]}`;
-  return VLAN_MAP[key3] ?? null;
+/** Get a VLAN label for a private IP address.
+ *  Uses the ipToVlanLabel function if provided, otherwise returns null. */
+export function vlanLabel(
+  ip: string,
+  ipToVlanLabel?: (ip: string) => string | null,
+): string | null {
+  if (ipToVlanLabel) return ipToVlanLabel(ip);
+  return null;
 }

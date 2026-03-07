@@ -5,6 +5,9 @@
 
 use std::sync::Arc;
 
+use mikrotik_core::behavior::VlanRegistry;
+use tokio::sync::RwLock;
+
 use crate::connection_store::{ConnectionStore, SyslogEvent};
 use crate::geo::GeoCache;
 
@@ -117,6 +120,7 @@ pub fn spawn_syslog_listener(
     store: Arc<ConnectionStore>,
     geo_cache: Arc<GeoCache>,
     router_host: String,
+    vlan_registry: Arc<RwLock<VlanRegistry>>,
 ) {
     tokio::spawn(async move {
         // Resolve the router host to an IP for source validation
@@ -193,8 +197,9 @@ pub fn spawn_syslog_listener(
             // Flush batch every 5 seconds or when it reaches 100 events
             if batch.len() >= 100 || (last_flush.elapsed().as_secs() >= 5 && !batch.is_empty()) {
                 let count = batch.len();
+                let registry = vlan_registry.read().await.clone();
                 for event in batch.drain(..) {
-                    if let Err(e) = store.upsert_from_syslog(&event, &geo_cache) {
+                    if let Err(e) = store.upsert_from_syslog(&event, &geo_cache, &registry) {
                         tracing::debug!("syslog insert error: {e}");
                     }
                 }

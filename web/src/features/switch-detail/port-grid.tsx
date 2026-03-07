@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { VLAN_CONFIG } from "@/constants/vlans";
+import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import type {
   PortMetricsTuple,
   VlanMembershipEntry,
@@ -66,6 +66,7 @@ export function PortGrid({
   bindings = [],
   violations = [],
 }: PortGridProps) {
+  const vlan = useVlanLookup();
   const [hoveredPort, setHoveredPort] = useState<string | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
@@ -154,7 +155,7 @@ export function PortGrid({
         rxBytes: metrics ? metrics[1] : 0,
         txBytes: metrics ? metrics[2] : 0,
         primaryVlanId: getPortPrimaryVlan(portName, vlans),
-        vlanColor: getPortVlanColor(portName, vlans),
+        vlanColor: getPortVlanColor(portName, vlans, vlan.configs),
         vlanCount: portVlans.length,
         macCount: macCounts.get(portName) ?? 0,
         role: role?.role ?? null,
@@ -186,7 +187,7 @@ export function PortGrid({
 
     const cells = allCells.filter((c) => activeFamilies.has(portFamily(c.portName)));
     return cells.sort((a, b) => portSortKey(a.portName) - portSortKey(b.portName));
-  }, [latestMetrics, vlans, portRoles, macCounts, roleMap, identityByPort, bindingByPort, violationByPort]);
+  }, [latestMetrics, vlans, portRoles, macCounts, roleMap, identityByPort, bindingByPort, violationByPort, vlan.configs]);
 
   // Separate copper ports (with grid positions) from SFP and other ports
   const { topRow, bottomRow, sfpTop, sfpBottom, otherPorts } = useMemo(() => {
@@ -363,7 +364,7 @@ export function PortGrid({
 
         {/* Legend */}
         <div className="mt-3 flex flex-wrap gap-3 border-t border-border pt-3">
-          {Object.entries(VLAN_CONFIG).map(([id, cfg]) => (
+          {Object.entries(vlan.configs).map(([id, cfg]) => (
             <div key={id} className="flex items-center gap-1.5">
               <span
                 className="inline-block h-2.5 w-2.5 rounded-sm"
@@ -406,7 +407,7 @@ export function PortGrid({
               <div className="flex justify-between gap-4">
                 <span>VLAN</span>
                 <span className="text-foreground">
-                  {hoveredCell.primaryVlanId} — {vlanName(hoveredCell.primaryVlanId)}
+                  {hoveredCell.primaryVlanId} — {vlanName(hoveredCell.primaryVlanId, vlan.configs)}
                   {hoveredCell.vlanCount > 1 && ` (+${hoveredCell.vlanCount - 1})`}
                 </span>
               </div>

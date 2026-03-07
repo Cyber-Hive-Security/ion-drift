@@ -7,6 +7,7 @@ import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
 import { formatBytes, formatNumber } from "@/lib/format";
 import { countryFlag, isPrivateIp, vlanLabel } from "@/lib/country";
+import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import { cn } from "@/lib/utils";
 import { portLabel } from "@/lib/services";
 import { ChevronDown, ChevronRight, Filter, X } from "lucide-react";
@@ -53,10 +54,10 @@ function groupKey(conn: ConnectionEntry, mode: GroupMode): string {
   }
 }
 
-function groupLabel(key: string, conns: ConnectionEntry[], mode: GroupMode): string {
+function groupLabel(key: string, conns: ConnectionEntry[], mode: GroupMode, ipToVlan?: (ip: string) => string | null): string {
   switch (mode) {
     case "src": {
-      const label = isPrivateIp(key) ? vlanLabel(key) : null;
+      const label = isPrivateIp(key) ? vlanLabel(key, ipToVlan) : null;
       const geo = conns[0]?.src_geo;
       const parts = [key];
       if (label) parts.push(label);
@@ -64,7 +65,7 @@ function groupLabel(key: string, conns: ConnectionEntry[], mode: GroupMode): str
       return parts.join(" \u00b7 ");
     }
     case "dst": {
-      const label = isPrivateIp(key) ? vlanLabel(key) : null;
+      const label = isPrivateIp(key) ? vlanLabel(key, ipToVlan) : null;
       const geo = conns[0]?.dst_geo;
       const parts = [key];
       if (label) parts.push(label);
@@ -72,7 +73,7 @@ function groupLabel(key: string, conns: ConnectionEntry[], mode: GroupMode): str
       return parts.join(" \u00b7 ");
     }
     case "vlan":
-      return vlanLabel(key + ".0") ?? `Subnet ${key}.0/24`;
+      return vlanLabel(key + ".0", ipToVlan) ?? `Subnet ${key}.0/24`;
     case "protocol":
       return key;
     default:
@@ -391,7 +392,7 @@ function GeoDistribution({
 
 // ── Connections Table ─────────────────────────────────────────────
 
-const connectionColumns: Column<ConnectionEntry>[] = [
+function connectionColumns(ipToVlan?: (ip: string) => string | null): Column<ConnectionEntry>[] { return [
   {
     key: "protocol",
     header: "Proto",
@@ -465,7 +466,7 @@ const connectionColumns: Column<ConnectionEntry>[] = [
         );
       }
       // Private IP — show VLAN label
-      const label = vlanLabel(r.dst_address);
+      const label = vlanLabel(r.dst_address, ipToVlan);
       if (label) {
         return <span className="text-xs text-muted-foreground">{label}</span>;
       }
@@ -484,7 +485,7 @@ const connectionColumns: Column<ConnectionEntry>[] = [
       ) : null,
     sortValue: (r) => (r.flagged ? 0 : 1),
   },
-];
+]; }
 
 // ── Grouped Connections View ─────────────────────────────────────
 
@@ -508,6 +509,7 @@ function GroupedConnectionsView({
   columns: Column<ConnectionEntry>[];
   rowStyle?: (row: ConnectionEntry) => React.CSSProperties | undefined;
 }) {
+  const vlanLookup = useVlanLookup();
   const groups = useMemo(() => {
     const map = new Map<string, ConnectionEntry[]>();
     for (const conn of connections) {
@@ -528,7 +530,7 @@ function GroupedConnectionsView({
       }
       entries.push({
         key: k,
-        label: groupLabel(k, conns, groupMode),
+        label: groupLabel(k, conns, groupMode, vlanLookup.ipToVlanLabel),
         connections: conns,
         totalOrig,
         totalRepl,
@@ -987,6 +989,7 @@ function getFilterValue(c: ConnectionEntry, field: ColumnFilterField): string {
 
 export function ConnectionsPage() {
   const { data, isLoading, error, refetch, isFetching } = useConnectionsPage();
+  const vlanLookup = useVlanLookup();
   const [filter, setFilter] = useState<FilterMode>("all");
   const [groupMode, setGroupMode] = useState<GroupMode>("flat");
   const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({});
@@ -1270,7 +1273,7 @@ export function ConnectionsPage() {
 
       {groupMode === "flat" ? (
         <DataTable
-          columns={connectionColumns}
+          columns={connectionColumns(vlanLookup.ipToVlanLabel)}
           data={filteredConnections}
           rowKey={(r) => r.id}
           searchable
@@ -1286,7 +1289,7 @@ export function ConnectionsPage() {
         <GroupedConnectionsView
           connections={filteredConnections}
           groupMode={groupMode}
-          columns={connectionColumns}
+          columns={connectionColumns(vlanLookup.ipToVlanLabel)}
           rowStyle={(r) =>
             r.flagged
               ? { borderLeft: "3px solid #FF4D4F" }

@@ -305,7 +305,7 @@ pub struct DevicePort {
     pub mac_count: Option<u32>,
 }
 
-/// VLAN configuration metadata (media type, color, subnet).
+/// VLAN configuration metadata (media type, color, subnet, sensitivity).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VlanConfig {
     pub vlan_id: u32,
@@ -313,6 +313,14 @@ pub struct VlanConfig {
     pub media_type: String,
     pub subnet: Option<String>,
     pub color: Option<String>,
+    /// Behavior engine sensitivity: "strictest", "strict", "moderate", "loose", "monitor".
+    /// Defaults to "monitor" if not set.
+    #[serde(default = "default_sensitivity")]
+    pub sensitivity: String,
+}
+
+fn default_sensitivity() -> String {
+    "monitor".to_string()
 }
 
 // ── Store ───────────────────────────────────────────────────────
@@ -577,7 +585,9 @@ impl SwitchStore {
                 name TEXT NOT NULL,
                 media_type TEXT NOT NULL DEFAULT 'wired' CHECK(media_type IN ('wired', 'wireless', 'mixed')),
                 subnet TEXT,
-                color TEXT
+                color TEXT,
+                sensitivity TEXT NOT NULL DEFAULT 'monitor'
+                    CHECK(sensitivity IN ('strictest', 'strict', 'moderate', 'loose', 'monitor'))
             );
 
             CREATE TABLE IF NOT EXISTS mac_observations (
@@ -667,6 +677,12 @@ impl SwitchStore {
         );
         let _ = conn.execute(
             "UPDATE backbone_links SET port_b = LOWER(port_b) WHERE port_b IS NOT NULL AND port_b != LOWER(port_b)",
+            [],
+        );
+
+        // Migration: add sensitivity column to vlan_config
+        let _ = conn.execute(
+            "ALTER TABLE vlan_config ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'monitor'",
             [],
         );
 
@@ -2324,7 +2340,7 @@ impl SwitchStore {
     pub async fn get_vlan_configs(&self) -> Result<Vec<VlanConfig>, rusqlite::Error> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT vlan_id, name, media_type, subnet, color FROM vlan_config ORDER BY vlan_id",
+            "SELECT vlan_id, name, media_type, subnet, color, sensitivity FROM vlan_config ORDER BY vlan_id",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(VlanConfig {
@@ -2333,6 +2349,7 @@ impl SwitchStore {
                 media_type: row.get(2)?,
                 subnet: row.get(3)?,
                 color: row.get(4)?,
+                sensitivity: row.get(5)?,
             })
         })?;
         rows.collect()
@@ -2342,19 +2359,21 @@ impl SwitchStore {
     pub async fn upsert_vlan_config(&self, config: &VlanConfig) -> Result<(), rusqlite::Error> {
         let db = self.db.lock().await;
         db.execute(
-            "INSERT INTO vlan_config (vlan_id, name, media_type, subnet, color)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO vlan_config (vlan_id, name, media_type, subnet, color, sensitivity)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(vlan_id) DO UPDATE SET
                  name = excluded.name,
                  media_type = excluded.media_type,
                  subnet = excluded.subnet,
-                 color = excluded.color",
+                 color = excluded.color,
+                 sensitivity = excluded.sensitivity",
             params![
                 config.vlan_id as i64,
                 config.name,
                 config.media_type,
                 config.subnet,
                 config.color,
+                config.sensitivity,
             ],
         )?;
         Ok(())
@@ -2365,14 +2384,15 @@ impl SwitchStore {
     pub async fn insert_vlan_config_if_missing(&self, config: &VlanConfig) -> Result<bool, rusqlite::Error> {
         let db = self.db.lock().await;
         let affected = db.execute(
-            "INSERT OR IGNORE INTO vlan_config (vlan_id, name, media_type, subnet, color)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR IGNORE INTO vlan_config (vlan_id, name, media_type, subnet, color, sensitivity)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 config.vlan_id as i64,
                 config.name,
                 config.media_type,
                 config.subnet,
                 config.color,
+                config.sensitivity,
             ],
         )?;
         Ok(affected > 0)

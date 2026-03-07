@@ -19,9 +19,15 @@ fn now_unix() -> i64 {
         .as_secs() as i64
 }
 
-// ── VLAN Mapping ─────────────────────────────────────────────
+// ── VLAN Registry ────────────────────────────────────────────
+//
+// All VLAN-specific behavior (subnet→VLAN mapping, sensitivity levels,
+// anomaly severity, auto-resolve timeouts) is driven by VlanConfig
+// entries loaded from the database. No hardcoded VLAN IDs or subnets.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum VlanSensitivity {
     Strictest,
     Strict,
@@ -30,125 +36,241 @@ pub enum VlanSensitivity {
     Monitor,
 }
 
-/// Map an IP address to its VLAN number based on subnet.
-pub fn ip_to_vlan(ip: &str) -> Option<u16> {
-    let octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() != 4 {
-        return None;
-    }
-    match (octets[0], octets[1], octets[2]) {
-        (10, 20, 25) => Some(25),
-        (10, 20, 30) => Some(30),
-        (10, 20, 35) => Some(35),
-        (10, 2, 2) => Some(2),
-        (172, 20, 10) => Some(10),
-        (172, 20, 6) => Some(6),
-        (192, 168, 40) => Some(40),
-        (192, 168, 90) => Some(90),
-        (192, 168, 99) => Some(99),
-        _ => None,
+impl VlanSensitivity {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "strictest" => Self::Strictest,
+            "strict" => Self::Strict,
+            "moderate" => Self::Moderate,
+            "loose" => Self::Loose,
+            _ => Self::Monitor,
+        }
     }
 }
 
-/// Returns true if the IP belongs to any known internal VLAN subnet.
-pub fn is_internal_ip(ip: &str) -> bool {
-    ip_to_vlan(ip).is_some()
+/// Parsed subnet entry for IP→VLAN matching.
+#[derive(Debug, Clone)]
+struct SubnetEntry {
+    vlan_id: u16,
+    /// Network address as u32.
+    network: u32,
+    /// Prefix length (e.g. 24).
+    prefix_len: u8,
+    /// Bitmask computed from prefix_len.
+    mask: u32,
 }
 
-/// Human-readable VLAN name.
-pub fn vlan_name(vlan: i64) -> &'static str {
-    match vlan {
-        2 => "Network Mgmt",
-        6 => "Employer Isolated",
-        10 => "Cyber Hive Security",
-        25 => "Trusted Services",
-        30 => "Trusted Wired",
-        35 => "Trusted Wireless",
-        40 => "Guest",
-        90 => "IoT Internet",
-        99 => "IoT Restricted",
-        -1 => "WAN / External",
-        _ => "Unclassified",
+/// Runtime VLAN registry loaded from database VlanConfig entries.
+/// Provides all the lookup functions the behavior engine needs.
+#[derive(Debug, Clone)]
+pub struct VlanRegistry {
+    /// VLAN ID → name.
+    names: HashMap<u16, String>,
+    /// VLAN ID → sensitivity level.
+    sensitivities: HashMap<u16, VlanSensitivity>,
+    /// Sorted subnet entries for IP→VLAN matching (longest prefix first).
+    subnets: Vec<SubnetEntry>,
+}
+
+impl Default for VlanRegistry {
+    fn default() -> Self {
+        Self {
+            names: HashMap::new(),
+            sensitivities: HashMap::new(),
+            subnets: Vec::new(),
+        }
     }
 }
 
-/// Get the sensitivity level for a VLAN.
-pub fn sensitivity(vlan: u16) -> VlanSensitivity {
-    match vlan {
-        99 => VlanSensitivity::Strictest,
-        90 | 2 => VlanSensitivity::Strict,
-        25 | 10 => VlanSensitivity::Moderate,
-        30 | 35 | 6 => VlanSensitivity::Loose,
-        _ => VlanSensitivity::Monitor,
+impl VlanRegistry {
+    /// Build a VlanRegistry from a list of VlanConfig entries.
+    pub fn from_configs(configs: &[crate::switch_store::VlanConfig]) -> Self {
+        let mut names = HashMap::new();
+        let mut sensitivities = HashMap::new();
+        let mut subnets = Vec::new();
+
+        for cfg in configs {
+            let vid = cfg.vlan_id as u16;
+            names.insert(vid, cfg.name.clone());
+            sensitivities.insert(vid, VlanSensitivity::from_str(&cfg.sensitivity));
+
+            if let Some(ref subnet_str) = cfg.subnet {
+                if let Some(entry) = Self::parse_cidr(subnet_str, vid) {
+                    subnets.push(entry);
+                }
+            }
+        }
+
+        // Sort by longest prefix first for most-specific match
+        subnets.sort_by(|a, b| b.prefix_len.cmp(&a.prefix_len));
+
+        Self { names, sensitivities, subnets }
+    }
+
+    fn parse_cidr(cidr: &str, vlan_id: u16) -> Option<SubnetEntry> {
+        let slash_pos = cidr.find('/')?;
+        let network_str = &cidr[..slash_pos];
+        let prefix_len: u8 = cidr[slash_pos + 1..].parse().ok()?;
+        let octets: Vec<u8> = network_str.split('.').filter_map(|o| o.parse().ok()).collect();
+        if octets.len() != 4 || prefix_len > 32 {
+            return None;
+        }
+        let network = u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]);
+        let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
+        Some(SubnetEntry { vlan_id, network, prefix_len, mask })
+    }
+
+    fn ip_to_u32(ip: &str) -> Option<u32> {
+        let octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
+        if octets.len() != 4 { return None; }
+        Some(u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]))
+    }
+
+    /// Map an IP address to its VLAN number based on configured subnets.
+    pub fn ip_to_vlan(&self, ip: &str) -> Option<u16> {
+        let ip_u32 = Self::ip_to_u32(ip)?;
+        for entry in &self.subnets {
+            if (ip_u32 & entry.mask) == (entry.network & entry.mask) {
+                return Some(entry.vlan_id);
+            }
+        }
+        None
+    }
+
+    /// Returns true if the IP belongs to any configured VLAN subnet.
+    pub fn is_internal_ip(&self, ip: &str) -> bool {
+        self.ip_to_vlan(ip).is_some()
+    }
+
+    /// Human-readable VLAN name.
+    pub fn vlan_name(&self, vlan: i64) -> String {
+        if vlan == -1 {
+            return "WAN / External".to_string();
+        }
+        self.names
+            .get(&(vlan as u16))
+            .cloned()
+            .unwrap_or_else(|| format!("VLAN {vlan}"))
+    }
+
+    /// Get the sensitivity level for a VLAN.
+    pub fn sensitivity(&self, vlan: u16) -> VlanSensitivity {
+        self.sensitivities
+            .get(&vlan)
+            .copied()
+            .unwrap_or(VlanSensitivity::Monitor)
+    }
+
+    /// Determine anomaly severity based on VLAN sensitivity and anomaly type.
+    pub fn anomaly_severity(&self, vlan: u16, anomaly_type: &str) -> &'static str {
+        let sens = self.sensitivity(vlan);
+        match (sens, anomaly_type) {
+            (VlanSensitivity::Strictest, _) => "critical",
+            (VlanSensitivity::Strict, "blocked_attempt" | "volume_spike") => "alert",
+            (VlanSensitivity::Strict, _) => "warning",
+            (VlanSensitivity::Moderate, "blocked_attempt" | "volume_spike") => "warning",
+            (VlanSensitivity::Moderate, _) => "info",
+            (VlanSensitivity::Loose, "blocked_attempt") => "warning",
+            (VlanSensitivity::Loose, _) => "info",
+            (VlanSensitivity::Monitor, _) => "info",
+        }
+    }
+
+    /// Auto-resolve timeout in seconds for stale anomalies (0 = never).
+    pub fn auto_resolve_timeout(&self, vlan: u16) -> i64 {
+        match self.sensitivity(vlan) {
+            VlanSensitivity::Strictest => 0,
+            VlanSensitivity::Strict => 0,
+            VlanSensitivity::Moderate => 48 * 3600,
+            VlanSensitivity::Loose => 24 * 3600,
+            VlanSensitivity::Monitor => 72 * 3600,
+        }
+    }
+
+    /// Classify a destination IP as a VLAN subnet string or a /16 group.
+    /// Uses configured subnets for known VLANs, falls back to RFC1918 /24 or external /16.
+    pub fn classify_destination(&self, dst_ip: &str) -> String {
+        let octets: Vec<u8> = dst_ip.split('.').filter_map(|o| o.parse().ok()).collect();
+        if octets.len() != 4 {
+            return format!("{}.0.0.0/8", dst_ip.split('.').next().unwrap_or("0"));
+        }
+
+        // Check if IP matches a configured VLAN subnet — return that subnet
+        if let Some(ip_u32) = Self::ip_to_u32(dst_ip) {
+            for entry in &self.subnets {
+                if (ip_u32 & entry.mask) == (entry.network & entry.mask) {
+                    let net_bytes = entry.network.to_be_bytes();
+                    return format!(
+                        "{}.{}.{}.{}/{}",
+                        net_bytes[0], net_bytes[1], net_bytes[2], net_bytes[3],
+                        entry.prefix_len
+                    );
+                }
+            }
+        }
+
+        // RFC1918 catch-all — keep /24 for internal networks
+        match (octets[0], octets[1]) {
+            (10, _) => format!("10.{}.{}.0/24", octets[1], octets[2]),
+            (172, 16..=31) => format!("172.{}.{}.0/24", octets[1], octets[2]),
+            (192, 168) => format!("192.168.{}.0/24", octets[2]),
+            // External IPs grouped at /16 to reduce baseline fragmentation
+            _ => format!("{}.{}.0.0/16", octets[0], octets[1]),
+        }
+    }
+
+    /// Classify flow direction based on source/destination VLANs.
+    pub fn classify_direction(&self, src_ip: &str, dst_ip: &str) -> &'static str {
+        let src_vlan = self.ip_to_vlan(src_ip);
+        let dst_vlan = self.ip_to_vlan(dst_ip);
+        let dst_external = !self.is_internal_ip(dst_ip);
+
+        match (src_vlan, dst_vlan, dst_external) {
+            (_, _, true) => "outbound",
+            (Some(s), Some(d), _) if s == d => "internal",
+            (Some(_), Some(_), _) => "lateral",
+            (None, Some(_), _) => "inbound",
+            _ => "internal",
+        }
     }
 }
 
-/// Determine anomaly severity based on VLAN sensitivity and anomaly type.
-pub fn anomaly_severity(vlan: u16, anomaly_type: &str) -> &'static str {
-    let sens = sensitivity(vlan);
-    match (sens, anomaly_type) {
-        (VlanSensitivity::Strictest, "blocked_attempt") => "critical",
-        (VlanSensitivity::Strictest, _) => "critical",
-        (VlanSensitivity::Strict, "blocked_attempt") => "alert",
-        (VlanSensitivity::Strict, "volume_spike") => "alert",
-        (VlanSensitivity::Strict, _) => "warning",
-        (VlanSensitivity::Moderate, "blocked_attempt") => "warning",
-        (VlanSensitivity::Moderate, "volume_spike") => "warning",
-        (VlanSensitivity::Moderate, _) => "info",
-        (VlanSensitivity::Loose, "blocked_attempt") => "warning",
-        (VlanSensitivity::Loose, _) => "info",
-        (VlanSensitivity::Monitor, _) => "info",
-    }
-}
+// ── Legacy compatibility shims ──────────────────────────────
+// These free functions maintain backward compatibility for code
+// that hasn't been migrated to use VlanRegistry yet.
+// They use a default (empty) registry, so they won't match any
+// VLAN subnets. Code should migrate to VlanRegistry methods.
 
-/// Auto-resolve timeout in seconds for stale anomalies (0 = never).
-pub fn auto_resolve_timeout(sens: VlanSensitivity) -> i64 {
-    match sens {
-        VlanSensitivity::Strictest => 0,         // never
-        VlanSensitivity::Strict => 0,            // never
-        VlanSensitivity::Moderate => 48 * 3600,  // 48 hours
-        VlanSensitivity::Loose => 24 * 3600,     // 24 hours
-        VlanSensitivity::Monitor => 72 * 3600,   // 72 hours
-    }
-}
-
-/// Classify a destination IP as a VLAN subnet string or "external".
+/// Classify a destination IP — legacy shim, prefers VlanRegistry method.
 pub fn classify_destination(dst_ip: &str) -> String {
+    // Without a registry, still handle RFC1918 grouping
     let octets: Vec<u8> = dst_ip.split('.').filter_map(|o| o.parse().ok()).collect();
     if octets.len() != 4 {
-        return "external".to_string();
+        return format!("{}.0.0.0/8", dst_ip.split('.').next().unwrap_or("0"));
     }
-    match (octets[0], octets[1], octets[2]) {
-        (10, 20, 25) => "10.20.25.0/24".to_string(),
-        (10, 20, 30) => "10.20.30.0/24".to_string(),
-        (10, 20, 35) => "10.20.35.0/24".to_string(),
-        (10, 2, 2) => "10.2.2.0/24".to_string(),
-        (172, 20, 10) => "172.20.10.0/24".to_string(),
-        (172, 20, 6) => "172.20.6.0/24".to_string(),
-        (192, 168, 40) => "192.168.40.0/24".to_string(),
-        (192, 168, 90) => "192.168.90.0/24".to_string(),
-        (192, 168, 99) => "192.168.99.0/24".to_string(),
-        // RFC1918 catch-all
-        (10, _, _) => format!("10.{}.{}.0/24", octets[1], octets[2]),
-        (172, 16..=31, _) => format!("172.{}.{}.0/24", octets[1], octets[2]),
-        (192, 168, _) => format!("192.168.{}.0/24", octets[2]),
-        _ => "external".to_string(),
+    match (octets[0], octets[1]) {
+        (10, _) => format!("10.{}.{}.0/24", octets[1], octets[2]),
+        (172, 16..=31) => format!("172.{}.{}.0/24", octets[1], octets[2]),
+        (192, 168) => format!("192.168.{}.0/24", octets[2]),
+        _ => format!("{}.{}.0.0/16", octets[0], octets[1]),
     }
 }
 
-/// Classify flow direction based on source/destination VLANs.
-pub fn classify_direction(src_ip: &str, dst_ip: &str) -> &'static str {
-    let src_vlan = ip_to_vlan(src_ip);
-    let dst_vlan = ip_to_vlan(dst_ip);
-    let dst_external = classify_destination(dst_ip) == "external";
+/// Check if IP is RFC1918 private — legacy shim.
+pub fn is_internal_ip(ip: &str) -> bool {
+    let octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
+    if octets.len() != 4 { return false; }
+    matches!(
+        (octets[0], octets[1]),
+        (10, _) | (172, 16..=31) | (192, 168)
+    )
+}
 
-    match (src_vlan, dst_vlan, dst_external) {
-        (_, _, true) => "outbound",
-        (Some(s), Some(d), _) if s == d => "internal",
-        (Some(_), Some(_), _) => "lateral",
-        (None, Some(_), _) => "inbound",
-        _ => "internal",
-    }
+/// Classify flow direction — legacy shim.
+pub fn classify_direction(src_ip: &str, dst_ip: &str) -> &'static str {
+    let dst_external = !is_internal_ip(dst_ip);
+    if dst_external { return "outbound"; }
+    "internal"
 }
 
 // ── Data Structures ──────────────────────────────────────────
@@ -203,6 +325,7 @@ pub struct DeviceAnomaly {
     pub timestamp: i64,
     pub anomaly_type: String,
     pub severity: String,
+    pub confidence: f64,
     pub description: String,
     pub details: Option<String>,
     pub vlan: i64,
@@ -220,6 +343,7 @@ pub struct NewAnomaly {
     pub mac: String,
     pub anomaly_type: String,
     pub severity: String,
+    pub confidence: f64,
     pub description: String,
     pub details: Option<String>,
     pub vlan: i64,
@@ -233,6 +357,7 @@ pub struct BehaviorOverview {
     pub total_devices: i64,
     pub baselined_devices: i64,
     pub learning_devices: i64,
+    pub sparse_devices: i64,
     pub pending_anomalies: i64,
     pub critical_anomalies: i64,
     pub warning_anomalies: i64,
@@ -245,6 +370,7 @@ pub struct VlanBehaviorSummary {
     pub device_count: i64,
     pub baselined_count: i64,
     pub learning_count: i64,
+    pub sparse_count: i64,
     pub pending_anomaly_count: i64,
 }
 
@@ -343,9 +469,19 @@ impl BehaviorStore {
                 ON device_anomalies(mac);
             CREATE INDEX IF NOT EXISTS idx_anomalies_status
                 ON device_anomalies(status);
+
+            CREATE TABLE IF NOT EXISTS engine_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             ",
         )
         .map_err(|e| format!("schema creation failed: {e}"))?;
+
+        // Migrations for existing databases
+        let _ = conn.execute_batch(
+            "ALTER TABLE device_anomalies ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5;"
+        );
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -628,16 +764,69 @@ impl BehaviorStore {
             .map_err(|e| format!("upsert baseline failed: {e}"))?;
         }
 
-        // Auto-promote learning → baselined if past learning_until
-        db.execute(
-            "UPDATE device_profiles
-             SET baseline_status = 'baselined'
-             WHERE mac = ?1
-               AND baseline_status = 'learning'
-               AND learning_until <= ?2",
-            params![mac, now],
-        )
-        .map_err(|e| format!("promote status failed: {e}"))?;
+        // Auto-promote learning → sparse or baselined if past learning_until.
+        // Minimum evidence thresholds for full "baselined" status:
+        //   - At least 50 observations
+        //   - At least 3 distinct flow patterns (baseline entries)
+        //   - At least 3 distinct active days
+        let profile: Option<String> = db
+            .query_row(
+                "SELECT baseline_status FROM device_profiles WHERE mac = ?1",
+                params![mac],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("check status failed: {e}"))?;
+
+        if let Some(status) = profile {
+            if status == "learning" || status == "sparse" {
+                let past_learning: bool = db
+                    .query_row(
+                        "SELECT learning_until <= ?2 FROM device_profiles WHERE mac = ?1",
+                        params![mac, now],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
+
+                if past_learning {
+                    let obs_count: i64 = db
+                        .query_row(
+                            "SELECT COUNT(*) FROM device_observations WHERE mac = ?1",
+                            params![mac],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(0);
+
+                    let baseline_count: i64 = db
+                        .query_row(
+                            "SELECT COUNT(*) FROM device_baselines WHERE mac = ?1",
+                            params![mac],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(0);
+
+                    let active_days: i64 = db
+                        .query_row(
+                            "SELECT COUNT(DISTINCT timestamp / 86400) FROM device_observations WHERE mac = ?1",
+                            params![mac],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(0);
+
+                    let new_status = if obs_count >= 50 && baseline_count >= 3 && active_days >= 3 {
+                        "baselined"
+                    } else {
+                        "sparse"
+                    };
+
+                    db.execute(
+                        "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
+                        params![mac, new_status],
+                    )
+                    .map_err(|e| format!("promote status failed: {e}"))?;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -668,14 +857,15 @@ impl BehaviorStore {
         let now = now_unix();
         db.execute(
             "INSERT INTO device_anomalies
-                (mac, timestamp, anomaly_type, severity, description, details,
+                (mac, timestamp, anomaly_type, severity, confidence, description, details,
                  vlan, firewall_correlation, firewall_rule_id, firewall_rule_comment)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 anomaly.mac,
                 now,
                 anomaly.anomaly_type,
                 anomaly.severity,
+                anomaly.confidence,
                 anomaly.description,
                 anomaly.details,
                 anomaly.vlan,
@@ -720,7 +910,7 @@ impl BehaviorStore {
     ) -> Result<Vec<DeviceAnomaly>, String> {
         let db = self.db.lock().await;
         let mut sql = String::from(
-            "SELECT id, mac, timestamp, anomaly_type, severity, description, details,
+            "SELECT id, mac, timestamp, anomaly_type, severity, confidence, description, details,
                     vlan, firewall_correlation, firewall_rule_id, firewall_rule_comment,
                     status, resolved_at, resolved_by
              FROM device_anomalies WHERE 1=1",
@@ -758,7 +948,7 @@ impl BehaviorStore {
         let db = self.db.lock().await;
         let mut stmt = db
             .prepare(
-                "SELECT id, mac, timestamp, anomaly_type, severity, description, details,
+                "SELECT id, mac, timestamp, anomaly_type, severity, confidence, description, details,
                         vlan, firewall_correlation, firewall_rule_id, firewall_rule_comment,
                         status, resolved_at, resolved_by
                  FROM device_anomalies WHERE mac = ?1 ORDER BY timestamp DESC",
@@ -830,7 +1020,7 @@ impl BehaviorStore {
     }
 
     /// Auto-resolve stale anomalies based on per-VLAN timeout rules.
-    pub async fn auto_resolve_stale(&self) -> Result<usize, String> {
+    pub async fn auto_resolve_stale(&self, registry: &VlanRegistry) -> Result<usize, String> {
         let db = self.db.lock().await;
         let now = now_unix();
         let mut total = 0usize;
@@ -849,7 +1039,7 @@ impl BehaviorStore {
         };
 
         for vlan in vlans {
-            let timeout = auto_resolve_timeout(sensitivity(vlan as u16));
+            let timeout = registry.auto_resolve_timeout(vlan as u16);
             if timeout == 0 {
                 continue; // never auto-resolve
             }
@@ -891,6 +1081,13 @@ impl BehaviorStore {
                 |row| row.get(0),
             )
             .map_err(|e| format!("count failed: {e}"))?;
+        let sparse_devices: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM device_profiles WHERE baseline_status = 'sparse'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("count failed: {e}"))?;
 
         let alerts = Self::pending_counts_inner(&db)?;
 
@@ -900,16 +1097,17 @@ impl BehaviorStore {
                 "SELECT current_vlan,
                         COUNT(*),
                         SUM(CASE WHEN baseline_status = 'baselined' THEN 1 ELSE 0 END),
-                        SUM(CASE WHEN baseline_status = 'learning' THEN 1 ELSE 0 END)
+                        SUM(CASE WHEN baseline_status = 'learning' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN baseline_status = 'sparse' THEN 1 ELSE 0 END)
                  FROM device_profiles
                  WHERE current_vlan IS NOT NULL
                  GROUP BY current_vlan
                  ORDER BY current_vlan",
             )
             .map_err(|e| format!("prepare failed: {e}"))?;
-        let vlan_rows: Vec<(i64, i64, i64, i64)> = stmt
+        let vlan_rows: Vec<(i64, i64, i64, i64, i64)> = stmt
             .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
             })
             .map_err(|e| format!("query failed: {e}"))?
             .collect::<Result<Vec<_>, _>>()
@@ -930,11 +1128,12 @@ impl BehaviorStore {
 
         let vlan_summaries = vlan_rows
             .into_iter()
-            .map(|(vlan, count, baselined, learning)| VlanBehaviorSummary {
+            .map(|(vlan, count, baselined, learning, sparse)| VlanBehaviorSummary {
                 vlan,
                 device_count: count,
                 baselined_count: baselined,
                 learning_count: learning,
+                sparse_count: sparse,
                 pending_anomaly_count: anomaly_counts.get(&vlan).copied().unwrap_or(0),
             })
             .collect();
@@ -943,11 +1142,36 @@ impl BehaviorStore {
             total_devices,
             baselined_devices,
             learning_devices,
+            sparse_devices,
             pending_anomalies: alerts.pending_count,
             critical_anomalies: alerts.critical_count,
             warning_anomalies: alerts.warning_count,
             vlan_summaries,
         })
+    }
+
+    // ── Engine Metadata ──
+
+    pub async fn get_metadata(&self, key: &str) -> Result<Option<String>, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT value FROM engine_metadata WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("get_metadata failed: {e}"))
+    }
+
+    pub async fn set_metadata(&self, key: &str, value: &str) -> Result<(), String> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO engine_metadata (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = ?2",
+            params![key, value],
+        )
+        .map_err(|e| format!("set_metadata failed: {e}"))?;
+        Ok(())
     }
 
     // ── Internal helpers ──
@@ -989,15 +1213,16 @@ impl BehaviorStore {
             timestamp: row.get(2)?,
             anomaly_type: row.get(3)?,
             severity: row.get(4)?,
-            description: row.get(5)?,
-            details: row.get(6)?,
-            vlan: row.get(7)?,
-            firewall_correlation: row.get(8)?,
-            firewall_rule_id: row.get(9)?,
-            firewall_rule_comment: row.get(10)?,
-            status: row.get(11)?,
-            resolved_at: row.get(12)?,
-            resolved_by: row.get(13)?,
+            confidence: row.get(5)?,
+            description: row.get(6)?,
+            details: row.get(7)?,
+            vlan: row.get(8)?,
+            firewall_correlation: row.get(9)?,
+            firewall_rule_id: row.get(10)?,
+            firewall_rule_comment: row.get(11)?,
+            status: row.get(12)?,
+            resolved_at: row.get(13)?,
+            resolved_by: row.get(14)?,
         })
     }
 }

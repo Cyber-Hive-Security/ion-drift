@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use mikrotik_core::behavior::{
-    self, BehaviorStore, DeviceObservation, NewAnomaly,
+    self, BehaviorStore, DeviceObservation, NewAnomaly, VlanRegistry,
 };
 use mikrotik_core::resources::firewall::FilterRule;
 use mikrotik_core::MikrotikClient;
@@ -16,6 +16,84 @@ use tokio::sync::RwLock;
 use crate::geo::GeoCache;
 use crate::log_parser;
 use crate::oui::OuiDb;
+
+/// In-memory tracker for volume spike candidates.
+/// Requires 2 consecutive detections (2 × 60s cycles = 2 min) before firing.
+#[derive(Default)]
+pub struct SpikeCandidates {
+    /// Map of (mac, dedup_key) → consecutive detection count.
+    candidates: std::sync::Mutex<HashMap<(String, String), u32>>,
+}
+
+impl SpikeCandidates {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a spike candidate. Returns true if it has hit the threshold (2 consecutive).
+    fn record(&self, mac: &str, dedup_key: &str) -> bool {
+        let mut map = self.candidates.lock().unwrap();
+        let key = (mac.to_string(), dedup_key.to_string());
+        let count = map.entry(key).or_insert(0);
+        *count += 1;
+        *count >= 2
+    }
+
+    /// Clear a candidate (spike was not detected this cycle).
+    fn clear(&self, mac: &str, dedup_key: &str) {
+        let mut map = self.candidates.lock().unwrap();
+        map.remove(&(mac.to_string(), dedup_key.to_string()));
+    }
+
+    /// Prune all candidates (called periodically to avoid memory growth).
+    pub fn prune(&self) {
+        let mut map = self.candidates.lock().unwrap();
+        map.clear();
+    }
+}
+
+/// Compute anomaly confidence score based on evidence quality.
+fn compute_confidence(
+    baseline_status: &str,
+    observation_count: i64,
+    vlan: i64,
+    anomaly_type: &str,
+    registry: &VlanRegistry,
+) -> f64 {
+    let mut score: f64 = 0.5;
+
+    // Baseline maturity factor
+    match baseline_status {
+        "baselined" => score += 0.3,
+        "sparse" => score += 0.1,
+        _ => {} // learning: no bonus
+    }
+
+    // Observation evidence factor (more data = higher confidence)
+    if observation_count >= 100 {
+        score += 0.15;
+    } else if observation_count >= 50 {
+        score += 0.1;
+    } else if observation_count >= 20 {
+        score += 0.05;
+    }
+
+    // VLAN strictness factor — stricter VLANs have more reliable baselines
+    let sens = registry.sensitivity(if vlan >= 0 { vlan as u16 } else { 0 });
+    match sens {
+        behavior::VlanSensitivity::Strictest => score += 0.05,
+        behavior::VlanSensitivity::Strict => score += 0.04,
+        behavior::VlanSensitivity::Moderate => score += 0.02,
+        _ => {}
+    }
+
+    // Blocked attempts are always high confidence (firewall evidence)
+    if anomaly_type == "blocked_attempt" {
+        score = f64::max(score, 0.85);
+    }
+
+    f64::min(score, 1.0)
+}
 
 /// Normalize RouterOS protocol numbers to names.
 fn normalize_protocol(proto: &str) -> &'static str {
@@ -29,10 +107,10 @@ fn normalize_protocol(proto: &str) -> &'static str {
 
 
 /// Classify IP to VLAN: known VLAN → that VLAN, external → -1, unknown internal → 0.
-fn classify_vlan(ip: &str) -> i64 {
-    match behavior::ip_to_vlan(ip) {
+fn classify_vlan(registry: &VlanRegistry, ip: &str) -> i64 {
+    match registry.ip_to_vlan(ip) {
         Some(v) => v as i64,
-        None if !behavior::is_internal_ip(ip) => -1, // WAN / External
+        None if !registry.is_internal_ip(ip) => -1, // WAN / External
         None => 0,                                    // Unclassified internal
     }
 }
@@ -45,6 +123,7 @@ pub async fn collect_observations(
     client: &MikrotikClient,
     store: &BehaviorStore,
     oui_db: &OuiDb,
+    registry: &VlanRegistry,
 ) -> Result<usize, String> {
     // Fetch ARP + DHCP concurrently
     let (arp_result, dhcp_result) = tokio::join!(
@@ -76,7 +155,7 @@ pub async fn collect_observations(
     for (ip, mac) in &ip_to_mac {
         let hostname = ip_to_hostname.get(ip).map(|s| s.as_str());
         let manufacturer = oui_db.lookup(mac).map(|s| s.to_string());
-        let vlan = classify_vlan(ip);
+        let vlan = classify_vlan(registry, ip);
         if let Err(e) = store.upsert_profile(mac, hostname, manufacturer.as_deref(), ip, vlan).await {
             tracing::debug!(mac, error = %e, "profile upsert failed");
         }
@@ -124,8 +203,8 @@ pub async fn collect_observations(
             .unwrap_or("other")
             .to_string();
 
-        let dst_subnet = behavior::classify_destination(dst_ip);
-        let direction = behavior::classify_direction(src_ip, dst_ip).to_string();
+        let dst_subnet = registry.classify_destination(dst_ip);
+        let direction = registry.classify_direction(src_ip, dst_ip).to_string();
         let dst_port_val = dst_port.map(|p| p as i64);
 
         let key = (protocol, dst_port_val, dst_subnet, direction);
@@ -147,7 +226,7 @@ pub async fn collect_observations(
             .find(|(_, m)| *m == mac)
             .map(|(ip, _)| ip.clone())
             .unwrap_or_default();
-        let vlan = classify_vlan(&ip);
+        let vlan = classify_vlan(registry, &ip);
 
         for ((protocol, dst_port, dst_subnet, direction), (bytes_sent, bytes_recv, conn_count)) in flows {
             obs_records.push(DeviceObservation {
@@ -175,14 +254,19 @@ pub async fn collect_observations(
 
 // ── Anomaly Detection ────────────────────────────────────────
 
-/// Detect anomalies for baselined devices.
+/// Detect anomalies for baselined and sparse devices.
 /// Called after each observation collection.
-pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
+pub async fn detect_anomalies(
+    store: &BehaviorStore,
+    spike_candidates: &SpikeCandidates,
+    registry: &VlanRegistry,
+) -> Result<usize, String> {
     let profiles = store.get_all_profiles().await?;
     let mut anomaly_count = 0;
 
     for profile in &profiles {
-        if profile.baseline_status != "baselined" {
+        // Only detect anomalies for devices past their learning period
+        if profile.baseline_status != "baselined" && profile.baseline_status != "sparse" {
             continue;
         }
 
@@ -213,21 +297,32 @@ pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
                 // Check volume spike: project to hourly rate, compare to 3x max
                 let total_bytes = (obs.bytes_sent + obs.bytes_recv) as f64;
                 let hourly_projected = total_bytes * 60.0; // 60s observation → hourly
+                let dedup_key = format!("{}:{}", obs.dst_subnet, obs.dst_port.unwrap_or(-1));
                 if baseline.max_bytes_per_hour > 0.0
                     && hourly_projected > baseline.max_bytes_per_hour * 3.0
                 {
-                    let dedup_key = format!("{}:{}", obs.dst_subnet, obs.dst_port.unwrap_or(-1));
-                    if !store
-                        .has_recent_anomaly(&profile.mac, "volume_spike", &dedup_key, 3600)
-                        .await?
+                    // Multi-cycle persistence: require 2 consecutive detections
+                    let persistent = spike_candidates.record(&profile.mac, &dedup_key);
+                    if persistent
+                        && !store
+                            .has_recent_anomaly(&profile.mac, "volume_spike", &dedup_key, 3600)
+                            .await?
                     {
-                        let severity = behavior::anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "volume_spike");
-                        let dst_vlan_val = behavior::ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
+                        let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "volume_spike");
+                        let confidence = compute_confidence(
+                            &profile.baseline_status,
+                            baseline.observation_count,
+                            vlan,
+                            "volume_spike",
+                            registry,
+                        );
+                        let dst_vlan_val = registry.ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
                         store
                             .record_anomaly(&NewAnomaly {
                                 mac: profile.mac.clone(),
                                 anomaly_type: "volume_spike".to_string(),
                                 severity: severity.to_string(),
+                                confidence,
                                 description: format!(
                                     "Traffic volume spike to {} ({} {}): {:.0} bytes/hr projected vs {:.0} baseline max",
                                     obs.dst_subnet,
@@ -242,7 +337,7 @@ pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
                                     "src_manufacturer": profile.manufacturer,
                                     "dst_subnet": obs.dst_subnet,
                                     "dst_vlan": dst_vlan_val,
-                                    "dst_vlan_name": dst_vlan_val.map(|v| behavior::vlan_name(v as i64)),
+                                    "dst_vlan_name": dst_vlan_val.map(|v| registry.vlan_name(v as i64)),
                                     "protocol": obs.protocol,
                                     "dst_port": obs.dst_port,
                                     "direction": obs.direction,
@@ -257,6 +352,9 @@ pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
                             .await?;
                         anomaly_count += 1;
                     }
+                } else {
+                    // Not spiking this cycle — reset persistence counter
+                    spike_candidates.clear(&profile.mac, &dedup_key);
                 }
             } else {
                 // New behavior — not in any baseline
@@ -280,14 +378,23 @@ pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
                     .has_recent_anomaly(&profile.mac, anomaly_type, &dedup_key, 3600)
                     .await?
                 {
-                    let severity = behavior::anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, anomaly_type);
+                    let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, anomaly_type);
+                    let total_obs: i64 = baselines.iter().map(|b| b.observation_count).sum();
+                    let confidence = compute_confidence(
+                        &profile.baseline_status,
+                        total_obs,
+                        vlan,
+                        anomaly_type,
+                        registry,
+                    );
                     let hostname = profile.hostname.as_deref().unwrap_or(&profile.mac);
-                    let dst_vlan_val = behavior::ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
+                    let dst_vlan_val = registry.ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
                     store
                         .record_anomaly(&NewAnomaly {
                             mac: profile.mac.clone(),
                             anomaly_type: anomaly_type.to_string(),
                             severity: severity.to_string(),
+                            confidence,
                             description: format!(
                                 "{} from {}: {} {} to {}",
                                 anomaly_type.replace('_', " "),
@@ -302,7 +409,7 @@ pub async fn detect_anomalies(store: &BehaviorStore) -> Result<usize, String> {
                                 "src_manufacturer": profile.manufacturer,
                                 "dst_subnet": obs.dst_subnet,
                                 "dst_vlan": dst_vlan_val,
-                                "dst_vlan_name": dst_vlan_val.map(|v| behavior::vlan_name(v as i64)),
+                                "dst_vlan_name": dst_vlan_val.map(|v| registry.vlan_name(v as i64)),
                                 "protocol": obs.protocol,
                                 "dst_port": obs.dst_port,
                                 "direction": obs.direction,
@@ -331,6 +438,7 @@ pub async fn detect_blocked_attempts(
     store: &BehaviorStore,
     oui_db: &OuiDb,
     geo_cache: &GeoCache,
+    registry: &VlanRegistry,
 ) -> Result<usize, String> {
     let log_entries = client
         .log_entries()
@@ -393,7 +501,7 @@ pub async fn detect_blocked_attempts(
         let dst_ip = fields.dst_ip.as_deref().unwrap_or("unknown");
         let dst_port = fields.dst_port.unwrap_or(0);
         let protocol = fields.protocol.as_deref().unwrap_or("unknown");
-        let vlan = classify_vlan(src_ip);
+        let vlan = classify_vlan(registry, src_ip);
 
         // Dedup: same device + dst_ip + dst_port within 1 hour
         let dedup_key = format!("{dst_ip}:{dst_port}");
@@ -404,15 +512,15 @@ pub async fn detect_blocked_attempts(
             continue;
         }
 
-        let severity = behavior::anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "blocked_attempt");
+        let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "blocked_attempt");
 
         // Enrich source context
         let src_hostname = ip_to_hostname.get(src_ip).cloned();
         let src_manufacturer = oui_db.lookup(&mac).map(|s| s.to_string());
 
         // Enrich destination context
-        let dst_vlan = behavior::ip_to_vlan(dst_ip).map(|v| v as i64);
-        let dst_vlan_name = dst_vlan.map(|v| behavior::vlan_name(v).to_string());
+        let dst_vlan = registry.ip_to_vlan(dst_ip).map(|v| v as i64);
+        let dst_vlan_name = dst_vlan.map(|v| registry.vlan_name(v).to_string());
         let dst_hostname = ip_to_hostname.get(dst_ip).cloned();
 
         // GeoIP enrichment for description
@@ -422,11 +530,15 @@ pub async fn detect_blocked_attempts(
             String::new()
         };
 
+        // Blocked attempts always have high confidence (firewall evidence)
+        let confidence = compute_confidence("baselined", 100, vlan, "blocked_attempt", registry);
+
         store
             .record_anomaly(&NewAnomaly {
                 mac: mac.clone(),
                 anomaly_type: "blocked_attempt".to_string(),
                 severity: severity.to_string(),
+                confidence,
                 description: format!(
                     "Blocked {} connection to {dst_ip}:{dst_port}{dst_country} via {protocol}",
                     fields.direction.as_deref().unwrap_or("unknown"),

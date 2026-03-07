@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { DataTable, type Column } from "@/components/data-table";
-import { VLAN_CONFIG } from "@/constants/vlans";
+import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import { X } from "lucide-react";
 import type { MacTableEntry, NetworkIdentity } from "@/api/types";
 import { relativeTime } from "./utils";
@@ -32,6 +32,8 @@ export function MacTableSection({
   portFilter,
   onClearFilter,
 }: MacTableSectionProps) {
+  const vlan = useVlanLookup();
+
   // Build identity lookup
   const identityMap = useMemo(() => {
     const map = new Map<string, NetworkIdentity>();
@@ -55,7 +57,7 @@ export function MacTableSection({
         vlan_id: entry.vlan_id,
         vlanColor:
           entry.vlan_id !== null
-            ? (VLAN_CONFIG[entry.vlan_id]?.color ?? "#666")
+            ? vlan.color(entry.vlan_id)
             : "transparent",
         ip: identity?.best_ip ?? "",
         hostname: identity?.hostname ?? "",
@@ -65,7 +67,7 @@ export function MacTableSection({
         last_seen: entry.last_seen,
       };
     });
-  }, [macTable, identityMap, portFilter]);
+  }, [macTable, identityMap, portFilter, vlan]);
 
   const columns: Column<MacRow>[] = [
     {

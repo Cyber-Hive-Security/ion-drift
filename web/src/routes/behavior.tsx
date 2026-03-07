@@ -10,6 +10,7 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
 import { cn } from "@/lib/utils";
+import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import type {
   BehaviorOverview,
   DeviceAnomaly,
@@ -26,27 +27,22 @@ import {
   Check,
   Flag,
   X,
+  CircleDashed,
 } from "lucide-react";
 
 // ── VLAN names for display ───────────────────────────────────
 
-const VLAN_NAMES: Record<number, string> = {
+// Special labels not in the DB config
+const SPECIAL_VLAN_NAMES: Record<number, string> = {
   [-1]: "WAN / External",
   0: "Unclassified",
-  2: "Network Mgmt",
-  6: "Employer Isolated",
-  10: "Cyber Hive Security",
-  25: "Trusted Services",
-  30: "Trusted Wired",
-  35: "Trusted Wireless",
-  40: "Guest",
-  90: "IoT Internet",
-  99: "IoT Restricted",
 };
 
-function vlanLabel(vlan: number): string {
-  const name = VLAN_NAMES[vlan];
-  if (vlan <= 0) return name ?? "Unclassified";
+function vlanLabel(vlan: number, vlanNames: Record<number, string>): string {
+  const special = SPECIAL_VLAN_NAMES[vlan];
+  if (special) return special;
+  if (vlan <= 0) return "Unclassified";
+  const name = vlanNames[vlan];
   return name ? `VLAN ${vlan}: ${name}` : `VLAN ${vlan}`;
 }
 
@@ -111,7 +107,7 @@ function formatBytesCompact(bytes: number): string {
 
 function StatsRow({ data }: { data: BehaviorOverview }) {
   return (
-    <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+    <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-5">
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Activity className="h-3.5 w-3.5" />
@@ -126,6 +122,15 @@ function StatsRow({ data }: { data: BehaviorOverview }) {
         </div>
         <p className="text-2xl font-bold text-success">
           {data.baselined_devices}
+        </p>
+      </div>
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <CircleDashed className="h-3.5 w-3.5 text-amber-400" />
+          Sparse
+        </div>
+        <p className="text-2xl font-bold text-amber-400">
+          {data.sparse_devices}
         </p>
       </div>
       <div className="rounded-lg border border-border bg-card p-4">
@@ -159,6 +164,7 @@ function StatsRow({ data }: { data: BehaviorOverview }) {
 
 function AlertBanners({ data }: { data: BehaviorOverview }) {
   const learningCount = data.learning_devices;
+  const sparseCount = data.sparse_devices;
   const hasCritical = data.critical_anomalies > 0;
   const hasWarning = data.warning_anomalies > 0;
 
@@ -173,6 +179,16 @@ function AlertBanners({ data }: { data: BehaviorOverview }) {
             <span className="ml-1 text-primary/70">
               Blocked connection attempts are flagged immediately. Behavioral anomalies will activate after learning completes.
             </span>
+          </div>
+        </div>
+      )}
+      {sparseCount > 0 && (
+        <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-400/30 bg-amber-400/10 px-4 py-2 text-sm text-amber-400">
+          <CircleDashed className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            {sparseCount} device{sparseCount !== 1 ? "s have" : " has"} sparse
+            baselines — insufficient observations for full profiling. Anomalies
+            from these devices have lower confidence scores.
           </div>
         </div>
       )}
@@ -208,6 +224,7 @@ function VlanSection({
   anomalies: DeviceAnomaly[];
   resolveMutation: ReturnType<typeof useResolveAnomaly>;
 }) {
+  const vlan = useVlanLookup();
   const hasAnomalies = summary.pending_anomaly_count > 0;
   const [expanded, setExpanded] = useState(hasAnomalies);
 
@@ -233,7 +250,7 @@ function VlanSection({
           <ChevronRight className="h-4 w-4 text-muted-foreground" />
         )}
         <span className="font-medium">
-          {vlanLabel(summary.vlan)}
+          {vlanLabel(summary.vlan, vlan.names)}
         </span>
         <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
           <span>{summary.device_count} devices</span>
@@ -241,6 +258,11 @@ function VlanSection({
             <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-warning">
               {summary.pending_anomaly_count} anomal
               {summary.pending_anomaly_count !== 1 ? "ies" : "y"}
+            </span>
+          )}
+          {summary.sparse_count > 0 && (
+            <span className="rounded-full bg-amber-400/15 px-2 py-0.5 text-amber-400">
+              {summary.sparse_count} sparse
             </span>
           )}
           {summary.learning_count > 0 && (
@@ -329,6 +351,19 @@ function AnomalyCard({
             </span>
             <span className="text-xs text-muted-foreground">
               {formatTimeAgo(anomaly.timestamp)}
+            </span>
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px] font-medium",
+                anomaly.confidence >= 0.8
+                  ? "bg-success/15 text-success"
+                  : anomaly.confidence >= 0.6
+                    ? "bg-amber-400/15 text-amber-400"
+                    : "bg-muted text-muted-foreground",
+              )}
+              title={`Confidence: ${(anomaly.confidence * 100).toFixed(0)}%`}
+            >
+              {(anomaly.confidence * 100).toFixed(0)}%
             </span>
           </div>
 
@@ -435,7 +470,7 @@ function AnomalyCard({
 
 // ── Anomalies Table ──────────────────────────────────────────
 
-const anomalyColumns: Column<DeviceAnomaly>[] = [
+function anomalyColumns(vlanNames: Record<number, string>): Column<DeviceAnomaly>[] { return [
   {
     key: "severity",
     header: "Severity",
@@ -499,8 +534,27 @@ const anomalyColumns: Column<DeviceAnomaly>[] = [
   {
     key: "vlan",
     header: "VLAN",
-    render: (r) => <span className="text-xs">{vlanLabel(r.vlan)}</span>,
+    render: (r) => <span className="text-xs">{vlanLabel(r.vlan, vlanNames)}</span>,
     sortValue: (r) => r.vlan,
+  },
+  {
+    key: "confidence",
+    header: "Conf.",
+    render: (r) => (
+      <span
+        className={cn(
+          "rounded px-1.5 py-0.5 text-xs font-medium",
+          r.confidence >= 0.8
+            ? "bg-success/15 text-success"
+            : r.confidence >= 0.6
+              ? "bg-amber-400/15 text-amber-400"
+              : "bg-muted text-muted-foreground",
+        )}
+      >
+        {(r.confidence * 100).toFixed(0)}%
+      </span>
+    ),
+    sortValue: (r) => -r.confidence,
   },
   {
     key: "timestamp",
@@ -529,7 +583,7 @@ const anomalyColumns: Column<DeviceAnomaly>[] = [
     ),
     sortValue: (r) => r.status,
   },
-];
+]; }
 
 // ── Main Page ────────────────────────────────────────────────
 
@@ -539,6 +593,7 @@ type AnomalyFilter = "all" | "pending" | "accepted" | "flagged" | "dismissed";
 export function BehaviorPage() {
   const [tab, setTab] = useState<TabMode>("overview");
   const [anomalyFilter, setAnomalyFilter] = useState<AnomalyFilter>("pending");
+  const vlan = useVlanLookup();
 
   const overview = useBehaviorOverview();
   const anomaliesQuery = useBehaviorAnomalies({
@@ -665,7 +720,7 @@ export function BehaviorPage() {
           </div>
 
           <DataTable
-            columns={anomalyColumns}
+            columns={anomalyColumns(vlan.names)}
             data={anomalies}
             rowKey={(r) => String(r.id)}
             searchable

@@ -9,6 +9,8 @@ use std::sync::Mutex;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
+use mikrotik_core::behavior::VlanRegistry;
+
 use crate::geo::{self, GeoCache, GeoInfo};
 
 /// Default retention for closed connections.
@@ -346,6 +348,7 @@ impl ConnectionStore {
         &self,
         conn: &PollConnection,
         geo_cache: &GeoCache,
+        registry: &VlanRegistry,
     ) -> anyhow::Result<bool> {
         let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
         let now = now_iso();
@@ -386,11 +389,11 @@ impl ConnectionStore {
                 None
             };
 
-            let src_vlan = vlan_label(&conn.src_ip);
+            let src_vlan = vlan_label(&conn.src_ip, registry);
             let dst_vlan = if dst_is_external {
                 None
             } else {
-                vlan_label(&conn.dst_ip)
+                vlan_label(&conn.dst_ip, registry)
             };
 
             let flagged = geo
@@ -484,6 +487,7 @@ impl ConnectionStore {
         &self,
         event: &SyslogEvent,
         geo_cache: &GeoCache,
+        registry: &VlanRegistry,
     ) -> anyhow::Result<bool> {
         let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
 
@@ -543,11 +547,11 @@ impl ConnectionStore {
                 None
             };
 
-            let src_vlan = vlan_label(&event.src_ip);
+            let src_vlan = vlan_label(&event.src_ip, registry);
             let dst_vlan = if dst_is_external {
                 None
             } else {
-                vlan_label(&event.dst_ip)
+                vlan_label(&event.dst_ip, registry)
             };
 
             let flagged = geo
@@ -1757,24 +1761,9 @@ fn week_to_period(week: &str) -> (String, String) {
     (format!("{week}-start"), format!("{week}-end"))
 }
 
-/// Map IP to VLAN label.
-fn vlan_label(ip: &str) -> Option<String> {
-    let octets: Vec<&str> = ip.split('.').collect();
-    if octets.len() != 4 {
-        return None;
-    }
-    let prefix = format!("{}.{}.{}", octets[0], octets[1], octets[2]);
-    match prefix.as_str() {
-        "10.20.25" => Some("VLAN 25".into()),
-        "10.20.30" => Some("VLAN 30".into()),
-        "10.20.35" => Some("VLAN 35".into()),
-        "10.2.2" => Some("VLAN 2".into()),
-        "172.20.10" => Some("VLAN 10".into()),
-        "172.20.6" => Some("VLAN 6".into()),
-        "192.168.90" => Some("VLAN 90".into()),
-        "192.168.99" => Some("VLAN 99".into()),
-        _ => None,
-    }
+/// Map IP to VLAN label using the registry's CIDR matching.
+fn vlan_label(ip: &str, registry: &VlanRegistry) -> Option<String> {
+    registry.ip_to_vlan(ip).map(|id| format!("VLAN {id}"))
 }
 
 // ── SQL filter builder ────────────────────────────────────────

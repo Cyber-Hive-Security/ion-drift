@@ -12,11 +12,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let password = get_arg(&args, "--password").expect("--password required");
 
     let config = MikrotikConfig {
-        host: "router.kaziik.xyz".into(),
+        host: get_arg(&args, "--host").unwrap_or_else(|| "192.168.88.1".into()),
         port: 443,
         tls: true,
-        ca_cert_path: Some(PathBuf::from("./certs/root_ca.crt")),
-        username: "ion-drift".into(),
+        ca_cert_path: get_arg(&args, "--ca-cert").map(PathBuf::from),
+        username: get_arg(&args, "--user").unwrap_or_else(|| "admin".into()),
         password,
     };
 

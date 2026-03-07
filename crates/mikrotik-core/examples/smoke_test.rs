@@ -1,7 +1,7 @@
 //! Smoke test — validates all resource models against a real RouterOS device.
 //!
 //! Usage:
-//!   cargo run --example smoke_test -- --host router.kaziik.xyz --user ion-drift --password <pass> --ca-cert /etc/ssl/certs/kaziik-root-ca.pem
+//!   cargo run --example smoke_test -- --host 192.168.88.1 --user admin --password <pass> --ca-cert /path/to/ca.pem
 
 use mikrotik_core::{MikrotikClient, MikrotikConfig};
 use std::path::PathBuf;
@@ -10,8 +10,8 @@ use std::path::PathBuf;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
-    let host = get_arg(&args, "--host").unwrap_or_else(|| "router.kaziik.xyz".into());
-    let user = get_arg(&args, "--user").unwrap_or_else(|| "ion-drift".into());
+    let host = get_arg(&args, "--host").unwrap_or_else(|| "192.168.88.1".into());
+    let user = get_arg(&args, "--user").unwrap_or_else(|| "admin".into());
     let password = get_arg(&args, "--password").expect("--password is required");
     let ca_cert = get_arg(&args, "--ca-cert");
 

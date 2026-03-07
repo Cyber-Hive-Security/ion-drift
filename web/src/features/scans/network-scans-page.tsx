@@ -25,7 +25,7 @@ import {
   useRemoveExclusion,
 } from "@/api/queries";
 import type { NmapScan, NmapResult, ScanExclusion } from "@/api/types";
-import { VLAN_CONFIG } from "@/constants/vlans";
+import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -104,6 +104,7 @@ function parseOpenPorts(json: string | null): { port: number; proto: string; ser
 // ── Main page ───────────────────────────────────────────────────
 
 export default function NetworkScansPage() {
+  const vlan = useVlanLookup();
   const { data: scanStatusData } = useScanStatus();
   const { data: scans = [], refetch: refetchScans } = useScans();
   const { data: exclusions = [] } = useScanExclusions();
@@ -150,7 +151,7 @@ export default function NetworkScansPage() {
       key: "vlan",
       header: "VLAN",
       render: (row) => {
-        const config = VLAN_CONFIG[row.vlan_id];
+        const config = vlan.configs[row.vlan_id];
         return (
           <span className="flex items-center gap-1.5">
             <span
@@ -351,7 +352,7 @@ export default function NetworkScansPage() {
               onChange={(e) => setSelectedVlan(Number(e.target.value))}
               className="rounded border border-border bg-background px-3 py-1.5 text-sm"
             >
-              {Object.entries(VLAN_CONFIG).map(([id, config]) => (
+              {Object.entries(vlan.configs).map(([id, config]) => (
                 <option key={id} value={id}>
                   VLAN {id} — {config.name} ({config.subnet})
                 </option>
@@ -474,7 +475,7 @@ export default function NetworkScansPage() {
                   type="text"
                   value={newExclusionIp}
                   onChange={(e) => setNewExclusionIp(e.target.value)}
-                  placeholder="10.20.25.1"
+                  placeholder="192.168.88.1"
                   className="rounded border border-border bg-background px-2 py-1 text-sm"
                 />
               </div>
