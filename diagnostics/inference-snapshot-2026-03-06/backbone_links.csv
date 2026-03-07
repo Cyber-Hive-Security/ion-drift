@@ -1,7 +1,0 @@
-id,device_a,port_a,device_b,port_b,label,created_at,speed_mbps,link_type
-12,CRS310-Office,310-sfp+1,CRS326-Office,sfp-sfpplus2,,"2026-03-05 21:33:44",10000,dac
-13,CRS326-Office,ether1,CSS106-Office,106-o-p1-trunk,,"2026-03-05 21:36:41",1000,ethernet
-16,CRS310-Office,310-sfp+2,Netgear-MS510TXPP,xg10,,"2026-03-06 06:15:26",10000,dac
-17,"MF 20-36-26-D7-EE-60",eth0,Netgear-MS510TXPP,mg5,,"2026-03-06 07:57:53",2500,ethernet
-18,Netgear-MS510TXPP,mg6,"UP 20-36-26-D7-ED-C0",eth0,,"2026-03-06 07:58:19",2500,ethernet
-19,CRS326-Office,sfp-sfpplus1,rb4011,1-sfp-sfpplus,,"2026-03-06 09:10:49",10000,dac

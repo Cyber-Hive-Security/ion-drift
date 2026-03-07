@@ -32,6 +32,10 @@ web/node_modules/
 .DS_Store
 Thumbs.db
 
+# Spec docs and diagnostics (live on development branch)
+SpecDocs/
+diagnostics/
+
 # Claude
 CLAUDE.md
 .claude/
