@@ -110,6 +110,8 @@ export interface TopologyMapInstance {
   setEndpointsVisible: (visible: boolean) => void;
   clearDraggedPosition: (nodeId: string) => void;
   snapToGrid: () => { node_id: string; x: number; y: number }[];
+  snapVlanToGrid: (vlanId: number) => { node_id: string; x: number; y: number }[];
+  snapNodeToGrid: (nodeId: string) => { node_id: string; x: number; y: number }[];
 }
 
 // ─── Helpers ───────────────────────────────────────────
@@ -234,8 +236,10 @@ export function createTopologyMapInstance(
   // ── SVG setup ──
   const svg = d3
     .select(svgElement)
-    .attr("viewBox", `0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`)
-    .attr("preserveAspectRatio", "xMidYMid meet");
+    .attr("viewBox", null)
+    .attr("preserveAspectRatio", null)
+    .attr("width", "100%")
+    .attr("height", "100%");
 
   svg.selectAll("*").remove();
 
@@ -1260,14 +1264,15 @@ export function createTopologyMapInstance(
       if (g.bbox_x + g.bbox_w > maxX) maxX = g.bbox_x + g.bbox_w;
       if (g.bbox_y + g.bbox_h > maxY) maxY = g.bbox_y + g.bbox_h;
     });
-    const pad = 0;
-    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
     const w = maxX - minX;
     const h = maxY - minY;
     const svgRect = svgElement.getBoundingClientRect();
     if (svgRect.width === 0 || svgRect.height === 0) return;
-    const scaleX = svgRect.width / w;
-    const scaleY = svgRect.height / h;
+    // Shrink available area by 40px on each side so nodes aren't flush with edges
+    const availW = Math.max(svgRect.width - 80, 1);
+    const availH = Math.max(svgRect.height - 80, 1);
+    const scaleX = availW / w;
+    const scaleY = availH / h;
     const scale = Math.min(scaleX, scaleY, 1.0);
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
@@ -1411,69 +1416,149 @@ export function createTopologyMapInstance(
 
     snapToGrid() {
       if (!currentData) return [];
-      const spacing = 60;
-      const movedPositions: { node_id: string; x: number; y: number }[] = [];
+      return snapNodesInternal(currentData.nodes);
+    },
 
-      // Group nodes by VLAN sector so we snap within sectors
-      const vlanNodes = new Map<number | null, TopologyNode[]>();
-      for (const node of currentData.nodes) {
-        const vlan = node.vlan_id;
-        const list = vlanNodes.get(vlan) ?? [];
-        list.push(node);
-        vlanNodes.set(vlan, list);
+    snapVlanToGrid(vlanId: number) {
+      if (!currentData) return [];
+      const nodes = currentData.nodes.filter((n) => n.vlan_id === vlanId);
+      return snapNodesInternal(nodes);
+    },
+
+    snapNodeToGrid(nodeId: string) {
+      if (!currentData) return [];
+      const node = currentData.nodes.find((n) => n.id === nodeId);
+      if (!node) return [];
+      return snapNodesInternal([node]);
+    },
+  };
+
+  // ── Snap helper (shared by all snap variants) ──
+
+  function snapNodesInternal(nodes: TopologyNode[]): { node_id: string; x: number; y: number }[] {
+    if (!currentData) return [];
+    const spacing = 60;
+    const movedPositions: { node_id: string; x: number; y: number }[] = [];
+
+    // Build occupied set from ALL nodes not being snapped
+    const snappingIds = new Set(nodes.map((n) => n.id));
+    const occupied = new Set<string>();
+    for (const n of currentData.nodes) {
+      if (!snappingIds.has(n.id)) {
+        const gx = Math.round(n.x / spacing) * spacing;
+        const gy = Math.round(n.y / spacing) * spacing;
+        occupied.add(`${gx},${gy}`);
       }
+    }
 
-      // For each VLAN group, snap nodes to grid relative to the sector origin
-      for (const [, nodes] of vlanNodes) {
-        // Track occupied grid cells to avoid overlaps
-        const occupied = new Set<string>();
+    // Group by VLAN so collision avoidance is per-sector
+    const vlanGroups = new Map<number | null, TopologyNode[]>();
+    for (const node of nodes) {
+      const list = vlanGroups.get(node.vlan_id) ?? [];
+      list.push(node);
+      vlanGroups.set(node.vlan_id, list);
+    }
 
-        // Sort by infrastructure first (they get priority), then by layer
-        const sorted = [...nodes].sort((a, b) => {
-          if (a.is_infrastructure !== b.is_infrastructure) return a.is_infrastructure ? -1 : 1;
-          return a.layer - b.layer;
-        });
+    for (const [, group] of vlanGroups) {
+      // Sort by infrastructure first (they get priority), then by layer
+      const sorted = [...group].sort((a, b) => {
+        if (a.is_infrastructure !== b.is_infrastructure) return a.is_infrastructure ? -1 : 1;
+        return a.layer - b.layer;
+      });
 
-        for (const node of sorted) {
-          let snapX = Math.round(node.x / spacing) * spacing;
-          let snapY = Math.round(node.y / spacing) * spacing;
+      for (const node of sorted) {
+        let snapX = Math.round(node.x / spacing) * spacing;
+        let snapY = Math.round(node.y / spacing) * spacing;
 
-          // Resolve collisions by spiraling outward
-          let key = `${snapX},${snapY}`;
-          if (occupied.has(key)) {
-            let found = false;
-            for (let radius = 1; radius <= 10 && !found; radius++) {
-              for (let dx = -radius; dx <= radius && !found; dx++) {
-                for (let dy = -radius; dy <= radius && !found; dy++) {
-                  if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue;
-                  const cx = snapX + dx * spacing;
-                  const cy = snapY + dy * spacing;
-                  const ck = `${cx},${cy}`;
-                  if (!occupied.has(ck)) {
-                    snapX = cx;
-                    snapY = cy;
-                    key = ck;
-                    found = true;
-                  }
+        // Resolve collisions by spiraling outward
+        let key = `${snapX},${snapY}`;
+        if (occupied.has(key)) {
+          let found = false;
+          for (let radius = 1; radius <= 10 && !found; radius++) {
+            for (let dx = -radius; dx <= radius && !found; dx++) {
+              for (let dy = -radius; dy <= radius && !found; dy++) {
+                if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue;
+                const cx = snapX + dx * spacing;
+                const cy = snapY + dy * spacing;
+                const ck = `${cx},${cy}`;
+                if (!occupied.has(ck)) {
+                  snapX = cx;
+                  snapY = cy;
+                  key = ck;
+                  found = true;
                 }
               }
             }
           }
-          occupied.add(key);
-
-          node.x = snapX;
-          node.y = snapY;
-          draggedPositions.set(node.id, { x: snapX, y: snapY });
-          movedPositions.push({ node_id: node.id, x: snapX, y: snapY });
         }
+        occupied.add(key);
+
+        node.x = snapX;
+        node.y = snapY;
+        draggedPositions.set(node.id, { x: snapX, y: snapY });
+        movedPositions.push({ node_id: node.id, x: snapX, y: snapY });
       }
+    }
 
-      // Re-render with snapped positions
-      renderAll(currentData);
-      updateVisibility();
-      zoomToFit(true);
+    // Update positions in-place (no full re-render to avoid edge flicker)
+    applyPositionUpdates(snappingIds);
+    zoomToFit(true);
 
-      return movedPositions;
-    },
-  };
+    return movedPositions;
+  }
+
+  /** Move node + label + edge SVG elements to match current node.x/y values. */
+  function applyPositionUpdates(nodeIds: Set<string>) {
+    // Update node transforms
+    layerNodes.selectAll<SVGGElement, unknown>(".topo-node").each(function () {
+      const el = d3.select(this);
+      const nid = el.attr("data-node-id");
+      if (!nid || !nodeIds.has(nid)) return;
+      const node = nodeMap.get(nid);
+      if (!node) return;
+      el.transition().duration(300).attr("transform", `translate(${node.x},${node.y})`);
+    });
+
+    // Update labels
+    layerLabels.selectAll<SVGTextElement, unknown>(".node-label, .node-sublabel").each(function () {
+      const el = d3.select(this);
+      const nid = el.attr("data-node-id");
+      if (!nid || !nodeIds.has(nid)) return;
+      const node = nodeMap.get(nid);
+      if (!node) return;
+      const r = node.is_infrastructure ? HEX_RADIUS : HEX_RADIUS_SM;
+      const isSubLabel = el.classed("node-sublabel");
+      const labelX = node.is_infrastructure ? node.x + r + 8 : node.x;
+      const labelY = node.is_infrastructure
+        ? node.y + 4 + (isSubLabel ? 13 : 0)
+        : node.y + r + 14 + (isSubLabel ? 13 : 0);
+      el.transition().duration(300).attr("x", labelX).attr("y", labelY);
+    });
+
+    // Update all edges connected to moved nodes
+    layerEdges.selectAll<SVGGElement, unknown>(".edge").each(function () {
+      const eg = d3.select(this);
+      const srcId = eg.attr("data-source") || "";
+      const tgtId = eg.attr("data-target") || "";
+      if (!nodeIds.has(srcId) && !nodeIds.has(tgtId)) return;
+      const src = nodeMap.get(srcId);
+      const tgt = nodeMap.get(tgtId);
+      if (!src || !tgt) return;
+      eg.select("line")
+        .transition().duration(300)
+        .attr("x1", src.x).attr("y1", src.y)
+        .attr("x2", tgt.x).attr("y2", tgt.y);
+      // Update port/speed labels
+      const dx = tgt.x - src.x;
+      const dy = tgt.y - src.y;
+      eg.selectAll("text").each(function (_, i) {
+        const txt = d3.select(this);
+        // Port labels are at 0.15 and 0.85, speed at 0.5
+        const t = i === 0 ? 0.15 : i === 1 ? 0.85 : 0.5;
+        txt.transition().duration(300)
+          .attr("x", src.x + dx * t)
+          .attr("y", src.y + dy * t - (i >= 2 ? 8 : 6));
+      });
+    });
+  }
 }

@@ -67,9 +67,9 @@ const vlanColumns: Column<VlanInterface>[] = [
 ];
 
 export function InterfacesPage() {
-  const [tab, setTab] = useState<"all" | "vlans">("all");
+  const [tab, setTab] = useState<"all" | "vlans">("vlans");
   const ifaces = useInterfaces();
-  const vlans = useVlans({ enabled: tab === "vlans" });
+  const vlans = useVlans();
 
   const query = tab === "all" ? ifaces : vlans;
 
@@ -83,7 +83,7 @@ export function InterfacesPage() {
       {ifaces.data && <RouterPortGrid interfaces={ifaces.data} />}
 
       <div className="mb-4 flex gap-2">
-        {(["all", "vlans"] as const).map((t) => (
+        {(["vlans", "all"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}

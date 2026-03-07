@@ -325,6 +325,8 @@ function NodeContextMenu({
   onHide,
   onSetDisposition,
   onSelect,
+  onSnapNode,
+  onSnapVlan,
 }: {
   menu: ContextMenuState;
   devices: NetworkDevice[];
@@ -333,6 +335,8 @@ function NodeContextMenu({
   onHide: (matchType: "mac" | "identity", matchValue: string) => void;
   onSetDisposition: (mac: string, disposition: "ignored" | "flagged") => void;
   onSelect: (node: TopologyNode) => void;
+  onSnapNode: (nodeId: string) => void;
+  onSnapVlan: (vlanId: number) => void;
 }) {
   const { node, x, y } = menu;
   const [showDevicePicker, setShowDevicePicker] = useState(false);
@@ -488,6 +492,32 @@ function NodeContextMenu({
             </button>
           </>
         )}
+
+        {/* Snap options — always available */}
+        <div className="border-t border-border mt-0.5 pt-0.5">
+          <button
+            onClick={() => {
+              onSnapNode(node.id);
+              onClose();
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+          >
+            <Grid3x3 className="h-3 w-3 text-muted-foreground" />
+            Snap to grid
+          </button>
+          {node.vlan_id != null && (
+            <button
+              onClick={() => {
+                onSnapVlan(node.vlan_id!);
+                onClose();
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+            >
+              <Grid3x3 className="h-3 w-3 text-muted-foreground" />
+              Snap VLAN {node.vlan_id} to grid
+            </button>
+          )}
+        </div>
       </div>
     </>
   );
@@ -662,6 +692,20 @@ export function TopologyPage() {
     }
   }, [batchPositionMutation]);
 
+  const handleSnapVlanToGrid = useCallback((vlanId: number) => {
+    const positions = mapRef.current?.snapVlanToGrid(vlanId);
+    if (positions && positions.length > 0) {
+      batchPositionMutation.mutate(positions);
+    }
+  }, [batchPositionMutation]);
+
+  const handleSnapNodeToGrid = useCallback((nodeId: string) => {
+    const positions = mapRef.current?.snapNodeToGrid(nodeId);
+    if (positions && positions.length > 0) {
+      batchPositionMutation.mutate(positions);
+    }
+  }, [batchPositionMutation]);
+
   const data = topology.data;
   const ago = data?.computed_at
     ? formatAgo(data.computed_at)
@@ -779,6 +823,8 @@ export function TopologyPage() {
               refreshMutation.mutate();
             }}
             onSelect={(node) => setSelectedNode(node)}
+            onSnapNode={handleSnapNodeToGrid}
+            onSnapVlan={handleSnapVlanToGrid}
           />
         )}
 

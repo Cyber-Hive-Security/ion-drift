@@ -53,8 +53,8 @@ export function InterfacesHelp() {
       </dl>
       <h3>Key Terms</h3>
       <dl>
-        <dt>Running</dt>
-        <dd>Interface has link (cable connected, peer detected). Disabled interfaces are administratively shut down.</dd>
+        <dt>Status</dt>
+        <dd>Whether the interface has link — <strong>Up</strong> means cable connected / peer detected, <strong>Down</strong> means no link. Disabled interfaces are administratively shut down.</dd>
         <dt>MTU</dt>
         <dd>Maximum Transmission Unit — largest packet size the interface will send without fragmentation.</dd>
         <dt>Tx/Rx</dt>
@@ -110,6 +110,8 @@ export function FirewallHelp() {
         <dd>Cumulative counters showing how much traffic matched each rule.</dd>
         <dt>Disabled</dt>
         <dd>Rule exists but is not active. Shown with reduced opacity.</dd>
+        <dt>Row Highlighting</dt>
+        <dd>Rules are highlighted based on hit count — the brighter the highlight, the more frequently the rule is matched. High-traffic rules stand out visually.</dd>
       </dl>
     </>
   );
@@ -244,7 +246,7 @@ export function IdentityManagerHelp() {
         <dt>Confirmed</dt>
         <dd>Whether a human has verified the identity's port assignment. Confirmed identities are trusted by the inference engine.</dd>
         <dt>Port Violation</dt>
-        <dd>A MAC address appeared on a different port than expected, or a device disappeared from its assigned port. May indicate cable changes or unauthorized moves.</dd>
+        <dd>A MAC address appeared on a different port than expected, or a device disappeared from its assigned port. When violations are detected, a red banner appears at the top of this page showing MAC mismatches and missing devices.</dd>
         <dt>Disposition</dt>
         <dd>Visibility state: <code>visible</code> (active), <code>hidden</code> (manually suppressed), or <code>infrastructure</code> (switches/APs — excluded from endpoint lists).</dd>
       </dl>
@@ -256,40 +258,107 @@ export function InferenceHelp() {
   return (
     <>
       <p>
-        The topology inference engine automatically determines which switch port each device is connected to by analyzing MAC table observations over time.
+        The inference engine determines which physical switch port each device is
+        actually connected to. Raw MAC table lookups can be misleading — MACs
+        appear on trunk ports, router ports, and upstream links due to flooding
+        and ARP broadcasts. Inference watches observations over time, scores
+        every candidate port, and picks the most likely real attachment point.
       </p>
-      <h3>Modes</h3>
+
+      <h3>How It Works</h3>
+      <p>
+        Every ~30 seconds, Ion Drift polls your switches for MAC table entries.
+        Every few minutes, the inference engine runs a scoring cycle: it loads
+        the last 10 minutes of observations, groups them by MAC, generates
+        candidate ports, scores each one across 13 weighted features, and picks
+        a winner. Confidence builds as the same port wins repeatedly.
+      </p>
+
+      <h3>Getting Started</h3>
+      <p>
+        Set the <code>TOPOLOGY_INFERENCE_MODE</code> environment variable on
+        the Ion Drift container and restart.
+      </p>
       <dl>
-        <dt>Legacy</dt>
-        <dd>Inference engine disabled. Port assignments come only from direct MAC table lookups.</dd>
-        <dt>Shadow</dt>
-        <dd>Inference runs and logs results but does NOT write bindings. Use this to evaluate accuracy before going active.</dd>
-        <dt>Active</dt>
-        <dd>Inference writes port bindings to the identity store. Results are live.</dd>
-      </dl>
-      <h3>Key Terms</h3>
-      <dl>
-        <dt>Confidence</dt>
-        <dd>How certain the engine is about a MAC's port assignment (0–100%). Based on observation consistency, candidate scoring, and consecutive wins.</dd>
-        <dt>Score</dt>
-        <dd>Weighted sum of feature scores for the top candidate. Higher is better. Features include edge likelihood, persistence, VLAN consistency, and penalties for routers/transits.</dd>
-        <dt>Consecutive Wins</dt>
-        <dd>How many scoring cycles in a row the current top candidate has won. More wins increase confidence.</dd>
-        <dt>Divergence</dt>
-        <dd>When inference assigns a different port than the legacy (MAC table) binding. The "Div" column flags these for review.</dd>
-        <dt>State</dt>
+        <dt>1. Shadow mode (recommended first)</dt>
         <dd>
-          <ul>
-            <li><strong>unknown</strong> — not enough observations yet</li>
-            <li><strong>candidate</strong> — a top candidate exists but confidence is low</li>
-            <li><strong>probable</strong> — strong candidate, building confidence</li>
-            <li><strong>stable</strong> — high confidence, consistent winner</li>
-            <li><strong>roaming</strong> — device moved to a different port</li>
-            <li><strong>conflicted</strong> — multiple candidates with similar scores</li>
-            <li><strong>human_pinned</strong> — manually confirmed, inference defers</li>
-          </ul>
+          Set <code>TOPOLOGY_INFERENCE_MODE=shadow</code>. Inference runs in
+          parallel but does <strong>not</strong> write bindings — it only logs
+          what it would do. Visit this page to review candidates, scores, and
+          divergences. Let it run for several days to build confidence.
+        </dd>
+        <dt>2. Validate</dt>
+        <dd>
+          Expand individual MACs to see the scored candidates and explanation.
+          Spot-check devices you know (printers, workstations, phones). Check
+          that divergences make sense — common reasons include "router fallback"
+          (legacy fell back to router) and "wireless parent preferred"
+          (inference correctly resolved to a WAP).
+        </dd>
+        <dt>3. Activate</dt>
+        <dd>
+          Set <code>TOPOLOGY_INFERENCE_MODE=active</code> and restart. Inference
+          now writes bindings to the identity store. These become the source of
+          truth for the topology map, identity manager, and behavioral analysis.
+        </dd>
+        <dt>Reverting</dt>
+        <dd>
+          Set <code>TOPOLOGY_INFERENCE_MODE=legacy</code> to disable inference
+          entirely and fall back to direct MAC table lookups.
         </dd>
       </dl>
+
+      <h3>Reading the Table</h3>
+      <dl>
+        <dt>Device / Port</dt>
+        <dd>The inferred switch and port where inference believes this MAC is physically connected.</dd>
+        <dt>Confidence</dt>
+        <dd>
+          Score margin between the winning candidate and the runner-up (0–100%).
+          Green (≥70%) means strong evidence. Yellow (40–70%) means building.
+          Red (&lt;40%) means ambiguous — expand the row to investigate.
+        </dd>
+        <dt>Score</dt>
+        <dd>
+          Weighted sum of 13 features for the top candidate. Features include
+          edge likelihood, persistence (how often the MAC was seen on that port),
+          VLAN consistency, graph depth, and penalties for trunk/router ports.
+        </dd>
+        <dt>Wins</dt>
+        <dd>Consecutive scoring cycles where the current port won. More wins = more stable binding. States promote at 1 (candidate), 3 (probable), and 10 (stable) wins.</dd>
+        <dt>Div</dt>
+        <dd>
+          Yellow dot when inference disagrees with the legacy MAC table binding.
+          Expand the row to see the divergence category and explanation.
+        </dd>
+      </dl>
+
+      <h3>States</h3>
+      <dl>
+        <dt>unknown</dt>
+        <dd>Not enough observations yet — no candidate has won a cycle.</dd>
+        <dt>candidate</dt>
+        <dd>A top candidate exists with 1 win. Evidence is early.</dd>
+        <dt>probable</dt>
+        <dd>3+ consecutive wins. Strong candidate, building toward stable.</dd>
+        <dt>stable</dt>
+        <dd>10+ consecutive wins. High confidence — this binding is reliable.</dd>
+        <dt>roaming</dt>
+        <dd>Device moved to a different switch/port. Previous binding is shown for context.</dd>
+        <dt>conflicted</dt>
+        <dd>Multiple candidates have similar scores. Current binding is held until evidence tips one way. Expand the row to see the competing candidates.</dd>
+        <dt>human_pinned</dt>
+        <dd>A human confirmed this binding in the Identity Manager. Inference defers and will not override it.</dd>
+      </dl>
+
+      <h3>Expanded Detail</h3>
+      <p>
+        Click the chevron on any row to see the full candidate breakdown:
+        all observed ports, their individual feature scores, suppression
+        status, and a human-readable explanation of why the winner was chosen.
+        Suppressed candidates (marked with a reason like "upstream_of_edge")
+        were pruned because a deeper, more edge-like port exists.
+      </p>
     </>
   );
 }

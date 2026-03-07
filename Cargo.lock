@@ -1465,6 +1465,7 @@ dependencies = [
  "hex",
  "hickory-resolver",
  "jsonwebtoken",
+ "libc",
  "maxminddb",
  "mikrotik-core",
  "openidconnect",

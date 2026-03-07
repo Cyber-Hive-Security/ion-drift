@@ -984,39 +984,77 @@ fn spawn_behavior_collector(
     });
 }
 
-/// Recompute all device baselines nightly (3 AM) and prune old observations.
+/// Recompute all device baselines nightly at 3 AM and prune old observations.
+/// Also runs once at startup (after a 5-minute delay) to promote any devices
+/// whose learning period elapsed while the server was down.
 fn spawn_behavior_maintenance(
     store: Arc<mikrotik_core::BehaviorStore>,
     connection_store: Arc<connection_store::ConnectionStore>,
     switch_store: Arc<mikrotik_core::SwitchStore>,
 ) {
     tokio::spawn(async move {
+        // Run once after 5 minutes to catch up on any missed promotions
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        run_behavior_maintenance(&store, &connection_store, &switch_store).await;
+
         loop {
-            // Sleep until roughly 3 AM — simplified: sleep 24 hours
-            tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+            // Sleep until next 3 AM local time
+            let sleep_secs = secs_until_hour(3);
+            tracing::info!("behavior maintenance: next run in {sleep_secs}s (~{:.1}h)", sleep_secs as f64 / 3600.0);
+            tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
 
-            tracing::info!("behavior maintenance: recomputing baselines");
-            match store.recompute_all_baselines(7 * 86400).await {
-                Ok(count) => tracing::info!("behavior: recomputed baselines for {count} devices"),
-                Err(e) => tracing::warn!("behavior: baseline recompute failed: {e}"),
-            }
-
-            match store.prune_observations(30 * 86400).await {
-                Ok(count) => tracing::info!("behavior: pruned {count} old observations"),
-                Err(e) => tracing::warn!("behavior: observation prune failed: {e}"),
-            }
-
-            // Compute port flow baselines for Sankey anomaly detection
-            tracing::info!("computing port flow baselines");
-            match connection_store.compute_port_flow_baselines() {
-                Ok(count) => tracing::info!("port flow baselines: computed {count} baselines"),
-                Err(e) => tracing::warn!("port flow baseline computation failed: {e}"),
-            }
-
-            // Classify devices by traffic patterns
-            classify_traffic_patterns(&store, &switch_store).await;
+            run_behavior_maintenance(&store, &connection_store, &switch_store).await;
         }
     });
+}
+
+async fn run_behavior_maintenance(
+    store: &mikrotik_core::BehaviorStore,
+    connection_store: &connection_store::ConnectionStore,
+    switch_store: &mikrotik_core::SwitchStore,
+) {
+    tracing::info!("behavior maintenance: recomputing baselines");
+    match store.recompute_all_baselines(7 * 86400).await {
+        Ok(count) => tracing::info!("behavior: recomputed baselines for {count} devices"),
+        Err(e) => tracing::warn!("behavior: baseline recompute failed: {e}"),
+    }
+
+    match store.prune_observations(30 * 86400).await {
+        Ok(count) => tracing::info!("behavior: pruned {count} old observations"),
+        Err(e) => tracing::warn!("behavior: observation prune failed: {e}"),
+    }
+
+    // Compute port flow baselines for Sankey anomaly detection
+    tracing::info!("computing port flow baselines");
+    match connection_store.compute_port_flow_baselines() {
+        Ok(count) => tracing::info!("port flow baselines: computed {count} baselines"),
+        Err(e) => tracing::warn!("port flow baseline computation failed: {e}"),
+    }
+
+    // Classify devices by traffic patterns
+    classify_traffic_patterns(store, switch_store).await;
+}
+
+/// Compute seconds until the next occurrence of `target_hour` (0-23) in local time.
+fn secs_until_hour(target_hour: u32) -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    // Determine local UTC offset by comparing libc localtime with UTC
+    let local_offset_secs: i64 = {
+        let t = now_secs as libc::time_t;
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { libc::localtime_r(&t, &mut tm) };
+        tm.tm_gmtoff as i64
+    };
+    let local_secs = now_secs as i64 + local_offset_secs;
+    let secs_into_day = local_secs.rem_euclid(86400) as u64;
+    let target_secs = (target_hour as u64) * 3600;
+    let diff = if target_secs > secs_into_day {
+        target_secs - secs_into_day
+    } else {
+        86400 - secs_into_day + target_secs
+    };
+    diff.max(60) // minimum 60s to avoid tight loops
 }
 
 /// Classify devices by their observed traffic patterns.
