@@ -335,8 +335,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             "/behavior/anomalies/{id}/resolve",
             post(behavior::resolve_anomaly),
         )
-        .route("/behavior/suppressions", get(behavior::list_suppressions))
-        .route("/behavior/suppressions", post(behavior::create_suppression))
+        .route(
+            "/behavior/suppressions",
+            get(behavior::list_suppressions).post(behavior::create_suppression),
+        )
         .route(
             "/behavior/suppressions/{id}",
             delete(behavior::delete_suppression),

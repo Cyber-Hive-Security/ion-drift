@@ -765,15 +765,15 @@ pub async fn detect_blocked_attempts(
         };
 
         let traffic_direction = fields.direction.as_deref().unwrap_or("unknown");
-        let traffic_class = classify_traffic_class(traffic_direction, protocol, Some(dst_port));
+        let traffic_class = classify_traffic_class(traffic_direction, protocol, Some(dst_port as i64));
         let suppression_action = store
-            .match_suppression_rule(&mac, vlan, protocol, Some(dst_port), traffic_class)
+            .match_suppression_rule(&mac, vlan, protocol, Some(dst_port as i64), traffic_class)
             .await?;
         if matches!(suppression_action.as_deref(), Some("suppress")) {
             continue;
         }
         let priority_boost = store
-            .get_priority_boost(&mac, vlan, protocol, Some(dst_port), traffic_class)
+            .get_priority_boost(&mac, vlan, protocol, Some(dst_port as i64), traffic_class)
             .await?;
         let severity = escalate_severity(base_severity, priority_boost);
         let blocked_confidence = (blocked_confidence + (priority_boost as f64 * 0.05)).min(1.0);

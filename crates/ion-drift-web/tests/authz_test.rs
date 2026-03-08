@@ -37,8 +37,9 @@ fn extract_mutating_routes() -> Vec<(String, String, String)> {
 #[test]
 fn api_routes_have_global_auth_layer() {
     let src = common::read_repo_file("src/routes/mod.rs");
+    let normalized: String = src.split_whitespace().collect();
     assert!(
-        src.contains(".layer(middleware::from_fn_with_state(state.clone(), require_auth_layer))"),
+        normalized.contains("from_fn_with_state(state.clone(),require_auth_layer,"),
         "expected /api global auth middleware in routes/mod.rs"
     );
 }
