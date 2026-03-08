@@ -652,7 +652,7 @@ export function WorldMap({
                   className="hover:underline cursor-pointer"
                   onClick={() => onCountryClick?.(c.country_code)}
                 >
-                  {countryFlag(c.country_code)} {c.country_code} ({formatNumber(c.connection_count)})
+                  {c.country_code} ({formatNumber(c.connection_count)})
                 </button>
                 {i < topCountries.length - 1 && <span className="mx-0.5">&middot;</span>}
               </span>
