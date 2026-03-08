@@ -263,10 +263,24 @@ pub async fn geo_summary(
     Query(query): Query<GeoSummaryQuery>,
 ) -> Result<Json<Vec<GeoSummaryEntry>>, Response> {
     let days = query.days.clamp(1, 365);
-    let result = state
+    let mut result = state
         .connection_store
         .geo_summary(days)
         .map_err(|e| internal_error("geo summary", e))?;
+
+    // Recompute flagged_count dynamically from current monitored regions
+    // rather than relying on the historical flagged column in the database.
+    let monitored = state.geo_cache.get_monitored_regions();
+    for entry in &mut result {
+        if monitored.is_empty() {
+            entry.flagged_count = 0;
+        } else if monitored.contains(&entry.country_code) {
+            entry.flagged_count = entry.connection_count;
+        } else {
+            entry.flagged_count = 0;
+        }
+    }
+
     Ok(Json(result))
 }
 
@@ -357,10 +371,23 @@ pub async fn city_summary(
     Query(query): Query<CitySummaryQuery>,
 ) -> Result<Json<Vec<CitySummaryEntry>>, Response> {
     let days = query.days.clamp(1, 365);
-    let result = state
+    let mut result = state
         .connection_store
         .city_summary(days, query.min_connections)
         .map_err(|e| internal_error("city summary", e))?;
+
+    // Recompute flagged_count dynamically from current monitored regions.
+    let monitored = state.geo_cache.get_monitored_regions();
+    for entry in &mut result {
+        if monitored.is_empty() {
+            entry.flagged_count = 0;
+        } else if monitored.contains(&entry.country_code) {
+            entry.flagged_count = entry.connection_count;
+        } else {
+            entry.flagged_count = 0;
+        }
+    }
+
     Ok(Json(result))
 }
 

@@ -448,6 +448,7 @@ pub async fn login(State(state): State<AppState>) -> Response {
         )
         .add_scope(Scope::new("profile".to_string()))
         .add_scope(Scope::new("email".to_string()))
+        .add_scope(Scope::new("roles".to_string()))
         .set_pkce_challenge(pkce_challenge)
         .url();
 

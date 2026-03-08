@@ -1349,20 +1349,105 @@ function GeoIpSection() {
 
 // ── Monitored Regions Section ────────────────────────────────────
 
+const COUNTRY_LIST: { code: string; name: string }[] = [
+  { code: "AF", name: "Afghanistan" }, { code: "AL", name: "Albania" },
+  { code: "DZ", name: "Algeria" }, { code: "AO", name: "Angola" },
+  { code: "AR", name: "Argentina" }, { code: "AM", name: "Armenia" },
+  { code: "AU", name: "Australia" }, { code: "AT", name: "Austria" },
+  { code: "AZ", name: "Azerbaijan" }, { code: "BH", name: "Bahrain" },
+  { code: "BD", name: "Bangladesh" }, { code: "BY", name: "Belarus" },
+  { code: "BE", name: "Belgium" }, { code: "BJ", name: "Benin" },
+  { code: "BO", name: "Bolivia" }, { code: "BA", name: "Bosnia and Herzegovina" },
+  { code: "BR", name: "Brazil" }, { code: "BG", name: "Bulgaria" },
+  { code: "BF", name: "Burkina Faso" }, { code: "KH", name: "Cambodia" },
+  { code: "CM", name: "Cameroon" }, { code: "CA", name: "Canada" },
+  { code: "CF", name: "Central African Republic" }, { code: "TD", name: "Chad" },
+  { code: "CL", name: "Chile" }, { code: "CN", name: "China" },
+  { code: "CO", name: "Colombia" }, { code: "CD", name: "Congo (DRC)" },
+  { code: "CR", name: "Costa Rica" }, { code: "HR", name: "Croatia" },
+  { code: "CU", name: "Cuba" }, { code: "CY", name: "Cyprus" },
+  { code: "CZ", name: "Czechia" }, { code: "DK", name: "Denmark" },
+  { code: "DO", name: "Dominican Republic" }, { code: "EC", name: "Ecuador" },
+  { code: "EG", name: "Egypt" }, { code: "SV", name: "El Salvador" },
+  { code: "EE", name: "Estonia" }, { code: "ET", name: "Ethiopia" },
+  { code: "FI", name: "Finland" }, { code: "FR", name: "France" },
+  { code: "GE", name: "Georgia" }, { code: "DE", name: "Germany" },
+  { code: "GH", name: "Ghana" }, { code: "GR", name: "Greece" },
+  { code: "GT", name: "Guatemala" }, { code: "HT", name: "Haiti" },
+  { code: "HN", name: "Honduras" }, { code: "HK", name: "Hong Kong" },
+  { code: "HU", name: "Hungary" }, { code: "IS", name: "Iceland" },
+  { code: "IN", name: "India" }, { code: "ID", name: "Indonesia" },
+  { code: "IR", name: "Iran" }, { code: "IQ", name: "Iraq" },
+  { code: "IE", name: "Ireland" }, { code: "IL", name: "Israel" },
+  { code: "IT", name: "Italy" }, { code: "JM", name: "Jamaica" },
+  { code: "JP", name: "Japan" }, { code: "JO", name: "Jordan" },
+  { code: "KZ", name: "Kazakhstan" }, { code: "KE", name: "Kenya" },
+  { code: "KP", name: "North Korea" }, { code: "KR", name: "South Korea" },
+  { code: "KW", name: "Kuwait" }, { code: "KG", name: "Kyrgyzstan" },
+  { code: "LA", name: "Laos" }, { code: "LV", name: "Latvia" },
+  { code: "LB", name: "Lebanon" }, { code: "LY", name: "Libya" },
+  { code: "LT", name: "Lithuania" }, { code: "LU", name: "Luxembourg" },
+  { code: "MY", name: "Malaysia" }, { code: "ML", name: "Mali" },
+  { code: "MX", name: "Mexico" }, { code: "MD", name: "Moldova" },
+  { code: "MN", name: "Mongolia" }, { code: "MA", name: "Morocco" },
+  { code: "MZ", name: "Mozambique" }, { code: "MM", name: "Myanmar" },
+  { code: "NP", name: "Nepal" }, { code: "NL", name: "Netherlands" },
+  { code: "NZ", name: "New Zealand" }, { code: "NI", name: "Nicaragua" },
+  { code: "NE", name: "Niger" }, { code: "NG", name: "Nigeria" },
+  { code: "NO", name: "Norway" }, { code: "OM", name: "Oman" },
+  { code: "PK", name: "Pakistan" }, { code: "PA", name: "Panama" },
+  { code: "PY", name: "Paraguay" }, { code: "PE", name: "Peru" },
+  { code: "PH", name: "Philippines" }, { code: "PL", name: "Poland" },
+  { code: "PT", name: "Portugal" }, { code: "QA", name: "Qatar" },
+  { code: "RO", name: "Romania" }, { code: "RU", name: "Russia" },
+  { code: "RW", name: "Rwanda" }, { code: "SA", name: "Saudi Arabia" },
+  { code: "SN", name: "Senegal" }, { code: "RS", name: "Serbia" },
+  { code: "SG", name: "Singapore" }, { code: "SK", name: "Slovakia" },
+  { code: "SI", name: "Slovenia" }, { code: "SO", name: "Somalia" },
+  { code: "ZA", name: "South Africa" }, { code: "SS", name: "South Sudan" },
+  { code: "ES", name: "Spain" }, { code: "LK", name: "Sri Lanka" },
+  { code: "SD", name: "Sudan" }, { code: "SE", name: "Sweden" },
+  { code: "CH", name: "Switzerland" }, { code: "SY", name: "Syria" },
+  { code: "TW", name: "Taiwan" }, { code: "TJ", name: "Tajikistan" },
+  { code: "TZ", name: "Tanzania" }, { code: "TH", name: "Thailand" },
+  { code: "TN", name: "Tunisia" }, { code: "TR", name: "Turkey" },
+  { code: "TM", name: "Turkmenistan" }, { code: "UG", name: "Uganda" },
+  { code: "UA", name: "Ukraine" }, { code: "AE", name: "UAE" },
+  { code: "GB", name: "United Kingdom" }, { code: "US", name: "United States" },
+  { code: "UY", name: "Uruguay" }, { code: "UZ", name: "Uzbekistan" },
+  { code: "VE", name: "Venezuela" }, { code: "VN", name: "Vietnam" },
+  { code: "YE", name: "Yemen" }, { code: "ZM", name: "Zambia" },
+  { code: "ZW", name: "Zimbabwe" },
+];
+
+function countryName(code: string): string {
+  return COUNTRY_LIST.find((c) => c.code === code)?.name ?? code;
+}
+
 function MonitoredRegionsSection() {
   const { data: regions, isLoading } = useMonitoredRegions();
   const updateRegions = useUpdateMonitoredRegions();
-  const [input, setInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   if (isLoading) return <LoadingSpinner />;
 
   const currentRegions = regions ?? [];
 
-  function addRegion() {
-    const code = input.trim().toUpperCase();
-    if (code.length !== 2 || currentRegions.includes(code)) return;
+  const filtered = search.length > 0
+    ? COUNTRY_LIST.filter(
+        (c) =>
+          !currentRegions.includes(c.code) &&
+          (c.name.toLowerCase().includes(search.toLowerCase()) ||
+            c.code.toLowerCase().includes(search.toLowerCase())),
+      ).slice(0, 12)
+    : [];
+
+  function addRegion(code: string) {
+    if (currentRegions.includes(code)) return;
     updateRegions.mutate([...currentRegions, code]);
-    setInput("");
+    setSearch("");
+    setDropdownOpen(false);
   }
 
   function removeRegion(code: string) {
@@ -1379,21 +1464,21 @@ function MonitoredRegionsSection() {
       <div className="p-4 space-y-3">
         <p className="text-sm text-muted-foreground">
           Connections to these countries are highlighted in red on the world map and flagged in connection tables.
-          Add ISO 3166-1 alpha-2 country codes (e.g. RU, CN, IR).
         </p>
 
         {currentRegions.length > 0 && (
           <div className="flex flex-wrap gap-2">
-            {currentRegions.map((code) => (
+            {currentRegions.sort().map((code) => (
               <span
                 key={code}
-                className="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-1 text-sm font-mono text-destructive"
+                className="inline-flex items-center gap-1.5 rounded-md bg-destructive/10 px-2.5 py-1 text-sm text-destructive"
               >
-                {code}
+                <span className="font-mono font-medium">{code}</span>
+                <span className="text-destructive/70">{countryName(code)}</span>
                 <button
                   onClick={() => removeRegion(code)}
-                  className="ml-0.5 hover:text-destructive/70"
-                  title={`Remove ${code}`}
+                  className="ml-0.5 rounded-sm p-0.5 hover:bg-destructive/20"
+                  title={`Remove ${countryName(code)}`}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -1402,25 +1487,49 @@ function MonitoredRegionsSection() {
           </div>
         )}
 
-        <div className="flex items-center gap-2">
+        <div className="relative">
           <input
             type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value.toUpperCase().slice(0, 2))}
-            onKeyDown={(e) => e.key === "Enter" && addRegion()}
-            placeholder="XX"
-            maxLength={2}
-            className="w-16 rounded-md border border-input bg-background px-2 py-1.5 text-sm font-mono text-center"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setDropdownOpen(true);
+            }}
+            onFocus={() => setDropdownOpen(true)}
+            onBlur={() => setTimeout(() => setDropdownOpen(false), 150)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && filtered.length > 0) {
+                addRegion(filtered[0].code);
+              } else if (e.key === "Enter" && search.trim().length === 2) {
+                addRegion(search.trim().toUpperCase());
+              }
+            }}
+            placeholder="Search countries..."
+            className="w-full max-w-xs rounded-md border border-input bg-background px-3 py-1.5 text-sm"
           />
-          <button
-            onClick={addRegion}
-            disabled={input.trim().length !== 2}
-            className="inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add
-          </button>
+          {dropdownOpen && filtered.length > 0 && (
+            <div className="absolute z-20 mt-1 w-full max-w-xs rounded-md border border-border bg-card shadow-lg max-h-48 overflow-y-auto">
+              {filtered.map((c) => (
+                <button
+                  key={c.code}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => addRegion(c.code)}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted text-left"
+                >
+                  <span className="font-mono text-muted-foreground w-6">{c.code}</span>
+                  <span>{c.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+
+        {updateRegions.isError && (
+          <p className="text-xs text-destructive">
+            {(updateRegions.error as Error)?.message || "Failed to update regions"}
+          </p>
+        )}
 
         {currentRegions.length === 0 && (
           <p className="text-xs text-muted-foreground">
