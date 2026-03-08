@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::alerting;
-use crate::middleware::RequireAuth;
+use crate::middleware::RequireAdmin;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -22,7 +22,7 @@ pub struct UpdateChannelBody {
 
 /// GET /api/alerts/rules — list all alert rules.
 pub async fn list_rules(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
 ) -> Response {
     match alerting::get_alert_rules(&state.switch_store).await {
@@ -33,7 +33,7 @@ pub async fn list_rules(
 
 /// GET /api/alerts/status — alert engine summary.
 pub async fn status(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
 ) -> Response {
     match alerting::get_alert_status(&state.switch_store).await {
@@ -44,7 +44,7 @@ pub async fn status(
 
 /// GET /api/alerts/history — recent alert history (paginated).
 pub async fn history(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
     Query(q): Query<HistoryQuery>,
 ) -> Response {
@@ -58,7 +58,7 @@ pub async fn history(
 
 /// DELETE /api/alerts/history — clear all alert history.
 pub async fn clear_history(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
 ) -> Response {
     match alerting::clear_alert_history(&state.switch_store).await {
@@ -69,7 +69,7 @@ pub async fn clear_history(
 
 /// GET /api/alerts/channels — delivery channel configs (passwords never returned).
 pub async fn list_channels(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
 ) -> Response {
     match alerting::get_delivery_channels(&state.switch_store).await {
@@ -93,7 +93,7 @@ pub async fn list_channels(
 
 /// PUT /api/alerts/channels/{channel} — update channel config.
 pub async fn update_channel(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
     axum::extract::Path(channel): axum::extract::Path<String>,
     Json(body): Json<UpdateChannelBody>,
@@ -154,7 +154,7 @@ pub async fn update_channel(
 
 /// POST /api/alerts/rules — create a new alert rule.
 pub async fn create_rule(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
     Json(body): Json<alerting::CreateRuleRequest>,
 ) -> Response {
@@ -166,7 +166,7 @@ pub async fn create_rule(
 
 /// PUT /api/alerts/rules/{id} — update an alert rule.
 pub async fn update_rule(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(body): Json<alerting::UpdateRuleRequest>,
@@ -179,7 +179,7 @@ pub async fn update_rule(
 
 /// DELETE /api/alerts/rules/{id} — delete a custom alert rule.
 pub async fn delete_rule(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Response {
@@ -191,7 +191,7 @@ pub async fn delete_rule(
 
 /// POST /api/alerts/channels/{channel}/test — send a test notification.
 pub async fn test_channel(
-    _auth: RequireAuth,
+    _auth: RequireAdmin,
     State(state): State<AppState>,
     axum::extract::Path(channel): axum::extract::Path<String>,
 ) -> Response {

@@ -118,7 +118,7 @@ const RESETTABLE_FIELDS: &[&str] = &["device_type", "human_label", "switch_bindi
 
 /// DELETE /api/network/identities/{mac}/fields/{field}
 pub async fn reset_identity_field(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path((mac, field)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, Response> {

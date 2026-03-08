@@ -19,7 +19,7 @@ async fn behavior_store_crud_after_migration() {
     let path = db_path("behavior.db");
     let store = BehaviorStore::new(&path).expect("behavior store");
     store
-        .upsert_profile("AA:BB:CC:DD:EE:FF", Some("10.0.0.10"), Some(10), None, None)
+        .upsert_profile("AA:BB:CC:DD:EE:FF", None, None, "10.0.0.10", 10)
         .await
         .expect("upsert profile");
     let profile = store

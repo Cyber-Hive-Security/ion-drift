@@ -95,7 +95,7 @@ pub struct NodePositionEntry {
 }
 
 pub async fn batch_update_positions(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(body): Json<BatchPositionUpdate>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -151,7 +151,7 @@ pub struct SectorUpdate {
 
 /// PUT /api/network/topology/sectors/{vlanId} — human sector position override.
 pub async fn update_sector(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(vlan_id): Path<u32>,
     Json(body): Json<SectorUpdate>,
@@ -166,7 +166,7 @@ pub async fn update_sector(
 
 /// DELETE /api/network/topology/sectors/{vlanId} — reset sector to auto.
 pub async fn reset_sector(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(vlan_id): Path<u32>,
 ) -> Result<Json<serde_json::Value>, Response> {

@@ -61,7 +61,9 @@ fn all_mutating_api_handlers_require_admin_extractor() {
     // We tolerate auth/logout because it's not in /api routes.
     let mut missing = Vec::new();
     for (_method, path, handler) in mutating {
-        let signature_needle = format!("pub async fn {handler}(");
+        // Strip module prefix (e.g. "behavior::resolve_anomaly" → "resolve_anomaly")
+        let fn_name = handler.rsplit("::").next().unwrap_or(&handler);
+        let signature_needle = format!("pub async fn {fn_name}(");
         if let Some(sig_start) = route_sources.find(&signature_needle) {
             let tail = &route_sources[sig_start..route_sources.len().min(sig_start + 300)];
             if !tail.contains("RequireAdmin") {

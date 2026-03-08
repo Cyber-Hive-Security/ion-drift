@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::response::{Json, Response};
 use serde::Deserialize;
 
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 
 use super::internal_error;
@@ -32,7 +32,7 @@ pub struct CreateNeighborAliasRequest {
 
 /// POST /api/network/neighbor-aliases — create a neighbor alias.
 pub async fn create_neighbor_alias(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(body): Json<CreateNeighborAliasRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -70,7 +70,7 @@ pub async fn create_neighbor_alias(
 
 /// DELETE /api/network/neighbor-aliases/{id} — delete a neighbor alias.
 pub async fn delete_neighbor_alias(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {
