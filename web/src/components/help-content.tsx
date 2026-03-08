@@ -363,6 +363,44 @@ export function InferenceHelp() {
   );
 }
 
+export function InvestigationHelp() {
+  return (
+    <>
+      <p>
+        Drill-down traffic investigation. Start with a network-wide overview and
+        progressively narrow to individual conversations.
+      </p>
+      <h3>Drill-Down Levels</h3>
+      <dl>
+        <dt>Network Overview</dt>
+        <dd>Top-level view showing all VLANs with device counts, traffic volume,
+        and inter-VLAN flows. Click a VLAN card or flow row to drill in.</dd>
+        <dt>VLAN Detail</dt>
+        <dd>Devices and flows within a single VLAN (or between a VLAN pair).
+        Shows baseline status per device. Right-click a device for quick actions.</dd>
+        <dt>Device Trace</dt>
+        <dd>Protocol breakdown, destination list, and flagged flows for one device.
+        Click a destination to see peer analysis ("Who Else?") — other devices
+        talking to the same endpoint.</dd>
+        <dt>Conversation Detail</dt>
+        <dd>Full connection history between two endpoints. Includes an activity
+        timeline, per-connection records with byte counts, and CSV export.</dd>
+      </dl>
+      <h3>Time Range</h3>
+      <p>
+        Use the time range selector (top right) to control the window: 1h, 6h,
+        24h, 7d, or 30d. All levels share the same range.
+      </p>
+      <h3>Tips</h3>
+      <ul>
+        <li><strong>Right-click</strong> devices or destinations for a context menu with copy and navigation shortcuts.</li>
+        <li><strong>Hover</strong> over VLAN cards to prefetch data for faster drill-down.</li>
+        <li><strong>Flagged flows</strong> appear in a red-bordered section on the Device Trace — these matched threat intelligence or anomaly rules.</li>
+      </ul>
+    </>
+  );
+}
+
 export function SetupWizardHelp() {
   return (
     <>

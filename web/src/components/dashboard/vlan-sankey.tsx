@@ -97,7 +97,7 @@ interface SankeyLinkPayload {
 
 // CustomLink is created inside VlanTrafficBreakdown (needs closure access to tooltip ref)
 
-export function VlanTrafficBreakdown() {
+export function VlanTrafficBreakdown({ onLinkClick }: { onLinkClick?: (srcVlan: string, dstVlan: string) => void } = {}) {
   const { data: flows, isLoading } = useVlanFlows();
   const tooltipRef = useRef<HTMLDivElement>(null);
 
@@ -133,6 +133,14 @@ export function VlanTrafficBreakdown() {
         if (el) el.style.display = "none";
       };
 
+      const handleClick = () => {
+        if (onLinkClick) {
+          const src = payload.source.name.trim();
+          const dst = payload.target.name.trim();
+          onLinkClick(src, dst);
+        }
+      };
+
       return (
         <path
           d={`
@@ -162,11 +170,12 @@ export function VlanTrafficBreakdown() {
             e.currentTarget.setAttribute("stroke-width", "0");
             hideTooltip();
           }}
+          onClick={handleClick}
           style={{ cursor: "pointer" }}
         />
       );
     };
-  }, []); // tooltipRef is stable, formatBytes is a module import
+  }, [onLinkClick]); // tooltipRef is stable, formatBytes is a module import
 
   const sankeyData = useMemo(() => {
     if (!flows || flows.length === 0) return null;

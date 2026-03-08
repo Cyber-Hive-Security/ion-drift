@@ -19,6 +19,7 @@ interface DataTableProps<T> {
   searchable?: boolean;
   searchPlaceholder?: string;
   rowStyle?: (row: T) => CSSProperties | undefined;
+  onRowClick?: (row: T) => void;
 }
 
 export function DataTable<T>({
@@ -30,6 +31,7 @@ export function DataTable<T>({
   searchable,
   searchPlaceholder = "Search...",
   rowStyle,
+  onRowClick,
 }: DataTableProps<T>) {
   const [sortCol, setSortCol] = useState<string | null>(defaultSort?.key ?? null);
   const [sortAsc, setSortAsc] = useState(defaultSort?.asc ?? true);
@@ -134,8 +136,9 @@ export function DataTable<T>({
               filteredAndSorted.map((row) => (
                 <tr
                   key={rowKey(row)}
-                  className="border-b border-border/50 hover:bg-muted/30"
+                  className={cn("border-b border-border/50 hover:bg-muted/30", onRowClick && "cursor-pointer")}
                   style={rowStyle?.(row)}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
                 >
                   {columns.map((col) => (
                     <td key={col.key} className="px-3 py-2">

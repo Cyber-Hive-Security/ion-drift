@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useSystemIdentity, useAlertStatus, useAlertHistory } from "@/api/queries";
-import { LogOut, Menu, Router, Bell, X } from "lucide-react";
+import { LogOut, Menu, PanelLeftClose, PanelLeftOpen, Router, Bell, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const LAST_READ_KEY = "ion-drift-alert-last-read";
@@ -25,9 +25,10 @@ const severityIcon: Record<string, string> = {
 interface HeaderProps {
   onMenuToggle?: () => void;
   pendingAnomalies?: number;
+  sidebarOpen?: boolean;
 }
 
-export function Header({ onMenuToggle, pendingAnomalies = 0 }: HeaderProps) {
+export function Header({ onMenuToggle, pendingAnomalies = 0, sidebarOpen }: HeaderProps) {
   const { user, logout } = useAuth();
   const { data: identity } = useSystemIdentity();
   const alertStatus = useAlertStatus();
@@ -55,6 +56,7 @@ export function Header({ onMenuToggle, pendingAnomalies = 0 }: HeaderProps) {
     <>
       <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4 md:px-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          {/* Mobile hamburger */}
           <button
             type="button"
             onClick={onMenuToggle}
@@ -67,6 +69,15 @@ export function Header({ onMenuToggle, pendingAnomalies = 0 }: HeaderProps) {
                 {pendingAnomalies > 99 ? "99+" : pendingAnomalies}
               </span>
             )}
+          </button>
+          {/* Desktop sidebar toggle */}
+          <button
+            type="button"
+            onClick={onMenuToggle}
+            className="hidden md:flex mr-1 h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Toggle sidebar"
+          >
+            {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
           </button>
           <Router className="h-4 w-4" />
           {identity ? (

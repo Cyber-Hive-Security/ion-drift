@@ -167,19 +167,6 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <Settings className="h-4 w-4" />
           Settings
         </Link>
-        <Link
-          to={"/setup-wizard" as "/"}
-          onClick={onClose}
-          className={cn(
-            "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-            currentPath.startsWith("/setup-wizard")
-              ? "bg-primary/10 text-primary"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground",
-          )}
-        >
-          <Settings className="h-4 w-4" />
-          Setup Wizard
-        </Link>
       </div>
     </>
   );

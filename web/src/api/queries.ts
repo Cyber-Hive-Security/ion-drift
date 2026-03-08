@@ -474,6 +474,21 @@ export function useResolveAnomaly() {
   });
 }
 
+export function useBulkResolveAnomalies() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, ids }: { action: string; ids?: number[] }) =>
+      apiFetch<{ success: boolean; updated: number }>("/api/behavior/anomalies/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ids }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["behavior"] });
+    },
+  });
+}
+
 export function useBehaviorAlerts() {
   return useQuery({
     queryKey: ["behavior", "alerts"],

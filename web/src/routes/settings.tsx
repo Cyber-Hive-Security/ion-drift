@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { PageShell } from "@/components/layout/page-shell";
 import { SettingsHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
@@ -52,6 +53,7 @@ import {
   Send,
   ChevronDown,
   ChevronRight,
+  Wand2,
 } from "lucide-react";
 import { formatBytes, formatNumber } from "@/lib/format";
 
@@ -59,6 +61,15 @@ export function SettingsPage() {
   return (
     <PageShell title="Settings" help={<SettingsHelp />}>
       <div className="space-y-6">
+        <div className="flex justify-end">
+          <Link
+            to={"/setup-wizard" as "/"}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow hover:bg-primary/90 transition-colors"
+          >
+            <Wand2 className="h-4 w-4" />
+            Setup Wizard
+          </Link>
+        </div>
         <AlertRulesSection />
         <AlertHistorySection />
         <AlertChannelsSection />

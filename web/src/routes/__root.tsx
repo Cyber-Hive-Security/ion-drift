@@ -31,7 +31,7 @@ export function RootLayout() {
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar open={sidebarOpen} onClose={() => { if (window.innerWidth < 768) setSidebarOpen(false); }} />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header onMenuToggle={() => setSidebarOpen((v) => !v)} pendingAnomalies={behaviorAlerts.data?.pending_count ?? 0} />
+        <Header onMenuToggle={() => setSidebarOpen((v) => !v)} pendingAnomalies={behaviorAlerts.data?.pending_count ?? 0} sidebarOpen={sidebarOpen} />
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>

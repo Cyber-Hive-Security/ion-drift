@@ -3,6 +3,7 @@ import {
   useBehaviorOverview,
   useBehaviorAnomalies,
   useResolveAnomaly,
+  useBulkResolveAnomalies,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { BehaviorHelp } from "@/components/help-content";
@@ -28,6 +29,11 @@ import {
   Flag,
   X,
   CircleDashed,
+  Download,
+  Archive,
+  Trash2,
+  CheckCheck,
+  XCircle,
 } from "lucide-react";
 
 // ── VLAN names for display ───────────────────────────────────
@@ -593,6 +599,7 @@ type AnomalyFilter = "all" | "pending" | "accepted" | "flagged" | "dismissed";
 export function BehaviorPage() {
   const [tab, setTab] = useState<TabMode>("overview");
   const [anomalyFilter, setAnomalyFilter] = useState<AnomalyFilter>("pending");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const vlan = useVlanLookup();
 
   const overview = useBehaviorOverview();
@@ -601,6 +608,7 @@ export function BehaviorPage() {
     limit: 200,
   });
   const resolveMutation = useResolveAnomaly();
+  const bulkMutation = useBulkResolveAnomalies();
 
   if (overview.isLoading) return <LoadingSpinner />;
   if (overview.error) {
@@ -701,12 +709,12 @@ export function BehaviorPage() {
       {/* Anomalies tab */}
       {tab === "anomalies" && (
         <div>
-          {/* Status filter */}
-          <div className="mb-3 flex flex-wrap gap-2">
+          {/* Status filter + bulk actions */}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
             {statusFilters.map((f) => (
               <button
                 key={f.mode}
-                onClick={() => setAnomalyFilter(f.mode)}
+                onClick={() => { setAnomalyFilter(f.mode); setSelectedIds(new Set()); }}
                 className={cn(
                   "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
                   anomalyFilter === f.mode
@@ -717,6 +725,91 @@ export function BehaviorPage() {
                 {f.label}
               </button>
             ))}
+
+            <div className="ml-auto flex items-center gap-1.5">
+              {/* Bulk actions when items selected */}
+              {selectedIds.size > 0 && anomalyFilter === "pending" && (
+                <>
+                  <span className="text-xs text-muted-foreground mr-1">
+                    {selectedIds.size} selected
+                  </span>
+                  <button
+                    className="flex items-center gap-1 rounded-md bg-success/15 px-2.5 py-1.5 text-xs font-medium text-success hover:bg-success/25 transition-colors"
+                    title="Accept selected"
+                    onClick={() => {
+                      bulkMutation.mutate({ action: "accepted", ids: [...selectedIds] }, {
+                        onSuccess: () => setSelectedIds(new Set()),
+                      });
+                    }}
+                    disabled={bulkMutation.isPending}
+                  >
+                    <CheckCheck className="h-3.5 w-3.5" /> Accept
+                  </button>
+                  <button
+                    className="flex items-center gap-1 rounded-md bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent transition-colors"
+                    title="Dismiss selected"
+                    onClick={() => {
+                      bulkMutation.mutate({ action: "dismissed", ids: [...selectedIds] }, {
+                        onSuccess: () => setSelectedIds(new Set()),
+                      });
+                    }}
+                    disabled={bulkMutation.isPending}
+                  >
+                    <XCircle className="h-3.5 w-3.5" /> Dismiss
+                  </button>
+                  <button
+                    className="flex items-center gap-1 rounded-md bg-warning/15 px-2.5 py-1.5 text-xs font-medium text-warning hover:bg-warning/25 transition-colors"
+                    title="Flag selected"
+                    onClick={() => {
+                      bulkMutation.mutate({ action: "flagged", ids: [...selectedIds] }, {
+                        onSuccess: () => setSelectedIds(new Set()),
+                      });
+                    }}
+                    disabled={bulkMutation.isPending}
+                  >
+                    <Flag className="h-3.5 w-3.5" /> Flag
+                  </button>
+                </>
+              )}
+
+              {/* Select all pending */}
+              {anomalyFilter === "pending" && anomalies.length > 0 && (
+                <button
+                  className="flex items-center gap-1 rounded-md bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => {
+                    if (selectedIds.size === anomalies.length) {
+                      setSelectedIds(new Set());
+                    } else {
+                      setSelectedIds(new Set(anomalies.map((a) => a.id)));
+                    }
+                  }}
+                >
+                  {selectedIds.size === anomalies.length ? "Deselect All" : "Select All"}
+                </button>
+              )}
+
+              {/* Archive reviewed */}
+              {(anomalyFilter === "all" || anomalyFilter === "accepted" || anomalyFilter === "dismissed" || anomalyFilter === "flagged") && (
+                <button
+                  className="flex items-center gap-1 rounded-md bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                  title="Archive all reviewed (non-pending) anomalies"
+                  onClick={() => bulkMutation.mutate({ action: "archive_reviewed" })}
+                  disabled={bulkMutation.isPending}
+                >
+                  <Archive className="h-3.5 w-3.5" /> Archive Reviewed
+                </button>
+              )}
+
+              {/* CSV export */}
+              <a
+                href={`/api/behavior/anomalies/export.csv${anomalyFilter !== "all" ? `?status=${anomalyFilter}` : ""}`}
+                download
+                className="flex items-center gap-1 rounded-md bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                title="Export as CSV"
+              >
+                <Download className="h-3.5 w-3.5" /> CSV
+              </a>
+            </div>
           </div>
 
           <DataTable
@@ -726,13 +819,23 @@ export function BehaviorPage() {
             searchable
             searchPlaceholder="Search anomalies..."
             defaultSort={{ key: "severity" }}
-            rowStyle={(r) =>
-              r.severity === "critical"
-                ? { borderLeft: "3px solid #FF4D4F" }
+            rowStyle={(r) => ({
+              borderLeft: r.severity === "critical"
+                ? "3px solid #FF4D4F"
                 : r.severity === "alert" || r.severity === "warning"
-                  ? { borderLeft: "3px solid #FFC857" }
-                  : undefined
-            }
+                  ? "3px solid #FFC857"
+                  : undefined,
+              backgroundColor: selectedIds.has(r.id) ? "rgba(47, 164, 255, 0.08)" : undefined,
+              cursor: anomalyFilter === "pending" ? "pointer" : undefined,
+            })}
+            onRowClick={anomalyFilter === "pending" ? (r) => {
+              setSelectedIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(r.id)) next.delete(r.id);
+                else next.add(r.id);
+                return next;
+              });
+            } : undefined}
           />
         </div>
       )}

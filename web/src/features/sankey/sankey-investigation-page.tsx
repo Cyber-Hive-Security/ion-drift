@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { PageShell } from "@/components/layout/page-shell";
+import { InvestigationHelp } from "@/components/help-content";
 import { ErrorDisplay } from "@/components/error-display";
 import {
   useSankeyNetwork,
@@ -217,7 +218,15 @@ type View =
 
 export function SankeyInvestigationPage() {
   const [range, setRange] = useState("24h");
-  const [view, setView] = useState<View>({ level: "network" });
+  const [view, setView] = useState<View>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const vlan = params.get("vlan");
+    if (vlan) {
+      const dest = params.get("dest") ?? undefined;
+      return { level: "vlan", vlanId: vlan, destVlan: dest };
+    }
+    return { level: "network" };
+  });
 
   const breadcrumb = (() => {
     const items: { label: string; onClick?: () => void }[] = [
@@ -246,7 +255,7 @@ export function SankeyInvestigationPage() {
   })();
 
   return (
-    <PageShell title="Investigation">
+    <PageShell title="Investigation" help={<InvestigationHelp />}>
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <Breadcrumb items={breadcrumb} />

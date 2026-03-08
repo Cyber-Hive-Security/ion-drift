@@ -150,6 +150,10 @@ const sankeyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sankey",
   component: SankeyInvestigationPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    vlan: (search.vlan as string) || undefined,
+    dest: (search.dest as string) || undefined,
+  }),
 });
 
 const settingsRoute = createRoute({

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import {
   useSystemResources,
   useTraffic,
@@ -194,11 +195,15 @@ function SystemHistorySection() {
 }
 
 export function DashboardPage() {
+  const navigate = useNavigate();
   const system = useSystemResources();
   const traffic = useTraffic();
   const dhcp = useDhcpLeases({ polling: true });
   const connections = useConnectionSummary();
   const drops = useFirewallDrops();
+  const handleSankeyClick = useCallback((srcVlan: string, dstVlan: string) => {
+    navigate({ to: "/sankey" as "/", search: { vlan: srcVlan, dest: dstVlan } });
+  }, [navigate]);
   if (system.isLoading) return <LoadingSpinner />;
   if (system.error)
     return (
@@ -226,7 +231,7 @@ export function DashboardPage() {
       <SystemHistorySection />
 
       <div className="mt-6">
-        <VlanTrafficBreakdown />
+        <VlanTrafficBreakdown onLinkClick={handleSankeyClick} />
       </div>
 
       <div className="mt-6">

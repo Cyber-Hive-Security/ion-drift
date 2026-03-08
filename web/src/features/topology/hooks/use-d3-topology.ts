@@ -648,15 +648,55 @@ export function createTopologyMapInstance(
           layerSectorDrag.select(`.sector-resize-${group.vlan_id}`)
             .attr("x", newX + group.bbox_w - 14).attr("y", newY + group.bbox_h - 14);
 
-          // Move all nodes in this VLAN
+          // Move all nodes in this VLAN and update connected edges
           if (currentData) {
+            // Temporarily offset node positions for edge calculations
+            const vlanNodes: TopologyNode[] = [];
             currentData.nodes.forEach((node) => {
               if (node.vlan_id === group.vlan_id) {
+                vlanNodes.push(node);
                 const nodeG = layerNodes.select(`[data-node-id="${CSS.escape(node.id)}"]`);
                 if (!nodeG.empty()) {
                   nodeG.attr("transform", `translate(${node.x + dx},${node.y + dy})`);
                 }
+                // Update labels
+                layerLabels.selectAll(`[data-node-id="${CSS.escape(node.id)}"]`).each(function () {
+                  const el = d3.select(this);
+                  const baseX = parseFloat(el.attr("data-base-x") || el.attr("x")) || 0;
+                  const baseY = parseFloat(el.attr("data-base-y") || el.attr("y")) || 0;
+                  if (!el.attr("data-base-x")) {
+                    el.attr("data-base-x", baseX).attr("data-base-y", baseY);
+                  }
+                  el.attr("x", baseX + dx).attr("y", baseY + dy);
+                });
               }
+            });
+            // Update edges using temporary offsets
+            const vlanNodeIds = new Set(vlanNodes.map((n) => n.id));
+            layerEdges.selectAll<SVGGElement, unknown>(".edge").each(function () {
+              const eg = d3.select(this);
+              const srcId = eg.attr("data-source") || "";
+              const tgtId = eg.attr("data-target") || "";
+              if (!vlanNodeIds.has(srcId) && !vlanNodeIds.has(tgtId)) return;
+              const srcNode = nodeMap.get(srcId);
+              const tgtNode = nodeMap.get(tgtId);
+              if (!srcNode || !tgtNode) return;
+              const sx = srcNode.x + (vlanNodeIds.has(srcId) ? dx : 0);
+              const sy = srcNode.y + (vlanNodeIds.has(srcId) ? dy : 0);
+              const tx = tgtNode.x + (vlanNodeIds.has(tgtId) ? dx : 0);
+              const ty = tgtNode.y + (vlanNodeIds.has(tgtId) ? dy : 0);
+              eg.select("line")
+                .attr("x1", sx).attr("y1", sy)
+                .attr("x2", tx).attr("y2", ty);
+              // Update port/speed text labels
+              const edx = tx - sx;
+              const edy = ty - sy;
+              eg.selectAll("text").each(function (_, i) {
+                const txt = d3.select(this);
+                const t = i === 0 ? 0.15 : i === 1 ? 0.85 : 0.5;
+                txt.attr("x", sx + edx * t)
+                  .attr("y", sy + edy * t - (i >= 2 ? 8 : 6));
+              });
             });
           }
         })
@@ -669,31 +709,16 @@ export function createTopologyMapInstance(
           const newX = origBboxX + dx;
           const newY = origBboxY + dy;
 
-          // Commit node position changes + update edges
+          // Commit node position changes (edges already updated during drag)
           if (currentData) {
             currentData.nodes.forEach((node) => {
               if (node.vlan_id === group.vlan_id) {
                 node.x += dx;
                 node.y += dy;
+                // Clean up temporary base attributes from drag
                 layerLabels.selectAll(`[data-node-id="${CSS.escape(node.id)}"]`).each(function () {
                   const el = d3.select(this);
-                  const curX = parseFloat(el.attr("x")) || 0;
-                  const curY = parseFloat(el.attr("y")) || 0;
-                  el.attr("x", curX + dx).attr("y", curY + dy);
-                });
-                layerEdges.selectAll<SVGGElement, unknown>(".edge").each(function () {
-                  const eg = d3.select(this);
-                  const srcId = eg.attr("data-source");
-                  const tgtId = eg.attr("data-target");
-                  if (srcId === node.id || tgtId === node.id) {
-                    const src = nodeMap.get(srcId || "");
-                    const tgt = nodeMap.get(tgtId || "");
-                    if (src && tgt) {
-                      eg.select("line")
-                        .attr("x1", src.x).attr("y1", src.y)
-                        .attr("x2", tgt.x).attr("y2", tgt.y);
-                    }
-                  }
+                  el.attr("data-base-x", null).attr("data-base-y", null);
                 });
               }
             });
@@ -795,7 +820,10 @@ export function createTopologyMapInstance(
     edges.forEach((edge) => {
       const src = nodeMap.get(edge.source);
       const tgt = nodeMap.get(edge.target);
-      if (!src || !tgt) return;
+      if (!src || !tgt) {
+        console.warn(`[Topology] Edge skipped — unresolved node: source="${edge.source}"${src ? " (ok)" : " (MISSING)"}, target="${edge.target}"${tgt ? " (ok)" : " (MISSING)"}, kind=${edge.kind}`);
+        return;
+      }
 
       const visible = isEdgeVisible(edge);
       const g = layerEdges.append("g")
@@ -1098,6 +1126,15 @@ export function createTopologyMapInstance(
                 eg.select("line")
                   .attr("x1", src.x).attr("y1", src.y)
                   .attr("x2", tgt.x).attr("y2", tgt.y);
+                // Update port/speed text labels
+                const dx = tgt.x - src.x;
+                const dy = tgt.y - src.y;
+                eg.selectAll("text").each(function (_, i) {
+                  const txt = d3.select(this);
+                  const t = i === 0 ? 0.15 : i === 1 ? 0.85 : 0.5;
+                  txt.attr("x", src.x + dx * t)
+                    .attr("y", src.y + dy * t - (i >= 2 ? 8 : 6));
+                });
               }
             }
           });
