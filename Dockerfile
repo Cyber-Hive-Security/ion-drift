@@ -28,11 +28,12 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=rust-builder /build/target/release/ion-drift-web ./
 COPY --from=node-builder /build/web/dist ./web/dist/
-COPY config/production.toml ./config/server.toml
-COPY docker/root_ca.crt ./certs/root_ca.crt
 COPY docker/entrypoint.sh /entrypoint.sh
 
-RUN mkdir -p /app/data/certs && chown -R app:app /app
+# Config and certs are provided at runtime via volume mounts:
+#   -v /path/to/server.toml:/app/config/server.toml:ro
+#   -v /path/to/ca.crt:/app/certs/root_ca.crt:ro
+RUN mkdir -p /app/config /app/data/certs && chown -R app:app /app
 
 ENV RUST_LOG=info
 ENV XDG_DATA_HOME=/app/data
