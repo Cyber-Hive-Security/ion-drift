@@ -418,10 +418,13 @@ async fn deliver_ntfy(
     body: &str,
     severity: &str,
 ) -> Result<(), String> {
-    let url = config.get("url").and_then(|v| v.as_str()).unwrap_or("https://ntfy.sh");
+    let url = config.get("url").and_then(|v| v.as_str()).unwrap_or("");
     let topic = config.get("topic").and_then(|v| v.as_str()).unwrap_or("");
     let token = config.get("token").and_then(|v| v.as_str()).unwrap_or("");
 
+    if url.is_empty() {
+        return Err("ntfy server URL not configured".into());
+    }
     if topic.is_empty() {
         return Err("ntfy topic not configured".into());
     }

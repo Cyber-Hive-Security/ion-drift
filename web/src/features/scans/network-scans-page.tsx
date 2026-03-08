@@ -112,21 +112,30 @@ export default function NetworkScansPage() {
   const addExclusion = useAddExclusion();
   const removeExclusion = useRemoveExclusion();
 
-  const [selectedVlan, setSelectedVlan] = useState<number>(25);
+  const vlanIds = Object.keys(vlan.configs).map(Number);
+  const [selectedVlan, setSelectedVlan] = useState<number | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<"quick" | "standard" | "deep">("standard");
   const [viewingScanId, setViewingScanId] = useState<string | null>(null);
   const [showExclusions, setShowExclusions] = useState(false);
   const [newExclusionIp, setNewExclusionIp] = useState("");
   const [newExclusionReason, setNewExclusionReason] = useState("");
 
+  // Auto-select first VLAN once configs load
+  const activeVlan = selectedVlan ?? vlanIds[0] ?? 0;
+
   const { data: scanResults = [] } = useScanResults(viewingScanId || undefined);
 
   const isScanning = scanStatusData?.scanning ?? false;
   const nmapAvailable = scanStatusData?.nmap_available ?? false;
-  const isIoTVlan = selectedVlan === 90 || selectedVlan === 99;
+  // Detect IoT VLANs by sensitivity (strictest/strict = fragile devices) or name
+  const activeVlanConfig = vlan.configs[activeVlan];
+  const isIoTVlan = activeVlanConfig
+    ? activeVlanConfig.sensitivity === "strictest" ||
+      /\biot\b/i.test(activeVlanConfig.name)
+    : false;
 
   const handleStartScan = () => {
-    startScan.mutate({ vlan_id: selectedVlan, profile: selectedProfile });
+    startScan.mutate({ vlan_id: activeVlan, profile: selectedProfile });
   };
 
   const handleAddExclusion = () => {
@@ -348,7 +357,7 @@ export default function NetworkScansPage() {
           <div className="flex flex-col gap-1">
             <label className="text-[10px] uppercase text-muted-foreground">Target VLAN</label>
             <select
-              value={selectedVlan}
+              value={activeVlan}
               onChange={(e) => setSelectedVlan(Number(e.target.value))}
               className="rounded border border-border bg-background px-3 py-1.5 text-sm"
             >

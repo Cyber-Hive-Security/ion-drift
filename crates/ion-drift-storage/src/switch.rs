@@ -637,7 +637,7 @@ impl SwitchStore {
 
         // Seed alert delivery config rows (idempotent)
         for sql in &[
-            "INSERT OR IGNORE INTO alert_delivery_config (channel, enabled, config_json) VALUES ('ntfy', 0, '{\"url\": \"https://ntfy.sh\", \"topic\": \"\", \"token\": \"\"}')",
+            "INSERT OR IGNORE INTO alert_delivery_config (channel, enabled, config_json) VALUES ('ntfy', 0, '{\"url\": \"\", \"topic\": \"\", \"token\": \"\"}')",
             "INSERT OR IGNORE INTO alert_delivery_config (channel, enabled, config_json) VALUES ('webhook', 0, '{\"url\": \"\", \"secret\": \"\"}')",
             "INSERT OR IGNORE INTO alert_delivery_config (channel, enabled, config_json) VALUES ('smtp', 0, '{\"host\": \"\", \"port\": 587, \"username\": \"\", \"from\": \"\", \"to\": []}')",
         ] {

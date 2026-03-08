@@ -17,7 +17,7 @@
 //! connects to won't be discovered. In practice, services that matter (web, SSH,
 //! DNS, SMTP, etc.) always have active connections.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -70,6 +70,11 @@ async fn run_passive_discovery(
     store: &SwitchStore,
     router: &MikrotikClient,
 ) -> anyhow::Result<()> {
+    // Fetch NAT and filter rules to discover which high ports are legitimate services.
+    // dst-nat rules reveal port forwards; filter accept rules on specific dst-ports
+    // reveal services the firewall explicitly allows.
+    let nat_ports = extract_nat_service_ports(router).await;
+
     // Fetch all active connections from the router
     let connections = router.firewall_connections_full().await?;
 
@@ -105,12 +110,9 @@ async fn run_passive_discovery(
             continue;
         }
 
-        // Skip ephemeral ports (>= 32768) — these are client-side source ports,
-        // not server listening ports. A server listening on a high port (like 32400
-        // for Plex) will still be caught because it also appears as dst_port in
-        // connections from clients. We use 49152 as the cutoff (IANA dynamic range).
-        // Exception: well-known high ports we explicitly track.
-        if dst_port >= 49152 && !is_known_high_port(dst_port) {
+        // Skip ephemeral ports (>= IANA dynamic range start) unless the port
+        // appears in NAT/firewall rules as a legitimate service port.
+        if dst_port >= 49152 && !nat_ports.contains(&dst_port) {
             continue;
         }
 
@@ -227,13 +229,81 @@ fn is_internal_ip(ip: &str) -> bool {
     ion_drift_storage::behavior::is_internal_ip(ip)
 }
 
-/// Well-known high ports that are legitimate server ports (not ephemeral).
-fn is_known_high_port(port: u32) -> bool {
-    matches!(
-        port,
-        32400  // Plex
-        | 32768 // Some services
-    )
+/// Extract service ports from router NAT and filter rules.
+///
+/// - dst-nat rules with `to-ports` or `dst-port` reveal port forwards
+/// - filter accept rules with explicit `dst-port` reveal allowed services
+///
+/// Returns a set of port numbers that are known to be legitimate services,
+/// even if they fall in the IANA ephemeral range (>= 49152).
+async fn extract_nat_service_ports(router: &MikrotikClient) -> HashSet<u32> {
+    let mut ports = HashSet::new();
+
+    // Extract ports from NAT dst-nat rules (port forwards)
+    if let Ok(nat_rules) = router.firewall_nat_rules().await {
+        for rule in &nat_rules {
+            if rule.action != "dst-nat" {
+                continue;
+            }
+            if rule.disabled == Some(true) {
+                continue;
+            }
+            // to-ports is the internal port the traffic is forwarded to
+            if let Some(ref to_ports) = rule.to_ports {
+                for p in parse_port_spec(to_ports) {
+                    ports.insert(p);
+                }
+            }
+            // dst-port is the external-facing port (also useful for service detection)
+            if let Some(ref dst_port) = rule.dst_port {
+                for p in parse_port_spec(dst_port) {
+                    ports.insert(p);
+                }
+            }
+        }
+    }
+
+    // Extract ports from filter accept rules with explicit dst-port
+    if let Ok(filter_rules) = router.firewall_filter_rules().await {
+        for rule in &filter_rules {
+            if rule.action != "accept" {
+                continue;
+            }
+            if rule.disabled == Some(true) {
+                continue;
+            }
+            if let Some(ref dst_port) = rule.dst_port {
+                for p in parse_port_spec(dst_port) {
+                    ports.insert(p);
+                }
+            }
+        }
+    }
+
+    if !ports.is_empty() {
+        tracing::debug!(count = ports.len(), "discovered service ports from firewall rules");
+    }
+
+    ports
+}
+
+/// Parse a RouterOS port specification into individual port numbers.
+/// Supports: single port ("443"), comma-separated ("80,443"), ranges ("8080-8090").
+fn parse_port_spec(spec: &str) -> Vec<u32> {
+    let mut result = Vec::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if let Some((start, end)) = part.split_once('-') {
+            if let (Ok(s), Ok(e)) = (start.trim().parse::<u32>(), end.trim().parse::<u32>()) {
+                for p in s..=e.min(s + 100) {
+                    result.push(p);
+                }
+            }
+        } else if let Ok(p) = part.parse::<u32>() {
+            result.push(p);
+        }
+    }
+    result
 }
 
 /// Map a port number to a human-readable service name.

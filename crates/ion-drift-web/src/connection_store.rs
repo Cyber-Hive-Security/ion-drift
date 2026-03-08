@@ -270,7 +270,7 @@ const KNOWN_SERVICE_PORTS: &[i64] = &[
 ];
 
 fn is_ephemeral_port(port: i64) -> bool {
-    port >= 10_000 && !KNOWN_SERVICE_PORTS.contains(&port)
+    port >= 49_152 && !KNOWN_SERVICE_PORTS.contains(&port)
 }
 
 /// Weekly snapshot record.

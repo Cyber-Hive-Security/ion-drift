@@ -1657,7 +1657,8 @@ function ChannelCard({
             <label className="text-xs text-muted-foreground">Server URL</label>
             <input
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
-              defaultValue={(cfg.url as string) || "https://ntfy.sh"}
+              defaultValue={(cfg.url as string) || ""}
+              placeholder="https://ntfy.sh or self-hosted URL"
               onBlur={(e) => handleBlur("url", e.target.value)}
             />
           </div>
