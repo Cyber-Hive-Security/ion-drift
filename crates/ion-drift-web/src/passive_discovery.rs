@@ -435,15 +435,15 @@ mod tests {
 
     #[test]
     fn test_parse_ip_port() {
-        assert_eq!(parse_ip_port("10.20.25.8:443"), ("10.20.25.8".to_string(), Some(443)));
-        assert_eq!(parse_ip_port("10.20.25.8"), ("10.20.25.8".to_string(), None));
+        assert_eq!(parse_ip_port("192.168.1.1:443"), ("192.168.1.1".to_string(), Some(443)));
+        assert_eq!(parse_ip_port("192.168.1.1"), ("192.168.1.1".to_string(), None));
         assert_eq!(parse_ip_port("192.168.90.7:554"), ("192.168.90.7".to_string(), Some(554)));
     }
 
     #[test]
     fn test_is_internal_ip() {
-        assert!(is_internal_ip("10.20.25.8"));
-        assert!(is_internal_ip("172.20.6.2"));
+        assert!(is_internal_ip("192.168.1.1"));
+        assert!(is_internal_ip("172.16.0.1"));
         assert!(is_internal_ip("192.168.90.7"));
         assert!(!is_internal_ip("8.8.8.8"));
         assert!(!is_internal_ip("1.1.1.1"));

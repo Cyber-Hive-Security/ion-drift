@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use ion_drift_storage::behavior::VlanRegistry;
 
-use crate::geo::{self, GeoCache, GeoInfo};
+use crate::geo::{self, GeoCache};
 
 /// Default retention for closed connections.
 const DEFAULT_RETENTION_DAYS: i64 = 30;

@@ -234,8 +234,7 @@ function StepConfigure({
   }, [interfaces]);
 
   // When interfaces load with a suggestion, auto-fill if empty
-  const prevSuggested = useState("")[0];
-  if (suggestedWan && !wanInterface && suggestedWan !== prevSuggested) {
+  if (suggestedWan && !wanInterface) {
     setWanInterface(suggestedWan);
   }
 

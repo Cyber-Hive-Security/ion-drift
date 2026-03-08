@@ -18,13 +18,14 @@ listen_port = 3000
 host = "192.168.88.1"
 port = 443
 tls = true
+# Path to your CA certificate if the router uses a private/internal CA
 ca_cert_path = "/path/to/ca.crt"
 username = "admin"
 # password from HIVE_ROUTER_PASSWORD env var (legacy mode only)
 wan_interface = "1-WAN"
 # Internal DNS server IP for PTR lookups (optional; falls back to system resolver)
 # Override: HIVE_ROUTER_DNS_SERVER env var
-# dns_server = "10.20.25.5"
+# dns_server = "192.168.1.1"
 
 [oidc]
 issuer_url = "https://your-keycloak.example.com/realms/YourRealm"
@@ -64,4 +65,4 @@ same_site = "lax"
 # [syslog]
 # port = 5514
 # bind_address = "0.0.0.0"
-# target_ip = "10.20.25.17"  # IP of this server as seen by the router
+# target_ip = "192.168.1.100"  # IP of this server as seen by the router

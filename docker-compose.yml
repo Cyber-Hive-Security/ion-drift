@@ -2,7 +2,7 @@ services:
   ion-drift:
     build: .
     container_name: ion-drift
-    hostname: hiverouter
+    hostname: ion-drift
     restart: unless-stopped
     cap_add:
       - NET_RAW

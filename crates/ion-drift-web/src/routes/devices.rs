@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn ssrf_allows_private_rfc1918() {
         // Private IPs are allowed — this tool is for managing LAN devices
-        assert!(!is_blocked_host("10.20.25.1"));
+        assert!(!is_blocked_host("10.0.0.1"));
         assert!(!is_blocked_host("192.168.1.1"));
         assert!(!is_blocked_host("172.16.0.1"));
     }

@@ -17,7 +17,7 @@ fn connection_store_crud_after_migration() {
     let geo_db = dir.path().join("geo.db");
 
     let store = ConnectionStore::new(&conn_db).expect("connection store");
-    let geo = GeoCache::new(&geo_db, None).expect("geo cache");
+    let geo = GeoCache::new(&geo_db, None, vec![]).expect("geo cache");
     let registry = VlanRegistry::default();
 
     let inserted = store

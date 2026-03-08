@@ -208,10 +208,10 @@ Severity is determined by VLAN sensitivity combined with anomaly type.
 
 | Tier | VLANs | Rationale |
 |------|-------|-----------|
-| **Strictest** | 99 (IoT Restricted) | No-internet devices; any anomaly is suspicious |
-| **Strict** | 90 (IoT Internet), 2 (Network Mgmt) | Limited expected behavior |
-| **Moderate** | 25 (Trusted Services), 10 (Cyber Hive Security) | Servers/services with diverse but predictable traffic |
-| **Loose** | 30 (Trusted Wired), 35 (Trusted Wireless), 6 (Employer Isolated) | User devices with variable traffic |
+| **Strictest** | IoT Restricted | No-internet devices; any anomaly is suspicious |
+| **Strict** | IoT Internet, Network Management | Limited expected behavior |
+| **Moderate** | Trusted Services, Security Operations | Servers/services with diverse but predictable traffic |
+| **Loose** | Trusted Wired, Trusted Wireless, Guest Isolated | User devices with variable traffic |
 | **Monitor** | All other VLANs | Baseline monitoring only |
 
 ### Severity Matrix
@@ -362,7 +362,7 @@ CREATE TABLE port_flow_baseline (
   "mac": "AA:BB:CC:DD:EE:FF",
   "hostname": "my-laptop",
   "manufacturer": "Dell",
-  "current_ip": "10.20.30.42",
+  "current_ip": "192.168.1.100",
   "current_vlan": 30,
   "first_seen": 1707123456,
   "last_seen": 1707209856,
@@ -397,7 +397,7 @@ CREATE TABLE port_flow_baseline (
   "severity": "warning",
   "description": "Traffic volume spike to external (tcp 443): 1.5MB/hr vs baseline max 500KB/hr",
   "details": {
-    "src_ip": "10.20.30.42",
+    "src_ip": "192.168.1.100",
     "dst_subnet": "external",
     "protocol": "tcp",
     "dst_port": 443,

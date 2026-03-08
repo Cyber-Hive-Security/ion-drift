@@ -42,7 +42,7 @@ pub async fn device_resources(
     let dm = state.device_manager.read().await;
     let entry = dm.get_device(&id).ok_or_else(|| {
         (
-            axum::http::StatusCode::NOT_FOUND,
+            StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "device not found" })),
         )
             .into_response()
@@ -125,7 +125,7 @@ pub async fn device_interfaces(
     let dm = state.device_manager.read().await;
     let entry = dm.get_device(&id).ok_or_else(|| {
         (
-            axum::http::StatusCode::NOT_FOUND,
+            StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "device not found" })),
         )
             .into_response()

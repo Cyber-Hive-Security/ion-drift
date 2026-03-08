@@ -11,24 +11,12 @@
 
 use std::net::IpAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
 /// Cache entries older than this are considered stale.
 const CACHE_TTL_SECS: i64 = 7 * 86400; // 7 days
-
-/// ip-api.com batch endpoint (free tier, HTTP only).
-///
-/// SECURITY NOTE: This is plaintext HTTP. IP addresses being resolved are visible
-/// to network observers, and responses can be tampered with (MitM). This is a
-/// fallback only — when MaxMind databases are loaded, ip-api.com is never called.
-/// The free tier does not support HTTPS; upgrading to Pro would allow HTTPS.
-const BATCH_URL: &str = "http://ip-api.com/batch";
-
-/// ip-api.com allows up to 100 IPs per batch request.
-const MAX_BATCH_SIZE: usize = 100;
 
 /// Geolocation info resolved from an IP address.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,14 +156,12 @@ impl GeoProvider for MaxMindProvider {
     }
 }
 
-/// Geolocation cache with dual MaxMind + ip-api.com backend.
+/// Geolocation cache with MaxMind GeoLite2 backend and SQLite lookup cache.
 pub struct GeoCache {
     /// Lookup provider for MaxMind-backed geolocation.
     provider: Arc<dyn GeoProvider>,
-    /// SQLite-backed ip-api.com cache (fallback when MaxMind unavailable).
+    /// SQLite-backed lookup cache.
     db: Mutex<rusqlite::Connection>,
-    /// HTTP client for ip-api.com batch requests.
-    http_client: reqwest::Client,
     /// Countries flagged for security monitoring (uppercase ISO 3166-1 alpha-2).
     flagged_countries: std::collections::HashSet<String>,
 }
@@ -199,9 +185,6 @@ impl GeoCache {
         let cache = Self {
             provider: Arc::new(MaxMindProvider::new()),
             db: Mutex::new(conn),
-            http_client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()?,
             flagged_countries: warning_countries.into_iter().collect(),
         };
 
@@ -263,131 +246,11 @@ impl GeoCache {
     /// SECURITY: The ip-api.com fallback uses plaintext HTTP (free tier limitation).
     /// This is disabled by default — only the cached results from previous runs are used.
     /// Set `allow_plaintext_geo = true` in config to enable it (not recommended).
-    pub async fn resolve_batch(&self, ips: &[String]) -> anyhow::Result<()> {
-        // If MaxMind is loaded, no need for ip-api batch fetching
-        if self.has_maxmind() {
-            return Ok(());
-        }
-
-        // SECURITY: Do not make plaintext HTTP requests to ip-api.com.
-        // This leaks queried IP addresses to network observers and is MitM-vulnerable.
+    pub async fn resolve_batch(&self, _ips: &[String]) -> anyhow::Result<()> {
+        // MaxMind handles all lookups instantly — no batch fetching needed.
+        // The ip-api.com fallback has been removed for security reasons:
+        // it uses plaintext HTTP which leaks queried IPs and is MitM-vulnerable.
         // Users should configure MaxMind GeoLite2 databases instead.
-        // Only cached results from previous runs will be used.
-        return Ok(());
-
-        // Filter to unique external IPs only
-        let mut seen = std::collections::HashSet::new();
-        let external: Vec<&str> = ips
-            .iter()
-            .filter_map(|ip| {
-                let addr: IpAddr = ip.parse().ok()?;
-                if is_private(&addr) || !seen.insert(ip.as_str()) {
-                    None
-                } else {
-                    Some(ip.as_str())
-                }
-            })
-            .collect();
-
-        if external.is_empty() {
-            return Ok(());
-        }
-
-        // Check which IPs are missing from cache (lock scope limited, no await)
-        let misses: Vec<&str> = {
-            let db = self
-                .db
-                .lock()
-                .map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
-            let now = now_unix();
-            let cutoff = now - CACHE_TTL_SECS;
-            external
-                .into_iter()
-                .filter(|ip| {
-                    db.query_row(
-                        "SELECT 1 FROM geo_cache WHERE ip = ?1 AND fetched_at > ?2",
-                        rusqlite::params![*ip, cutoff],
-                        |_| Ok(()),
-                    )
-                    .is_err()
-                })
-                .collect()
-        };
-
-        if misses.is_empty() {
-            return Ok(());
-        }
-
-        tracing::debug!(count = misses.len(), "resolving geo for uncached IPs via ip-api.com");
-
-        // Batch fetch in chunks of MAX_BATCH_SIZE
-        for chunk in misses.chunks(MAX_BATCH_SIZE) {
-            let body: Vec<serde_json::Value> = chunk
-                .iter()
-                .map(|ip| {
-                    serde_json::json!({
-                        "query": ip,
-                        "fields": "status,country,countryCode,city,isp,org,as,lat,lon,query"
-                    })
-                })
-                .collect();
-
-            let resp = match self.http_client.post(BATCH_URL).json(&body).send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("ip-api.com batch request failed: {e}");
-                    continue;
-                }
-            };
-
-            if !resp.status().is_success() {
-                tracing::warn!("ip-api.com returned {}", resp.status());
-                continue;
-            }
-
-            let results: Vec<IpApiResponse> = match resp.json().await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("failed to parse ip-api.com response: {e}");
-                    continue;
-                }
-            };
-
-            let now = now_unix();
-            let db = self
-                .db
-                .lock()
-                .map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
-
-            for result in results {
-                if result.status != "success" {
-                    continue;
-                }
-                let info = GeoInfo {
-                    country_code: result.country_code,
-                    country: result.country,
-                    city: non_empty(result.city),
-                    isp: non_empty(result.isp),
-                    asn: result
-                        .as_field
-                        .as_deref()
-                        .and_then(|s| s.split_whitespace().next())
-                        .map(String::from),
-                    org: non_empty(result.org),
-                    lat: result.lat,
-                    lon: result.lon,
-                };
-                if let Ok(json) = serde_json::to_string(&info) {
-                    if let Err(e) = db.execute(
-                        "INSERT OR REPLACE INTO geo_cache (ip, data, fetched_at) VALUES (?1, ?2, ?3)",
-                        rusqlite::params![result.query, json, now],
-                    ) {
-                        tracing::warn!("failed to cache geo result for {}: {e}", result.query);
-                    }
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -395,35 +258,6 @@ impl GeoCache {
     pub fn is_flagged(&self, code: &str) -> bool {
         self.flagged_countries.contains(code)
     }
-}
-
-/// ip-api.com batch response entry.
-#[derive(Deserialize)]
-struct IpApiResponse {
-    status: String,
-    #[serde(default)]
-    query: String,
-    #[serde(default)]
-    country: String,
-    #[serde(default, rename = "countryCode")]
-    country_code: String,
-    #[serde(default)]
-    city: Option<String>,
-    #[serde(default)]
-    isp: Option<String>,
-    #[serde(default)]
-    org: Option<String>,
-    #[serde(default, rename = "as")]
-    as_field: Option<String>,
-    #[serde(default)]
-    lat: Option<f64>,
-    #[serde(default)]
-    lon: Option<f64>,
-}
-
-/// Convert empty strings to None.
-fn non_empty(s: Option<String>) -> Option<String> {
-    s.filter(|v| !v.is_empty())
 }
 
 fn now_unix() -> i64 {

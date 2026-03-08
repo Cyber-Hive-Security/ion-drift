@@ -245,7 +245,7 @@ Virtual/aggregate interfaces are filtered out — only physical port names are s
 
 ### 2.5 Reverse DNS (PTR Lookups)
 
-**Source:** Technitium DNS server at 10.20.25.6 (hardcoded in `correlation_engine.rs`).
+**Source:** The DNS server configured via `dns_server` in `[router]` config.
 
 **Not stored in a table.** Performed live during each correlation cycle for any MAC that has an IP but no hostname (not set by LLDP or DHCP). Each lookup has a 500ms timeout. Results are written directly into the `IdentityBuilder.hostname` field.
 
@@ -438,7 +438,7 @@ IdentityBuilder {
 | 2 | LLDP/MNDP neighbors | `best_ip`, `hostname`, `discovery_protocol`, `remote_identity`, `remote_platform`, `device_type`, `device_type_source` = `"lldp"`, `device_type_confidence` = `0.95` | LLDP is the most authoritative identity source. Sets `device_type` to `"network_equipment"` for all LLDP-discovered devices. |
 | 3 | Router ARP table | `best_ip` | Only if `best_ip` is not already set by LLDP. ARP provides MAC → IP mapping from the router's ARP cache. |
 | 4 | Router DHCP leases | `best_ip`, `hostname` | Overwrites ARP IP (DHCP is more authoritative). Hostname only set if not already set by LLDP. |
-| 5 | Reverse DNS (PTR) | `hostname` | Only for IPs without hostname from steps 2-4. Queries Technitium (10.20.25.6), 500ms timeout per lookup. |
+| 5 | Reverse DNS (PTR) | `hostname` | Only for IPs without hostname from steps 2-4. Queries the configured DNS server, 500ms timeout per lookup. |
 | 6 | OUI database | `manufacturer`, `device_type`, `device_type_source` = `"oui"`, `device_type_confidence` = `0.5-0.6` | `device_type` only set if not already set by LLDP. Manufacturer heuristics: "Hikvision" → `camera` (0.6), "MikroTik" → `network_equipment` (0.6), etc. |
 
 **Human overrides are preserved:** If `switch_binding_source = 'human'`, the automated binding never overwrites `switch_device_id` or `switch_port`.
@@ -456,8 +456,8 @@ If a switch has exactly one WAP child, all wireless VLAN devices on that switch 
 
 When VLAN is not set by the MAC table (device not seen on a switch port), the engine infers from IP:
 
-1. **Exact CIDR match:** Check each VLAN's configured subnet (e.g. `10.20.25.0/24` → VLAN 25)
-2. **Third-octet heuristic fallback:** `10.20.25.x → VLAN 25`, `192.168.90.x → VLAN 90`
+1. **Exact CIDR match:** Check each VLAN's configured subnet (e.g. `10.0.25.0/24` → VLAN 25)
+2. **Third-octet heuristic fallback:** `10.0.25.x → VLAN 25`, `192.168.90.x → VLAN 90`
 
 ### 3.6 Phase 4: Confidence Scoring
 

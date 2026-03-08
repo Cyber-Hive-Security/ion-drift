@@ -6,16 +6,15 @@
 .env.*
 !.env.example
 
-# Local config (contains machine-specific paths)
+# Local config (contains machine-specific paths and secrets)
 config/server.toml
+config/production.toml
 
-# Certificates (user-provided, local dev)
+# Certificates (user-provided)
 certs/
 *.pem
 *.key
-
-# Allow Smallstep root CA in docker/ (public cert, needed for builds)
-!docker/root_ca.crt
+*.crt
 
 # Node modules (frontend)
 web/node_modules/
