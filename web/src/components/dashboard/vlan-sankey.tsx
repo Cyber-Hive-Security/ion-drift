@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { formatBytes } from "@/lib/format";
 import { useVlanFlows } from "@/api/queries";
 import { Sankey, Rectangle, Layer } from "recharts";
@@ -100,6 +100,19 @@ interface SankeyLinkPayload {
 export function VlanTrafficBreakdown({ onLinkClick }: { onLinkClick?: (srcVlan: string, dstVlan: string) => void } = {}) {
   const { data: flows, isLoading } = useVlanFlows();
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(800);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0].contentRect.width;
+      if (w > 0) setContainerWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Link component created here so it has closure access to tooltipRef.
   // Uses direct DOM manipulation for the tooltip to avoid re-rendering
@@ -261,13 +274,13 @@ export function VlanTrafficBreakdown({ onLinkClick }: { onLinkClick?: (srcVlan: 
   const chartHeight = Math.max(400, sideNodes * 70);
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4 overflow-visible">
+    <div ref={containerRef} className="rounded-lg border border-border bg-card p-4 overflow-visible">
       <h3 className="mb-3 text-sm font-medium text-muted-foreground">
         Inter-VLAN Traffic Flows
       </h3>
       <div className="sankey-container" style={{ overflow: "visible" }}>
         <Sankey
-          width={800}
+          width={containerWidth}
           height={chartHeight}
           data={sankeyData}
           nodeWidth={10}
@@ -278,7 +291,7 @@ export function VlanTrafficBreakdown({ onLinkClick }: { onLinkClick?: (srcVlan: 
           margin={{ top: 10, right: 120, bottom: 30, left: 120 }}
           node={
             ((props: SankeyNodePayload) => (
-              <CustomNode {...props} containerWidth={800} />
+              <CustomNode {...props} containerWidth={containerWidth} />
             )) as any
           }
           link={LinkWithTooltip as any}
