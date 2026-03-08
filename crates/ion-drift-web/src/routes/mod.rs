@@ -374,6 +374,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         // Settings
         .route("/settings/map-config", get(settings::map_config))
         .route(
+            "/settings/monitored-regions",
+            get(settings::get_monitored_regions).put(settings::update_monitored_regions),
+        )
+        .route(
             "/settings/secrets",
             get(settings::secrets_status).put(settings::update_secrets),
         )

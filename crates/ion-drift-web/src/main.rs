@@ -321,6 +321,13 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to init geo cache: {e}"))?,
     );
 
+    // Load persisted monitored regions from database (overrides TOML default if set)
+    if let Ok(Some(json)) = switch_store.get_setting("monitored_regions").await {
+        if let Ok(regions) = serde_json::from_str::<Vec<String>>(&json) {
+            geo_cache.set_monitored_regions(regions);
+        }
+    }
+
     // Auto-download MaxMind databases if credentials are available but files are missing
     if !geo_cache.has_maxmind() {
         if let Some(ref sm) = secrets_manager {

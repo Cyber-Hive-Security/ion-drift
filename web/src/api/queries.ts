@@ -724,6 +724,29 @@ export function useMapConfig() {
   });
 }
 
+export function useMonitoredRegions() {
+  return useQuery({
+    queryKey: ["settings", "monitored-regions"],
+    queryFn: () => apiFetch<string[]>("/api/settings/monitored-regions"),
+  });
+}
+
+export function useUpdateMonitoredRegions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (regions: string[]) =>
+      apiFetch<string[]>("/api/settings/monitored-regions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ regions }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "monitored-regions"] });
+      qc.invalidateQueries({ queryKey: ["settings", "map-config"] });
+    },
+  });
+}
+
 // ── Network Devices ──────────────────────────────────────────────
 
 export function useDevices() {

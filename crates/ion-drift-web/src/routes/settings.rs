@@ -21,8 +21,8 @@ pub struct MapConfigResponse {
     pub home_lat: Option<f64>,
     /// Home country ISO 3166-1 alpha-2 code, if configured.
     pub home_country: Option<String>,
-    /// Countries flagged for security monitoring (ISO 3166-1 alpha-2 codes).
-    pub warning_countries: Vec<String>,
+    /// Country codes highlighted for monitoring (ISO 3166-1 alpha-2 codes).
+    pub monitored_regions: Vec<String>,
 }
 
 pub async fn map_config(
@@ -33,8 +33,40 @@ pub async fn map_config(
         home_lon: state.config.server.home_lon,
         home_lat: state.config.server.home_lat,
         home_country: state.config.server.home_country.clone(),
-        warning_countries: state.config.server.warning_countries.clone(),
+        monitored_regions: state.geo_cache.get_monitored_regions(),
     })
+}
+
+// ── GET/PUT /api/settings/monitored-regions ──────────────────────
+
+#[derive(Deserialize)]
+pub struct MonitoredRegionsRequest {
+    pub regions: Vec<String>,
+}
+
+pub async fn get_monitored_regions(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Json<Vec<String>> {
+    Json(state.geo_cache.get_monitored_regions())
+}
+
+pub async fn update_monitored_regions(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+    Json(body): Json<MonitoredRegionsRequest>,
+) -> Result<Json<Vec<String>>, Response> {
+    // Normalize to uppercase
+    let codes: Vec<String> = body.regions.iter().map(|c| c.trim().to_uppercase()).filter(|c| c.len() == 2).collect();
+
+    // Persist to database
+    let json = serde_json::to_string(&codes).map_err(|e| internal_error("serialize monitored regions", e))?;
+    state.switch_store.set_setting("monitored_regions", &json).await.map_err(|e| internal_error("save monitored regions", e))?;
+
+    // Update in-memory cache
+    state.geo_cache.set_monitored_regions(codes.clone());
+
+    Ok(Json(codes))
 }
 
 // ── GET /api/settings/secrets ────────────────────────────────────

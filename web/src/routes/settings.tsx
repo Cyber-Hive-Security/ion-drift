@@ -30,6 +30,8 @@ import {
   useUpdateAlertChannel,
   useTestAlertChannel,
   useAlertStatus,
+  useMonitoredRegions,
+  useUpdateMonitoredRegions,
 } from "@/api/queries";
 import type { CreateDeviceRequest, TestConnectionRequest, UpdateDeviceRequest, VlanConfig, AlertRule } from "@/api/types";
 import {
@@ -42,6 +44,7 @@ import {
   FileKey,
   Radio,
   Globe,
+  MapPin,
   Database,
   Server,
   Plus,
@@ -80,6 +83,7 @@ export function SettingsPage() {
         <EncryptionSection />
         <SyslogSection />
         <GeoIpSection />
+        <MonitoredRegionsSection />
         <ConnectionHistorySection />
       </div>
     </PageShell>
@@ -1320,6 +1324,91 @@ function GeoIpSection() {
             Credentials configured. Place GeoLite2-City.mmdb and GeoLite2-ASN.mmdb in the{" "}
             <code className="rounded bg-muted px-1 py-0.5 text-xs">data/geoip/</code>{" "}
             directory, or restart to trigger auto-download.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Monitored Regions Section ────────────────────────────────────
+
+function MonitoredRegionsSection() {
+  const { data: regions, isLoading } = useMonitoredRegions();
+  const updateRegions = useUpdateMonitoredRegions();
+  const [input, setInput] = useState("");
+
+  if (isLoading) return <LoadingSpinner />;
+
+  const currentRegions = regions ?? [];
+
+  function addRegion() {
+    const code = input.trim().toUpperCase();
+    if (code.length !== 2 || currentRegions.includes(code)) return;
+    updateRegions.mutate([...currentRegions, code]);
+    setInput("");
+  }
+
+  function removeRegion(code: string) {
+    updateRegions.mutate(currentRegions.filter((c) => c !== code));
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-3 border-b border-border p-4">
+        <MapPin className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">Monitored Regions</h2>
+      </div>
+
+      <div className="p-4 space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Connections to these countries are highlighted in red on the world map and flagged in connection tables.
+          Add ISO 3166-1 alpha-2 country codes (e.g. RU, CN, IR).
+        </p>
+
+        {currentRegions.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {currentRegions.map((code) => (
+              <span
+                key={code}
+                className="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-1 text-sm font-mono text-destructive"
+              >
+                {code}
+                <button
+                  onClick={() => removeRegion(code)}
+                  className="ml-0.5 hover:text-destructive/70"
+                  title={`Remove ${code}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value.toUpperCase().slice(0, 2))}
+            onKeyDown={(e) => e.key === "Enter" && addRegion()}
+            placeholder="XX"
+            maxLength={2}
+            className="w-16 rounded-md border border-input bg-background px-2 py-1.5 text-sm font-mono text-center"
+          />
+          <button
+            onClick={addRegion}
+            disabled={input.trim().length !== 2}
+            className="inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add
+          </button>
+        </div>
+
+        {currentRegions.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            No regions monitored. All countries are treated equally.
           </p>
         )}
       </div>

@@ -162,8 +162,9 @@ pub struct GeoCache {
     provider: Arc<dyn GeoProvider>,
     /// SQLite-backed lookup cache.
     db: Mutex<rusqlite::Connection>,
-    /// Countries flagged for security monitoring (uppercase ISO 3166-1 alpha-2).
-    flagged_countries: std::collections::HashSet<String>,
+    /// Countries highlighted for monitoring (uppercase ISO 3166-1 alpha-2).
+    /// Wrapped in RwLock so the settings page can update at runtime.
+    monitored_regions: RwLock<std::collections::HashSet<String>>,
 }
 
 impl GeoCache {
@@ -185,7 +186,7 @@ impl GeoCache {
         let cache = Self {
             provider: Arc::new(MaxMindProvider::new()),
             db: Mutex::new(conn),
-            flagged_countries: warning_countries.into_iter().collect(),
+            monitored_regions: RwLock::new(warning_countries.into_iter().collect()),
         };
 
         // Try to load MaxMind databases if directory provided
@@ -254,9 +255,27 @@ impl GeoCache {
         Ok(())
     }
 
-    /// Check whether a country code is in the flagged list.
+    /// Check whether a country code is in the monitored regions list.
     pub fn is_flagged(&self, code: &str) -> bool {
-        self.flagged_countries.contains(code)
+        self.monitored_regions
+            .read()
+            .map(|set| set.contains(code))
+            .unwrap_or(false)
+    }
+
+    /// Get the current monitored region codes.
+    pub fn get_monitored_regions(&self) -> Vec<String> {
+        self.monitored_regions
+            .read()
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Replace the monitored regions list at runtime.
+    pub fn set_monitored_regions(&self, codes: Vec<String>) {
+        if let Ok(mut set) = self.monitored_regions.write() {
+            *set = codes.into_iter().collect();
+        }
     }
 }
 

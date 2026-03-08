@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -614,6 +614,11 @@ impl SwitchStore {
                 key TEXT NOT NULL PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT NOT NULL PRIMARY KEY,
+                value TEXT NOT NULL
             );
 
             PRAGMA journal_mode=WAL;",
@@ -2474,6 +2479,30 @@ impl SwitchStore {
             params![format!("-{max_age_days} days")],
         )?;
         Ok(affected)
+    }
+
+    // ── App Settings ────────────────────────────────────────────
+
+    /// Get a setting value by key.
+    pub async fn get_setting(&self, key: &str) -> Result<Option<String>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    /// Set a setting value by key.
+    pub async fn set_setting(&self, key: &str, value: &str) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
     }
 }
 

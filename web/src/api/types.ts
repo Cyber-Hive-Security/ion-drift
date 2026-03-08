@@ -846,7 +846,7 @@ export interface MapConfig {
   home_lon: number | null;
   home_lat: number | null;
   home_country: string | null;
-  warning_countries: string[];
+  monitored_regions: string[];
 }
 
 export interface ConnectionHistoryStats {

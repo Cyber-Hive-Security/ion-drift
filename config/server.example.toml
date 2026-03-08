@@ -7,10 +7,9 @@ listen_port = 3000
 # home_lon = -111.97
 # home_lat = 41.22
 # home_country = "US"
-# Countries flagged for security monitoring (ISO 3166-1 alpha-2 codes).
-# Connections to/from these countries are marked as flagged in the UI.
-# Default: ["RU", "CN", "IR", "KP", "VE", "BY", "SY", "CU"]
-# warning_countries = ["RU", "CN", "IR", "KP", "VE", "BY", "SY", "CU"]
+# Monitored regions — country codes highlighted on the world map (ISO 3166-1 alpha-2).
+# Default: [] (none). Configure via Settings > Monitored Regions in the UI.
+# warning_countries = ["RU", "CN"]
 
 [router]
 # Router IP or hostname (REQUIRED for production; default: 192.168.88.1 = Mikrotik factory default)
