@@ -209,6 +209,7 @@ pub async fn detect_anomalies(
     store: &BehaviorStore,
     spike_candidates: &SpikeCandidates,
     registry: &VlanRegistry,
+    firewall_rules: &[FilterRule],
 ) -> Result<usize, String> {
     let profiles = store.get_all_profiles().await?;
     let mut anomaly_count = 0;
@@ -291,12 +292,18 @@ pub async fn detect_anomalies(
                         {
                             let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "volume_spike");
                             let dst_vlan_val = registry.ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
+                            let src_ip = profile.current_ip.as_deref().unwrap_or("");
+                            let (fw_corr, fw_rule_id, fw_rule_comment) = correlate_with_firewall(
+                                firewall_rules, src_ip, &obs.dst_subnet,
+                                &obs.protocol, obs.dst_port.map(|p| p as u16),
+                            );
+                            let has_fw = fw_corr != "no_match";
                             let confidence = compute_confidence(
                                 "volume_spike",
                                 &profile.baseline_status,
                                 total_obs_count,
                                 baseline_age_days,
-                                false, // no firewall correlation for volume spikes
+                                has_fw,
                                 vlan_sens,
                             );
                             store
@@ -330,9 +337,9 @@ pub async fn detect_anomalies(
                                         "elevated_observation_count": elevated_count,
                                     }).to_string()),
                                     vlan,
-                                    firewall_correlation: None,
-                                    firewall_rule_id: None,
-                                    firewall_rule_comment: None,
+                                    firewall_correlation: Some(fw_corr),
+                                    firewall_rule_id: fw_rule_id,
+                                    firewall_rule_comment: fw_rule_comment,
                                 })
                                 .await?;
                             anomaly_count += 1;
@@ -367,12 +374,18 @@ pub async fn detect_anomalies(
                     let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, anomaly_type);
                     let hostname = profile.hostname.as_deref().unwrap_or(&profile.mac);
                     let dst_vlan_val = registry.ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
+                    let src_ip = profile.current_ip.as_deref().unwrap_or("");
+                    let (fw_corr, fw_rule_id, fw_rule_comment) = correlate_with_firewall(
+                        firewall_rules, src_ip, &obs.dst_subnet,
+                        &obs.protocol, obs.dst_port.map(|p| p as u16),
+                    );
+                    let has_fw = fw_corr != "no_match";
                     let confidence = compute_confidence(
                         anomaly_type,
                         &profile.baseline_status,
                         total_obs_count,
                         baseline_age_days,
-                        false,
+                        has_fw,
                         vlan_sens,
                     );
                     store
@@ -401,9 +414,9 @@ pub async fn detect_anomalies(
                                 "direction": obs.direction,
                             }).to_string()),
                             vlan,
-                            firewall_correlation: None,
-                            firewall_rule_id: None,
-                            firewall_rule_comment: None,
+                            firewall_correlation: Some(fw_corr),
+                            firewall_rule_id: fw_rule_id,
+                            firewall_rule_comment: fw_rule_comment,
                         })
                         .await?;
                     anomaly_count += 1;
