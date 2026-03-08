@@ -184,6 +184,13 @@ pub async fn resolve_anomaly(
         .resolve_anomaly(id, &body.action, resolved_by)
         .await
         .map_err(|e| internal_error("resolve anomaly", e))?;
+    if updated {
+        state
+            .behavior_store
+            .apply_operator_feedback(id, &body.action, resolved_by)
+            .await
+            .map_err(|e| internal_error("resolve anomaly feedback", e))?;
+    }
 
     Ok(Json(serde_json::json!({
         "success": updated,
@@ -202,11 +209,23 @@ pub async fn bulk_resolve_anomalies(
     let updated = match body.action.as_str() {
         "accepted" | "dismissed" | "flagged" => {
             let ids = body.ids.as_deref().unwrap_or(&[]);
-            state
-                .behavior_store
-                .bulk_resolve_anomalies(ids, &body.action, actor)
-                .await
-                .map_err(|e| internal_error("bulk resolve anomalies", e))?
+            let mut updated = 0usize;
+            for id in ids {
+                let changed = state
+                    .behavior_store
+                    .resolve_anomaly(*id, &body.action, actor)
+                    .await
+                    .map_err(|e| internal_error("bulk resolve anomaly", e))?;
+                if changed {
+                    updated += 1;
+                    state
+                        .behavior_store
+                        .apply_operator_feedback(*id, &body.action, actor)
+                        .await
+                        .map_err(|e| internal_error("bulk resolve anomaly feedback", e))?;
+                }
+            }
+            updated
         }
         "archive_reviewed" => state
             .behavior_store
@@ -233,6 +252,52 @@ pub async fn bulk_resolve_anomalies(
         "success": true,
         "action": body.action,
         "updated": updated
+    })))
+}
+
+/// GET /api/behavior/suppressions
+pub async fn list_suppressions(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ion_drift_storage::behavior::PatternSuppression>>, Response> {
+    let rows = state
+        .behavior_store
+        .list_suppression_rules()
+        .await
+        .map_err(|e| internal_error("list suppressions", e))?;
+    Ok(Json(rows))
+}
+
+/// POST /api/behavior/suppressions
+pub async fn create_suppression(
+    RequireAdmin(session): RequireAdmin,
+    State(state): State<AppState>,
+    Json(body): Json<ion_drift_storage::behavior::NewPatternSuppression>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let id = state
+        .behavior_store
+        .add_suppression_rule(&body, &session.username)
+        .await
+        .map_err(|e| internal_error("create suppression", e))?;
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "id": id
+    })))
+}
+
+/// DELETE /api/behavior/suppressions/:id
+pub async fn delete_suppression(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let deleted = state
+        .behavior_store
+        .delete_suppression_rule(id)
+        .await
+        .map_err(|e| internal_error("delete suppression", e))?;
+    Ok(Json(serde_json::json!({
+        "success": deleted
     })))
 }
 

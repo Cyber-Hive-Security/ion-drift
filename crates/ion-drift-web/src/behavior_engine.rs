@@ -57,22 +57,84 @@ fn has_policy_match(outcome: &str) -> bool {
     outcome != "policy_unknown"
 }
 
-fn classify_traffic_class(direction: &str) -> &'static str {
+fn classify_traffic_class(direction: &str, protocol: &str, dst_port: Option<i64>) -> &'static str {
+    let is_dhcp = matches!(dst_port, Some(67 | 68));
+    if is_dhcp {
+        return "dhcp_activity";
+    }
+    let is_management_port = matches!(
+        dst_port,
+        Some(22 | 23 | 161 | 162 | 443 | 8291 | 8728 | 8729)
+    );
+    if is_management_port {
+        return "management_protocol";
+    }
+
     match direction {
-        "internal" | "lateral" => "east_west",
-        "outbound" | "inbound" => "north_south",
+        "inbound" => "internet_scan",
+        "lateral" => {
+            if matches!(dst_port, Some(22 | 23 | 445 | 3389)) {
+                "lateral_movement"
+            } else {
+                "internal_service_access"
+            }
+        }
+        "internal" => {
+            if protocol == "arp" {
+                "broadcast_service"
+            } else {
+                "internal_service_access"
+            }
+        }
+        "outbound" => "external_service_access",
         _ => "unknown",
+    }
+}
+
+fn zone_from_vlan_name(vlan_name: &str) -> &'static str {
+    let n = vlan_name.to_ascii_lowercase();
+    if n.contains("guest") {
+        "Guest"
+    } else if n.contains("iot") {
+        "IoT"
+    } else if n.contains("service") || n.contains("server") {
+        "Services"
+    } else if n.contains("manage") || n.contains("admin") {
+        "Management"
+    } else if n.contains("infra") {
+        "Infrastructure"
+    } else {
+        "Trusted"
     }
 }
 
 fn zone_from_vlan(registry: &VlanRegistry, vlan: Option<i64>, ip: &str) -> String {
     if !registry.is_internal_ip(ip) {
-        return "external".to_string();
+        return "WAN".to_string();
     }
     if let Some(v) = vlan {
-        return registry.vlan_name(v);
+        let vlan_name = registry.vlan_name(v);
+        return zone_from_vlan_name(&vlan_name).to_string();
     }
-    "internal".to_string()
+    "Trusted".to_string()
+}
+
+fn escalate_severity(base: &str, boost: i64) -> String {
+    let steps = boost.max(0) as usize;
+    let mut idx = match base {
+        "info" => 0usize,
+        "warning" => 1usize,
+        "alert" => 2usize,
+        "critical" => 3usize,
+        _ => 0usize,
+    };
+    idx = (idx + steps).min(3);
+    match idx {
+        0 => "info".to_string(),
+        1 => "warning".to_string(),
+        2 => "alert".to_string(),
+        _ => "critical".to_string(),
+    }
 }
 
 /// Classify IP to VLAN: known VLAN → that VLAN, external → -1, unknown internal → 0.
@@ -326,7 +388,7 @@ pub async fn detect_anomalies(
                             .has_recent_anomaly(&profile.mac, "volume_spike", &dedup_key, 3600)
                             .await?
                         {
-                            let severity = registry.anomaly_severity(
+                            let base_severity = registry.anomaly_severity(
                                 if vlan >= 0 { vlan as u16 } else { 0 },
                                 "volume_spike",
                             );
@@ -343,8 +405,30 @@ pub async fn detect_anomalies(
                                 &obs.protocol,
                                 obs.dst_port.map(|p| p as u16),
                             );
+                            let traffic_class =
+                                classify_traffic_class(&obs.direction, &obs.protocol, obs.dst_port);
+                            let suppression_action = store
+                                .match_suppression_rule(
+                                    &profile.mac,
+                                    vlan,
+                                    &obs.protocol,
+                                    obs.dst_port,
+                                    traffic_class,
+                                )
+                                .await?;
+                            if matches!(suppression_action.as_deref(), Some("suppress")) {
+                                continue;
+                            }
+                            let priority_boost = store
+                                .get_priority_boost(
+                                    &profile.mac,
+                                    vlan,
+                                    &obs.protocol,
+                                    obs.dst_port,
+                                    traffic_class,
+                                )
+                                .await?;
                             let has_fw = has_policy_match(&fw_corr);
-                            let traffic_class = classify_traffic_class(&obs.direction);
                             let source_zone = zone_from_vlan(registry, Some(vlan), src_ip);
                             let destination_zone = zone_from_vlan(
                                 registry,
@@ -359,6 +443,8 @@ pub async fn detect_anomalies(
                                 has_fw,
                                 vlan_sens,
                             );
+                            let confidence = (confidence + (priority_boost as f64 * 0.05)).min(1.0);
+                            let severity = escalate_severity(base_severity, priority_boost);
                             let details_json = serde_json::json!({
                                 "src_ip": profile.current_ip,
                                 "src_hostname": profile.hostname,
@@ -378,10 +464,10 @@ pub async fn detect_anomalies(
                                 "baseline_avg": baseline.avg_bytes_per_hour,
                                 "elevated_observation_count": elevated_count,
                             });
-                            store.record_anomaly(&NewAnomaly {
+                            let anomaly_id = store.record_anomaly(&NewAnomaly {
                                     mac: profile.mac.clone(),
                                     anomaly_type: "volume_spike".to_string(),
-                                    severity: severity.to_string(),
+                                    severity,
                                     confidence,
                                     description: format!(
                                         "Traffic volume spike to {} ({} {}): {:.0} bytes/hr projected vs {:.0} baseline max / {:.0} baseline avg",
@@ -404,6 +490,13 @@ pub async fn detect_anomalies(
                                     firewall_rule_comment: fw_rule_comment,
                                 })
                                 .await?;
+                            if let Some(action) = suppression_action.as_deref() {
+                                if action == "dismissed" || action == "accepted" {
+                                    let _ = store
+                                        .resolve_anomaly(anomaly_id, action, "system-pattern")
+                                        .await;
+                                }
+                            }
                             anomaly_count += 1;
                         }
                     }
@@ -433,7 +526,7 @@ pub async fn detect_anomalies(
                     .has_recent_anomaly(&profile.mac, anomaly_type, &dedup_key, 3600)
                     .await?
                 {
-                    let severity = registry
+                    let base_severity = registry
                         .anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, anomaly_type);
                     let hostname = profile.hostname.as_deref().unwrap_or(&profile.mac);
                     let dst_vlan_val = registry.ip_to_vlan(
@@ -448,8 +541,30 @@ pub async fn detect_anomalies(
                         &obs.protocol,
                         obs.dst_port.map(|p| p as u16),
                     );
+                    let traffic_class =
+                        classify_traffic_class(&obs.direction, &obs.protocol, obs.dst_port);
+                    let suppression_action = store
+                        .match_suppression_rule(
+                            &profile.mac,
+                            vlan,
+                            &obs.protocol,
+                            obs.dst_port,
+                            traffic_class,
+                        )
+                        .await?;
+                    if matches!(suppression_action.as_deref(), Some("suppress")) {
+                        continue;
+                    }
+                    let priority_boost = store
+                        .get_priority_boost(
+                            &profile.mac,
+                            vlan,
+                            &obs.protocol,
+                            obs.dst_port,
+                            traffic_class,
+                        )
+                        .await?;
                     let has_fw = has_policy_match(&fw_corr);
-                    let traffic_class = classify_traffic_class(&obs.direction);
                     let source_zone = zone_from_vlan(registry, Some(vlan), src_ip);
                     let destination_zone =
                         zone_from_vlan(registry, dst_vlan_val.map(|v| v as i64), &obs.dst_subnet);
@@ -461,6 +576,8 @@ pub async fn detect_anomalies(
                         has_fw,
                         vlan_sens,
                     );
+                    let confidence = (confidence + (priority_boost as f64 * 0.05)).min(1.0);
+                    let severity = escalate_severity(base_severity, priority_boost);
                     let details_json = serde_json::json!({
                         "src_ip": profile.current_ip,
                         "src_hostname": profile.hostname,
@@ -476,11 +593,11 @@ pub async fn detect_anomalies(
                         "source_zone": source_zone,
                         "destination_zone": destination_zone,
                     });
-                    store
+                    let anomaly_id = store
                         .record_anomaly(&NewAnomaly {
                             mac: profile.mac.clone(),
                             anomaly_type: anomaly_type.to_string(),
-                            severity: severity.to_string(),
+                            severity,
                             confidence,
                             description: format!(
                                 "{} from {}: {} {} to {}",
@@ -502,6 +619,13 @@ pub async fn detect_anomalies(
                             firewall_rule_comment: fw_rule_comment,
                         })
                         .await?;
+                    if let Some(action) = suppression_action.as_deref() {
+                        if action == "dismissed" || action == "accepted" {
+                            let _ = store
+                                .resolve_anomaly(anomaly_id, action, "system-pattern")
+                                .await;
+                        }
+                    }
                     anomaly_count += 1;
                 }
             }
@@ -593,7 +717,7 @@ pub async fn detect_blocked_attempts(
             continue;
         }
 
-        let severity =
+        let base_severity =
             registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "blocked_attempt");
 
         // Enrich source context
@@ -641,7 +765,18 @@ pub async fn detect_blocked_attempts(
         };
 
         let traffic_direction = fields.direction.as_deref().unwrap_or("unknown");
-        let traffic_class = classify_traffic_class(traffic_direction);
+        let traffic_class = classify_traffic_class(traffic_direction, protocol, Some(dst_port));
+        let suppression_action = store
+            .match_suppression_rule(&mac, vlan, protocol, Some(dst_port), traffic_class)
+            .await?;
+        if matches!(suppression_action.as_deref(), Some("suppress")) {
+            continue;
+        }
+        let priority_boost = store
+            .get_priority_boost(&mac, vlan, protocol, Some(dst_port), traffic_class)
+            .await?;
+        let severity = escalate_severity(base_severity, priority_boost);
+        let blocked_confidence = (blocked_confidence + (priority_boost as f64 * 0.05)).min(1.0);
         let source_zone = zone_from_vlan(registry, Some(vlan), src_ip);
         let destination_zone = zone_from_vlan(registry, dst_vlan, dst_ip);
         let details_json = serde_json::json!({
@@ -663,11 +798,11 @@ pub async fn detect_blocked_attempts(
             "source_zone": source_zone,
             "destination_zone": destination_zone,
         });
-        store
+        let anomaly_id = store
             .record_anomaly(&NewAnomaly {
                 mac: mac.clone(),
                 anomaly_type: "blocked_attempt".to_string(),
-                severity: severity.to_string(),
+                severity,
                 confidence: blocked_confidence,
                 description: format!(
                     "Blocked {} connection to {dst_ip}:{dst_port}{dst_country} via {protocol}",
@@ -685,6 +820,13 @@ pub async fn detect_blocked_attempts(
                 firewall_rule_comment: None,
             })
             .await?;
+        if let Some(action) = suppression_action.as_deref() {
+            if action == "dismissed" || action == "accepted" {
+                let _ = store
+                    .resolve_anomaly(anomaly_id, action, "system-pattern")
+                    .await;
+            }
+        }
         anomaly_count += 1;
     }
 

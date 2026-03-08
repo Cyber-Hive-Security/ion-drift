@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -472,6 +472,30 @@ pub struct AlertCount {
     pub anomaly_macs: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PatternSuppression {
+    pub id: i64,
+    pub device_id: Option<String>,
+    pub vlan: Option<i64>,
+    pub protocol: Option<String>,
+    pub destination_port: Option<i64>,
+    pub traffic_class: Option<String>,
+    pub action: String,
+    pub created_by: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewPatternSuppression {
+    pub device_id: Option<String>,
+    pub vlan: Option<i64>,
+    pub protocol: Option<String>,
+    pub destination_port: Option<i64>,
+    pub traffic_class: Option<String>,
+    /// One of: suppress, dismissed, accepted
+    pub action: String,
+}
+
 // ── BehaviorStore ────────────────────────────────────────────
 
 pub struct BehaviorStore {
@@ -482,6 +506,46 @@ impl BehaviorStore {
     /// Public timestamp helper for use by the behavior engine.
     pub fn now_unix_pub() -> i64 {
         now_unix()
+    }
+
+    fn pattern_key(
+        device_id: Option<&str>,
+        vlan: Option<i64>,
+        protocol: Option<&str>,
+        destination_port: Option<i64>,
+        traffic_class: Option<&str>,
+    ) -> String {
+        let did = device_id.unwrap_or("*");
+        let v = vlan
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "*".to_string());
+        let p = protocol.unwrap_or("*");
+        let dp = destination_port
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "*".to_string());
+        let tc = traffic_class.unwrap_or("*");
+        format!("{did}|{v}|{p}|{dp}|{tc}")
+    }
+
+    fn parse_pattern_fields(
+        details: Option<&str>,
+    ) -> (Option<String>, Option<i64>, Option<String>) {
+        let Some(raw) = details else {
+            return (None, None, None);
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) else {
+            return (None, None, None);
+        };
+        let protocol = json
+            .get("protocol")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let destination_port = json.get("dst_port").and_then(|v| v.as_i64());
+        let traffic_class = json
+            .get("traffic_class")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        (protocol, destination_port, traffic_class)
     }
 
     pub fn new(db_path: &Path) -> Result<Self, String> {
@@ -568,6 +632,32 @@ impl BehaviorStore {
             CREATE TABLE IF NOT EXISTS scheduler_watermarks (
                 task_name TEXT PRIMARY KEY,
                 last_run INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS anomaly_suppressions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT,
+                vlan INTEGER,
+                protocol TEXT,
+                destination_port INTEGER,
+                traffic_class TEXT,
+                action TEXT NOT NULL DEFAULT 'suppress',
+                created_by TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_anomaly_suppressions_match
+                ON anomaly_suppressions(device_id, vlan, protocol, destination_port, traffic_class);
+
+            CREATE TABLE IF NOT EXISTS anomaly_priority_boosts (
+                pattern_key TEXT PRIMARY KEY,
+                device_id TEXT,
+                vlan INTEGER,
+                protocol TEXT,
+                destination_port INTEGER,
+                traffic_class TEXT,
+                boost INTEGER NOT NULL DEFAULT 1,
                 updated_at INTEGER NOT NULL
             );
             ",
@@ -1014,7 +1104,6 @@ impl BehaviorStore {
                 anomaly.description,
                 anomaly.details,
                 anomaly.vlan,
-                anomaly.confidence,
                 anomaly.firewall_correlation,
                 anomaly.firewall_rule_id,
                 anomaly.firewall_rule_comment,
@@ -1170,6 +1259,20 @@ impl BehaviorStore {
             .map_err(|e| format!("row collect failed: {e}"))
     }
 
+    pub async fn get_anomaly_by_id(&self, id: i64) -> Result<Option<DeviceAnomaly>, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT id, mac, timestamp, anomaly_type, severity, confidence, description, details,
+                    vlan, firewall_correlation, firewall_rule_id, firewall_rule_comment,
+                    status, resolved_at, resolved_by
+             FROM device_anomalies WHERE id = ?1",
+            params![id],
+            Self::map_anomaly_row,
+        )
+        .optional()
+        .map_err(|e| format!("get_anomaly_by_id failed: {e}"))
+    }
+
     pub async fn get_pending_anomaly_counts(&self) -> Result<AlertCount, String> {
         let db = self.db.lock().await;
         let pending: i64 = db
@@ -1228,6 +1331,49 @@ impl BehaviorStore {
         Ok(changed > 0)
     }
 
+    pub async fn apply_operator_feedback(
+        &self,
+        id: i64,
+        status: &str,
+        actor: &str,
+    ) -> Result<(), String> {
+        let Some(anomaly) = self.get_anomaly_by_id(id).await? else {
+            return Ok(());
+        };
+        let (protocol, destination_port, traffic_class) =
+            Self::parse_pattern_fields(anomaly.details.as_deref());
+
+        match status {
+            "accepted" => {
+                self.recompute_baselines(&anomaly.mac, 7 * 86400).await?;
+            }
+            "dismissed" => {
+                let rule = NewPatternSuppression {
+                    device_id: Some(anomaly.mac),
+                    vlan: Some(anomaly.vlan),
+                    protocol,
+                    destination_port,
+                    traffic_class,
+                    action: "suppress".to_string(),
+                };
+                let _ = self.add_suppression_rule(&rule, actor).await?;
+            }
+            "flagged" => {
+                self.bump_priority_boost(
+                    Some(&anomaly.mac),
+                    Some(anomaly.vlan),
+                    protocol.as_deref(),
+                    destination_port,
+                    traffic_class.as_deref(),
+                )
+                .await?;
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
     /// Bulk-update anomaly status for specific IDs.
     pub async fn bulk_resolve_anomalies(
         &self,
@@ -1250,6 +1396,151 @@ impl BehaviorStore {
             updated += changed;
         }
         Ok(updated)
+    }
+
+    pub async fn list_suppression_rules(&self) -> Result<Vec<PatternSuppression>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db
+            .prepare(
+                "SELECT id, device_id, vlan, protocol, destination_port, traffic_class, action, created_by, created_at
+                 FROM anomaly_suppressions ORDER BY created_at DESC, id DESC",
+            )
+            .map_err(|e| format!("list suppressions prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PatternSuppression {
+                    id: row.get(0)?,
+                    device_id: row.get(1)?,
+                    vlan: row.get(2)?,
+                    protocol: row.get(3)?,
+                    destination_port: row.get(4)?,
+                    traffic_class: row.get(5)?,
+                    action: row.get(6)?,
+                    created_by: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            })
+            .map_err(|e| format!("list suppressions query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("list suppressions collect failed: {e}"))
+    }
+
+    pub async fn add_suppression_rule(
+        &self,
+        rule: &NewPatternSuppression,
+        actor: &str,
+    ) -> Result<i64, String> {
+        let action = match rule.action.as_str() {
+            "suppress" | "dismissed" | "accepted" => rule.action.as_str(),
+            _ => return Err("invalid suppression action".to_string()),
+        };
+        let db = self.db.lock().await;
+        let now = now_unix();
+        db.execute(
+            "INSERT INTO anomaly_suppressions
+                (device_id, vlan, protocol, destination_port, traffic_class, action, created_by, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                rule.device_id.as_deref(),
+                rule.vlan,
+                rule.protocol.as_deref(),
+                rule.destination_port,
+                rule.traffic_class.as_deref(),
+                action,
+                actor,
+                now
+            ],
+        )
+        .map_err(|e| format!("add suppression failed: {e}"))?;
+        Ok(db.last_insert_rowid())
+    }
+
+    pub async fn delete_suppression_rule(&self, id: i64) -> Result<bool, String> {
+        let db = self.db.lock().await;
+        let changed = db
+            .execute(
+                "DELETE FROM anomaly_suppressions WHERE id = ?1",
+                params![id],
+            )
+            .map_err(|e| format!("delete suppression failed: {e}"))?;
+        Ok(changed > 0)
+    }
+
+    pub async fn match_suppression_rule(
+        &self,
+        device_id: &str,
+        vlan: i64,
+        protocol: &str,
+        destination_port: Option<i64>,
+        traffic_class: &str,
+    ) -> Result<Option<String>, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT action
+             FROM anomaly_suppressions
+             WHERE (device_id IS NULL OR device_id = ?1)
+               AND (vlan IS NULL OR vlan = ?2)
+               AND (protocol IS NULL OR protocol = ?3)
+               AND (destination_port IS NULL OR destination_port = ?4)
+               AND (traffic_class IS NULL OR traffic_class = ?5)
+             ORDER BY
+               ((CASE WHEN device_id IS NULL THEN 0 ELSE 1 END) +
+                (CASE WHEN vlan IS NULL THEN 0 ELSE 1 END) +
+                (CASE WHEN protocol IS NULL THEN 0 ELSE 1 END) +
+                (CASE WHEN destination_port IS NULL THEN 0 ELSE 1 END) +
+                (CASE WHEN traffic_class IS NULL THEN 0 ELSE 1 END)) DESC,
+               id DESC
+             LIMIT 1",
+            params![device_id, vlan, protocol, destination_port, traffic_class],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("match suppression failed: {e}"))
+    }
+
+    pub async fn bump_priority_boost(
+        &self,
+        device_id: Option<&str>,
+        vlan: Option<i64>,
+        protocol: Option<&str>,
+        destination_port: Option<i64>,
+        traffic_class: Option<&str>,
+    ) -> Result<(), String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        let key = Self::pattern_key(device_id, vlan, protocol, destination_port, traffic_class);
+        db.execute(
+            "INSERT INTO anomaly_priority_boosts
+                (pattern_key, device_id, vlan, protocol, destination_port, traffic_class, boost, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7)
+             ON CONFLICT(pattern_key) DO UPDATE SET boost = boost + 1, updated_at = excluded.updated_at",
+            params![key, device_id, vlan, protocol, destination_port, traffic_class, now],
+        )
+        .map_err(|e| format!("bump priority boost failed: {e}"))?;
+        Ok(())
+    }
+
+    pub async fn get_priority_boost(
+        &self,
+        device_id: &str,
+        vlan: i64,
+        protocol: &str,
+        destination_port: Option<i64>,
+        traffic_class: &str,
+    ) -> Result<i64, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT COALESCE(MAX(boost), 0)
+             FROM anomaly_priority_boosts
+             WHERE (device_id IS NULL OR device_id = ?1)
+               AND (vlan IS NULL OR vlan = ?2)
+               AND (protocol IS NULL OR protocol = ?3)
+               AND (destination_port IS NULL OR destination_port = ?4)
+               AND (traffic_class IS NULL OR traffic_class = ?5)",
+            params![device_id, vlan, protocol, destination_port, traffic_class],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("get priority boost failed: {e}"))
     }
 
     /// Archive reviewed anomalies (accepted/dismissed/flagged/auto_dismissed).
