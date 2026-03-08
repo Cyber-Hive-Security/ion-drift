@@ -1,9 +1,13 @@
+use std::path::PathBuf;
+
 use axum::extract::State;
 use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
+
+use secrecy::ExposeSecret;
 
 use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::secrets;
@@ -357,4 +361,82 @@ pub async fn cert_status(
         renewal_threshold_days: threshold,
         check_interval_hours: interval,
     }))
+}
+
+// ── POST /api/settings/geoip/update ─────────────────────────────
+
+#[derive(Serialize)]
+pub struct UpdateGeoipResponse {
+    downloaded: Vec<String>,
+}
+
+pub async fn update_geoip_databases(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+) -> Result<Json<UpdateGeoipResponse>, Response> {
+    let sm = state.secrets_manager.as_ref().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "secrets manager not enabled" })),
+        )
+            .into_response()
+    })?;
+
+    let sm = sm.read().await;
+    let account_id = sm
+        .decrypt_secret(secrets::SECRET_MAXMIND_ACCOUNT_ID)
+        .await
+        .map_err(|e| internal_error("decrypt maxmind account_id", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "MaxMind account ID not configured" })),
+            )
+                .into_response()
+        })?;
+    let license_key = sm
+        .decrypt_secret(secrets::SECRET_MAXMIND_LICENSE_KEY)
+        .await
+        .map_err(|e| internal_error("decrypt maxmind license_key", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "MaxMind license key not configured" })),
+            )
+                .into_response()
+        })?;
+    drop(sm);
+
+    let geoip_dir = geoip_data_dir();
+
+    // Remove existing files so download_maxmind_databases will re-fetch them
+    for filename in &["GeoLite2-City.mmdb", "GeoLite2-ASN.mmdb"] {
+        let path = geoip_dir.join(filename);
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    let downloaded = crate::geo::download_maxmind_databases(
+        &geoip_dir,
+        account_id.expose_secret(),
+        license_key.expose_secret(),
+    )
+    .await
+    .map_err(|e| internal_error("download MaxMind databases", e))?;
+
+    if !downloaded.is_empty() {
+        state.geo_cache.hot_swap_maxmind(&geoip_dir);
+        tracing::info!(count = downloaded.len(), "MaxMind databases updated via settings API");
+    }
+
+    Ok(Json(UpdateGeoipResponse { downloaded }))
+}
+
+/// Resolve the geoip data directory (same logic as main.rs).
+fn geoip_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ion-drift")
+        .join("geoip")
 }

@@ -716,6 +716,19 @@ export function useGeoIpStatus() {
   });
 }
 
+export function useUpdateGeoipDatabases() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ downloaded: string[] }>("/api/settings/geoip/update", {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "geoip"] });
+    },
+  });
+}
+
 export function useMapConfig() {
   return useQuery({
     queryKey: ["settings", "map-config"],

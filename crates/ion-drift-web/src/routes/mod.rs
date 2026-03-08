@@ -394,6 +394,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/settings/cert", get(settings::cert_status))
         .route("/settings/syslog", get(connections::syslog_status))
         .route("/settings/geoip", get(connections::geoip_status))
+        .route("/settings/geoip/update", post(settings::update_geoip_databases))
         // Devices (CRUD)
         .route(
             "/devices",

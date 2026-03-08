@@ -32,6 +32,7 @@ import {
   useAlertStatus,
   useMonitoredRegions,
   useUpdateMonitoredRegions,
+  useUpdateGeoipDatabases,
 } from "@/api/queries";
 import type { CreateDeviceRequest, TestConnectionRequest, UpdateDeviceRequest, VlanConfig, AlertRule } from "@/api/types";
 import {
@@ -1260,6 +1261,7 @@ add action=ion-drift topics=firewall`}
 
 function GeoIpSection() {
   const { data, isLoading } = useGeoIpStatus();
+  const updateMutation = useUpdateGeoipDatabases();
 
   if (isLoading) return <LoadingSpinner />;
   if (!data) return null;
@@ -1301,13 +1303,34 @@ function GeoIpSection() {
             )}
           </div>
         </div>
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">Fallback</span>
-          <span className="text-sm">ip-api.com (rate-limited)</span>
-        </div>
+        {data.has_credentials && (
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-sm text-muted-foreground">
+              {data.has_maxmind ? "Re-download latest databases" : "Download databases"}
+            </span>
+            <button
+              onClick={() => updateMutation.mutate()}
+              disabled={updateMutation.isPending}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${updateMutation.isPending ? "animate-spin" : ""}`} />
+              {updateMutation.isPending ? "Downloading…" : "Update GeoIP"}
+            </button>
+          </div>
+        )}
+        {updateMutation.isSuccess && (
+          <p className="text-xs text-success">
+            Updated: {updateMutation.data.downloaded.join(", ")}
+          </p>
+        )}
+        {updateMutation.isError && (
+          <p className="text-xs text-destructive">
+            {(updateMutation.error as Error)?.message || "Download failed"}
+          </p>
+        )}
         {!data.has_credentials && (
           <p className="text-xs text-muted-foreground mt-2">
-            Add MaxMind Account ID and License Key in the Encrypted Secrets section above to enable auto-download.
+            Add MaxMind Account ID and License Key in the Encrypted Secrets section above to enable GeoIP.
             Free account required &mdash;{" "}
             <a
               href="https://www.maxmind.com/en/geolite2/signup"
@@ -1317,13 +1340,6 @@ function GeoIpSection() {
             >
               sign up at maxmind.com
             </a>
-          </p>
-        )}
-        {!data.has_maxmind && data.has_credentials && (
-          <p className="text-xs text-muted-foreground mt-2">
-            Credentials configured. Place GeoLite2-City.mmdb and GeoLite2-ASN.mmdb in the{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-xs">data/geoip/</code>{" "}
-            directory, or restart to trigger auto-download.
           </p>
         )}
       </div>
