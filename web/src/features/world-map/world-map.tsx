@@ -167,7 +167,7 @@ export function WorldMap({
       minCount: counts.length > 0 ? Math.min(...counts) : 1,
       maxCount: counts.length > 0 ? Math.max(...counts) : 1,
     };
-  }, [data]);
+  }, [data, homeCountry]);
 
   // City dot scaling ranges
   const { minCityCount, maxCityCount, minCityBytes, maxCityBytes } = useMemo(() => {
@@ -594,9 +594,9 @@ export function WorldMap({
       renderMap(worldTopoRef.current);
     } else {
       d3.json<Topology>("/world-110m.json").then((world) => {
-        if (!world || cancelled) return;
+        if (!world) return;
         worldTopoRef.current = world;
-        renderMap(world);
+        if (!cancelled) renderMap(world);
       });
     }
 

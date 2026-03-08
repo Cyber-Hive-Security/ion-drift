@@ -403,7 +403,7 @@ impl ConnectionStore {
 
             let flagged = geo
                 .as_ref()
-                .map(|g| GeoCache::is_flagged(&g.country_code))
+                .map(|g| geo_cache.is_flagged(&g.country_code))
                 .unwrap_or(false);
 
             db.execute(
@@ -561,7 +561,7 @@ impl ConnectionStore {
 
             let flagged = geo
                 .as_ref()
-                .map(|g| GeoCache::is_flagged(&g.country_code))
+                .map(|g| geo_cache.is_flagged(&g.country_code))
                 .unwrap_or(false);
 
             db.execute(

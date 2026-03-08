@@ -3,7 +3,6 @@ use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::geo::GeoCache;
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 use super::{api_error, internal_error};
@@ -67,7 +66,7 @@ pub async fn drops(
         let mut entries: Vec<DropCountryEntry> = country_counts
             .into_iter()
             .map(|(code, (name, count))| DropCountryEntry {
-                flagged: GeoCache::is_flagged(&code),
+                flagged: state.geo_cache.is_flagged(&code),
                 code,
                 name,
                 count,

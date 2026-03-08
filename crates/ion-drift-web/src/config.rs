@@ -174,6 +174,18 @@ pub struct ServerSection {
     pub home_lat: Option<f64>,
     /// Home country ISO 3166-1 alpha-2 code (e.g. "US"). Optional.
     pub home_country: Option<String>,
+    /// Countries flagged for security monitoring (ISO 3166-1 alpha-2 codes).
+    /// Connections to these countries will be marked as flagged.
+    /// Default: ["RU", "CN", "IR", "KP", "VE", "BY", "SY", "CU"]
+    #[serde(default = "default_warning_countries")]
+    pub warning_countries: Vec<String>,
+}
+
+fn default_warning_countries() -> Vec<String> {
+    vec![
+        "RU".into(), "CN".into(), "IR".into(), "KP".into(),
+        "VE".into(), "BY".into(), "SY".into(), "CU".into(),
+    ]
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

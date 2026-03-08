@@ -213,11 +213,11 @@ fn parse_firewall_message(msg: &str, geo_cache: &GeoCache, oui_db: &OuiDb) -> Op
     let dst_country = dst_ip.as_deref().and_then(|ip| geo_cache.lookup_cached(ip));
     let src_flagged = src_country
         .as_ref()
-        .map(|c| GeoCache::is_flagged(&c.country_code))
+        .map(|c| geo_cache.is_flagged(&c.country_code))
         .unwrap_or(false);
     let dst_flagged = dst_country
         .as_ref()
-        .map(|c| GeoCache::is_flagged(&c.country_code))
+        .map(|c| geo_cache.is_flagged(&c.country_code))
         .unwrap_or(false);
 
     // OUI lookup

@@ -7,7 +7,7 @@ use crate::connection_store::{
     CitySummaryEntry, ClassifiedPortSummary, ConnectionHistoryStats, GeoSummaryEntry,
     HistoryFilters, PaginatedHistory, PortBaselineStatus, PortSummaryEntry,
 };
-use crate::geo::{GeoCache, GeoInfo};
+use crate::geo::GeoInfo;
 use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 use super::{api_error, internal_error};
@@ -66,11 +66,11 @@ pub async fn summary(
                 let dst_ip = c.dst_address.as_deref();
                 let src_flagged = src_ip
                     .and_then(|ip| state.geo_cache.lookup_cached(ip))
-                    .map(|g| GeoCache::is_flagged(&g.country_code))
+                    .map(|g| state.geo_cache.is_flagged(&g.country_code))
                     .unwrap_or(false);
                 let dst_flagged = dst_ip
                     .and_then(|ip| state.geo_cache.lookup_cached(ip))
-                    .map(|g| GeoCache::is_flagged(&g.country_code))
+                    .map(|g| state.geo_cache.is_flagged(&g.country_code))
                     .unwrap_or(false);
                 src_flagged || dst_flagged
             })
@@ -186,11 +186,11 @@ pub async fn page(
 
             let flagged = src_geo
                 .as_ref()
-                .map(|g| GeoCache::is_flagged(&g.country_code))
+                .map(|g| state.geo_cache.is_flagged(&g.country_code))
                 .unwrap_or(false)
                 || dst_geo
                     .as_ref()
-                    .map(|g| GeoCache::is_flagged(&g.country_code))
+                    .map(|g| state.geo_cache.is_flagged(&g.country_code))
                     .unwrap_or(false);
 
             if flagged {

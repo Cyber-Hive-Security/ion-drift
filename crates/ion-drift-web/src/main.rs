@@ -313,7 +313,11 @@ async fn main() -> anyhow::Result<()> {
     let geoip_dir = data_dir.join("geoip");
     std::fs::create_dir_all(&geoip_dir)?;
     let geo_cache = std::sync::Arc::new(
-        geo::GeoCache::new(&data_dir.join("geo.db"), Some(&geoip_dir))
+        geo::GeoCache::new(
+            &data_dir.join("geo.db"),
+            Some(&geoip_dir),
+            config.server.warning_countries.clone(),
+        )
             .map_err(|e| anyhow::anyhow!("failed to init geo cache: {e}"))?,
     );
 

@@ -21,6 +21,8 @@ pub struct MapConfigResponse {
     pub home_lat: Option<f64>,
     /// Home country ISO 3166-1 alpha-2 code, if configured.
     pub home_country: Option<String>,
+    /// Countries flagged for security monitoring (ISO 3166-1 alpha-2 codes).
+    pub warning_countries: Vec<String>,
 }
 
 pub async fn map_config(
@@ -31,6 +33,7 @@ pub async fn map_config(
         home_lon: state.config.server.home_lon,
         home_lat: state.config.server.home_lat,
         home_country: state.config.server.home_country.clone(),
+        warning_countries: state.config.server.warning_countries.clone(),
     })
 }
 

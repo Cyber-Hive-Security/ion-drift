@@ -1143,10 +1143,13 @@ export function ConnectionsPage() {
   const [timeRange, setTimeRange] = useState<TimeRange>("7");
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
   const mapConfig = useMapConfig();
-  const home: [number, number] | null =
-    mapConfig.data?.home_lon != null && mapConfig.data?.home_lat != null
-      ? [mapConfig.data.home_lon, mapConfig.data.home_lat]
-      : null;
+  const home = useMemo<[number, number] | null>(
+    () =>
+      mapConfig.data?.home_lon != null && mapConfig.data?.home_lat != null
+        ? [mapConfig.data.home_lon, mapConfig.data.home_lat]
+        : null,
+    [mapConfig.data?.home_lon, mapConfig.data?.home_lat],
+  );
   const homeCountry = mapConfig.data?.home_country ?? null;
   const geoSummary = useGeoSummary(Number(timeRange));
   const citySummary = useCitySummary(Number(timeRange), 50);

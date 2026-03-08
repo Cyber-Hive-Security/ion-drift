@@ -16,9 +16,6 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-/// Countries flagged for security monitoring.
-const FLAGGED_COUNTRIES: &[&str] = &["RU", "CN", "IR", "KP", "VE", "BY", "SY", "CU"];
-
 /// Cache entries older than this are considered stale.
 const CACHE_TTL_SECS: i64 = 7 * 86400; // 7 days
 
@@ -179,12 +176,15 @@ pub struct GeoCache {
     db: Mutex<rusqlite::Connection>,
     /// HTTP client for ip-api.com batch requests.
     http_client: reqwest::Client,
+    /// Countries flagged for security monitoring (uppercase ISO 3166-1 alpha-2).
+    flagged_countries: std::collections::HashSet<String>,
 }
 
 impl GeoCache {
     /// Create a new GeoCache backed by a SQLite database at the given path.
     /// Optionally loads MaxMind databases if the directory contains them.
-    pub fn new(db_path: &Path, mmdb_dir: Option<&Path>) -> anyhow::Result<Self> {
+    /// `warning_countries` overrides the default flagged-country list (uppercase ISO codes).
+    pub fn new(db_path: &Path, mmdb_dir: Option<&Path>, warning_countries: Vec<String>) -> anyhow::Result<Self> {
         let conn = rusqlite::Connection::open(db_path)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -202,6 +202,7 @@ impl GeoCache {
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
                 .build()?,
+            flagged_countries: warning_countries.into_iter().collect(),
         };
 
         // Try to load MaxMind databases if directory provided
@@ -391,8 +392,8 @@ impl GeoCache {
     }
 
     /// Check whether a country code is in the flagged list.
-    pub fn is_flagged(code: &str) -> bool {
-        FLAGGED_COUNTRIES.contains(&code)
+    pub fn is_flagged(&self, code: &str) -> bool {
+        self.flagged_countries.contains(code)
     }
 }
 
