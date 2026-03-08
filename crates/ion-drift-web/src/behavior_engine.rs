@@ -7,11 +7,10 @@
 use std::collections::HashMap;
 
 use ion_drift_storage::behavior::{
-    self, BehaviorStore, DeviceObservation, NewAnomaly, VlanRegistry,
-    compute_confidence,
+    self, BehaviorStore, DeviceObservation, NewAnomaly, VlanRegistry, compute_confidence,
 };
-use mikrotik_core::resources::firewall::FilterRule;
 use mikrotik_core::MikrotikClient;
+use mikrotik_core::resources::firewall::FilterRule;
 use tokio::sync::RwLock;
 
 use crate::geo::GeoCache;
@@ -54,13 +53,34 @@ fn normalize_protocol(proto: &str) -> &'static str {
     }
 }
 
+fn has_policy_match(outcome: &str) -> bool {
+    outcome != "policy_unknown"
+}
+
+fn classify_traffic_class(direction: &str) -> &'static str {
+    match direction {
+        "internal" | "lateral" => "east_west",
+        "outbound" | "inbound" => "north_south",
+        _ => "unknown",
+    }
+}
+
+fn zone_from_vlan(registry: &VlanRegistry, vlan: Option<i64>, ip: &str) -> String {
+    if !registry.is_internal_ip(ip) {
+        return "external".to_string();
+    }
+    if let Some(v) = vlan {
+        return registry.vlan_name(v);
+    }
+    "internal".to_string()
+}
 
 /// Classify IP to VLAN: known VLAN → that VLAN, external → -1, unknown internal → 0.
 fn classify_vlan(registry: &VlanRegistry, ip: &str) -> i64 {
     match registry.ip_to_vlan(ip) {
         Some(v) => v as i64,
         None if !registry.is_internal_ip(ip) => -1, // WAN / External
-        None => 0,                                    // Unclassified internal
+        None => 0,                                  // Unclassified internal
     }
 }
 
@@ -75,10 +95,7 @@ pub async fn collect_observations(
     registry: &VlanRegistry,
 ) -> Result<usize, String> {
     // Fetch ARP + DHCP concurrently
-    let (arp_result, dhcp_result) = tokio::join!(
-        client.arp_table(),
-        client.dhcp_leases(),
-    );
+    let (arp_result, dhcp_result) = tokio::join!(client.arp_table(), client.dhcp_leases(),);
     let arp_entries = arp_result.map_err(|e| format!("ARP fetch failed: {e}"))?;
     let dhcp_leases = dhcp_result.map_err(|e| format!("DHCP fetch failed: {e}"))?;
 
@@ -96,7 +113,9 @@ pub async fn collect_observations(
     }
     for arp in &arp_entries {
         if let Some(ref mac) = arp.mac_address {
-            ip_to_mac.entry(arp.address.clone()).or_insert_with(|| mac.to_uppercase());
+            ip_to_mac
+                .entry(arp.address.clone())
+                .or_insert_with(|| mac.to_uppercase());
         }
     }
 
@@ -105,7 +124,10 @@ pub async fn collect_observations(
         let hostname = ip_to_hostname.get(ip).map(|s| s.as_str());
         let manufacturer = oui_db.lookup(mac).map(|s| s.to_string());
         let vlan = classify_vlan(registry, ip);
-        if let Err(e) = store.upsert_profile(mac, hostname, manufacturer.as_deref(), ip, vlan).await {
+        if let Err(e) = store
+            .upsert_profile(mac, hostname, manufacturer.as_deref(), ip, vlan)
+            .await
+        {
             tracing::debug!(mac, error = %e, "profile upsert failed");
         }
     }
@@ -119,8 +141,10 @@ pub async fn collect_observations(
     let now = behavior::BehaviorStore::now_unix_pub();
 
     // Group connections by source MAC
-    let mut observations: HashMap<String, HashMap<(String, Option<i64>, String, String), (i64, i64, i64)>> =
-        HashMap::new();
+    let mut observations: HashMap<
+        String,
+        HashMap<(String, Option<i64>, String, String), (i64, i64, i64)>,
+    > = HashMap::new();
 
     for conn in &connections {
         let src_addr = match conn.src_address.as_deref() {
@@ -134,10 +158,7 @@ pub async fn collect_observations(
 
         let src_ip = src_addr;
         let dst_ip = dst_addr;
-        let dst_port: Option<u16> = conn
-            .dst_port
-            .as_deref()
-            .and_then(|p| p.parse().ok());
+        let dst_port: Option<u16> = conn.dst_port.as_deref().and_then(|p| p.parse().ok());
 
         // Look up source MAC
         let mac = match ip_to_mac.get(src_ip) {
@@ -177,7 +198,9 @@ pub async fn collect_observations(
             .unwrap_or_default();
         let vlan = classify_vlan(registry, &ip);
 
-        for ((protocol, dst_port, dst_subnet, direction), (bytes_sent, bytes_recv, conn_count)) in flows {
+        for ((protocol, dst_port, dst_subnet, direction), (bytes_sent, bytes_recv, conn_count)) in
+            flows
+        {
             obs_records.push(DeviceObservation {
                 mac: mac.clone(),
                 timestamp: now,
@@ -226,10 +249,23 @@ pub async fn detect_anomalies(
         }
 
         // Build baseline lookup
-        let baseline_map: HashMap<(String, Option<i64>, String, String), &ion_drift_storage::behavior::DeviceBaseline> =
-            baselines.iter().map(|b| {
-                ((b.protocol.clone(), b.dst_port, b.dst_subnet.clone(), b.direction.clone()), b)
-            }).collect();
+        let baseline_map: HashMap<
+            (String, Option<i64>, String, String),
+            &ion_drift_storage::behavior::DeviceBaseline,
+        > = baselines
+            .iter()
+            .map(|b| {
+                (
+                    (
+                        b.protocol.clone(),
+                        b.dst_port,
+                        b.dst_subnet.clone(),
+                        b.direction.clone(),
+                    ),
+                    b,
+                )
+            })
+            .collect();
 
         // Get last 120s of observations
         let recent_obs = store.get_observations(&profile.mac, 120).await?;
@@ -290,14 +326,28 @@ pub async fn detect_anomalies(
                             .has_recent_anomaly(&profile.mac, "volume_spike", &dedup_key, 3600)
                             .await?
                         {
-                            let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "volume_spike");
-                            let dst_vlan_val = registry.ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
+                            let severity = registry.anomaly_severity(
+                                if vlan >= 0 { vlan as u16 } else { 0 },
+                                "volume_spike",
+                            );
+                            let dst_vlan_val =
+                                registry
+                                    .ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| {
+                                        c == '/' || c.is_ascii_digit()
+                                    }));
                             let src_ip = profile.current_ip.as_deref().unwrap_or("");
                             let (fw_corr, fw_rule_id, fw_rule_comment) = correlate_with_firewall(
-                                firewall_rules, src_ip, &obs.dst_subnet,
-                                &obs.protocol, obs.dst_port.map(|p| p as u16),
+                                firewall_rules,
+                                src_ip,
+                                &obs.dst_subnet,
+                                &obs.protocol,
+                                obs.dst_port.map(|p| p as u16),
                             );
-                            let has_fw = fw_corr != "no_match";
+                            let has_fw = has_policy_match(&fw_corr);
+                            let traffic_class = classify_traffic_class(&obs.direction);
+                            let source_zone = zone_from_vlan(registry, Some(vlan), src_ip);
+                            let destination_zone =
+                                zone_from_vlan(registry, dst_vlan_val, &obs.dst_subnet);
                             let confidence = compute_confidence(
                                 "volume_spike",
                                 &profile.baseline_status,
@@ -306,8 +356,26 @@ pub async fn detect_anomalies(
                                 has_fw,
                                 vlan_sens,
                             );
-                            store
-                                .record_anomaly(&NewAnomaly {
+                            let details_json = serde_json::json!({
+                                "src_ip": profile.current_ip,
+                                "src_hostname": profile.hostname,
+                                "src_manufacturer": profile.manufacturer,
+                                "dst_subnet": obs.dst_subnet,
+                                "dst_vlan": dst_vlan_val,
+                                "dst_vlan_name": dst_vlan_val.map(|v| registry.vlan_name(v as i64)),
+                                "protocol": obs.protocol,
+                                "dst_port": obs.dst_port,
+                                "direction": obs.direction,
+                                "policy_outcome": fw_corr,
+                                "traffic_class": traffic_class,
+                                "source_zone": source_zone,
+                                "destination_zone": destination_zone,
+                                "projected_hourly": hourly_projected,
+                                "baseline_max": baseline.max_bytes_per_hour,
+                                "baseline_avg": baseline.avg_bytes_per_hour,
+                                "elevated_observation_count": elevated_count,
+                            });
+                            store.record_anomaly(&NewAnomaly {
                                     mac: profile.mac.clone(),
                                     anomaly_type: "volume_spike".to_string(),
                                     severity: severity.to_string(),
@@ -321,23 +389,14 @@ pub async fn detect_anomalies(
                                         baseline.max_bytes_per_hour,
                                         baseline.avg_bytes_per_hour,
                                     ),
-                                    details: Some(serde_json::json!({
-                                        "src_ip": profile.current_ip,
-                                        "src_hostname": profile.hostname,
-                                        "src_manufacturer": profile.manufacturer,
-                                        "dst_subnet": obs.dst_subnet,
-                                        "dst_vlan": dst_vlan_val,
-                                        "dst_vlan_name": dst_vlan_val.map(|v| registry.vlan_name(v as i64)),
-                                        "protocol": obs.protocol,
-                                        "dst_port": obs.dst_port,
-                                        "direction": obs.direction,
-                                        "projected_hourly": hourly_projected,
-                                        "baseline_max": baseline.max_bytes_per_hour,
-                                        "baseline_avg": baseline.avg_bytes_per_hour,
-                                        "elevated_observation_count": elevated_count,
-                                    }).to_string()),
+                                    details: Some(details_json.to_string()),
                                     vlan,
-                                    firewall_correlation: Some(fw_corr),
+                                    firewall_correlation: Some(
+                                        details_json["policy_outcome"]
+                                            .as_str()
+                                            .unwrap_or("policy_unknown")
+                                            .to_string()
+                                    ),
                                     firewall_rule_id: fw_rule_id,
                                     firewall_rule_comment: fw_rule_comment,
                                 })
@@ -371,15 +430,25 @@ pub async fn detect_anomalies(
                     .has_recent_anomaly(&profile.mac, anomaly_type, &dedup_key, 3600)
                     .await?
                 {
-                    let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, anomaly_type);
+                    let severity = registry
+                        .anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, anomaly_type);
                     let hostname = profile.hostname.as_deref().unwrap_or(&profile.mac);
-                    let dst_vlan_val = registry.ip_to_vlan(obs.dst_subnet.trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()));
+                    let dst_vlan_val = registry.ip_to_vlan(
+                        obs.dst_subnet
+                            .trim_end_matches(|c: char| c == '/' || c.is_ascii_digit()),
+                    );
                     let src_ip = profile.current_ip.as_deref().unwrap_or("");
                     let (fw_corr, fw_rule_id, fw_rule_comment) = correlate_with_firewall(
-                        firewall_rules, src_ip, &obs.dst_subnet,
-                        &obs.protocol, obs.dst_port.map(|p| p as u16),
+                        firewall_rules,
+                        src_ip,
+                        &obs.dst_subnet,
+                        &obs.protocol,
+                        obs.dst_port.map(|p| p as u16),
                     );
-                    let has_fw = fw_corr != "no_match";
+                    let has_fw = has_policy_match(&fw_corr);
+                    let traffic_class = classify_traffic_class(&obs.direction);
+                    let source_zone = zone_from_vlan(registry, Some(vlan), src_ip);
+                    let destination_zone = zone_from_vlan(registry, dst_vlan_val, &obs.dst_subnet);
                     let confidence = compute_confidence(
                         anomaly_type,
                         &profile.baseline_status,
@@ -388,6 +457,21 @@ pub async fn detect_anomalies(
                         has_fw,
                         vlan_sens,
                     );
+                    let details_json = serde_json::json!({
+                        "src_ip": profile.current_ip,
+                        "src_hostname": profile.hostname,
+                        "src_manufacturer": profile.manufacturer,
+                        "dst_subnet": obs.dst_subnet,
+                        "dst_vlan": dst_vlan_val,
+                        "dst_vlan_name": dst_vlan_val.map(|v| registry.vlan_name(v as i64)),
+                        "protocol": obs.protocol,
+                        "dst_port": obs.dst_port,
+                        "direction": obs.direction,
+                        "policy_outcome": fw_corr,
+                        "traffic_class": traffic_class,
+                        "source_zone": source_zone,
+                        "destination_zone": destination_zone,
+                    });
                     store
                         .record_anomaly(&NewAnomaly {
                             mac: profile.mac.clone(),
@@ -402,19 +486,14 @@ pub async fn detect_anomalies(
                                 obs.dst_port.map(|p| p.to_string()).unwrap_or_default(),
                                 obs.dst_subnet,
                             ),
-                            details: Some(serde_json::json!({
-                                "src_ip": profile.current_ip,
-                                "src_hostname": profile.hostname,
-                                "src_manufacturer": profile.manufacturer,
-                                "dst_subnet": obs.dst_subnet,
-                                "dst_vlan": dst_vlan_val,
-                                "dst_vlan_name": dst_vlan_val.map(|v| registry.vlan_name(v as i64)),
-                                "protocol": obs.protocol,
-                                "dst_port": obs.dst_port,
-                                "direction": obs.direction,
-                            }).to_string()),
+                            details: Some(details_json.to_string()),
                             vlan,
-                            firewall_correlation: Some(fw_corr),
+                            firewall_correlation: Some(
+                                details_json["policy_outcome"]
+                                    .as_str()
+                                    .unwrap_or("policy_unknown")
+                                    .to_string(),
+                            ),
                             firewall_rule_id: fw_rule_id,
                             firewall_rule_comment: fw_rule_comment,
                         })
@@ -447,10 +526,7 @@ pub async fn detect_blocked_attempts(
     let mut anomaly_count = 0;
 
     // Fetch ARP + DHCP for MAC/hostname lookup
-    let (arp_result, dhcp_result) = tokio::join!(
-        client.arp_table(),
-        client.dhcp_leases(),
-    );
+    let (arp_result, dhcp_result) = tokio::join!(client.arp_table(), client.dhcp_leases(),);
     let arp_entries = arp_result.map_err(|e| format!("ARP fetch failed: {e}"))?;
     let dhcp_leases = dhcp_result.map_err(|e| format!("DHCP fetch failed: {e}"))?;
 
@@ -466,7 +542,9 @@ pub async fn detect_blocked_attempts(
     }
     for arp in &arp_entries {
         if let Some(ref m) = arp.mac_address {
-            ip_to_mac.entry(arp.address.clone()).or_insert_with(|| m.to_uppercase());
+            ip_to_mac
+                .entry(arp.address.clone())
+                .or_insert_with(|| m.to_uppercase());
         }
     }
 
@@ -511,7 +589,8 @@ pub async fn detect_blocked_attempts(
             continue;
         }
 
-        let severity = registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "blocked_attempt");
+        let severity =
+            registry.anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, "blocked_attempt");
 
         // Enrich source context
         let src_hostname = ip_to_hostname.get(src_ip).cloned();
@@ -557,6 +636,29 @@ pub async fn detect_blocked_attempts(
             )
         };
 
+        let traffic_direction = fields.direction.as_deref().unwrap_or("unknown");
+        let traffic_class = classify_traffic_class(traffic_direction);
+        let source_zone = zone_from_vlan(registry, Some(vlan), src_ip);
+        let destination_zone = zone_from_vlan(registry, dst_vlan, dst_ip);
+        let details_json = serde_json::json!({
+            "src_ip": src_ip,
+            "src_hostname": src_hostname,
+            "src_manufacturer": src_manufacturer,
+            "dst_ip": dst_ip,
+            "dst_port": dst_port,
+            "dst_hostname": dst_hostname,
+            "dst_vlan": dst_vlan,
+            "dst_vlan_name": dst_vlan_name,
+            "protocol": protocol,
+            "direction": fields.direction,
+            "in_interface": fields.in_interface,
+            "dst_country": fields.dst_country,
+            "dst_subnet": dedup_key,
+            "policy_outcome": "expected_deny",
+            "traffic_class": traffic_class,
+            "source_zone": source_zone,
+            "destination_zone": destination_zone,
+        });
         store
             .record_anomaly(&NewAnomaly {
                 mac: mac.clone(),
@@ -567,23 +669,14 @@ pub async fn detect_blocked_attempts(
                     "Blocked {} connection to {dst_ip}:{dst_port}{dst_country} via {protocol}",
                     fields.direction.as_deref().unwrap_or("unknown"),
                 ),
-                details: Some(serde_json::json!({
-                    "src_ip": src_ip,
-                    "src_hostname": src_hostname,
-                    "src_manufacturer": src_manufacturer,
-                    "dst_ip": dst_ip,
-                    "dst_port": dst_port,
-                    "dst_hostname": dst_hostname,
-                    "dst_vlan": dst_vlan,
-                    "dst_vlan_name": dst_vlan_name,
-                    "protocol": protocol,
-                    "direction": fields.direction,
-                    "in_interface": fields.in_interface,
-                    "dst_country": fields.dst_country,
-                    "dst_subnet": dedup_key,
-                }).to_string()),
+                details: Some(details_json.to_string()),
                 vlan,
-                firewall_correlation: Some("blocked_attempting".to_string()),
+                firewall_correlation: Some(
+                    details_json["policy_outcome"]
+                        .as_str()
+                        .unwrap_or("expected_deny")
+                        .to_string(),
+                ),
                 firewall_rule_id: None,
                 firewall_rule_comment: None,
             })
@@ -612,9 +705,14 @@ fn cidr_matches(spec: &str, ip: &str) -> bool {
         if net_octets.len() != 4 || ip_octets.len() != 4 {
             return false;
         }
-        let net_u32 = u32::from_be_bytes([net_octets[0], net_octets[1], net_octets[2], net_octets[3]]);
+        let net_u32 =
+            u32::from_be_bytes([net_octets[0], net_octets[1], net_octets[2], net_octets[3]]);
         let ip_u32 = u32::from_be_bytes([ip_octets[0], ip_octets[1], ip_octets[2], ip_octets[3]]);
-        let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
+        let mask = if prefix_len == 0 {
+            0
+        } else {
+            !0u32 << (32 - prefix_len)
+        };
         return (net_u32 & mask) == (ip_u32 & mask);
     }
     false
@@ -690,9 +788,9 @@ pub fn correlate_with_firewall(
 
         // Matched — determine correlation type
         let correlation = match rule.action.as_str() {
-            "accept" | "passthrough" => "expected",
-            "drop" | "reject" => "blocked_attempting",
-            _ => "expected",
+            "accept" | "passthrough" => "expected_allow",
+            "drop" | "reject" => "expected_deny",
+            _ => "policy_unknown",
         };
 
         return (
@@ -702,7 +800,7 @@ pub fn correlate_with_firewall(
         );
     }
 
-    ("no_match".to_string(), None, None)
+    ("policy_unknown".to_string(), None, None)
 }
 
 /// Refresh firewall rules cache if stale (>5 minutes).

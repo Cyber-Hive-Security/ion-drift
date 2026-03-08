@@ -1,12 +1,13 @@
 //! Behavior API endpoints — device fingerprinting, baselines, anomalies.
 
 use axum::extract::{Path, Query, State};
-use axum::response::{Json, Response};
+use axum::http::{HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
 use serde::{Deserialize, Serialize};
 
+use super::internal_error;
 use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
-use super::internal_error;
 
 // ── Request / Response types ─────────────────────────────────
 
@@ -21,6 +22,12 @@ pub struct AnomalyQueryParams {
 #[derive(Deserialize)]
 pub struct ResolveRequest {
     pub action: String,
+}
+
+#[derive(Deserialize)]
+pub struct BulkActionRequest {
+    pub action: String,
+    pub ids: Option<Vec<i64>>,
 }
 
 #[derive(Serialize)]
@@ -112,7 +119,8 @@ pub async fn device_detail(
                 let protocol = json.get("protocol").and_then(|v| v.as_str());
                 let dst_port = json.get("dst_port").and_then(|v| v.as_i64());
                 if let (Some(proto), Some(port)) = (protocol, dst_port) {
-                    if let Ok(Some(ctx)) = state.connection_store.get_port_flow_context(proto, port) {
+                    if let Ok(Some(ctx)) = state.connection_store.get_port_flow_context(proto, port)
+                    {
                         port_flow_contexts.push(ctx);
                     }
                 }
@@ -158,7 +166,10 @@ pub async fn resolve_anomaly(
     if !valid_actions.contains(&body.action.as_str()) {
         return Err(internal_error(
             "resolve anomaly",
-            format!("invalid action '{}', must be one of: accepted, flagged, dismissed", body.action),
+            format!(
+                "invalid action '{}', must be one of: accepted, flagged, dismissed",
+                body.action
+            ),
         ));
     }
 
@@ -174,6 +185,142 @@ pub async fn resolve_anomaly(
         "id": id,
         "action": body.action,
     })))
+}
+
+/// POST /api/behavior/anomalies/bulk
+pub async fn bulk_resolve_anomalies(
+    RequireAdmin(session): RequireAdmin,
+    State(state): State<AppState>,
+    Json(body): Json<BulkActionRequest>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let actor = &session.username;
+    let updated = match body.action.as_str() {
+        "accepted" | "dismissed" | "flagged" => {
+            let ids = body.ids.as_deref().unwrap_or(&[]);
+            state
+                .behavior_store
+                .bulk_resolve_anomalies(ids, &body.action, actor)
+                .await
+                .map_err(|e| internal_error("bulk resolve anomalies", e))?
+        }
+        "archive_reviewed" => state
+            .behavior_store
+            .archive_reviewed(actor)
+            .await
+            .map_err(|e| internal_error("archive reviewed anomalies", e))?,
+        "delete_archived" => state
+            .behavior_store
+            .delete_archived()
+            .await
+            .map_err(|e| internal_error("delete archived anomalies", e))?,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "invalid bulk action; expected accepted|dismissed|flagged|archive_reviewed|delete_archived"
+                })),
+            )
+                .into_response());
+        }
+    };
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "action": body.action,
+        "updated": updated
+    })))
+}
+
+/// GET /api/behavior/anomalies/export.csv
+pub async fn export_anomalies_csv(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(params): Query<AnomalyQueryParams>,
+) -> Result<Response, Response> {
+    let rows = state
+        .behavior_store
+        .get_anomalies(
+            params.status.as_deref(),
+            params.severity.as_deref(),
+            params.vlan,
+            params.limit.or(Some(10_000)),
+        )
+        .await
+        .map_err(|e| internal_error("export anomalies", e))?;
+
+    let mut csv = String::from(
+        "severity,device,device_mac,device_ip,anomaly_type,flow,vlan,confidence,timestamp,status,anomaly_id,policy_outcome,traffic_class,source_zone,destination_zone\n",
+    );
+    for a in rows {
+        let details: serde_json::Value = a
+            .details
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        let device_ip = details.get("src_ip").and_then(|v| v.as_str()).unwrap_or("");
+        let flow = format!(
+            "{}:{}",
+            details
+                .get("protocol")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            details
+                .get("dst_port")
+                .and_then(|v| v.as_i64())
+                .map(|v| v.to_string())
+                .unwrap_or_default()
+        );
+        let policy_outcome = details
+            .get("policy_outcome")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let traffic_class = details
+            .get("traffic_class")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let source_zone = details
+            .get("source_zone")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let destination_zone = details
+            .get("destination_zone")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let line = format!(
+            "{},{},{},{},{},{},{},{:.2},{},{},{},{},{},{},{}\n",
+            a.severity,
+            a.mac,
+            a.mac,
+            device_ip,
+            a.anomaly_type,
+            flow,
+            a.vlan,
+            a.confidence,
+            a.timestamp,
+            a.status,
+            a.id,
+            policy_outcome,
+            traffic_class,
+            source_zone,
+            destination_zone
+        );
+        csv.push_str(&line);
+    }
+
+    Ok((
+        [
+            (
+                "content-type",
+                HeaderValue::from_static("text/csv; charset=utf-8"),
+            ),
+            (
+                "content-disposition",
+                HeaderValue::from_static("attachment; filename=\"ion-drift-anomalies-export.csv\""),
+            ),
+        ],
+        csv,
+    )
+        .into_response())
 }
 
 /// GET /api/behavior/alerts

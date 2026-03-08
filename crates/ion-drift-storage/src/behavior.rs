@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use tokio::sync::Mutex;
 
@@ -104,26 +104,46 @@ impl VlanRegistry {
         // Sort by longest prefix first for most-specific match
         subnets.sort_by(|a, b| b.prefix_len.cmp(&a.prefix_len));
 
-        Self { names, sensitivities, subnets }
+        Self {
+            names,
+            sensitivities,
+            subnets,
+        }
     }
 
     fn parse_cidr(cidr: &str, vlan_id: u16) -> Option<SubnetEntry> {
         let slash_pos = cidr.find('/')?;
         let network_str = &cidr[..slash_pos];
         let prefix_len: u8 = cidr[slash_pos + 1..].parse().ok()?;
-        let octets: Vec<u8> = network_str.split('.').filter_map(|o| o.parse().ok()).collect();
+        let octets: Vec<u8> = network_str
+            .split('.')
+            .filter_map(|o| o.parse().ok())
+            .collect();
         if octets.len() != 4 || prefix_len > 32 {
             return None;
         }
         let network = u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]);
-        let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
-        Some(SubnetEntry { vlan_id, network, prefix_len, mask })
+        let mask = if prefix_len == 0 {
+            0
+        } else {
+            !0u32 << (32 - prefix_len)
+        };
+        Some(SubnetEntry {
+            vlan_id,
+            network,
+            prefix_len,
+            mask,
+        })
     }
 
     fn ip_to_u32(ip: &str) -> Option<u32> {
         let octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
-        if octets.len() != 4 { return None; }
-        Some(u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]))
+        if octets.len() != 4 {
+            return None;
+        }
+        Some(u32::from_be_bytes([
+            octets[0], octets[1], octets[2], octets[3],
+        ]))
     }
 
     /// Map an IP address to its VLAN number based on configured subnets.
@@ -202,8 +222,7 @@ impl VlanRegistry {
                     let net_bytes = entry.network.to_be_bytes();
                     return format!(
                         "{}.{}.{}.{}/{}",
-                        net_bytes[0], net_bytes[1], net_bytes[2], net_bytes[3],
-                        entry.prefix_len
+                        net_bytes[0], net_bytes[1], net_bytes[2], net_bytes[3], entry.prefix_len
                     );
                 }
             }
@@ -259,7 +278,9 @@ pub fn classify_destination(dst_ip: &str) -> String {
 /// Check if IP is RFC1918 private — legacy shim.
 pub fn is_internal_ip(ip: &str) -> bool {
     let octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() != 4 { return false; }
+    if octets.len() != 4 {
+        return false;
+    }
     matches!(
         (octets[0], octets[1]),
         (10, _) | (172, 16..=31) | (192, 168)
@@ -269,7 +290,9 @@ pub fn is_internal_ip(ip: &str) -> bool {
 /// Classify flow direction — legacy shim.
 pub fn classify_direction(src_ip: &str, dst_ip: &str) -> &'static str {
     let dst_external = !is_internal_ip(dst_ip);
-    if dst_external { return "outbound"; }
+    if dst_external {
+        return "outbound";
+    }
     "internal"
 }
 
@@ -462,8 +485,8 @@ impl BehaviorStore {
     }
 
     pub fn new(db_path: &Path) -> Result<Self, String> {
-        let conn = Connection::open(db_path)
-            .map_err(|e| format!("failed to open behavior db: {e}"))?;
+        let conn =
+            Connection::open(db_path).map_err(|e| format!("failed to open behavior db: {e}"))?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .map_err(|e| format!("pragma failed: {e}"))?;
@@ -681,7 +704,10 @@ impl BehaviorStore {
 
     // ── Observation methods ──
 
-    pub async fn record_observations(&self, observations: &[DeviceObservation]) -> Result<(), String> {
+    pub async fn record_observations(
+        &self,
+        observations: &[DeviceObservation],
+    ) -> Result<(), String> {
         let db = self.db.lock().await;
         let mut stmt = db
             .prepare(
@@ -844,7 +870,9 @@ impl BehaviorStore {
                     max_bytes_per_hour = ?7,
                     observation_count = ?8,
                     computed_at = ?9",
-                params![mac, protocol, dst_port, dst_subnet, direction, avg_bph, max_bph, count, now],
+                params![
+                    mac, protocol, dst_port, dst_subnet, direction, avg_bph, max_bph, count, now
+                ],
             )
             .map_err(|e| format!("upsert baseline failed: {e}"))?;
         }
@@ -1041,7 +1069,15 @@ impl BehaviorStore {
                    AND timestamp >= ?6
                    AND (bytes_sent + bytes_recv) > ?7
                    AND (dst_port = ?3 OR (?3 IS NULL AND dst_port IS NULL))",
-                params![mac, protocol, dst_port, dst_subnet, direction, cutoff, hourly_threshold],
+                params![
+                    mac,
+                    protocol,
+                    dst_port,
+                    dst_subnet,
+                    direction,
+                    cutoff,
+                    hourly_threshold
+                ],
                 |row| row.get(0),
             )
             .map_err(|e| format!("count_elevated_observations failed: {e}"))?;
@@ -1105,8 +1141,11 @@ impl BehaviorStore {
             sql.push_str(&format!(" LIMIT ?{}", param_values.len()));
         }
 
-        let mut stmt = db.prepare(&sql).map_err(|e| format!("prepare failed: {e}"))?;
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = db
+            .prepare(&sql)
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let rows = stmt
             .query_map(params_ref.as_slice(), Self::map_anomaly_row)
             .map_err(|e| format!("query failed: {e}"))?;
@@ -1189,6 +1228,50 @@ impl BehaviorStore {
         Ok(changed > 0)
     }
 
+    /// Bulk-update anomaly status for specific IDs.
+    pub async fn bulk_resolve_anomalies(
+        &self,
+        ids: &[i64],
+        status: &str,
+        resolved_by: &str,
+    ) -> Result<usize, String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        let mut updated = 0usize;
+        for id in ids {
+            let changed = db
+                .execute(
+                    "UPDATE device_anomalies
+                     SET status = ?2, resolved_at = ?3, resolved_by = ?4
+                     WHERE id = ?1 AND status = 'pending'",
+                    params![id, status, now, resolved_by],
+                )
+                .map_err(|e| format!("bulk resolve failed: {e}"))?;
+            updated += changed;
+        }
+        Ok(updated)
+    }
+
+    /// Archive reviewed anomalies (accepted/dismissed/flagged/auto_dismissed).
+    pub async fn archive_reviewed(&self, actor: &str) -> Result<usize, String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        db.execute(
+            "UPDATE device_anomalies
+             SET status = 'archived', resolved_at = COALESCE(resolved_at, ?1), resolved_by = COALESCE(resolved_by, ?2)
+             WHERE status IN ('accepted', 'dismissed', 'flagged', 'auto_dismissed')",
+            params![now, actor],
+        )
+        .map_err(|e| format!("archive reviewed failed: {e}"))
+    }
+
+    /// Delete archived anomalies.
+    pub async fn delete_archived(&self) -> Result<usize, String> {
+        let db = self.db.lock().await;
+        db.execute("DELETE FROM device_anomalies WHERE status = 'archived'", [])
+            .map_err(|e| format!("delete archived failed: {e}"))
+    }
+
     /// Auto-resolve stale anomalies based on per-VLAN timeout rules.
     pub async fn auto_resolve_stale(&self, registry: &VlanRegistry) -> Result<usize, String> {
         let db = self.db.lock().await;
@@ -1198,9 +1281,7 @@ impl BehaviorStore {
         // Get all VLANs with pending anomalies
         let vlans: Vec<i64> = {
             let mut stmt = db
-                .prepare(
-                    "SELECT DISTINCT vlan FROM device_anomalies WHERE status = 'pending'",
-                )
+                .prepare("SELECT DISTINCT vlan FROM device_anomalies WHERE status = 'pending'")
                 .map_err(|e| format!("prepare failed: {e}"))?;
             stmt.query_map([], |row| row.get(0))
                 .map_err(|e| format!("query failed: {e}"))?
@@ -1284,7 +1365,13 @@ impl BehaviorStore {
             .map_err(|e| format!("prepare failed: {e}"))?;
         let vlan_rows: Vec<(i64, i64, i64, i64, i64)> = stmt
             .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             })
             .map_err(|e| format!("query failed: {e}"))?
             .collect::<Result<Vec<_>, _>>()
@@ -1305,14 +1392,16 @@ impl BehaviorStore {
 
         let vlan_summaries = vlan_rows
             .into_iter()
-            .map(|(vlan, count, baselined, learning, sparse)| VlanBehaviorSummary {
-                vlan,
-                device_count: count,
-                baselined_count: baselined,
-                learning_count: learning,
-                sparse_count: sparse,
-                pending_anomaly_count: anomaly_counts.get(&vlan).copied().unwrap_or(0),
-            })
+            .map(
+                |(vlan, count, baselined, learning, sparse)| VlanBehaviorSummary {
+                    vlan,
+                    device_count: count,
+                    baselined_count: baselined,
+                    learning_count: learning,
+                    sparse_count: sparse,
+                    pending_anomaly_count: anomaly_counts.get(&vlan).copied().unwrap_or(0),
+                },
+            )
             .collect();
 
         Ok(BehaviorOverview {

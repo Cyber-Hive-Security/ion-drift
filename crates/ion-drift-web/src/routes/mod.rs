@@ -2,8 +2,6 @@ pub mod alerts;
 pub mod arp;
 pub mod backbone;
 pub mod behavior;
-pub mod neighbor_aliases;
-pub mod provision;
 pub mod connections;
 pub mod devices;
 pub mod firewall;
@@ -14,7 +12,9 @@ pub mod interfaces;
 pub mod ip;
 pub mod logs;
 pub mod metrics;
+pub mod neighbor_aliases;
 pub mod network_map_status;
+pub mod provision;
 pub mod sankey;
 pub mod settings;
 pub mod switch_data;
@@ -119,11 +119,11 @@ pub(crate) async fn csrf_guard_layer(
 
 #[cfg(test)]
 mod tests {
+    use axum::Router;
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode, header};
     use axum::middleware;
     use axum::routing::{delete, get, options, post, put};
-    use axum::Router;
     use tower::util::ServiceExt;
 
     use super::csrf_guard_layer;
@@ -244,24 +244,26 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
     // SPA fallback: serve static files from web/dist/,
     // fall back to index.html for client-side routing.
     let index_html = web_dist.join("index.html");
-    let spa = ServeDir::new(&web_dist)
-        .not_found_service(ServeFile::new(index_html));
+    let spa = ServeDir::new(&web_dist).not_found_service(ServeFile::new(index_html));
 
     // Derive CORS allowed origin from the OIDC redirect URI
     let origin = extract_origin(&state.config.oidc.redirect_uri);
     let cors = CorsLayer::new()
-        .allow_origin(
-            origin
-                .parse::<HeaderValue>()
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to parse CORS origin '{}' from redirect_uri: {} \
+        .allow_origin(origin.parse::<HeaderValue>().map_err(|e| {
+            anyhow::anyhow!(
+                "failed to parse CORS origin '{}' from redirect_uri: {} \
                          — fix oidc.redirect_uri in config",
-                        origin, e
-                    )
-                })?,
-        )
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+                origin,
+                e
+            )
+        })?)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .allow_credentials(true);
 
@@ -291,7 +293,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/connections/history", get(connections::history))
         .route("/connections/geo-summary", get(connections::geo_summary))
         .route("/connections/port-summary", get(connections::port_summary))
-        .route("/connections/port-summary-classified", get(connections::port_summary_classified))
+        .route(
+            "/connections/port-summary-classified",
+            get(connections::port_summary_classified),
+        )
         .route("/connections/city-summary", get(connections::city_summary))
         .route("/connections/stats", get(connections::history_stats))
         // ARP + enhanced endpoints
@@ -318,107 +323,274 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/behavior/vlan/{vlan_id}", get(behavior::vlan_detail))
         .route("/behavior/device/{mac}", get(behavior::device_detail))
         .route("/behavior/anomalies", get(behavior::anomalies))
-        .route("/behavior/anomalies/{id}/resolve", post(behavior::resolve_anomaly))
+        .route(
+            "/behavior/anomalies/export.csv",
+            get(behavior::export_anomalies_csv),
+        )
+        .route(
+            "/behavior/anomalies/bulk",
+            post(behavior::bulk_resolve_anomalies),
+        )
+        .route(
+            "/behavior/anomalies/{id}/resolve",
+            post(behavior::resolve_anomaly),
+        )
         .route("/behavior/alerts", get(behavior::alerts))
         .route("/behavior/anomaly-links", get(behavior::anomaly_links))
-        .route("/behavior/anomaly-links/port/{protocol}/{port}", get(behavior::anomaly_links_by_port))
-        .route("/behavior/anomaly-links/device/{mac}", get(behavior::anomaly_links_by_device))
-        .route("/behavior/anomaly-links/{id}/resolve", post(behavior::resolve_anomaly_link))
-        .route("/behavior/port-baseline", get(connections::port_baseline_status))
-        .route("/behavior/port-baseline/compute", post(connections::compute_port_baselines))
+        .route(
+            "/behavior/anomaly-links/port/{protocol}/{port}",
+            get(behavior::anomaly_links_by_port),
+        )
+        .route(
+            "/behavior/anomaly-links/device/{mac}",
+            get(behavior::anomaly_links_by_device),
+        )
+        .route(
+            "/behavior/anomaly-links/{id}/resolve",
+            post(behavior::resolve_anomaly_link),
+        )
+        .route(
+            "/behavior/port-baseline",
+            get(connections::port_baseline_status),
+        )
+        .route(
+            "/behavior/port-baseline/compute",
+            post(connections::compute_port_baselines),
+        )
         // History (snapshots)
         .route("/history/snapshots", get(history::list_snapshots))
-        .route("/history/snapshot/{week}/{snapshot_type}", get(history::get_snapshot))
+        .route(
+            "/history/snapshot/{week}/{snapshot_type}",
+            get(history::get_snapshot),
+        )
         // Settings
         .route("/settings/map-config", get(settings::map_config))
-        .route("/settings/secrets", get(settings::secrets_status).put(settings::update_secrets))
-        .route("/settings/secrets/session/regenerate", post(settings::regenerate_session))
+        .route(
+            "/settings/secrets",
+            get(settings::secrets_status).put(settings::update_secrets),
+        )
+        .route(
+            "/settings/secrets/session/regenerate",
+            post(settings::regenerate_session),
+        )
         .route("/settings/sessions", get(settings::list_sessions))
-        .route("/settings/sessions/{session_id}", delete(settings::revoke_session))
+        .route(
+            "/settings/sessions/{session_id}",
+            delete(settings::revoke_session),
+        )
         .route("/settings/encryption", get(settings::encryption_status))
         .route("/settings/cert", get(settings::cert_status))
         .route("/settings/syslog", get(connections::syslog_status))
         .route("/settings/geoip", get(connections::geoip_status))
         // Devices (CRUD)
-        .route("/devices", get(devices::list_devices).post(devices::create_device))
+        .route(
+            "/devices",
+            get(devices::list_devices).post(devices::create_device),
+        )
         .route("/devices/test", post(devices::test_connection))
-        .route("/devices/{id}", get(devices::get_device).put(devices::update_device).delete(devices::delete_device))
+        .route(
+            "/devices/{id}",
+            get(devices::get_device)
+                .put(devices::update_device)
+                .delete(devices::delete_device),
+        )
         .route("/devices/{id}/test", post(devices::test_device))
         // Device-specific data
-        .route("/devices/{id}/resources", get(switch_data::device_resources))
-        .route("/devices/{id}/interfaces", get(switch_data::device_interfaces))
+        .route(
+            "/devices/{id}/resources",
+            get(switch_data::device_resources),
+        )
+        .route(
+            "/devices/{id}/interfaces",
+            get(switch_data::device_interfaces),
+        )
         .route("/devices/{id}/ports", get(switch_data::device_ports))
-        .route("/devices/{id}/port-list", get(switch_data::device_port_list))
-        .route("/devices/{id}/mac-table", get(switch_data::device_mac_table))
-        .route("/devices/{id}/neighbors", get(switch_data::device_neighbors))
+        .route(
+            "/devices/{id}/port-list",
+            get(switch_data::device_port_list),
+        )
+        .route(
+            "/devices/{id}/mac-table",
+            get(switch_data::device_mac_table),
+        )
+        .route(
+            "/devices/{id}/neighbors",
+            get(switch_data::device_neighbors),
+        )
         .route("/devices/{id}/vlans", get(switch_data::device_vlans))
-        .route("/devices/{id}/port-roles", get(switch_data::device_port_roles))
-        .route("/devices/{id}/port-utilization", get(switch_data::device_port_utilization))
+        .route(
+            "/devices/{id}/port-roles",
+            get(switch_data::device_port_roles),
+        )
+        .route(
+            "/devices/{id}/port-utilization",
+            get(switch_data::device_port_utilization),
+        )
         // Provisioning (Setup Wizard)
         .route("/devices/{id}/provision/plan", post(provision::plan))
         .route("/devices/{id}/provision/apply", post(provision::apply))
-        .route("/devices/{id}/provision/interfaces", get(provision::interfaces))
+        .route(
+            "/devices/{id}/provision/interfaces",
+            get(provision::interfaces),
+        )
         // Network-wide correlation data
         .route("/network/identities", get(switch_data::network_identities))
         .route("/network/mac-table", get(switch_data::network_mac_table))
         .route("/network/neighbors", get(switch_data::network_neighbors))
         .route("/network/port-roles", get(switch_data::network_port_roles))
         // Identity management
-        .route("/network/identities/infrastructure", get(identity::list_infrastructure_identities))
+        .route(
+            "/network/identities/infrastructure",
+            get(identity::list_infrastructure_identities),
+        )
         .route("/network/identities/stats", get(identity::identity_stats))
-        .route("/network/identities/review-queue", get(identity::review_queue))
-        .route("/network/identities/{mac}/fields/{field}", delete(identity::reset_identity_field))
+        .route(
+            "/network/identities/review-queue",
+            get(identity::review_queue),
+        )
+        .route(
+            "/network/identities/{mac}/fields/{field}",
+            delete(identity::reset_identity_field),
+        )
         .route("/network/identities/{mac}", put(identity::update_identity))
-        .route("/network/identities/{mac}/disposition", put(identity::set_disposition))
-        .route("/network/identities/bulk-confirm", post(identity::bulk_confirm))
-        .route("/network/identities/bulk-disposition", post(identity::bulk_disposition))
+        .route(
+            "/network/identities/{mac}/disposition",
+            put(identity::set_disposition),
+        )
+        .route(
+            "/network/identities/bulk-confirm",
+            post(identity::bulk_confirm),
+        )
+        .route(
+            "/network/identities/bulk-disposition",
+            post(identity::bulk_disposition),
+        )
         // Observed services (passive discovery)
         .route("/network/services", get(identity::observed_services))
         // Port MAC bindings
-        .route("/network/port-bindings", get(identity::list_port_bindings).post(identity::create_port_binding))
-        .route("/network/port-bindings/{device_id}", get(identity::list_device_port_bindings))
-        .route("/network/port-bindings/{device_id}/{port}", put(identity::update_port_binding).delete(identity::delete_port_binding))
+        .route(
+            "/network/port-bindings",
+            get(identity::list_port_bindings).post(identity::create_port_binding),
+        )
+        .route(
+            "/network/port-bindings/{device_id}",
+            get(identity::list_device_port_bindings),
+        )
+        .route(
+            "/network/port-bindings/{device_id}/{port}",
+            put(identity::update_port_binding).delete(identity::delete_port_binding),
+        )
         // Port violations
-        .route("/network/port-violations", get(identity::list_port_violations))
-        .route("/network/port-violations/{device_id}", get(identity::list_device_port_violations))
-        .route("/network/port-violations/{id}/resolve", put(identity::resolve_port_violation))
+        .route(
+            "/network/port-violations",
+            get(identity::list_port_violations),
+        )
+        .route(
+            "/network/port-violations/{device_id}",
+            get(identity::list_device_port_violations),
+        )
+        .route(
+            "/network/port-violations/{id}/resolve",
+            put(identity::resolve_port_violation),
+        )
         // Alerts
-        .route("/alerts/rules", get(alerts::list_rules).post(alerts::create_rule))
-        .route("/alerts/rules/{id}", put(alerts::update_rule).delete(alerts::delete_rule))
+        .route(
+            "/alerts/rules",
+            get(alerts::list_rules).post(alerts::create_rule),
+        )
+        .route(
+            "/alerts/rules/{id}",
+            put(alerts::update_rule).delete(alerts::delete_rule),
+        )
         .route("/alerts/status", get(alerts::status))
-        .route("/alerts/history", get(alerts::history).delete(alerts::clear_history))
+        .route(
+            "/alerts/history",
+            get(alerts::history).delete(alerts::clear_history),
+        )
         .route("/alerts/channels", get(alerts::list_channels))
         .route("/alerts/channels/{channel}", put(alerts::update_channel))
-        .route("/alerts/channels/{channel}/test", post(alerts::test_channel))
+        .route(
+            "/alerts/channels/{channel}/test",
+            post(alerts::test_channel),
+        )
         // Sankey investigation
         .route("/sankey/network", get(sankey::network_overview))
         .route("/sankey/vlan/{vlan_id}", get(sankey::vlan_detail))
         .route("/sankey/device/{mac}", get(sankey::device_trace))
-        .route("/sankey/device/{mac}/destination/{ip}", get(sankey::conversation_detail))
-        .route("/sankey/destination/{ip}/devices", get(sankey::destination_peers))
+        .route(
+            "/sankey/device/{mac}/destination/{ip}",
+            get(sankey::conversation_detail),
+        )
+        .route(
+            "/sankey/destination/{ip}/devices",
+            get(sankey::destination_peers),
+        )
         // Network topology
         .route("/network/topology", get(topology::get_topology))
-        .route("/network/topology/refresh", post(topology::refresh_topology))
-        .route("/network/topology/positions", get(topology::get_positions).put(topology::batch_update_positions))
-        .route("/network/topology/positions/{nodeId}", put(topology::update_position).delete(topology::reset_position))
+        .route(
+            "/network/topology/refresh",
+            post(topology::refresh_topology),
+        )
+        .route(
+            "/network/topology/positions",
+            get(topology::get_positions).put(topology::batch_update_positions),
+        )
+        .route(
+            "/network/topology/positions/{nodeId}",
+            put(topology::update_position).delete(topology::reset_position),
+        )
         .route("/network/topology/sectors", get(topology::get_sectors))
-        .route("/network/topology/sectors/{vlanId}", put(topology::update_sector).delete(topology::reset_sector))
+        .route(
+            "/network/topology/sectors/{vlanId}",
+            put(topology::update_sector).delete(topology::reset_sector),
+        )
         // VLAN config
         .route("/network/vlan-config", get(vlans::list_vlan_configs))
-        .route("/network/vlan-config/{vlan_id}", put(vlans::upsert_vlan_config))
+        .route(
+            "/network/vlan-config/{vlan_id}",
+            put(vlans::upsert_vlan_config),
+        )
         // Backbone links (manual switch interconnects)
-        .route("/network/backbone-links", get(backbone::list_backbone_links).post(backbone::create_backbone_link))
-        .route("/network/backbone-links/{id}", put(backbone::update_backbone_link).delete(backbone::delete_backbone_link))
+        .route(
+            "/network/backbone-links",
+            get(backbone::list_backbone_links).post(backbone::create_backbone_link),
+        )
+        .route(
+            "/network/backbone-links/{id}",
+            put(backbone::update_backbone_link).delete(backbone::delete_backbone_link),
+        )
         // Neighbor aliases (topology neighbor mapping/hiding)
-        .route("/network/neighbor-aliases", get(neighbor_aliases::list_neighbor_aliases).post(neighbor_aliases::create_neighbor_alias))
-        .route("/network/neighbor-aliases/{id}", delete(neighbor_aliases::delete_neighbor_alias))
+        .route(
+            "/network/neighbor-aliases",
+            get(neighbor_aliases::list_neighbor_aliases)
+                .post(neighbor_aliases::create_neighbor_alias),
+        )
+        .route(
+            "/network/neighbor-aliases/{id}",
+            delete(neighbor_aliases::delete_neighbor_alias),
+        )
         // Topology inference diagnostics
-        .route("/network/inference/status", get(inference::inference_status))
-        .route("/network/inference/states", get(inference::all_attachment_states))
-        .route("/network/inference/mac/{mac}", get(inference::inference_mac_detail))
-        .route("/network/inference/observations", get(inference::observation_stats))
+        .route(
+            "/network/inference/status",
+            get(inference::inference_status),
+        )
+        .route(
+            "/network/inference/states",
+            get(inference::all_attachment_states),
+        )
+        .route(
+            "/network/inference/mac/{mac}",
+            get(inference::inference_mac_detail),
+        )
+        .route(
+            "/network/inference/observations",
+            get(inference::observation_stats),
+        )
         // Global auth middleware for all API routes
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth_layer))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_auth_layer,
+        ))
         // CSRF protection: require application/json Content-Type on mutating requests
         .layer(middleware::from_fn(csrf_guard_layer))
         // Limit request body size to 2 MiB
