@@ -449,6 +449,16 @@ pub async fn compute_topology(
                     NodeKind::UnmanagedSwitch
                 };
 
+                tracing::info!(
+                    inferred_id = %inferred_id,
+                    identity = ?nb.identity,
+                    mac = ?nb.mac_address,
+                    platform = %platform,
+                    seen_by = %source_device,
+                    port = %source_port,
+                    "creating inferred infrastructure node from LLDP neighbor"
+                );
+
                 infra_ids.insert(inferred_id.clone());
                 nodes.insert(
                     inferred_id.clone(),
@@ -1059,6 +1069,32 @@ pub async fn compute_topology(
             bbox_h: height,
             position_source: "auto".to_string(),
         });
+    }
+
+    // ── Validate edges have valid endpoints ─────────────────────
+    let valid_node_ids: HashSet<&String> = nodes.keys().collect();
+    for edge in &edges {
+        if !valid_node_ids.contains(&edge.source) {
+            tracing::warn!(
+                source = %edge.source, target = %edge.target, kind = ?edge.kind,
+                "edge references non-existent source node — will not render"
+            );
+        }
+        if !valid_node_ids.contains(&edge.target) {
+            tracing::warn!(
+                source = %edge.source, target = %edge.target, kind = ?edge.kind,
+                "edge references non-existent target node — will not render"
+            );
+        }
+    }
+
+    // Log infrastructure nodes for debugging
+    for node in nodes.values().filter(|n| n.is_infrastructure) {
+        tracing::debug!(
+            id = %node.id, label = %node.label, kind = ?node.kind,
+            layer = node.layer, x = node.x, y = node.y,
+            "infrastructure node"
+        );
     }
 
     // ── Assemble result ──────────────────────────────────────────
