@@ -1,9 +1,9 @@
 [router]
 # Router IP or hostname (default: 192.168.88.1 = Mikrotik factory default)
-# Override: --host flag or HIVE_ROUTER_HOST env var
+# Override: --host flag or DRIFT_ROUTER_HOST env var
 host = "192.168.88.1"
 port = 443
 tls = true
 # ca_cert_path = "/path/to/ca.crt"
 username = "admin"
-# password is read from HIVE_ROUTER_PASSWORD env var or --password flag
+# password is read from DRIFT_ROUTER_PASSWORD env var or --password flag

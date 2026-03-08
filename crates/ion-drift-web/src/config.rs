@@ -28,7 +28,7 @@ pub struct OidcBootstrapSection {
     pub client_id: Option<String>,
     /// Full Keycloak token endpoint URL.
     pub token_url: Option<String>,
-    /// Full Keycloak Admin API URL (e.g., .../admin/realms/TheHolonet).
+    /// Full Keycloak Admin API URL (e.g., .../admin/realms/YourRealm).
     pub admin_url: Option<String>,
     /// Keycloak user attribute name for storing the KEK.
     #[serde(default = "default_kek_attribute")]
@@ -192,7 +192,7 @@ pub struct RouterSection {
     pub ca_cert_path: Option<String>,
     #[serde(default = "default_username")]
     pub username: String,
-    /// Loaded from `HIVE_ROUTER_PASSWORD` env var at runtime.
+    /// Loaded from `DRIFT_ROUTER_PASSWORD` env var at runtime.
     #[serde(skip)]
     pub password: String,
     /// WAN interface name for traffic tracking (default: "1-WAN").
@@ -206,7 +206,7 @@ pub struct RouterSection {
 pub struct OidcSection {
     pub issuer_url: String,
     pub client_id: String,
-    /// Loaded from `HIVE_ROUTER_OIDC_SECRET` env var at runtime.
+    /// Loaded from `DRIFT_OIDC_SECRET` env var at runtime.
     #[serde(skip)]
     pub client_secret: String,
     pub redirect_uri: String,
@@ -226,7 +226,7 @@ pub struct SessionSection {
     pub secure: bool,
     #[serde(default = "default_same_site")]
     pub same_site: String,
-    /// Loaded from `HIVE_ROUTER_SESSION_SECRET` env var at runtime.
+    /// Loaded from `DRIFT_SESSION_SECRET` env var at runtime.
     #[serde(skip)]
     pub session_secret: String,
 }
@@ -337,35 +337,35 @@ impl ServerConfig {
 
         if has_bootstrap {
             // Secrets-at-rest mode: env vars are optional fallbacks
-            config.router.password = std::env::var("HIVE_ROUTER_PASSWORD").unwrap_or_default();
-            config.oidc.client_secret = std::env::var("HIVE_ROUTER_OIDC_SECRET").unwrap_or_default();
-            config.session.session_secret = std::env::var("HIVE_ROUTER_SESSION_SECRET").unwrap_or_default();
+            config.router.password = std::env::var("DRIFT_ROUTER_PASSWORD").unwrap_or_default();
+            config.oidc.client_secret = std::env::var("DRIFT_OIDC_SECRET").unwrap_or_default();
+            config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET").unwrap_or_default();
         } else {
             // Legacy mode: env vars are required
-            config.router.password = std::env::var("HIVE_ROUTER_PASSWORD")
-                .map_err(|_| anyhow::anyhow!("HIVE_ROUTER_PASSWORD env var is required"))?;
+            config.router.password = std::env::var("DRIFT_ROUTER_PASSWORD")
+                .map_err(|_| anyhow::anyhow!("DRIFT_ROUTER_PASSWORD env var is required"))?;
 
-            config.oidc.client_secret = std::env::var("HIVE_ROUTER_OIDC_SECRET")
-                .map_err(|_| anyhow::anyhow!("HIVE_ROUTER_OIDC_SECRET env var is required"))?;
+            config.oidc.client_secret = std::env::var("DRIFT_OIDC_SECRET")
+                .map_err(|_| anyhow::anyhow!("DRIFT_OIDC_SECRET env var is required"))?;
 
-            config.session.session_secret = std::env::var("HIVE_ROUTER_SESSION_SECRET")
+            config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET")
                 .unwrap_or_else(|_| {
-                    tracing::warn!("HIVE_ROUTER_SESSION_SECRET not set, generating random secret");
+                    tracing::warn!("DRIFT_SESSION_SECRET not set, generating random secret");
                     uuid::Uuid::new_v4().to_string()
                 });
         }
 
         // Allow env overrides for non-secret router fields
-        if let Ok(host) = std::env::var("HIVE_ROUTER_HOST") {
+        if let Ok(host) = std::env::var("DRIFT_ROUTER_HOST") {
             config.router.host = host;
         }
-        if let Ok(user) = std::env::var("HIVE_ROUTER_USER") {
+        if let Ok(user) = std::env::var("DRIFT_ROUTER_USER") {
             config.router.username = user;
         }
-        if let Ok(ca) = std::env::var("HIVE_ROUTER_CA_CERT") {
+        if let Ok(ca) = std::env::var("DRIFT_ROUTER_CA_CERT") {
             config.router.ca_cert_path = Some(ca);
         }
-        if let Ok(dns) = std::env::var("HIVE_ROUTER_DNS_SERVER") {
+        if let Ok(dns) = std::env::var("DRIFT_ROUTER_DNS_SERVER") {
             config.router.dns_server = Some(dns);
         }
 
@@ -378,7 +378,7 @@ impl ServerConfig {
     /// Validate router-related configuration, emitting warnings for defaults.
     fn validate_router(&self) -> anyhow::Result<()> {
         if self.router.host.is_empty() {
-            anyhow::bail!("router.host cannot be empty; set it in config or HIVE_ROUTER_HOST env var");
+            anyhow::bail!("router.host cannot be empty; set it in config or DRIFT_ROUTER_HOST env var");
         }
 
         if self.router.host.trim().contains(' ') {
@@ -388,7 +388,7 @@ impl ServerConfig {
         if self.router.host == mikrotik_core::DEFAULT_ROUTER_HOST {
             tracing::warn!(
                 "router.host is set to Mikrotik factory default ({}); \
-                 set router.host in config or HIVE_ROUTER_HOST for production",
+                 set router.host in config or DRIFT_ROUTER_HOST for production",
                 mikrotik_core::DEFAULT_ROUTER_HOST
             );
         }

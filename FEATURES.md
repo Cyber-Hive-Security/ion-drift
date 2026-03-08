@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-07 — Behavior Engine v3 (firewall policy correlation, queue management, CSV export, pattern suppression, operator feedback loop)
+> **Last updated:** 2026-03-08 — Monitored Regions settings, runtime config mounts, release cleanup
 
 ## Overview
 
@@ -30,6 +30,7 @@ ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network 
 
 - 3-stage Dockerfile (Rust build, Node build, Debian slim runtime)
 - Docker Compose with health check (`GET /health`)
+- Config and CA cert provided at runtime via bind mounts (not baked into image)
 - Persistent volume for SQLite databases, certs, GeoIP data
 - Designed for deployment behind any reverse proxy (Traefik, nginx, etc.)
 
@@ -588,18 +589,17 @@ Manual switch-to-switch interconnect configuration for devices without LLDP supp
 | Priority | Source | Performance | Data |
 |----------|--------|-------------|------|
 | 1 | MaxMind GeoLite2 (.mmdb) | Microsecond, in-memory | Country, city, ASN, org, lat/lon |
-| 2 | ip-api.com (SQLite cache) | HTTP batch, 7-day TTL | Country, city, ISP, ASN, lat/lon |
 
 - **Auto-Download:** If MaxMind credentials exist but `.mmdb` files are missing, downloads from MaxMind API on startup
 - **Hot-Swap:** After download, databases loaded into memory without restart
-- **Flagged Countries:** RU, CN, IR, KP, VE, BY, SY, CU
+- **Monitored Regions:** Admin-configurable list of country codes (ISO 3166-1 alpha-2) highlighted on the world map. Empty by default — no countries flagged until explicitly configured via Settings > Monitored Regions. Persisted in `app_settings` SQLite table, loaded at startup, mutable at runtime via `RwLock`.
 
 ### World Map Visualization
 
 - D3.js orthographic projection with Natural Earth TopoJSON
 - Country-level arcs from home location to destination countries, width scaled by bytes
 - City-level arcs to individual U.S. cities with log-scaled width
-- City dots sized by connection count, colored by flagged status
+- City dots sized by connection count, colored by monitored region status
 - Zoom/pan controls (scroll zoom 1-12x, drag pan, +/-/reset buttons)
 - Tooltip with country, connection count, unique IPs, bytes, top orgs
 
@@ -874,6 +874,7 @@ Each anomaly record includes:
 |---------|----------|
 | Network Devices | Device registry: add/edit/delete/test, per-device credentials, polling interval |
 | VLAN Configuration | Editable table: VLAN ID, name, media type (wired/wireless/mixed dropdown), subnet, color picker. Auto-saves on change. |
+| Monitored Regions | Tag-based add/remove of ISO 3166-1 alpha-2 country codes. Countries in this list are highlighted red on the world map. Empty by default. Persisted to `app_settings` table, takes effect immediately without restart. Admin-only. |
 | Encrypted Secrets | Status of managed secrets, add/update interface, key fingerprint |
 | mTLS Certificate | Subject, issuer, expiry countdown, auto-renewal status |
 | Encryption Key | KEK fingerprint, source (Keycloak mTLS), secrets integrity check |
@@ -965,4 +966,4 @@ Output formats: `--format table|json|csv`
 | `/inference` | Inference Diagnostics | Mode badge, state distribution, divergence analytics, per-MAC drill-down |
 | `/topology` | Network Topology | Auto-generated D3 hierarchical map, VLAN sectors, drag-to-pin |
 | `/switches/$deviceId` | Switch Detail | Per-switch port metrics, MAC table, VLANs, port roles |
-| `/settings` | Settings | Device registry, secrets, cert, syslog, GeoIP, connection stats |
+| `/settings` | Settings | Device registry, secrets, cert, syslog, GeoIP, monitored regions, connection stats |

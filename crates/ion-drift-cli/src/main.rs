@@ -22,7 +22,7 @@ struct Cli {
     #[arg(long, short = 'u', global = true)]
     user: Option<String>,
 
-    /// RouterOS password (prefer HIVE_ROUTER_PASSWORD env var)
+    /// RouterOS password (prefer DRIFT_ROUTER_PASSWORD env var)
     #[arg(long, short = 'p', global = true)]
     password: Option<String>,
 

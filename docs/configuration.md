@@ -11,17 +11,17 @@ Single source of truth for runtime configuration in `ion-drift-web` and `ion-dri
 | `server.home_lon` | f64 | - | - | No | Optional map home longitude. |
 | `server.home_lat` | f64 | - | - | No | Optional map home latitude. |
 | `server.home_country` | string | - | - | No | Optional ISO country code for map home. |
-| `router.host` | string | `192.168.88.1` | `HIVE_ROUTER_HOST` | No | Primary router host/IP. |
+| `router.host` | string | `192.168.88.1` | `DRIFT_ROUTER_HOST` | No | Primary router host/IP. |
 | `router.port` | u16 | `443` | - | No | RouterOS REST API port. |
 | `router.tls` | bool | `true` | - | No | Use TLS for RouterOS client. |
-| `router.ca_cert_path` | string | - | `HIVE_ROUTER_CA_CERT` | No | CA cert path for router TLS validation. |
-| `router.username` | string | `admin` | `HIVE_ROUTER_USER` | No | Router username. |
-| `router.password` | string | - | `HIVE_ROUTER_PASSWORD` | Yes\* | Router password secret. |
+| `router.ca_cert_path` | string | - | `DRIFT_ROUTER_CA_CERT` | No | CA cert path for router TLS validation. |
+| `router.username` | string | `admin` | `DRIFT_ROUTER_USER` | No | Router username. |
+| `router.password` | string | - | `DRIFT_ROUTER_PASSWORD` | Yes\* | Router password secret. |
 | `router.wan_interface` | string | `1-WAN` | - | No | WAN interface used by traffic tracker. |
-| `router.dns_server` | string | - | `HIVE_ROUTER_DNS_SERVER` | No | Internal DNS server for PTR lookups. |
+| `router.dns_server` | string | - | `DRIFT_ROUTER_DNS_SERVER` | No | Internal DNS server for PTR lookups. |
 | `oidc.issuer_url` | string | - | - | Yes | OIDC issuer URL. |
 | `oidc.client_id` | string | - | - | Yes | OIDC client ID. |
-| `oidc.client_secret` | string | - | `HIVE_ROUTER_OIDC_SECRET` | Yes\* | OIDC client secret. |
+| `oidc.client_secret` | string | - | `DRIFT_OIDC_SECRET` | Yes\* | OIDC client secret. |
 | `oidc.redirect_uri` | string | - | - | Yes | OIDC callback URI. |
 | `oidc.ca_cert_path` | string | - | - | No | Optional CA cert for OIDC TLS validation. |
 | `oidc.bootstrap.client_id` | string | - | - | No | Bootstrap client ID for KEK retrieval. |
@@ -32,7 +32,7 @@ Single source of truth for runtime configuration in `ion-drift-web` and `ion-dri
 | `session.max_age_seconds` | u64 | `86400` | - | No | Session max age in seconds. |
 | `session.secure` | bool | `true` | - | No | Session cookie secure flag. |
 | `session.same_site` | string | `lax` | - | No | Session cookie SameSite setting. |
-| `session.session_secret` | string | generated if unset in legacy mode | `HIVE_ROUTER_SESSION_SECRET` | Yes\* | Session signing secret. |
+| `session.session_secret` | string | generated if unset in legacy mode | `DRIFT_SESSION_SECRET` | Yes\* | Session signing secret. |
 | `tls.client_cert` | string | `/app/data/certs/client.crt` | - | No | Bootstrap mTLS client cert path. |
 | `tls.client_key` | string | `/app/data/certs/client.key` | - | No | Bootstrap mTLS client key path. |
 | `certwarden.base_url` | string | - | - | No | CertWarden API base URL. |
@@ -55,11 +55,11 @@ Single source of truth for runtime configuration in `ion-drift-web` and `ion-dri
 
 | TOML Key | Type | Default | Env Override | Required | Description |
 |---|---|---|---|---|---|
-| `router.host` | string | `192.168.88.1` | `HIVE_ROUTER_HOST` | No | Router host/IP for CLI commands. |
+| `router.host` | string | `192.168.88.1` | `DRIFT_ROUTER_HOST` | No | Router host/IP for CLI commands. |
 | `router.port` | u16 | `443` | - | No | Router API port. |
 | `router.tls` | bool | `true` | - | No | Use TLS for CLI router client. |
-| `router.ca_cert_path` | string | - | `HIVE_ROUTER_CA_CERT` | No | CA cert path for CLI router TLS. |
-| `router.username` | string | `admin` | `HIVE_ROUTER_USER` | No | Router username. |
-| `router.password` | string | - | `HIVE_ROUTER_PASSWORD` | Yes | Router password (or `--password` flag). |
+| `router.ca_cert_path` | string | - | `DRIFT_ROUTER_CA_CERT` | No | CA cert path for CLI router TLS. |
+| `router.username` | string | `admin` | `DRIFT_ROUTER_USER` | No | Router username. |
+| `router.password` | string | - | `DRIFT_ROUTER_PASSWORD` | Yes | Router password (or `--password` flag). |
 
 CLI path default: `~/.config/ion-drift/cli.toml`.

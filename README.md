@@ -27,7 +27,7 @@ cargo build --release --bin ion-drift
 cp config/cli.example.toml ~/.config/ion-drift/cli.toml
 # Edit config with your router details
 
-export HIVE_ROUTER_PASSWORD='your-router-password'
+export DRIFT_ROUTER_PASSWORD='your-router-password'
 ion-drift system resources
 ion-drift interfaces list
 ion-drift firewall filter list
@@ -41,9 +41,9 @@ cp config/server.example.toml config/server.toml
 # Edit config with your settings
 
 # Required environment variables:
-# HIVE_ROUTER_PASSWORD      — RouterOS API password
-# HIVE_ROUTER_OIDC_SECRET   — Keycloak OIDC client secret
-# HIVE_ROUTER_SESSION_SECRET — Session encryption key
+# DRIFT_ROUTER_PASSWORD      — RouterOS API password
+# DRIFT_OIDC_SECRET   — Keycloak OIDC client secret
+# DRIFT_SESSION_SECRET — Session encryption key
 
 cargo run --release --bin ion-drift-web -- --config config/server.toml
 ```
@@ -96,4 +96,4 @@ Key sections:
 
 ## License
 
-MIT
+PolyForm Shield 1.0.0

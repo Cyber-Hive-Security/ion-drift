@@ -83,7 +83,7 @@ impl MikrotikConfig {
         if self.host == DEFAULT_ROUTER_HOST {
             warnings.push(format!(
                 "using Mikrotik factory-default host ({DEFAULT_ROUTER_HOST}); \
-                 set router.host in config or HIVE_ROUTER_HOST env var for production"
+                 set router.host in config or DRIFT_ROUTER_HOST env var for production"
             ));
         }
 

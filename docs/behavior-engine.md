@@ -435,10 +435,10 @@ CREATE TABLE port_flow_baseline (
 
 | Variable | Purpose |
 |----------|---------|
-| `HIVE_ROUTER_PASSWORD` | Router REST API password |
-| `HIVE_ROUTER_HOST` | Override router host (default: from config) |
-| `HIVE_ROUTER_USER` | Override router username |
-| `HIVE_ROUTER_CA_CERT` | Override CA certificate path |
+| `DRIFT_ROUTER_PASSWORD` | Router REST API password |
+| `DRIFT_ROUTER_HOST` | Override router host (default: from config) |
+| `DRIFT_ROUTER_USER` | Override router username |
+| `DRIFT_ROUTER_CA_CERT` | Override CA certificate path |
 | `RUST_LOG` | Log level filter |
 
 ---

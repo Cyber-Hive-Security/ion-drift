@@ -51,14 +51,14 @@ pub fn build_mikrotik_config(
     // Host: CLI flag > env > config file > default (Mikrotik factory default)
     let host = host
         .map(String::from)
-        .or_else(|| std::env::var("HIVE_ROUTER_HOST").ok())
+        .or_else(|| std::env::var("DRIFT_ROUTER_HOST").ok())
         .or_else(|| file_cfg.router.host.clone())
         .unwrap_or_else(|| mikrotik_core::DEFAULT_ROUTER_HOST.into());
 
     if host == mikrotik_core::DEFAULT_ROUTER_HOST {
         eprintln!(
             "warning: using Mikrotik factory-default host ({}); \
-             set --host, HIVE_ROUTER_HOST, or router.host in config for production",
+             set --host, DRIFT_ROUTER_HOST, or router.host in config for production",
             mikrotik_core::DEFAULT_ROUTER_HOST
         );
     }
@@ -78,22 +78,22 @@ pub fn build_mikrotik_config(
     // CA cert: CLI flag > env > config file
     let ca_cert_path = ca_cert
         .map(String::from)
-        .or_else(|| std::env::var("HIVE_ROUTER_CA_CERT").ok())
+        .or_else(|| std::env::var("DRIFT_ROUTER_CA_CERT").ok())
         .or_else(|| file_cfg.router.ca_cert_path.clone())
         .map(PathBuf::from);
 
     // Username: CLI flag > env > config file > default
     let username = user
         .map(String::from)
-        .or_else(|| std::env::var("HIVE_ROUTER_USER").ok())
+        .or_else(|| std::env::var("DRIFT_ROUTER_USER").ok())
         .or_else(|| file_cfg.router.username.clone())
         .unwrap_or_else(|| mikrotik_core::DEFAULT_ROUTER_USERNAME.into());
 
     // Password: CLI flag > env var (required)
     let password = password
         .map(String::from)
-        .or_else(|| std::env::var("HIVE_ROUTER_PASSWORD").ok())
-        .ok_or("password required: use --password or set HIVE_ROUTER_PASSWORD")?;
+        .or_else(|| std::env::var("DRIFT_ROUTER_PASSWORD").ok())
+        .ok_or("password required: use --password or set DRIFT_ROUTER_PASSWORD")?;
 
     Ok(MikrotikConfig {
         host,

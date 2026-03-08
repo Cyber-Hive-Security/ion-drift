@@ -58,10 +58,10 @@ fn env_var_names_are_referenced_in_config_code() {
     )
     .expect("read config.rs");
     for name in [
-        "HIVE_ROUTER_PASSWORD",
-        "HIVE_ROUTER_OIDC_SECRET",
-        "HIVE_ROUTER_SESSION_SECRET",
-        "HIVE_ROUTER_DNS_SERVER",
+        "DRIFT_ROUTER_PASSWORD",
+        "DRIFT_OIDC_SECRET",
+        "DRIFT_SESSION_SECRET",
+        "DRIFT_ROUTER_DNS_SERVER",
     ] {
         assert!(src.contains(name), "missing env var reference: {name}");
     }

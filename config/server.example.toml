@@ -13,29 +13,29 @@ listen_port = 3000
 
 [router]
 # Router IP or hostname (REQUIRED for production; default: 192.168.88.1 = Mikrotik factory default)
-# Override: HIVE_ROUTER_HOST env var
+# Override: DRIFT_ROUTER_HOST env var
 host = "192.168.88.1"
 port = 443
 tls = true
 # Path to your CA certificate if the router uses a private/internal CA
 ca_cert_path = "/path/to/ca.crt"
 username = "admin"
-# password from HIVE_ROUTER_PASSWORD env var (legacy mode only)
+# password from DRIFT_ROUTER_PASSWORD env var (legacy mode only)
 wan_interface = "1-WAN"
 # Internal DNS server IP for PTR lookups (optional; falls back to system resolver)
-# Override: HIVE_ROUTER_DNS_SERVER env var
+# Override: DRIFT_ROUTER_DNS_SERVER env var
 # dns_server = "192.168.1.1"
 
 [oidc]
 issuer_url = "https://your-keycloak.example.com/realms/YourRealm"
 client_id = "ion-drift"
-# client_secret from HIVE_ROUTER_OIDC_SECRET env var (legacy mode only)
+# client_secret from DRIFT_OIDC_SECRET env var (legacy mode only)
 redirect_uri = "https://your-ion-drift.example.com/auth/callback"
 # CA cert for verifying your OIDC provider's TLS cert (optional)
 # ca_cert_path = "/path/to/ca.crt"
 
 [session]
-# secret from HIVE_ROUTER_SESSION_SECRET env var (legacy mode; auto-generated in bootstrap mode)
+# secret from DRIFT_SESSION_SECRET env var (legacy mode; auto-generated in bootstrap mode)
 cookie_name = "ion_drift_session"
 max_age_seconds = 86400
 secure = true
