@@ -48,3 +48,6 @@ quick-xml = "0.37"
 hickory-resolver = "0.25"
 openssl = "0.10"
 libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -5,7 +5,7 @@ use axum::response::{Json, Response};
 use axum::http::StatusCode;
 use ion_drift_storage::switch::VlanConfig;
 
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 
 use super::internal_error;
@@ -25,7 +25,7 @@ pub async fn list_vlan_configs(
 
 /// PUT /api/network/vlan-config/{vlan_id} — upsert a VLAN config.
 pub async fn upsert_vlan_config(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(vlan_id): Path<u32>,
     Json(mut body): Json<VlanConfig>,

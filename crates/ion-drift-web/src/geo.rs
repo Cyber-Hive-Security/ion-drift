@@ -52,53 +52,92 @@ pub struct GeoInfo {
     pub lon: Option<f64>,
 }
 
-/// Geolocation cache with dual MaxMind + ip-api.com backend.
-pub struct GeoCache {
-    /// MaxMind GeoLite2-City reader (None if databases not loaded).
-    mmdb_city: RwLock<Option<Arc<maxminddb::Reader<Vec<u8>>>>>,
-    /// MaxMind GeoLite2-ASN reader (None if databases not loaded).
-    mmdb_asn: RwLock<Option<Arc<maxminddb::Reader<Vec<u8>>>>>,
-    /// SQLite-backed ip-api.com cache (fallback when MaxMind unavailable).
-    db: Mutex<rusqlite::Connection>,
-    /// HTTP client for ip-api.com batch requests.
-    http_client: reqwest::Client,
+pub trait GeoProvider: Send + Sync {
+    fn lookup(&self, ip: &IpAddr) -> Option<GeoInfo>;
+    fn try_load(&self, dir: &Path);
+    fn is_loaded(&self) -> bool;
 }
 
-impl GeoCache {
-    /// Create a new GeoCache backed by a SQLite database at the given path.
-    /// Optionally loads MaxMind databases if the directory contains them.
-    pub fn new(db_path: &Path, mmdb_dir: Option<&Path>) -> anyhow::Result<Self> {
-        let conn = rusqlite::Connection::open(db_path)?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             CREATE TABLE IF NOT EXISTS geo_cache (
-                ip TEXT PRIMARY KEY,
-                data TEXT NOT NULL,
-                fetched_at INTEGER NOT NULL
-            )",
-        )?;
+pub struct MaxMindProvider {
+    mmdb_city: RwLock<Option<Arc<maxminddb::Reader<Vec<u8>>>>>,
+    mmdb_asn: RwLock<Option<Arc<maxminddb::Reader<Vec<u8>>>>>,
+}
 
-        let cache = Self {
+impl MaxMindProvider {
+    pub fn new() -> Self {
+        Self {
             mmdb_city: RwLock::new(None),
             mmdb_asn: RwLock::new(None),
-            db: Mutex::new(conn),
-            http_client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()?,
-        };
-
-        // Try to load MaxMind databases if directory provided
-        if let Some(dir) = mmdb_dir {
-            cache.try_load_maxmind(dir);
         }
-
-        Ok(cache)
     }
 
-    /// Attempt to load MaxMind databases from the given directory.
-    /// Logs warnings on failure but does not return errors (fallback to ip-api).
-    pub fn try_load_maxmind(&self, dir: &Path) {
+    fn lookup_asn(&self, ip: &IpAddr) -> (Option<String>, Option<String>, Option<String>) {
+        let asn_reader = match self.mmdb_asn.read().ok() {
+            Some(guard) => guard,
+            None => return (None, None, None),
+        };
+        let asn_reader = match asn_reader.as_ref() {
+            Some(r) => r,
+            None => return (None, None, None),
+        };
+
+        let asn_result: maxminddb::geoip2::Asn = match asn_reader.lookup(*ip) {
+            Ok(r) => r,
+            Err(_) => return (None, None, None),
+        };
+
+        let asn = asn_result
+            .autonomous_system_number
+            .map(|n| format!("AS{n}"));
+        let org = asn_result
+            .autonomous_system_organization
+            .map(|s| s.to_string());
+        let isp = org.clone();
+
+        (asn, org, isp)
+    }
+}
+
+impl GeoProvider for MaxMindProvider {
+    fn lookup(&self, ip: &IpAddr) -> Option<GeoInfo> {
+        let city_reader = self.mmdb_city.read().ok()?;
+        let city_reader = city_reader.as_ref()?;
+
+        let city_result: maxminddb::geoip2::City = city_reader.lookup(*ip).ok()?;
+        let country = city_result.country.as_ref()?;
+        let country_code = country.iso_code?.to_string();
+        let country_name = country
+            .names
+            .as_ref()
+            .and_then(|n| n.get("en"))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| country_code.clone());
+
+        let city = city_result
+            .city
+            .as_ref()
+            .and_then(|c| c.names.as_ref())
+            .and_then(|n| n.get("en"))
+            .map(|s| s.to_string());
+
+        let location = city_result.location.as_ref();
+        let lat = location.and_then(|l| l.latitude);
+        let lon = location.and_then(|l| l.longitude);
+        let (asn, org, isp) = self.lookup_asn(ip);
+
+        Some(GeoInfo {
+            country_code,
+            country: country_name,
+            city,
+            isp,
+            asn,
+            org,
+            lat,
+            lon,
+        })
+    }
+
+    fn try_load(&self, dir: &Path) {
         let city_path = dir.join("GeoLite2-City.mmdb");
         let asn_path = dir.join("GeoLite2-ASN.mmdb");
 
@@ -127,6 +166,58 @@ impl GeoCache {
         }
     }
 
+    fn is_loaded(&self) -> bool {
+        self.mmdb_city.read().map(|g| g.is_some()).unwrap_or(false)
+    }
+}
+
+/// Geolocation cache with dual MaxMind + ip-api.com backend.
+pub struct GeoCache {
+    /// Lookup provider for MaxMind-backed geolocation.
+    provider: Arc<dyn GeoProvider>,
+    /// SQLite-backed ip-api.com cache (fallback when MaxMind unavailable).
+    db: Mutex<rusqlite::Connection>,
+    /// HTTP client for ip-api.com batch requests.
+    http_client: reqwest::Client,
+}
+
+impl GeoCache {
+    /// Create a new GeoCache backed by a SQLite database at the given path.
+    /// Optionally loads MaxMind databases if the directory contains them.
+    pub fn new(db_path: &Path, mmdb_dir: Option<&Path>) -> anyhow::Result<Self> {
+        let conn = rusqlite::Connection::open(db_path)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             CREATE TABLE IF NOT EXISTS geo_cache (
+                ip TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                fetched_at INTEGER NOT NULL
+            )",
+        )?;
+
+        let cache = Self {
+            provider: Arc::new(MaxMindProvider::new()),
+            db: Mutex::new(conn),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()?,
+        };
+
+        // Try to load MaxMind databases if directory provided
+        if let Some(dir) = mmdb_dir {
+            cache.try_load_maxmind(dir);
+        }
+
+        Ok(cache)
+    }
+
+    /// Attempt to load MaxMind databases from the given directory.
+    /// Logs warnings on failure but does not return errors (fallback to ip-api).
+    pub fn try_load_maxmind(&self, dir: &Path) {
+        self.provider.try_load(dir);
+    }
+
     /// Hot-swap MaxMind databases (called by the auto-updater after downloading new versions).
     pub fn hot_swap_maxmind(&self, dir: &Path) {
         self.try_load_maxmind(dir);
@@ -134,10 +225,7 @@ impl GeoCache {
 
     /// Whether MaxMind databases are loaded.
     pub fn has_maxmind(&self) -> bool {
-        self.mmdb_city
-            .read()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
+        self.provider.is_loaded()
     }
 
     /// Synchronous lookup. Tries MaxMind first, then ip-api cache.
@@ -150,10 +238,9 @@ impl GeoCache {
         }
 
         // Try MaxMind first (microsecond lookup)
-        if let Some(info) = self.lookup_maxmind(&ip_addr) {
+        if let Some(info) = self.provider.lookup(&ip_addr) {
             return Some(info);
         }
-
         // Fallback to ip-api cache
         let db = self.db.lock().ok()?;
         let now = now_unix();
@@ -166,76 +253,6 @@ impl GeoCache {
             )
             .ok()?;
         serde_json::from_str(&json).ok()
-    }
-
-    /// MaxMind-only lookup from in-memory databases.
-    fn lookup_maxmind(&self, ip: &IpAddr) -> Option<GeoInfo> {
-        let city_reader = self.mmdb_city.read().ok()?;
-        let city_reader = city_reader.as_ref()?;
-
-        let city_result: maxminddb::geoip2::City = city_reader.lookup(*ip).ok()?;
-
-        let country = city_result.country.as_ref()?;
-        let country_code = country.iso_code?.to_string();
-        let country_name = country
-            .names
-            .as_ref()
-            .and_then(|n| n.get("en"))
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| country_code.clone());
-
-        let city = city_result
-            .city
-            .as_ref()
-            .and_then(|c| c.names.as_ref())
-            .and_then(|n| n.get("en"))
-            .map(|s| s.to_string());
-
-        let location = city_result.location.as_ref();
-        let lat = location.and_then(|l| l.latitude);
-        let lon = location.and_then(|l| l.longitude);
-
-        // ASN lookup (separate database)
-        let (asn, org, isp) = self.lookup_asn(ip);
-
-        Some(GeoInfo {
-            country_code,
-            country: country_name,
-            city,
-            isp,
-            asn,
-            org,
-            lat,
-            lon,
-        })
-    }
-
-    /// ASN-only lookup from MaxMind GeoLite2-ASN database.
-    fn lookup_asn(&self, ip: &IpAddr) -> (Option<String>, Option<String>, Option<String>) {
-        let asn_reader = match self.mmdb_asn.read().ok() {
-            Some(guard) => guard,
-            None => return (None, None, None),
-        };
-        let asn_reader = match asn_reader.as_ref() {
-            Some(r) => r,
-            None => return (None, None, None),
-        };
-
-        let asn_result: maxminddb::geoip2::Asn = match asn_reader.lookup(*ip) {
-            Ok(r) => r,
-            Err(_) => return (None, None, None),
-        };
-
-        let asn = asn_result
-            .autonomous_system_number
-            .map(|n| format!("AS{n}"));
-        let org = asn_result
-            .autonomous_system_organization
-            .map(|s| s.to_string());
-        // GeoLite2-ASN doesn't have ISP separate from org; use org for both
-        let isp = org.clone();
-
-        (asn, org, isp)
     }
 
     /// Async batch resolve: checks cache for each IP, fetches misses from ip-api.com.

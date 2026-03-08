@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::response::{Json, Response};
 use serde::Deserialize;
 
-use crate::middleware::RequireAuth;
+use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 
 use super::internal_error;
@@ -35,7 +35,7 @@ pub struct CreateBackboneLinkRequest {
 
 /// POST /api/network/backbone-links — create a backbone link.
 pub async fn create_backbone_link(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(body): Json<CreateBackboneLinkRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
@@ -66,7 +66,7 @@ pub struct UpdateBackboneLinkRequest {
 
 /// PUT /api/network/backbone-links/{id} — update a backbone link.
 pub async fn update_backbone_link(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<UpdateBackboneLinkRequest>,
@@ -88,7 +88,7 @@ pub async fn update_backbone_link(
 
 /// DELETE /api/network/backbone-links/{id} — delete a backbone link.
 pub async fn delete_backbone_link(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {

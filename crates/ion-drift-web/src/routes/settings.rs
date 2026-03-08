@@ -1,6 +1,8 @@
 use axum::extract::State;
+use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
+use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
 
 use crate::middleware::{RequireAdmin, RequireAuth};
@@ -205,6 +207,41 @@ pub async fn regenerate_session(
     Ok(Json(RegenerateSessionResponse {
         status: "regenerated".to_string(),
     }))
+}
+
+// â”€â”€ GET /api/settings/sessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+#[derive(Serialize)]
+pub struct SessionsResponse {
+    sessions: Vec<crate::auth::SessionListEntry>,
+}
+
+pub async fn list_sessions(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Json<SessionsResponse> {
+    let current = jar
+        .get(&state.config.session.cookie_name)
+        .map(|c| c.value().to_string());
+    let sessions = state.sessions.list_sessions(current.as_deref());
+    Json(SessionsResponse { sessions })
+}
+
+// â”€â”€ DELETE /api/settings/sessions/{session_id} â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+#[derive(Serialize)]
+pub struct RevokeSessionResponse {
+    revoked: bool,
+}
+
+pub async fn revoke_session(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Json<RevokeSessionResponse> {
+    let revoked = state.sessions.revoke_session(&session_id);
+    Json(RevokeSessionResponse { revoked })
 }
 
 // ── GET /api/settings/encryption ────────────────────────────────

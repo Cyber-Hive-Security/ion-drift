@@ -86,7 +86,7 @@ async fn health() -> Json<serde_json::Value> {
 ///
 /// Combined with SameSite=Lax cookies and strict CORS, this provides
 /// defense-in-depth against CSRF attacks.
-async fn csrf_guard_layer(
+pub(crate) async fn csrf_guard_layer(
     request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
@@ -115,6 +115,96 @@ async fn csrf_guard_layer(
         }
     }
     next.run(request).await
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode, header};
+    use axum::middleware;
+    use axum::routing::{delete, get, options, post, put};
+    use axum::Router;
+    use tower::util::ServiceExt;
+
+    use super::csrf_guard_layer;
+
+    fn app() -> Router {
+        Router::new()
+            .route(
+                "/x",
+                get(|| async { StatusCode::OK })
+                    .post(|| async { StatusCode::OK })
+                    .put(|| async { StatusCode::OK })
+                    .delete(|| async { StatusCode::OK })
+                    .options(|| async { StatusCode::OK }),
+            )
+            .layer(middleware::from_fn(csrf_guard_layer))
+    }
+
+    async fn call(method: Method, content_type: Option<&str>, body: &str) -> StatusCode {
+        let mut req = Request::builder().method(method).uri("/x");
+        if let Some(ct) = content_type {
+            req = req.header(header::CONTENT_TYPE, ct);
+        }
+        let req = req
+            .header(header::CONTENT_LENGTH, body.len().to_string())
+            .body(Body::from(body.to_string()))
+            .expect("request build");
+        app().oneshot(req).await.expect("response").status()
+    }
+
+    #[tokio::test]
+    async fn csrf_rejects_form_urlencoded_post() {
+        let status = call(
+            Method::POST,
+            Some("application/x-www-form-urlencoded"),
+            "a=1&b=2",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn csrf_rejects_multipart_post() {
+        let status = call(Method::POST, Some("multipart/form-data"), "payload").await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn csrf_rejects_text_plain_post() {
+        let status = call(Method::POST, Some("text/plain"), "payload").await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_json_post() {
+        let status = call(Method::POST, Some("application/json"), "{\"x\":1}").await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_empty_body_post() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/x")
+            .header(header::CONTENT_LENGTH, "0")
+            .body(Body::empty())
+            .expect("request");
+        let status = app().oneshot(req).await.expect("response").status();
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_get_requests() {
+        let status = call(Method::GET, Some("text/plain"), "payload").await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_options_requests() {
+        let status = call(Method::OPTIONS, Some("text/plain"), "payload").await;
+        assert_eq!(status, StatusCode::OK);
+    }
 }
 
 /// Global auth guard middleware for all /api/* routes.
@@ -243,6 +333,8 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/settings/map-config", get(settings::map_config))
         .route("/settings/secrets", get(settings::secrets_status).put(settings::update_secrets))
         .route("/settings/secrets/session/regenerate", post(settings::regenerate_session))
+        .route("/settings/sessions", get(settings::list_sessions))
+        .route("/settings/sessions/{session_id}", delete(settings::revoke_session))
         .route("/settings/encryption", get(settings::encryption_status))
         .route("/settings/cert", get(settings::cert_status))
         .route("/settings/syslog", get(connections::syslog_status))

@@ -41,6 +41,9 @@ struct TaskRecord {
 #[derive(Clone)]
 pub struct TaskSupervisor {
     tasks: Arc<RwLock<HashMap<String, Arc<RwLock<TaskRecord>>>>>,
+    initial_backoff: Duration,
+    max_backoff: Duration,
+    healthy_reset: Duration,
 }
 
 /// Backoff parameters.
@@ -50,8 +53,19 @@ const HEALTHY_RESET: Duration = Duration::from_secs(300); // 5 minutes
 
 impl TaskSupervisor {
     pub fn new() -> Self {
+        Self::with_backoff(INITIAL_BACKOFF, MAX_BACKOFF, HEALTHY_RESET)
+    }
+
+    pub fn with_backoff(
+        initial_backoff: Duration,
+        max_backoff: Duration,
+        healthy_reset: Duration,
+    ) -> Self {
         Self {
             tasks: Arc::new(RwLock::new(HashMap::new())),
+            initial_backoff,
+            max_backoff,
+            healthy_reset,
         }
     }
 
@@ -78,6 +92,9 @@ impl TaskSupervisor {
             let tasks_clone = tasks.clone();
             let record_clone = record.clone();
             let name_clone = task_name.clone();
+            let initial_backoff = self.initial_backoff;
+            let max_backoff = self.max_backoff;
+            let healthy_reset = self.healthy_reset;
             tokio::spawn(async move {
                 // Register
                 {
@@ -86,7 +103,7 @@ impl TaskSupervisor {
                 }
 
                 let task_fn = Arc::new(task_fn);
-                let mut backoff = INITIAL_BACKOFF;
+                let mut backoff = initial_backoff;
 
                 loop {
                     // Mark as running
@@ -136,8 +153,8 @@ impl TaskSupervisor {
                     }
 
                     // Reset backoff if the task ran long enough to be considered healthy
-                    if elapsed >= HEALTHY_RESET {
-                        backoff = INITIAL_BACKOFF;
+                    if elapsed >= healthy_reset {
+                        backoff = initial_backoff;
                     }
 
                     rec.state = TaskState::Restarting {
@@ -157,7 +174,7 @@ impl TaskSupervisor {
                     tokio::time::sleep(backoff).await;
 
                     // Exponential backoff: double up to max
-                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                    backoff = (backoff * 2).min(max_backoff);
                 }
             });
         }

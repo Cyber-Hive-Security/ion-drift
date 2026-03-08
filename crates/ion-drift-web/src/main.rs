@@ -9,6 +9,7 @@ mod connection_store;
 mod correlation_engine;
 mod topology_inference;
 mod device_manager;
+mod dns;
 mod geo;
 mod live_traffic;
 mod log_parser;
@@ -63,8 +64,9 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| tracing::warn!("failed to load OpenSSL legacy provider (DES may not work): {e}"))
         .ok();
 
-    // Parse CLI args (just --config for now)
-    let config_path = parse_config_arg();
+    // Parse CLI args.
+    let args = parse_args();
+    let config_path = args.config_path.clone();
     let config_file = ServerConfig::resolve_path(config_path.as_deref());
 
     tracing::info!("loading config from {}", config_file.display());
@@ -153,7 +155,26 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("Session cookie 'secure' flag is disabled on a non-localhost bind address. Cookies will be sent over HTTP.");
     }
 
+    tracing::info!(
+        listen = %config.server.listen_addr,
+        port = config.server.listen_port,
+        router_host = %config.router.host,
+        router_port = config.router.port,
+        router_tls = config.router.tls,
+        wan_interface = %config.router.wan_interface,
+        oidc_issuer = %config.oidc.issuer_url,
+        session_max_age = config.session.max_age_seconds,
+        syslog_port = config.syslog.port,
+        "resolved configuration"
+    );
+
+    if args.dump_config {
+        println!("{}", config.masked_toml()?);
+        return Ok(());
+    }
+
     let config = Arc::new(config);
+    let dns_resolver = dns::build_dns_resolver(config.router.dns_server.as_deref());
 
     // ── Device Manager + SwitchStore ─────────────────────────────
     let switch_store = Arc::new(
@@ -274,7 +295,10 @@ async fn main() -> anyhow::Result<()> {
     let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
 
     // Session store
-    let sessions = auth::SessionStore::new(config.session.max_age_seconds);
+    let sessions = auth::SessionStore::new(
+        config.session.max_age_seconds,
+        &data_dir.join("sessions.db"),
+    )?;
 
     // Load MAC OUI database (bundled)
     let oui_db = oui::OuiDb::load();
@@ -367,7 +391,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Spawn all background tasks
-    tasks::spawn_all(&app_state);
+    tasks::spawn_all(&app_state, dns_resolver);
 
     // Resolve web/dist path relative to the config file's parent (project root)
     let web_dist = config_file
@@ -428,13 +452,26 @@ async fn run_setup_mode(
     Ok(())
 }
 
-/// Parse `--config <path>` from CLI args.
-fn parse_config_arg() -> Option<String> {
+struct CliArgs {
+    config_path: Option<String>,
+    dump_config: bool,
+}
+
+/// Parse `--config <path>` and `--dump-config` from CLI args.
+fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
+    let mut config_path = None;
+    let mut dump_config = false;
     for i in 0..args.len() {
         if args[i] == "--config" {
-            return args.get(i + 1).cloned();
+            config_path = args.get(i + 1).cloned();
+        }
+        if args[i] == "--dump-config" {
+            dump_config = true;
         }
     }
-    None
+    CliArgs {
+        config_path,
+        dump_config,
+    }
 }
