@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useSystemIdentity, useAlertStatus, useAlertHistory } from "@/api/queries";
-import { LogOut, Menu, PanelLeftClose, PanelLeftOpen, Router, Bell, X } from "lucide-react";
+import { LogOut, Menu, PanelLeftClose, PanelLeftOpen, Bell, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const LAST_READ_KEY = "ion-drift-alert-last-read";
@@ -79,7 +79,7 @@ export function Header({ onMenuToggle, pendingAnomalies = 0, sidebarOpen }: Head
           >
             {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
           </button>
-          <Router className="h-4 w-4" />
+          <img src="/logo-icon.png" alt="" className="h-5 w-5" />
           {identity ? (
             <span className="font-medium text-foreground">{identity.name}</span>
           ) : (

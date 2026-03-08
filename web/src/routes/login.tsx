@@ -1,10 +1,8 @@
-import { Router } from "lucide-react";
-
 export function LoginPage() {
   return (
     <div className="flex h-screen items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-6 rounded-lg border border-border bg-card p-10 shadow-lg">
-        <Router className="h-12 w-12 text-primary" />
+        <img src="/logo-icon.png" alt="Ion Drift" className="h-16 w-16" />
         <div className="text-center">
           <h1 className="text-2xl font-bold">Ion Drift</h1>
           <p className="text-xs text-muted-foreground">

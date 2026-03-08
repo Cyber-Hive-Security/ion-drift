@@ -46,9 +46,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
   const navContent = (
     <>
-      <div className="flex h-14 flex-col justify-center border-b border-border px-4">
-        <span className="text-lg font-bold leading-tight text-primary">Ion Drift</span>
-        <span className="text-[10px] leading-tight text-muted-foreground">by Cyber Hive Security</span>
+      <div className="flex h-14 items-center gap-2.5 border-b border-border px-4">
+        <img src="/logo-icon.png" alt="" className="h-8 w-8" />
+        <div className="flex flex-col justify-center">
+          <span className="text-lg font-bold leading-tight text-primary">Ion Drift</span>
+          <span className="text-[10px] leading-tight text-muted-foreground">by Cyber Hive Security</span>
+        </div>
       </div>
       <nav className="flex-1 space-y-1 p-3">
         <span className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
