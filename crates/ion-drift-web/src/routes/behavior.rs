@@ -3,6 +3,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use super::internal_error;
@@ -35,6 +36,10 @@ pub struct VlanBehaviorDetail {
     pub vlan: i64,
     pub devices: Vec<ion_drift_storage::behavior::DeviceProfile>,
     pub anomalies: Vec<ion_drift_storage::behavior::DeviceAnomaly>,
+}
+
+fn csv_quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 // ── Handlers ─────────────────────────────────────────────────
@@ -257,6 +262,10 @@ pub async fn export_anomalies_csv(
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_else(|| serde_json::json!({}));
+        let device_name = details
+            .get("src_hostname")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&a.mac);
         let device_ip = details.get("src_ip").and_then(|v| v.as_str()).unwrap_or("");
         let flow = format!(
             "{}:{}",
@@ -286,26 +295,31 @@ pub async fn export_anomalies_csv(
             .get("destination_zone")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let confidence = format!("{:.2}", a.confidence);
         let line = format!(
-            "{},{},{},{},{},{},{},{:.2},{},{},{},{},{},{},{}\n",
-            a.severity,
-            a.mac,
-            a.mac,
-            device_ip,
-            a.anomaly_type,
-            flow,
-            a.vlan,
-            a.confidence,
-            a.timestamp,
-            a.status,
-            a.id,
-            policy_outcome,
-            traffic_class,
-            source_zone,
-            destination_zone
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            csv_quote(&a.severity),
+            csv_quote(device_name),
+            csv_quote(&a.mac),
+            csv_quote(device_ip),
+            csv_quote(&a.anomaly_type),
+            csv_quote(&flow),
+            csv_quote(&a.vlan.to_string()),
+            csv_quote(&confidence),
+            csv_quote(&a.timestamp.to_string()),
+            csv_quote(&a.status),
+            csv_quote(&a.id.to_string()),
+            csv_quote(policy_outcome),
+            csv_quote(traffic_class),
+            csv_quote(source_zone),
+            csv_quote(destination_zone)
         );
         csv.push_str(&line);
     }
+    let export_date = Utc::now().format("%Y%m%d").to_string();
+    let disposition = format!("attachment; filename=\"ion-drift-anomalies-{export_date}.csv\"");
+    let disposition_value = HeaderValue::from_str(&disposition)
+        .map_err(|e| internal_error("export anomalies", format!("invalid header value: {e}")))?;
 
     Ok((
         [
@@ -313,10 +327,7 @@ pub async fn export_anomalies_csv(
                 "content-type",
                 HeaderValue::from_static("text/csv; charset=utf-8"),
             ),
-            (
-                "content-disposition",
-                HeaderValue::from_static("attachment; filename=\"ion-drift-anomalies-export.csv\""),
-            ),
+            ("content-disposition", disposition_value),
         ],
         csv,
     )

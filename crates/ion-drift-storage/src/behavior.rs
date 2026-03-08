@@ -1339,14 +1339,6 @@ impl BehaviorStore {
                 |row| row.get(0),
             )
             .map_err(|e| format!("count failed: {e}"))?;
-        let sparse_devices: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM device_profiles WHERE baseline_status = 'sparse'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("count failed: {e}"))?;
-
         let alerts = Self::pending_counts_inner(&db)?;
 
         // Per-VLAN summaries

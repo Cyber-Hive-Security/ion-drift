@@ -346,8 +346,11 @@ pub async fn detect_anomalies(
                             let has_fw = has_policy_match(&fw_corr);
                             let traffic_class = classify_traffic_class(&obs.direction);
                             let source_zone = zone_from_vlan(registry, Some(vlan), src_ip);
-                            let destination_zone =
-                                zone_from_vlan(registry, dst_vlan_val, &obs.dst_subnet);
+                            let destination_zone = zone_from_vlan(
+                                registry,
+                                dst_vlan_val.map(|v| v as i64),
+                                &obs.dst_subnet,
+                            );
                             let confidence = compute_confidence(
                                 "volume_spike",
                                 &profile.baseline_status,
@@ -448,7 +451,8 @@ pub async fn detect_anomalies(
                     let has_fw = has_policy_match(&fw_corr);
                     let traffic_class = classify_traffic_class(&obs.direction);
                     let source_zone = zone_from_vlan(registry, Some(vlan), src_ip);
-                    let destination_zone = zone_from_vlan(registry, dst_vlan_val, &obs.dst_subnet);
+                    let destination_zone =
+                        zone_from_vlan(registry, dst_vlan_val.map(|v| v as i64), &obs.dst_subnet);
                     let confidence = compute_confidence(
                         anomaly_type,
                         &profile.baseline_status,
