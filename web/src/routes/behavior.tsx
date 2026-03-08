@@ -31,7 +31,6 @@ import {
   CircleDashed,
   Download,
   Archive,
-  Trash2,
   CheckCheck,
   XCircle,
 } from "lucide-react";
