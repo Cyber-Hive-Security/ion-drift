@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-07 — environment-agnostic refactor (all hardcoded IPs/VLANs/hostnames removed)
+> **Last updated:** 2026-03-07 — Behavior Engine v3 (firewall policy correlation, queue management, CSV export, pattern suppression, operator feedback loop)
 
 ## Overview
 
@@ -20,9 +20,10 @@ ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network 
 
 | Crate | Role |
 |-------|------|
-| `mikrotik-core` | Shared RouterOS REST API client, resource models, SwitchStore (SQLite), BehaviorStore |
+| `mikrotik-core` | RouterOS REST API client, SNMP client, SwOS client, resource models |
+| `ion-drift-storage` | SQLite stores: BehaviorStore, SwitchStore, MetricsStore, TrafficTracker, VlanFlowManager |
 | `ion-drift-cli` | clap-based CLI binary with table/JSON/CSV output |
-| `ion-drift-web` | Axum web server + React SPA, OIDC auth, 55+ API routes, 21 background tasks |
+| `ion-drift-web` | Axum web server + React SPA, OIDC auth, 60+ API routes, 22 background tasks |
 | `web/` | React frontend (Vite + TypeScript) |
 
 ### Deployment
@@ -410,7 +411,7 @@ VLAN metadata (name, color, subnet, media type, sensitivity) is stored in the `v
 | `sensitivity` | Behavior engine sensitivity: `strictest`, `strict`, `moderate`, `loose`, `monitor` |
 
 **Runtime Architecture:**
-- **Backend:** `VlanRegistry` (in `mikrotik-core/src/behavior.rs`) loaded from `vlan_config` table at startup, stored as `Arc<RwLock<VlanRegistry>>` in `AppState`. Provides CIDR-based IP→VLAN matching, sensitivity lookups, anomaly severity, and auto-resolve timeouts. Shared across all background tasks (behavior engine, connection store, syslog, anomaly correlator, scanner).
+- **Backend:** `VlanRegistry` (in `ion-drift-storage/src/behavior.rs`) loaded from `vlan_config` table at startup, stored as `Arc<RwLock<VlanRegistry>>` in `AppState`. Provides CIDR-based IP→VLAN matching, sensitivity lookups, anomaly severity, and auto-resolve timeouts. Shared across all background tasks (behavior engine, connection store, syslog, anomaly correlator, scanner).
 - **Frontend:** `useVlanLookup()` hook (in `hooks/use-vlan-lookup.ts`) fetches from `/api/network/vlan-config` via TanStack Query. Provides `configs`, `colors`, `names`, `subnets` maps plus `color()`, `name()`, `subnet()`, and `ipToVlanLabel()` helper functions with CIDR matching. All components use this hook — no hardcoded VLAN constants.
 
 **VLAN Config APIs:**
@@ -681,30 +682,156 @@ Bridges the two independent anomaly systems (port flow baselines + device behavi
 
 ---
 
-## Behavior Engine
+## Behavior Engine (v3)
+
+Treats firewall policy as the authoritative definition of network intent. All anomalies are classified against firewall policy, enriched with zone and traffic class metadata, and fed through operator workflow tools.
+
+### Processing Pipeline
+
+```
+Network Telemetry → Event Normalization → Traffic Classification →
+Firewall Policy Correlation → Policy Outcome Classification →
+Context Enrichment → Behavioral Baseline Analysis →
+Correlation Engine → Anomaly Queue → Operator Review
+```
 
 ### Device Profiling
 
 - **Collection:** Every 60s — ARP + DHCP correlation, active connections grouped by source MAC
 - **Profile:** MAC, hostname, manufacturer (OUI), IP, VLAN, last_seen
-- **Observations:** Daily aggregation of (protocol, dst_port, dst_subnet, direction) with bytes and flow counts
+- **Observations:** Per-cycle aggregation of (protocol, dst_port, dst_subnet, direction) with bytes and flow counts
+
+### Traffic Classification
+
+Every event is classified into a traffic type based on direction, protocol, and destination port:
+
+| Class | Trigger |
+|-------|---------|
+| `internet_scan` | Inbound unsolicited traffic |
+| `dhcp_activity` | DHCP ports (67/68) |
+| `broadcast_service` | ARP or broadcast protocols |
+| `internal_service_access` | Internal-to-internal non-lateral |
+| `external_service_access` | Outbound to external |
+| `management_protocol` | SSH, SNMP, WinBox, API ports (22, 23, 161, 443, 8291, etc.) |
+| `lateral_movement` | Lateral traffic to SSH, SMB, RDP (22, 445, 3389) |
+| `unknown` | Unclassified |
+
+### Firewall Policy Correlation
+
+Every anomaly is correlated against cached RouterOS firewall filter rules (`/ip/firewall/filter`). Cache refreshed every 5 minutes.
+
+**Policy Outcomes:**
+
+| Outcome | Meaning | Action |
+|---------|---------|--------|
+| `expected_allow` | Matches a permit rule | Baseline tracking only |
+| `expected_deny` | Matches a deny rule (blocked attempts) | Informational telemetry |
+| `policy_unknown` | No matching rule found | Full anomaly analysis |
+
+Correlation matches on source/destination IP (CIDR), protocol, and destination port (ranges supported). Matching rules contribute rule ID and comment to the anomaly record.
+
+### Network Zone Model
+
+VLANs are mapped to trust zones based on VLAN name heuristics:
+
+| Zone | VLAN Name Pattern |
+|------|-------------------|
+| WAN | External/non-internal IPs |
+| Services | Contains "service" or "server" |
+| Management | Contains "manage" or "admin" |
+| IoT | Contains "iot" |
+| Guest | Contains "guest" |
+| Infrastructure | Contains "infra" |
+| Trusted | Default for internal VLANs |
+
+Source and destination zones are recorded on every anomaly for cross-zone analysis.
 
 ### Baselines & Anomaly Detection
 
 - **Baseline Window:** 7 days of observations
-- **Anomaly Types:** `new_port`, `volume_spike`, `source_anomaly`, `blocked_attempt`, `direction_anomaly`
-- **Severity:** Based on per-VLAN `sensitivity` setting in `vlan_config` table (strictest/strict → critical, moderate → warning, loose/monitor → info)
+- **Device Lifecycle:** `new_device` → `learning` (7 days) → `sparse` / `baselined`
+- **Anomaly Types:** `new_port`, `new_protocol`, `new_destination`, `volume_spike`, `blocked_attempt`
+- **Volume Spike Thresholds:** projected_hourly > baseline_max × 3 AND > baseline_avg × 5 AND > 5 MB floor, with multi-window persistence (2+ elevated observations in 300s)
+- **Severity:** Based on per-VLAN `sensitivity` setting (strictest → critical, strict → alert/warning, moderate → warning/info, loose/monitor → info), escalated by priority boosts from operator flagging
 - **Auto-Resolution:** TTL-based per sensitivity level (strictest = never, strict = 72h, moderate = 48h, loose = 24h, monitor = 12h)
-- **Blocked Attempts:** Detected from firewall drop rules, correlated with GeoIP
+- **Blocked Attempts:** Detected from firewall drop rules, correlated with GeoIP, always classified as `expected_deny`
+- **Confidence Model:** Factors: baseline maturity, observation count, baseline age, policy alignment, VLAN sensitivity, priority boosts. Range: 0.0–1.0.
+
+### Anomaly Queue Management
+
+**Queue States:** `pending` → `accepted` / `dismissed` / `flagged` / `auto_dismissed` → `archived`
+
+**Bulk Actions:**
+- Bulk accept/dismiss/flag by anomaly IDs
+- Archive reviewed (moves accepted/dismissed/flagged/auto_dismissed → archived)
+- Delete archived (hard delete, admin only)
+
+**Safe Queue Clearing:** Archive reviewed clears the queue without losing data. Hard delete requires explicit `delete_archived` action.
+
+### Pattern Suppression
+
+Operators can suppress repeating anomaly patterns. Suppression rules match on any combination of:
+
+| Field | Match |
+|-------|-------|
+| `device_id` | Specific MAC or NULL (any device) |
+| `vlan` | Specific VLAN or NULL (any) |
+| `protocol` | tcp/udp/icmp or NULL |
+| `destination_port` | Specific port or NULL |
+| `traffic_class` | Specific class or NULL |
+
+Most-specific rule wins (ranked by number of non-NULL fields). Suppressed anomalies are skipped during detection. Suppression rules stored in `anomaly_suppressions` table.
+
+### Operator Feedback Loop
+
+Resolving an anomaly triggers side effects:
+
+| Action | Effect |
+|--------|--------|
+| `accepted` | Recompute device baselines (reinforces the behavior as normal) |
+| `dismissed` | Auto-create suppression rule for that anomaly's pattern |
+| `flagged` | Increment priority boost — future matching anomalies get escalated severity and higher confidence |
+
+Priority boosts stored in `anomaly_priority_boosts` table, keyed by pattern (device + vlan + protocol + port + traffic_class).
+
+### CSV Export
+
+Export anomalies with full policy context for offline analysis.
+
+**Fields:** severity, device, device_mac, device_ip, anomaly_type, flow, vlan, confidence, timestamp, status, anomaly_id, policy_outcome, traffic_class, source_zone, destination_zone
+
+**Filename:** `ion-drift-anomalies-YYYYMMDD.csv`
+
+Supports filtering by status, severity, VLAN, and limit. All fields properly quoted for CSV safety.
+
+### Anomaly Detail Fields
+
+Each anomaly record includes:
+
+| Field | Source |
+|-------|--------|
+| `policy_outcome` | Firewall correlation result |
+| `traffic_class` | Traffic classification |
+| `source_zone` | VLAN-to-zone mapping |
+| `destination_zone` | VLAN-to-zone mapping |
+| `firewall_correlation` | Match type (expected_allow/deny/policy_unknown) |
+| `firewall_rule_id` | RouterOS rule `.id` |
+| `firewall_rule_comment` | Rule comment from RouterOS |
 
 ### APIs
 
-- `/api/behavior/overview` — Device count, anomaly breakdown
-- `/api/behavior/anomalies` — Paginated anomaly list
-- `/api/behavior/device/{mac}` — Device detail with observations + port flow contexts
-- `/api/behavior/alerts` — Critical + alert severity anomalies
-- `POST /api/behavior/anomalies/{id}/resolve` — Mark resolved
-- `/api/behavior/anomaly-links` — Cross-reference links (see Anomaly Cross-Reference section)
+- `GET /api/behavior/overview` — Device count, anomaly breakdown, per-VLAN summaries
+- `GET /api/behavior/anomalies` — Filtered anomaly list (status, severity, vlan, limit)
+- `GET /api/behavior/anomalies/export.csv` — CSV export with policy fields
+- `GET /api/behavior/device/{mac}` — Device detail with baselines, anomalies, port flow contexts
+- `GET /api/behavior/vlan/{vlan_id}` — VLAN detail with devices and anomalies
+- `GET /api/behavior/alerts` — Pending anomaly counts (total, critical, warning)
+- `POST /api/behavior/anomalies/{id}/resolve` — Resolve with feedback loop (accepted/dismissed/flagged)
+- `POST /api/behavior/anomalies/bulk` — Bulk resolve/archive/delete
+- `GET /api/behavior/suppressions` — List pattern suppression rules
+- `POST /api/behavior/suppressions` — Create suppression rule
+- `DELETE /api/behavior/suppressions/{id}` — Delete suppression rule
+- `GET /api/behavior/anomaly-links` — Cross-reference links (see Anomaly Cross-Reference section)
 
 ---
 
@@ -788,9 +915,10 @@ Output formats: `--format table|json|csv`
 | Connection persister | 30s | Conntrack -> connection_history with GeoIP |
 | Connection pruner | Daily | Prune closed connections > 30 days |
 | Syslog listener | Realtime | UDP 5514, parse firewall logs |
-| Behavior collector | 60s | Device observations, anomaly detection |
-| Behavior maintenance | Daily | Baseline recompute, observation pruning, port flow baselines |
-| Behavior auto-classifier | Hourly | Auto-resolve stale anomalies |
+| Behavior collector | 60s | Device observations, anomaly detection, firewall correlation, suppression matching, priority boost application |
+| Behavior maintenance | Daily | Baseline recompute, observation pruning, port flow baselines, traffic pattern classification |
+| Behavior auto-classifier | Hourly | Auto-resolve stale anomalies per VLAN timeout |
+| Alert engine | 60s | Evaluate alert rules against anomalies, send notifications |
 | Anomaly correlator | 60s | Cross-reference port flow + device anomalies |
 | Snapshot generator | Weekly | Geo + port Sankey snapshots |
 | Session cleanup | 10 min | Expire old sessions |
@@ -812,7 +940,7 @@ Output formats: `--format table|json|csv`
 | `secrets.db` | `kek_cache`, `encrypted_secrets`, `devices`, `device_credentials` | AES-256-GCM encrypted secrets + device registry |
 | `traffic.db` | `traffic` | Lifetime WAN counters with reset detection |
 | `metrics.db` | `metrics`, `drop_metrics`, `connection_metrics`, `vlan_metrics`, `log_aggregates` | Time-series metrics |
-| `behavior.db` | `device_profiles`, `device_observations`, `baselines`, `anomalies` | Behavioral analysis |
+| `behavior.db` | `device_profiles`, `device_observations`, `device_baselines`, `device_anomalies`, `anomaly_suppressions`, `anomaly_priority_boosts`, `engine_metadata`, `scheduler_watermarks` | Behavioral analysis, pattern suppression, operator feedback |
 | `connections.db` | `connection_history`, `port_flow_baseline`, `anomaly_links`, `snapshots` | Connection history, anomaly cross-references, snapshots |
 | `geo.db` | `geo_cache` | ip-api.com lookup cache (7-day TTL) |
 | `switch.db` | `switch_port_metrics`, `switch_mac_table`, `switch_vlan_membership`, `neighbor_discovery`, `switch_port_roles`, `network_identities`, `observed_services`, `topology_positions`, `topology_sector_positions`, `backbone_links`, `vlan_config`, `port_mac_bindings`, `port_violations`, `mac_observations`, `attachment_states`, `port_role_probabilities` | Switch data, correlated identities, topology, backbone links, VLAN config, port security, inference state |
