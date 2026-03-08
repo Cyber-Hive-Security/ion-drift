@@ -395,4 +395,3 @@ pub async fn resolve_port_violation(
     Ok(Json(serde_json::json!({ "resolved": resolved })))
 }
 
-// Nmap scan endpoints removed — replaced by passive_discovery (connection tracking).

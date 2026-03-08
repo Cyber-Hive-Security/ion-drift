@@ -134,6 +134,9 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.mikrotik.clone(),
     );
 
+    // Alert engine
+    crate::alerting::spawn_alert_engine(&state.task_supervisor, state.clone());
+
     // Cert rotation (only if CertWarden is configured)
     if let Some(ref sm) = state.secrets_manager {
         if let Some(cw_config) = state.config.certwarden.resolve() {

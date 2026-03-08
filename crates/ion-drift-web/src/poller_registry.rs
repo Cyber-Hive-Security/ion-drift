@@ -130,19 +130,6 @@ impl PollerRegistry {
         }
     }
 
-    /// Start pollers for all devices currently in the DeviceManager.
-    /// Used at startup after the initial 30-second delay.
-    pub fn start_all_pollers(
-        &mut self,
-        devices: &[&DeviceEntry],
-        device_manager: Arc<RwLock<DeviceManager>>,
-        switch_store: Arc<SwitchStore>,
-    ) {
-        for entry in devices {
-            self.start_poller(entry, device_manager.clone(), switch_store.clone());
-        }
-    }
-
     /// Check if a poller is running for a device.
     pub fn has_poller(&self, device_id: &str) -> bool {
         self.tasks.contains_key(device_id)

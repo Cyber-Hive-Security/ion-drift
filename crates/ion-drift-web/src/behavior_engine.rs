@@ -31,15 +31,6 @@ impl SpikeCandidates {
         Self::default()
     }
 
-    /// Record a spike candidate. Returns true if it has hit the threshold (2 consecutive).
-    fn record(&self, mac: &str, dedup_key: &str) -> bool {
-        let mut map = self.candidates.lock().unwrap();
-        let key = (mac.to_string(), dedup_key.to_string());
-        let count = map.entry(key).or_insert(0);
-        *count += 1;
-        *count >= 2
-    }
-
     /// Clear a candidate (spike was not detected this cycle).
     fn clear(&self, mac: &str, dedup_key: &str) {
         let mut map = self.candidates.lock().unwrap();
