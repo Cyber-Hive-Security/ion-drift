@@ -7,6 +7,7 @@ pub mod certwarden;
 pub mod config;
 pub mod connection_store;
 pub mod correlation_engine;
+pub mod demo;
 pub mod device_manager;
 pub mod dns;
 pub mod geo;

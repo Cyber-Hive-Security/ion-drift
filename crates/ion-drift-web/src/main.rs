@@ -7,6 +7,7 @@ mod certwarden;
 mod config;
 mod connection_store;
 mod correlation_engine;
+pub mod demo;
 mod topology_inference;
 mod device_manager;
 mod dns;
@@ -415,6 +416,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("serving SPA from {}", web_dist.display());
     } else {
         tracing::warn!("SPA directory not found at {}, only API routes available", web_dist.display());
+    }
+
+    // Log demo mode status
+    if demo::is_demo_mode() {
+        tracing::warn!("DEMO MODE ACTIVE — all API responses will have sensitive data sanitized");
     }
 
     // Build router and start server

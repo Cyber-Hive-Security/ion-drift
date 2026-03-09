@@ -26,18 +26,21 @@ pub mod vlan_flows;
 pub mod vlans;
 
 use axum::Router;
+use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{delete, get, post, put};
 use axum_extra::extract::CookieJar;
+use http_body_util::BodyExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::auth;
+use crate::demo::{self, DemoSanitizer};
 use crate::state::AppState;
 
 /// Shared error handler for RouterOS API errors.
@@ -74,7 +77,10 @@ fn extract_origin(url: &str) -> String {
 
 /// Health check endpoint — no auth required.
 async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok" }))
+    Json(serde_json::json!({
+        "status": "ok",
+        "demo_mode": demo::is_demo_mode(),
+    }))
 }
 
 /// CSRF protection middleware for non-GET API endpoints.
@@ -234,6 +240,63 @@ async fn require_auth_layer(
     }
 
     next.run(request).await
+}
+
+/// Demo mode middleware: intercepts JSON API responses and sanitizes sensitive data.
+/// Only active when `ION_DRIFT_MODE=demo` is set.
+async fn demo_sanitize_layer(
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    if !demo::is_demo_mode() {
+        return next.run(request).await;
+    }
+
+    let response = next.run(request).await;
+    let (parts, body) = response.into_parts();
+
+    // Only sanitize JSON responses
+    let is_json = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map_or(false, |ct| ct.contains("application/json"));
+
+    if !is_json {
+        return Response::from_parts(parts, body);
+    }
+
+    // Collect the body bytes
+    let bytes = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(_) => return Response::from_parts(parts, Body::empty()),
+    };
+
+    // Parse, sanitize, re-serialize
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(mut value) => {
+            // Use a process-wide sanitizer for consistency
+            static SANITIZER: std::sync::OnceLock<DemoSanitizer> = std::sync::OnceLock::new();
+            let sanitizer = SANITIZER.get_or_init(DemoSanitizer::new);
+            sanitizer.sanitize_value(&mut value);
+
+            match serde_json::to_vec(&value) {
+                Ok(sanitized_bytes) => {
+                    let mut parts = parts;
+                    parts.headers.insert(
+                        header::CONTENT_LENGTH,
+                        HeaderValue::from(sanitized_bytes.len()),
+                    );
+                    Response::from_parts(parts, Body::from(sanitized_bytes))
+                }
+                Err(_) => Response::from_parts(parts, Body::from(bytes)),
+            }
+        }
+        Err(_) => {
+            // Not valid JSON — pass through unchanged
+            Response::from_parts(parts, Body::from(bytes))
+        }
+    }
 }
 
 /// Build the full Axum router with all routes and middleware.
@@ -599,6 +662,8 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             "/network/inference/observations",
             get(inference::observation_stats),
         )
+        // Demo mode sanitization (outermost — runs after response is built)
+        .layer(middleware::from_fn(demo_sanitize_layer))
         // Global auth middleware for all API routes
         .layer(middleware::from_fn_with_state(
             state.clone(),
