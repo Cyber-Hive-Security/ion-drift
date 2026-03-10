@@ -4,6 +4,7 @@ import {
   useBehaviorAnomalies,
   useResolveAnomaly,
   useBulkResolveAnomalies,
+  useDeleteAllAnomalies,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { BehaviorHelp } from "@/components/help-content";
@@ -33,6 +34,7 @@ import {
   Archive,
   CheckCheck,
   XCircle,
+  Trash2,
 } from "lucide-react";
 
 // ── VLAN names for display ───────────────────────────────────
@@ -608,6 +610,7 @@ export function BehaviorPage() {
   });
   const resolveMutation = useResolveAnomaly();
   const bulkMutation = useBulkResolveAnomalies();
+  const deleteAllMutation = useDeleteAllAnomalies();
 
   if (overview.isLoading) return <LoadingSpinner />;
   if (overview.error) {
@@ -798,6 +801,20 @@ export function BehaviorPage() {
                   <Archive className="h-3.5 w-3.5" /> Archive Reviewed
                 </button>
               )}
+
+              {/* Delete all anomalies */}
+              <button
+                className="flex items-center gap-1 rounded-md bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 transition-colors"
+                title="Delete ALL anomalies"
+                onClick={() => {
+                  if (window.confirm("Delete ALL anomalies? This cannot be undone.")) {
+                    deleteAllMutation.mutate();
+                  }
+                }}
+                disabled={deleteAllMutation.isPending}
+              >
+                <Trash2 className="h-3.5 w-3.5" /> {deleteAllMutation.isPending ? "Deleting..." : "Delete All"}
+              </button>
 
               {/* CSV export */}
               <a

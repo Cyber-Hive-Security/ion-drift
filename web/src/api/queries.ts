@@ -489,6 +489,39 @@ export function useBulkResolveAnomalies() {
   });
 }
 
+export function useDeleteAllAnomalies() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ deleted: number }>("/api/behavior/anomalies", {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["behavior"] });
+    },
+  });
+}
+
+export function useResetBehavior() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{
+        anomalies: number;
+        baselines: number;
+        observations: number;
+        profiles: number;
+        boosts: number;
+        watermarks: number;
+      }>("/api/behavior/reset", {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["behavior"] });
+    },
+  });
+}
+
 export function useBehaviorAlerts() {
   return useQuery({
     queryKey: ["behavior", "alerts"],
