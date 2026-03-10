@@ -18,6 +18,10 @@ pub struct DemoSanitizer {
     hostname_cache: Mutex<HashMap<String, String>>,
     /// Counter for generating sequential hostnames.
     hostname_counter: Mutex<u32>,
+    /// VLAN ID remapping: real VLAN ID → fake VLAN ID (10, 12, 14, ...).
+    vlan_id_cache: Mutex<HashMap<u16, u16>>,
+    /// Next fake VLAN ID to assign.
+    next_vlan_id: Mutex<u16>,
 }
 
 impl DemoSanitizer {
@@ -28,7 +32,22 @@ impl DemoSanitizer {
             mac_cache: Mutex::new(HashMap::new()),
             hostname_cache: Mutex::new(HashMap::new()),
             hostname_counter: Mutex::new(0),
+            vlan_id_cache: Mutex::new(HashMap::new()),
+            next_vlan_id: Mutex::new(10),
         }
+    }
+
+    /// Map a real VLAN ID to a fake one (10, 12, 14, ...).
+    fn remap_vlan_id(&self, real_id: u16) -> u16 {
+        let mut cache = self.vlan_id_cache.lock().unwrap();
+        if let Some(&fake) = cache.get(&real_id) {
+            return fake;
+        }
+        let mut next = self.next_vlan_id.lock().unwrap();
+        let fake = *next;
+        *next += 2;
+        cache.insert(real_id, fake);
+        fake
     }
 
     /// Sanitize a JSON value tree in place.
@@ -81,11 +100,27 @@ impl DemoSanitizer {
                     *s = self.sanitize_isp(s);
                 } else if is_comment_field(key_lower) {
                     *s = self.sanitize_comment(s);
-                } else if is_interface_list_field(key_lower) {
+                } else if is_vlan_name_field(key_lower) {
+                    *s = self.sanitize_vlan_name(s);
+                } else if is_interface_list_field(key_lower) || key_lower == "name" {
                     // Keep interface names like "ether1", "bridge1" — they're generic
+                    // But sanitize VLAN interface names that embed real VLAN descriptions
+                    // e.g. "vlan25-Trusted-Services" → "vlan25"
+                    if looks_like_vlan_interface(s) {
+                        *s = self.sanitize_vlan_interface_name(s);
+                    }
                 } else {
                     // For unknown fields, check if the value looks like an IP or MAC
                     *s = self.sanitize_string(s);
+                }
+            }
+            serde_json::Value::Number(n) => {
+                // Remap numeric VLAN ID fields
+                if is_vlan_id_field(key_lower) {
+                    if let Some(id) = n.as_u64() {
+                        let fake = self.remap_vlan_id(id as u16);
+                        *value = serde_json::Value::Number(serde_json::Number::from(fake));
+                    }
                 }
             }
             serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
@@ -137,9 +172,10 @@ impl DemoSanitizer {
 
         let fake = if is_private_ip(&octets) {
             // All private IPs → 10.249.VLAN.host
-            // Preserves VLAN = 3rd octet convention, only host octet is randomized
+            // 3rd octet (VLAN ID) is remapped to fake sequence (10, 12, 14, ...)
+            let fake_vlan = self.remap_vlan_id(octets[2] as u16) as u8;
             let o4 = (hash[0] as u16 % 254 + 1) as u8;
-            Ipv4Addr::new(10, 249, octets[2], o4)
+            Ipv4Addr::new(10, 249, fake_vlan, o4)
         } else if parsed.is_loopback() {
             parsed // Keep loopback as-is
         } else {
@@ -238,6 +274,35 @@ impl DemoSanitizer {
         isps[hash[0] as usize % isps.len()].to_string()
     }
 
+    /// Replace real VLAN names/IDs with remapped values.
+    /// Pure numeric IDs get remapped (25 → 10). Names get "VLAN <remapped>".
+    fn sanitize_vlan_name(&self, name: &str) -> String {
+        if name.is_empty() || name == "WAN" || name == "unknown" {
+            return name.to_string();
+        }
+        // Pure number (VLAN ID) → remap
+        if let Ok(id) = name.parse::<u16>() {
+            return self.remap_vlan_id(id).to_string();
+        }
+        // Real name like "Trusted Services" → "VLAN <remapped>"
+        let hash = self.hash_bytes(name.as_bytes());
+        let pseudo_id = (hash[0] as u16 % 200) + 100;
+        let fake_id = self.remap_vlan_id(pseudo_id);
+        format!("VLAN {fake_id}")
+    }
+
+    /// Strip descriptive suffix from VLAN interface name and remap the ID.
+    /// "vlan25-Trusted-Services" → "vlan10"
+    fn sanitize_vlan_interface_name(&self, s: &str) -> String {
+        let after_prefix = &s[4..];
+        let digit_end = after_prefix
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(after_prefix.len());
+        let real_id: u16 = after_prefix[..digit_end].parse().unwrap_or(0);
+        let fake_id = self.remap_vlan_id(real_id);
+        format!("vlan{fake_id}")
+    }
+
     /// Sanitize comment fields — remove any IPs or hostnames embedded in comments.
     fn sanitize_comment(&self, comment: &str) -> String {
         if comment.is_empty() {
@@ -310,6 +375,18 @@ fn is_comment_field(key: &str) -> bool {
     matches!(key, "comment" | "description")
 }
 
+fn is_vlan_name_field(key: &str) -> bool {
+    matches!(
+        key,
+        "src_vlan" | "dst_vlan" | "vlan_name" | "vlan"
+            | "current_vlan"
+    )
+}
+
+fn is_vlan_id_field(key: &str) -> bool {
+    matches!(key, "vlan_id" | "vlanid" | "vid")
+}
+
 fn is_interface_list_field(key: &str) -> bool {
     matches!(
         key,
@@ -317,6 +394,14 @@ fn is_interface_list_field(key: &str) -> bool {
             | "bridge" | "wan_interface"
     )
 }
+
+/// Check if a string looks like a VLAN interface name (e.g. "vlan25-Trusted-Services").
+fn looks_like_vlan_interface(s: &str) -> bool {
+    let lower = s.to_lowercase();
+    lower.starts_with("vlan") && s.len() > 4 && s[4..].starts_with(|c: char| c.is_ascii_digit())
+}
+
+// sanitize_vlan_interface_name is a method on DemoSanitizer (uses remap_vlan_id)
 
 /// Check if a string looks like an IPv4 address (with optional CIDR suffix).
 fn looks_like_ip_or_cidr(s: &str) -> bool {
@@ -363,26 +448,28 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_ip_maps_to_10_249_preserving_vlan() {
+    fn sanitize_ip_maps_to_10_249_with_remapped_vlan() {
         let s = DemoSanitizer::new();
-        // All private IPs → 10.249.VLAN.host
+        // All private IPs → 10.249.<remapped_vlan>.host
         let result = s.sanitize_ip("10.20.25.7");
         let octets: Vec<&str> = result.split('.').collect();
         assert_eq!(octets[0], "10");
         assert_eq!(octets[1], "249");
-        assert_eq!(octets[2], "25", "3rd octet (VLAN) must be preserved");
+        // 3rd octet is remapped (first VLAN seen gets 10)
+        let vlan25_remapped: u16 = octets[2].parse().unwrap();
+        assert_eq!(vlan25_remapped, 10, "first VLAN seen should remap to 10");
 
-        // 192.168.99.x → 10.249.99.x
+        // Second unique VLAN gets 12
         let result2 = s.sanitize_ip("192.168.99.5");
         let octets2: Vec<&str> = result2.split('.').collect();
         assert_eq!(&octets2[..2], &["10", "249"]);
-        assert_eq!(octets2[2], "99", "3rd octet (VLAN) must be preserved");
+        let vlan99_remapped: u16 = octets2[2].parse().unwrap();
+        assert_eq!(vlan99_remapped, 12, "second VLAN seen should remap to 12");
 
-        // 172.16.10.x → 10.249.10.x
-        let result3 = s.sanitize_ip("172.16.10.3");
+        // Same VLAN (25) gets same remapped ID
+        let result3 = s.sanitize_ip("10.20.25.100");
         let octets3: Vec<&str> = result3.split('.').collect();
-        assert_eq!(&octets3[..2], &["10", "249"]);
-        assert_eq!(octets3[2], "10");
+        assert_eq!(octets3[2], "10", "same VLAN must get same remapped ID");
 
         // Different hosts in same VLAN get different 4th octets
         let a = s.sanitize_ip("10.20.25.1");
@@ -397,7 +484,9 @@ mod tests {
         assert!(result.ends_with("/24"));
         let octets: Vec<&str> = result.split('/').next().unwrap().split('.').collect();
         assert_eq!(&octets[..2], &["10", "249"]);
-        assert_eq!(octets[2], "25");
+        // 3rd octet is remapped, not the original
+        let remapped: u16 = octets[2].parse().unwrap();
+        assert!(remapped >= 10 && remapped % 2 == 0, "VLAN ID should be remapped to even number >= 10");
     }
 
     #[test]
@@ -484,5 +573,41 @@ mod tests {
 
         let nested = obj["nested"].as_object().unwrap();
         assert_ne!(nested["src_address"].as_str().unwrap(), "192.168.1.100");
+    }
+
+    #[test]
+    fn sanitize_vlan_names() {
+        let s = DemoSanitizer::new();
+        // src_vlan/dst_vlan fields: real names → "VLAN xx"
+        let result = s.sanitize_vlan_name("Trusted Services");
+        assert!(result.starts_with("VLAN "), "got: {result}");
+        assert_ne!(result, "Trusted Services");
+        // Special values preserved
+        assert_eq!(s.sanitize_vlan_name("WAN"), "WAN");
+        assert_eq!(s.sanitize_vlan_name("unknown"), "unknown");
+        // Numeric VLAN IDs get remapped
+        let remapped = s.sanitize_vlan_name("25");
+        assert_ne!(remapped, "25");
+        let id: u16 = remapped.parse().unwrap();
+        assert!(id >= 10 && id % 2 == 0, "remapped VLAN ID should be even >= 10, got {id}");
+    }
+
+    #[test]
+    fn sanitize_vlan_interface_names() {
+        let s = DemoSanitizer::new();
+        // "vlan25-Trusted-Services" → "vlan<remapped>"
+        let result = s.sanitize_vlan_interface_name("vlan25-Trusted-Services");
+        assert!(result.starts_with("vlan"), "got: {result}");
+        assert!(!result.contains("Trusted"));
+        // Second VLAN gets different ID
+        let result2 = s.sanitize_vlan_interface_name("vlan99-IoT-No-Internet");
+        assert_ne!(result, result2);
+        // Same VLAN gets same result
+        let result3 = s.sanitize_vlan_interface_name("vlan25-Something-Else");
+        assert_eq!(result, result3, "same VLAN ID must remap consistently");
+        // Detection
+        assert!(looks_like_vlan_interface("vlan25-Trusted-Services"));
+        assert!(!looks_like_vlan_interface("ether1"));
+        assert!(!looks_like_vlan_interface("bridge1"));
     }
 }
