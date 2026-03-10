@@ -136,31 +136,10 @@ impl DemoSanitizer {
         let hash = self.hash_bytes(ip.as_bytes());
 
         let fake = if is_private_ip(&octets) {
-            // Map private IPs to RFC 5737 documentation ranges
-            // Use different ranges for different private subnets
-            match octets[0] {
-                10 => {
-                    // 10.x.x.x → 10.x.x.hash (keep first two octets structure, vary last two)
-                    let o2 = (hash[0] as u16 % 250 + 1) as u8;
-                    let o3 = (hash[1] as u16 % 250 + 1) as u8;
-                    let o4 = (hash[2] as u16 % 250 + 1) as u8;
-                    Ipv4Addr::new(10, o2, o3, o4)
-                }
-                172 if (16..=31).contains(&octets[1]) => {
-                    let o3 = (hash[0] as u16 % 250 + 1) as u8;
-                    let o4 = (hash[1] as u16 % 250 + 1) as u8;
-                    Ipv4Addr::new(172, 16 + (hash[2] % 16), o3, o4)
-                }
-                192 if octets[1] == 168 => {
-                    let o3 = (hash[0] as u16 % 250 + 1) as u8;
-                    let o4 = (hash[1] as u16 % 250 + 1) as u8;
-                    Ipv4Addr::new(192, 168, o3, o4)
-                }
-                _ => {
-                    // Other private ranges
-                    Ipv4Addr::new(10, hash[0], hash[1], (hash[2] as u16 % 254 + 1) as u8)
-                }
-            }
+            // All private IPs → 10.249.VLAN.host
+            // Preserves VLAN = 3rd octet convention, only host octet is randomized
+            let o4 = (hash[0] as u16 % 254 + 1) as u8;
+            Ipv4Addr::new(10, 249, octets[2], o4)
         } else if parsed.is_loopback() {
             parsed // Keep loopback as-is
         } else {
@@ -384,11 +363,41 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_ip_maps_to_10_249_preserving_vlan() {
+        let s = DemoSanitizer::new();
+        // All private IPs → 10.249.VLAN.host
+        let result = s.sanitize_ip("10.20.25.7");
+        let octets: Vec<&str> = result.split('.').collect();
+        assert_eq!(octets[0], "10");
+        assert_eq!(octets[1], "249");
+        assert_eq!(octets[2], "25", "3rd octet (VLAN) must be preserved");
+
+        // 192.168.99.x → 10.249.99.x
+        let result2 = s.sanitize_ip("192.168.99.5");
+        let octets2: Vec<&str> = result2.split('.').collect();
+        assert_eq!(&octets2[..2], &["10", "249"]);
+        assert_eq!(octets2[2], "99", "3rd octet (VLAN) must be preserved");
+
+        // 172.16.10.x → 10.249.10.x
+        let result3 = s.sanitize_ip("172.16.10.3");
+        let octets3: Vec<&str> = result3.split('.').collect();
+        assert_eq!(&octets3[..2], &["10", "249"]);
+        assert_eq!(octets3[2], "10");
+
+        // Different hosts in same VLAN get different 4th octets
+        let a = s.sanitize_ip("10.20.25.1");
+        let b = s.sanitize_ip("10.20.25.2");
+        assert_ne!(a, b, "different hosts must map to different IPs");
+    }
+
+    #[test]
     fn sanitize_cidr() {
         let s = DemoSanitizer::new();
         let result = s.sanitize_ip_or_cidr("10.20.25.0/24");
         assert!(result.ends_with("/24"));
-        assert_ne!(result, "10.20.25.0/24");
+        let octets: Vec<&str> = result.split('/').next().unwrap().split('.').collect();
+        assert_eq!(&octets[..2], &["10", "249"]);
+        assert_eq!(octets[2], "25");
     }
 
     #[test]
