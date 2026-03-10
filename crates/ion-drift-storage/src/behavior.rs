@@ -465,6 +465,16 @@ pub struct VlanBehaviorSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct BehaviorResetResult {
+    pub anomalies: usize,
+    pub baselines: usize,
+    pub observations: usize,
+    pub profiles: usize,
+    pub boosts: usize,
+    pub watermarks: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AlertCount {
     pub pending_count: i64,
     pub critical_count: i64,
@@ -1752,6 +1762,40 @@ impl BehaviorStore {
             critical_count: critical,
             warning_count: warning,
             anomaly_macs: Vec::new(),
+        })
+    }
+
+    /// Delete ALL anomalies regardless of status. Returns the number deleted.
+    pub async fn delete_all_anomalies(&self) -> Result<usize, String> {
+        let db = self.db.lock().await;
+        db.execute("DELETE FROM device_anomalies", [])
+            .map_err(|e| format!("delete all anomalies failed: {e}"))
+    }
+
+    /// Full behavior engine reset: delete all anomalies, baselines, observations,
+    /// profiles, priority boosts, and watermarks. Suppressions are kept (user-created).
+    /// Returns counts of deleted rows per table.
+    pub async fn reset_all(&self) -> Result<BehaviorResetResult, String> {
+        let db = self.db.lock().await;
+        let anomalies = db.execute("DELETE FROM device_anomalies", [])
+            .map_err(|e| format!("reset anomalies: {e}"))?;
+        let baselines = db.execute("DELETE FROM device_baselines", [])
+            .map_err(|e| format!("reset baselines: {e}"))?;
+        let observations = db.execute("DELETE FROM device_observations", [])
+            .map_err(|e| format!("reset observations: {e}"))?;
+        let profiles = db.execute("DELETE FROM device_profiles", [])
+            .map_err(|e| format!("reset profiles: {e}"))?;
+        let boosts = db.execute("DELETE FROM anomaly_priority_boosts", [])
+            .map_err(|e| format!("reset boosts: {e}"))?;
+        let watermarks = db.execute("DELETE FROM scheduler_watermarks", [])
+            .map_err(|e| format!("reset watermarks: {e}"))?;
+        Ok(BehaviorResetResult {
+            anomalies,
+            baselines,
+            observations,
+            profiles,
+            boosts,
+            watermarks,
         })
     }
 

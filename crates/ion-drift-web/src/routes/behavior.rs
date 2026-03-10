@@ -482,6 +482,43 @@ pub async fn resolve_anomaly_link(
     })))
 }
 
+/// DELETE /api/behavior/anomalies — delete ALL anomalies.
+pub async fn delete_all_anomalies(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let deleted = state
+        .behavior_store
+        .delete_all_anomalies()
+        .await
+        .map_err(|e| internal_error("delete all anomalies", e))?;
+
+    tracing::warn!("deleted all {deleted} anomalies (admin action)");
+    Ok(Json(serde_json::json!({
+        "deleted": deleted,
+    })))
+}
+
+/// POST /api/behavior/reset — full behavior engine reset.
+/// Deletes anomalies, baselines, observations, profiles, boosts, watermarks.
+/// Keeps suppressions (user-created rules).
+pub async fn reset_behavior(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let result = state
+        .behavior_store
+        .reset_all()
+        .await
+        .map_err(|e| internal_error("behavior reset", e))?;
+
+    tracing::warn!(
+        "behavior engine reset: {} anomalies, {} baselines, {} observations, {} profiles deleted (admin action)",
+        result.anomalies, result.baselines, result.observations, result.profiles,
+    );
+    Ok(Json(serde_json::json!(result)))
+}
+
 /// Enhanced device detail with port flow context.
 #[derive(Serialize)]
 pub struct EnhancedDeviceDetailResponse {

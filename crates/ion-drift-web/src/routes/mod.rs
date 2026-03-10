@@ -385,7 +385,11 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/behavior/overview", get(behavior::overview))
         .route("/behavior/vlan/{vlan_id}", get(behavior::vlan_detail))
         .route("/behavior/device/{mac}", get(behavior::device_detail))
-        .route("/behavior/anomalies", get(behavior::anomalies))
+        .route(
+            "/behavior/anomalies",
+            get(behavior::anomalies).delete(behavior::delete_all_anomalies),
+        )
+        .route("/behavior/reset", post(behavior::reset_behavior))
         .route(
             "/behavior/anomalies/export.csv",
             get(behavior::export_anomalies_csv),
