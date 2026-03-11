@@ -1016,38 +1016,38 @@ When navigating to `/sankey?mac={mac}&anomaly_id={id}`, show a slide-in panel wi
 ## Implementation Priority
 
 ```
-Phase 1A:  Fix Sankey page data display       → Unblocks all drill-down
-Phase 10A: Investigation engine module         → Core engine
-Phase 10B: Investigation storage               → Persist results
-Phase 10C: Wire into detection cycle           → Engine goes live
-Phase 10D: CDN detection helper                → Reduce false positives
-Phase 10E: Destination commonality query       → Reduce false positives
-Phase 11A: Alert engine waits for investigation → Enriched notifications
-Phase 11B: Verdict-based alert filtering       → Noise reduction for operators
-Phase 11C: Enhanced notification payloads      → Rich context in alerts
-Phase 11D: Investigation deep link             → One-click from alert to context
-Phase 1B:  Add mac URL param to Sankey         → Enables direct device investigation
-Phase 1D:  Sync Sankey URL with view state     → Back button + shareable links
-Phase 5B:  Investigation verdict inline        → See verdicts in anomaly table
-Phase 12A: Investigation API endpoints         → Frontend can query investigations
-Phase 12B: Investigation panel on behavior     → Full investigation detail view
-Phase 12C: Dashboard investigation widget      → At-a-glance verdict summary
-Phase 4A:  Topology context menu               → Most-requested drill-down
-Phase 5A:  Anomaly investigate button          → Security workflow
-Phase 7A:  Dashboard VLAN activity investigate → Most visible entry point
-Phase 3A:  World map country investigation     → Geographic analysis
-Phase 2A:  Port Sankey click handlers          → Traffic analysis
-Phase 6A:  Identity manager actions            → Device management workflow
-Phase 8A:  History row click                   → Connection investigation
-Phase 4B:  Topology double-click               → Power user shortcut
-Phase 7B-C: Dashboard card navigation          → Quick nav polish
-Phase 3B:  City-level filtering                → Geographic detail
-Phase 8B:  Firewall rule → connections         → Policy audit
-Phase 9A:  Connections URL filter params        → Deep linking
-Phase 1C:  Country URL param for Sankey        → Geographic + Sankey integration
-Phase 2B:  Port Sankey device expansion        → Inline preview
-Phase 5C:  Behavior page mac filter            → Direct device behavior view
-Phase 12D: Sankey investigation overlay        → Traffic + analysis side-by-side
+Phase 1A:  Fix Sankey page data display       → ✅ DONE (useSearch replaces window.location.search)
+Phase 10A: Investigation engine module         → ✅ DONE (investigation.rs — 6-step pipeline)
+Phase 10B: Investigation storage               → ✅ DONE (investigations table + CRUD in behavior.rs)
+Phase 10C: Wire into detection cycle           → ✅ DONE (spawn in behavior collector)
+Phase 10D: CDN detection helper                → ✅ DONE (30+ ASNs in CDN_ASNS constant)
+Phase 10E: Destination commonality query       → ✅ DONE (count_devices_to_destination in connection_store)
+Phase 11A: Alert engine waits for investigation → ✅ DONE (lookup after collection, before delivery)
+Phase 11B: Verdict-based alert filtering       → ✅ DONE (verdict_filter column + retain filter)
+Phase 11C: Enhanced notification payloads      → ✅ DONE (enriched title/body + webhook investigation JSON)
+Phase 11D: Investigation deep link             → ✅ DONE (webhook includes anomaly_id for linking)
+Phase 1B:  Add mac URL param to Sankey         → ✅ DONE (mac + country params in router)
+Phase 1D:  Sync Sankey URL with view state     → ✅ DONE (setView wraps navigate with replace)
+Phase 5B:  Investigation verdict inline        → ✅ DONE (VerdictBadge + summary in AnomalyCard + table column)
+Phase 12A: Investigation API endpoints         → ✅ DONE (4 endpoints in routes/behavior.rs)
+Phase 12B: Investigation panel on behavior     → ✅ DONE (summary bar + verdict badges)
+Phase 12C: Dashboard investigation widget      → ✅ DONE (investigation-card.tsx)
+Phase 4A:  Topology context menu               → ✅ DONE (3 investigation links)
+Phase 5A:  Anomaly investigate button          → ✅ DONE (Microscope link to /sankey?mac=)
+Phase 7A:  Dashboard VLAN activity investigate → ✅ DONE (background agent)
+Phase 3A:  World map country investigation     → Pending (needs backend endpoint)
+Phase 2A:  Port Sankey click handlers          → Pending (needs backend filter support)
+Phase 6A:  Identity manager actions            → ✅ DONE (background agent)
+Phase 8A:  History row click                   → ✅ DONE (background agent)
+Phase 4B:  Topology double-click               → Skipped (context menu sufficient)
+Phase 7B-C: Dashboard card navigation          → ✅ DONE (Link wrappers on drops/traffic cards)
+Phase 3B:  City-level filtering                → Pending
+Phase 8B:  Firewall rule → connections         → ✅ DONE (background agent)
+Phase 9A:  Connections URL filter params        → Pending
+Phase 1C:  Country URL param for Sankey        → ✅ DONE (param added, router updated)
+Phase 2B:  Port Sankey device expansion        → Pending
+Phase 5C:  Behavior page mac filter            → Pending
+Phase 12D: Sankey investigation overlay        → Pending
 ```
 
 ---

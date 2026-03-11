@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Microscope } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { useConnectionHistory } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { HistoryHelp } from "@/components/help-content";
@@ -105,6 +107,21 @@ const historyColumns: Column<ConnectionHistoryEntry>[] = [
     render: (r) =>
       r.flagged ? (
         <span className="h-2 w-2 rounded-full bg-destructive inline-block" />
+      ) : null,
+  },
+  {
+    key: "investigate",
+    header: "",
+    render: (r) =>
+      r.src_mac ? (
+        <Link
+          to="/sankey"
+          search={{ mac: r.src_mac }}
+          className="rounded p-1 text-muted-foreground hover:bg-primary/15 hover:text-primary"
+          title="Investigate source device"
+        >
+          <Microscope className="h-3.5 w-3.5" />
+        </Link>
       ) : null,
   },
 ];
