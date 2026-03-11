@@ -60,6 +60,15 @@ const connectionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/connections",
   component: ConnectionsPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: (search.tab as string) || undefined,
+    country: (search.country as string) || undefined,
+    city: (search.city as string) || undefined,
+    protocol: (search.protocol as string) || undefined,
+    dst_port: (search.dst_port as string) || undefined,
+    src_ip: (search.src_ip as string) || undefined,
+    dst_ip: (search.dst_ip as string) || undefined,
+  }),
 });
 
 const logsRoute = createRoute({
@@ -72,6 +81,9 @@ const behaviorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/behavior",
   component: BehaviorPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    mac: (search.mac as string) || undefined,
+  }),
 });
 
 const historyRoute = createRoute({

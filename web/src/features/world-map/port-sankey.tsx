@@ -199,9 +199,10 @@ interface SankeyLinkPayload {
 interface PortSankeyProps {
   summary: ClassifiedPortSummary;
   title: string;
+  onFlowClick?: (protocol: string, port: string) => void;
 }
 
-export function PortSankey({ summary, title }: PortSankeyProps) {
+export function PortSankey({ summary, title, onFlowClick }: PortSankeyProps) {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
@@ -234,6 +235,7 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
   }, [summary, baselined]);
 
   const LinkWithTooltip = useMemo(() => {
+    const flowClickHandler = onFlowClick;
     return function SankeyLink(props: SankeyLinkPayload) {
       const {
         sourceX,
@@ -353,6 +355,14 @@ export function PortSankey({ summary, title }: PortSankeyProps) {
             updateTooltip(e);
           }}
           onMouseMove={updateTooltip}
+          onClick={() => {
+            hideTooltip();
+            if (flowClickHandler) {
+              const protocol = payload.source.name.trim().toLowerCase();
+              const portMatch = payload.target.name.trim().match(/^(\d+)/);
+              if (portMatch) flowClickHandler(protocol, portMatch[1]);
+            }
+          }}
           onMouseLeave={(e) => {
             if (!isDashed) {
               e.currentTarget.setAttribute("fill-opacity", "0.25");
@@ -566,10 +576,12 @@ const DIRECTIONS: { key: PortDirection; title: string }[] = [
 
 interface DirectionalPortSankeysProps {
   days: number;
+  onFlowClick?: (protocol: string, port: string) => void;
 }
 
 export function DirectionalPortSankeys({
   days,
+  onFlowClick,
 }: DirectionalPortSankeysProps) {
   return (
     <div className="space-y-6">
@@ -579,6 +591,7 @@ export function DirectionalPortSankeys({
           direction={key}
           title={title}
           days={days}
+          onFlowClick={onFlowClick}
         />
       ))}
     </div>
@@ -589,10 +602,12 @@ function DirectionSection({
   direction,
   title,
   days,
+  onFlowClick,
 }: {
   direction: PortDirection;
   title: string;
   days: number;
+  onFlowClick?: (protocol: string, port: string) => void;
 }) {
   const { data, isLoading } = useClassifiedPortSummary(days, direction);
 
@@ -613,5 +628,5 @@ function DirectionSection({
     );
   }
 
-  return <PortSankey summary={data!} title={title} />;
+  return <PortSankey summary={data!} title={title} onFlowClick={onFlowClick} />;
 }

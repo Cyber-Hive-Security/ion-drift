@@ -752,6 +752,46 @@ export interface CitySummaryEntry {
   flagged_count: number;
 }
 
+export interface CountrySummary {
+  country_code: string;
+  country: string;
+  total_connections: number;
+  total_tx: number;
+  total_rx: number;
+  top_devices: CountryDeviceEntry[];
+  top_destinations: CountryDestEntry[];
+  top_ports: CountryPortEntry[];
+  timeline: CountryTimelineBucket[];
+}
+
+export interface CountryDeviceEntry {
+  src_mac: string;
+  src_ip: string;
+  hostname: string | null;
+  connection_count: number;
+  total_bytes: number;
+}
+
+export interface CountryDestEntry {
+  dst_ip: string;
+  org: string | null;
+  connection_count: number;
+  total_bytes: number;
+}
+
+export interface CountryPortEntry {
+  dst_port: number;
+  protocol: string;
+  connection_count: number;
+  total_bytes: number;
+}
+
+export interface CountryTimelineBucket {
+  date: string;
+  connection_count: number;
+  bytes: number;
+}
+
 export interface PortSummaryEntry {
   dst_port: number;
   protocol: string;

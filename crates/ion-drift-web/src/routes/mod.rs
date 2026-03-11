@@ -361,6 +361,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             get(connections::port_summary_classified),
         )
         .route("/connections/city-summary", get(connections::city_summary))
+        .route("/connections/country/:code/summary", get(connections::country_summary))
         .route("/connections/stats", get(connections::history_stats))
         // ARP + enhanced endpoints
         .route("/ip/arp", get(arp::list))

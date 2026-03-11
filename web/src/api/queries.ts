@@ -104,6 +104,7 @@ import type {
   DeliveryChannelConfig,
   Investigation,
   InvestigationStats,
+  CountrySummary,
 } from "./types";
 
 // Auth
@@ -698,6 +699,18 @@ export function useCitySummary(days = 7, minConnections = 50) {
       ),
     refetchInterval: 60_000,
     placeholderData: keepPreviousData,
+  });
+}
+
+export function useCountrySummary(countryCode: string | null, days = 30) {
+  return useQuery({
+    queryKey: ["connections", "country-summary", countryCode, days],
+    queryFn: () =>
+      apiFetch<CountrySummary>(
+        `/api/connections/country/${countryCode}/summary?days=${days}`,
+      ),
+    enabled: !!countryCode,
+    staleTime: 60_000,
   });
 }
 

@@ -237,7 +237,12 @@ export function DashboardPage() {
       </div>
 
       <div className="mt-6">
-        <DirectionalPortSankeys days={1} />
+        <DirectionalPortSankeys
+          days={1}
+          onFlowClick={(protocol, port) => {
+            navigate({ to: "/connections" as "/", search: { protocol, dst_port: port, tab: "connections" } });
+          }}
+        />
       </div>
 
       <div className="mt-6 flex justify-end">

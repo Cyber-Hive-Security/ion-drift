@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import {
   useBehaviorOverview,
   useBehaviorAnomalies,
@@ -41,6 +41,7 @@ import {
   XCircle,
   Trash2,
   Microscope,
+  Filter,
 } from "lucide-react";
 
 // ── VLAN names for display ───────────────────────────────────
@@ -698,7 +699,9 @@ type TabMode = "overview" | "anomalies";
 type AnomalyFilter = "all" | "pending" | "accepted" | "flagged" | "dismissed";
 
 export function BehaviorPage() {
-  const [tab, setTab] = useState<TabMode>("overview");
+  const search = useSearch({ from: "/behavior" });
+  const macFilter = search.mac ?? null;
+  const [tab, setTab] = useState<TabMode>(macFilter ? "anomalies" : "overview");
   const [anomalyFilter, setAnomalyFilter] = useState<AnomalyFilter>("pending");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const vlan = useVlanLookup();
@@ -728,7 +731,10 @@ export function BehaviorPage() {
   if (!overview.data) return null;
 
   const data = overview.data;
-  const anomalies = anomaliesQuery.data ?? [];
+  const allAnomalies = anomaliesQuery.data ?? [];
+  const anomalies = macFilter
+    ? allAnomalies.filter((a) => a.mac === macFilter)
+    : allAnomalies;
   const investigations = investigationsQuery.data ?? [];
   const invStats = investigationStatsQuery.data;
 
@@ -797,6 +803,16 @@ export function BehaviorPage() {
           </button>
         ))}
       </div>
+
+      {macFilter && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <Filter className="h-4 w-4 text-primary" />
+          <span>Filtered to device: <code className="font-mono text-xs">{macFilter}</code></span>
+          <Link to="/behavior" className="ml-auto text-xs text-muted-foreground hover:text-foreground">
+            Clear filter
+          </Link>
+        </div>
+      )}
 
       {/* Overview tab */}
       {tab === "overview" && (

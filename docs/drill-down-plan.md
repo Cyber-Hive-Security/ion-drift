@@ -1035,19 +1035,19 @@ Phase 12C: Dashboard investigation widget      → ✅ DONE (investigation-card.
 Phase 4A:  Topology context menu               → ✅ DONE (3 investigation links)
 Phase 5A:  Anomaly investigate button          → ✅ DONE (Microscope link to /sankey?mac=)
 Phase 7A:  Dashboard VLAN activity investigate → ✅ DONE (background agent)
-Phase 3A:  World map country investigation     → Pending (needs backend endpoint)
-Phase 2A:  Port Sankey click handlers          → Pending (needs backend filter support)
+Phase 3A:  World map country investigation     → ✅ DONE (country_summary backend + CountryInvestigationPanel component)
+Phase 2A:  Port Sankey click handlers          → ✅ DONE (onFlowClick prop → navigate to /connections with protocol/port filters)
 Phase 6A:  Identity manager actions            → ✅ DONE (background agent)
 Phase 8A:  History row click                   → ✅ DONE (background agent)
 Phase 4B:  Topology double-click               → Skipped (context menu sufficient)
 Phase 7B-C: Dashboard card navigation          → ✅ DONE (Link wrappers on drops/traffic cards)
-Phase 3B:  City-level filtering                → Pending
+Phase 3B:  City-level filtering                → ✅ DONE (city column filter + handleMapCityClick sets city+country)
 Phase 8B:  Firewall rule → connections         → ✅ DONE (background agent)
-Phase 9A:  Connections URL filter params        → Pending
+Phase 9A:  Connections URL filter params        → ✅ DONE (validateSearch on /connections route + initialFilters from URL)
 Phase 1C:  Country URL param for Sankey        → ✅ DONE (param added, router updated)
-Phase 2B:  Port Sankey device expansion        → Pending
-Phase 5C:  Behavior page mac filter            → Pending
-Phase 12D: Sankey investigation overlay        → Pending
+Phase 2B:  Port Sankey device expansion        → Skipped (tooltip already shows involved devices with bytes + correlated marker)
+Phase 5C:  Behavior page mac filter            → ✅ DONE (useSearch + macFilter + filter banner with clear link)
+Phase 12D: Sankey investigation overlay        → ✅ DONE (DeviceInvestigationsPanel in DeviceTrace with expandable evidence chain)
 ```
 
 ---
