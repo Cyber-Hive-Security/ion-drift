@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useSearch, useNavigate } from "@tanstack/react-router";
 import { PageShell } from "@/components/layout/page-shell";
 import { InvestigationHelp } from "@/components/help-content";
 import { ErrorDisplay } from "@/components/error-display";
@@ -217,16 +218,35 @@ type View =
   | { level: "conversation"; mac: string; destIp: string };
 
 export function SankeyInvestigationPage() {
+  const search = useSearch({ from: "/sankey" });
+  const navigate = useNavigate();
   const [range, setRange] = useState("24h");
-  const [view, setView] = useState<View>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const vlan = params.get("vlan");
-    if (vlan) {
-      const dest = params.get("dest") ?? undefined;
-      return { level: "vlan", vlanId: vlan, destVlan: dest };
-    }
+
+  // Derive initial view from URL search params
+  const initialView = useMemo((): View => {
+    if (search.mac) return { level: "device", mac: search.mac };
+    if (search.vlan) return { level: "vlan", vlanId: search.vlan, destVlan: search.dest };
     return { level: "network" };
-  });
+  }, []); // Only compute once on mount
+
+  const [view, setViewState] = useState<View>(initialView);
+
+  // Wrap setView to sync URL
+  const setView = useCallback((v: View) => {
+    setViewState(v);
+    const params: Record<string, string | undefined> = {};
+    if (v.level === "vlan") {
+      params.vlan = v.vlanId;
+      params.dest = v.destVlan;
+    } else if (v.level === "device") {
+      params.mac = v.mac;
+    } else if (v.level === "conversation") {
+      params.mac = v.mac;
+    }
+    // Keep country if it was in original params
+    if (search.country) params.country = search.country;
+    navigate({ to: "/sankey", search: params, replace: true });
+  }, [navigate, search.country]);
 
   const breadcrumb = (() => {
     const items: { label: string; onClick?: () => void }[] = [

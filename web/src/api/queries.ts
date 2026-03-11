@@ -102,6 +102,8 @@ import type {
   AlertHistoryEntry,
   AlertStatus,
   DeliveryChannelConfig,
+  Investigation,
+  InvestigationStats,
 } from "./types";
 
 // Auth
@@ -1809,5 +1811,51 @@ export function useTestAlertChannel() {
       apiFetch<{ ok: boolean }>(`/api/alerts/channels/${encodeURIComponent(channel)}/test`, {
         method: "POST",
       }),
+  });
+}
+
+// ── Investigation Engine ──────────────────────────────────────
+
+export function useInvestigations(params?: {
+  verdict?: string;
+  mac?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.verdict) qs.set("verdict", params.verdict);
+  if (params?.mac) qs.set("mac", params.mac);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  const q = qs.toString();
+  return useQuery({
+    queryKey: ["investigations", params],
+    queryFn: () => apiFetch<Investigation[]>(`/api/investigations${q ? `?${q}` : ""}`),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useInvestigationByAnomaly(anomalyId: number | null) {
+  return useQuery({
+    queryKey: ["investigations", "anomaly", anomalyId],
+    queryFn: () => apiFetch<Investigation>(`/api/investigations/anomaly/${anomalyId}`),
+    enabled: anomalyId != null,
+  });
+}
+
+export function useDeviceInvestigations(mac: string | null) {
+  return useQuery({
+    queryKey: ["investigations", "device", mac],
+    queryFn: () => apiFetch<Investigation[]>(`/api/investigations/device/${encodeURIComponent(mac!)}`),
+    enabled: mac != null,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useInvestigationStats(hours = 24) {
+  return useQuery({
+    queryKey: ["investigations", "stats", hours],
+    queryFn: () => apiFetch<InvestigationStats>(`/api/investigations/stats?hours=${hours}`),
+    refetchInterval: 30_000,
   });
 }

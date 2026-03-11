@@ -1,10 +1,13 @@
 import { useState, useMemo } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   useBehaviorOverview,
   useBehaviorAnomalies,
   useResolveAnomaly,
   useBulkResolveAnomalies,
   useDeleteAllAnomalies,
+  useInvestigations,
+  useInvestigationStats,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { BehaviorHelp } from "@/components/help-content";
@@ -17,6 +20,8 @@ import type {
   BehaviorOverview,
   DeviceAnomaly,
   VlanBehaviorSummary,
+  Investigation,
+  InvestigationStats,
 } from "@/api/types";
 import {
   Activity,
@@ -35,6 +40,7 @@ import {
   CheckCheck,
   XCircle,
   Trash2,
+  Microscope,
 } from "lucide-react";
 
 // ── VLAN names for display ───────────────────────────────────
@@ -110,7 +116,66 @@ function formatBytesCompact(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
+// ── Investigation verdict styling ────────────────────────────
+
+function verdictStyle(verdict: string): string {
+  switch (verdict) {
+    case "benign":
+      return "bg-emerald-500/15 text-emerald-400";
+    case "routine":
+      return "bg-sky-500/15 text-sky-400";
+    case "suspicious":
+      return "bg-amber-500/15 text-amber-400";
+    case "threat":
+      return "bg-destructive/15 text-destructive";
+    case "inconclusive":
+      return "bg-muted text-muted-foreground";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function VerdictBadge({ investigation }: { investigation: Investigation | undefined }) {
+  if (!investigation) return null;
+  return (
+    <span
+      className={cn("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium", verdictStyle(investigation.verdict))}
+      title={investigation.summary}
+    >
+      <Microscope className="h-3 w-3" />
+      {investigation.verdict}
+    </span>
+  );
+}
+
 // ── Stats Row ────────────────────────────────────────────────
+
+function InvestigationSummaryBar({ stats }: { stats: InvestigationStats | undefined }) {
+  if (!stats || stats.total === 0) return null;
+  const items = [
+    { label: "Benign", count: stats.benign, color: "text-emerald-400" },
+    { label: "Routine", count: stats.routine, color: "text-sky-400" },
+    { label: "Suspicious", count: stats.suspicious, color: "text-amber-400" },
+    { label: "Threat", count: stats.threat, color: "text-destructive" },
+    { label: "Inconclusive", count: stats.inconclusive, color: "text-muted-foreground" },
+  ];
+  return (
+    <div className="mb-4 flex items-center gap-4 rounded-lg border border-border bg-card px-4 py-2.5">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Microscope className="h-3.5 w-3.5" />
+        Investigations (24h)
+      </div>
+      <span className="text-sm font-bold">{stats.total}</span>
+      <div className="ml-2 flex items-center gap-3">
+        {items.filter(i => i.count > 0).map(i => (
+          <span key={i.label} className={cn("text-xs font-medium", i.color)}>
+            {i.count} {i.label.toLowerCase()}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function StatsRow({ data }: { data: BehaviorOverview }) {
   return (
@@ -226,10 +291,12 @@ function VlanSection({
   summary,
   anomalies,
   resolveMutation,
+  investigationMap,
 }: {
   summary: VlanBehaviorSummary;
   anomalies: DeviceAnomaly[];
   resolveMutation: ReturnType<typeof useResolveAnomaly>;
+  investigationMap: Map<number, Investigation>;
 }) {
   const vlan = useVlanLookup();
   const hasAnomalies = summary.pending_anomaly_count > 0;
@@ -290,6 +357,7 @@ function VlanSection({
                 key={a.id}
                 anomaly={a}
                 resolveMutation={resolveMutation}
+                investigation={investigationMap.get(a.id)}
               />
             ))}
           </div>
@@ -309,9 +377,11 @@ function VlanSection({
 function AnomalyCard({
   anomaly,
   resolveMutation,
+  investigation,
 }: {
   anomaly: DeviceAnomaly;
   resolveMutation: ReturnType<typeof useResolveAnomaly>;
+  investigation?: Investigation;
 }) {
   const isPending = anomaly.status === "pending";
   const d = parseDetails(anomaly.details);
@@ -372,6 +442,7 @@ function AnomalyCard({
             >
               {(anomaly.confidence * 100).toFixed(0)}%
             </span>
+            <VerdictBadge investigation={investigation} />
           </div>
 
           {/* Flow line: source → destination */}
@@ -411,6 +482,17 @@ function AnomalyCard({
             </p>
           )}
 
+          {/* Investigation summary */}
+          {investigation && (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground/70">Investigation:</span>{" "}
+              {investigation.summary}
+              {investigation.recommended_action && (
+                <span className="ml-1 italic">&middot; {investigation.recommended_action}</span>
+              )}
+            </p>
+          )}
+
           {/* Network context from port flow correlator */}
           {d.source === "port_flow" && (
             <div className="mt-1 rounded border border-warning/20 bg-warning/5 px-2 py-1 text-xs">
@@ -436,6 +518,14 @@ function AnomalyCard({
         </div>
         {isPending && (
           <div className="flex shrink-0 items-center gap-1">
+            <Link
+              to="/sankey"
+              search={{ mac: anomaly.mac }}
+              className="flex h-11 w-11 items-center justify-center rounded text-primary hover:bg-primary/15 md:h-auto md:w-auto md:p-1"
+              title="Investigate traffic"
+            >
+              <Microscope className="h-5 w-5 md:h-3.5 md:w-3.5" />
+            </Link>
             <button
               className="flex h-11 w-11 items-center justify-center rounded text-success hover:bg-emerald-500/15 md:h-auto md:w-auto md:p-1"
               title="Accept"
@@ -477,7 +567,7 @@ function AnomalyCard({
 
 // ── Anomalies Table ──────────────────────────────────────────
 
-function anomalyColumns(vlanNames: Record<number, string>): Column<DeviceAnomaly>[] { return [
+function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map<number, Investigation>): Column<DeviceAnomaly>[] { return [
   {
     key: "severity",
     header: "Severity",
@@ -564,6 +654,16 @@ function anomalyColumns(vlanNames: Record<number, string>): Column<DeviceAnomaly
     sortValue: (r) => -r.confidence,
   },
   {
+    key: "verdict",
+    header: "Verdict",
+    render: (r) => <VerdictBadge investigation={investigationMap.get(r.id)} />,
+    sortValue: (r) => {
+      const v = investigationMap.get(r.id)?.verdict ?? "z";
+      const order: Record<string, number> = { threat: 0, suspicious: 1, inconclusive: 2, routine: 3, benign: 4 };
+      return order[v] ?? 5;
+    },
+  },
+  {
     key: "timestamp",
     header: "Time",
     render: (r) => (
@@ -611,6 +711,8 @@ export function BehaviorPage() {
   const resolveMutation = useResolveAnomaly();
   const bulkMutation = useBulkResolveAnomalies();
   const deleteAllMutation = useDeleteAllAnomalies();
+  const investigationsQuery = useInvestigations({ limit: 200 });
+  const investigationStatsQuery = useInvestigationStats();
 
   if (overview.isLoading) return <LoadingSpinner />;
   if (overview.error) {
@@ -627,6 +729,17 @@ export function BehaviorPage() {
 
   const data = overview.data;
   const anomalies = anomaliesQuery.data ?? [];
+  const investigations = investigationsQuery.data ?? [];
+  const invStats = investigationStatsQuery.data;
+
+  // Build anomaly_id → Investigation lookup
+  const investigationMap = useMemo(() => {
+    const map = new Map<number, Investigation>();
+    for (const inv of investigations) {
+      map.set(inv.anomaly_id, inv);
+    }
+    return map;
+  }, [investigations]);
 
   // Sort VLANs: those with anomalies first
   const sortedSummaries = [...data.vlan_summaries].sort((a, b) => {
@@ -660,6 +773,7 @@ export function BehaviorPage() {
     >
       <AlertBanners data={data} />
       <StatsRow data={data} />
+      <InvestigationSummaryBar stats={invStats} />
 
       {/* Tabs */}
       <div className="mb-4 flex flex-wrap gap-2">
@@ -693,6 +807,7 @@ export function BehaviorPage() {
               summary={s}
               anomalies={anomalies}
               resolveMutation={resolveMutation}
+              investigationMap={investigationMap}
             />
           ))}
           {sortedSummaries.length === 0 && (
@@ -829,7 +944,7 @@ export function BehaviorPage() {
           </div>
 
           <DataTable
-            columns={anomalyColumns(vlan.names)}
+            columns={anomalyColumns(vlan.names, investigationMap)}
             data={anomalies}
             rowKey={(r) => String(r.id)}
             searchable

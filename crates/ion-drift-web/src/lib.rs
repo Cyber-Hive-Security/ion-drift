@@ -11,6 +11,7 @@ pub mod demo;
 pub mod device_manager;
 pub mod dns;
 pub mod geo;
+pub mod investigation;
 pub mod live_traffic;
 pub mod log_parser;
 pub mod middleware;

@@ -527,3 +527,87 @@ pub struct EnhancedDeviceDetailResponse {
     pub anomalies: Vec<ion_drift_storage::behavior::DeviceAnomaly>,
     pub port_flow_contexts: Vec<crate::connection_store::PortFlowContext>,
 }
+
+// ── Investigation Endpoints ────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct InvestigationQueryParams {
+    pub verdict: Option<String>,
+    pub mac: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// GET /api/investigations — list investigations with optional filters.
+pub async fn list_investigations(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(params): Query<InvestigationQueryParams>,
+) -> Result<Json<Vec<ion_drift_storage::behavior::Investigation>>, Response> {
+    let limit = params.limit.unwrap_or(50).min(200);
+    let offset = params.offset.unwrap_or(0);
+    let investigations = state
+        .behavior_store
+        .get_investigations(
+            params.verdict.as_deref(),
+            params.mac.as_deref(),
+            limit,
+            offset,
+        )
+        .await
+        .map_err(|e| internal_error("list investigations", e))?;
+    Ok(Json(investigations))
+}
+
+/// GET /api/investigations/anomaly/:anomaly_id — get investigation by anomaly ID.
+pub async fn get_investigation(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(anomaly_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, Response> {
+    match state
+        .behavior_store
+        .get_investigation_by_anomaly(anomaly_id)
+        .await
+        .map_err(|e| internal_error("get investigation", e))?
+    {
+        Some(inv) => Ok(Json(serde_json::to_value(inv).unwrap_or_default())),
+        None => Ok(Json(serde_json::json!(null))),
+    }
+}
+
+/// GET /api/investigations/device/:mac — investigations for a specific device.
+pub async fn get_device_investigations(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Path(mac): Path<String>,
+    Query(params): Query<InvestigationQueryParams>,
+) -> Result<Json<Vec<ion_drift_storage::behavior::Investigation>>, Response> {
+    let limit = params.limit.unwrap_or(50).min(200);
+    let investigations = state
+        .behavior_store
+        .get_investigations_by_device(&mac, limit)
+        .await
+        .map_err(|e| internal_error("device investigations", e))?;
+    Ok(Json(investigations))
+}
+
+#[derive(Deserialize)]
+pub struct InvestigationStatsParams {
+    pub hours: Option<i64>,
+}
+
+/// GET /api/investigations/stats — verdict distribution.
+pub async fn investigation_stats(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(params): Query<InvestigationStatsParams>,
+) -> Result<Json<ion_drift_storage::behavior::InvestigationStats>, Response> {
+    let hours = params.hours.unwrap_or(24);
+    let stats = state
+        .behavior_store
+        .get_investigation_stats(hours)
+        .await
+        .map_err(|e| internal_error("investigation stats", e))?;
+    Ok(Json(stats))
+}

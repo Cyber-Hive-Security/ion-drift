@@ -411,6 +411,17 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             delete(behavior::delete_suppression),
         )
         .route("/behavior/alerts", get(behavior::alerts))
+        // Investigations
+        .route("/investigations", get(behavior::list_investigations))
+        .route(
+            "/investigations/anomaly/{anomaly_id}",
+            get(behavior::get_investigation),
+        )
+        .route(
+            "/investigations/device/{mac}",
+            get(behavior::get_device_investigations),
+        )
+        .route("/investigations/stats", get(behavior::investigation_stats))
         .route("/behavior/anomaly-links", get(behavior::anomaly_links))
         .route(
             "/behavior/anomaly-links/port/{protocol}/{port}",

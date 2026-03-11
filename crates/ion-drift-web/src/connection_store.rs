@@ -1366,6 +1366,32 @@ impl ConnectionStore {
         })
     }
 
+    // ── Investigation helpers ───────────────────────────────────────
+
+    /// Count unique source MACs that have connected to a given destination IP
+    /// within the specified number of days. Used by investigation engine to
+    /// determine if a destination is "common" (many devices talk to it).
+    pub fn count_devices_to_destination(&self, dst_ip: &str, days: i64) -> Result<i64, String> {
+        let db = self.db.lock().unwrap();
+        let cutoff_ts = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            now - (days * 86400)
+        };
+        // first_seen is stored as ISO8601 text, so compare as text timestamps
+        db.query_row(
+            "SELECT COUNT(DISTINCT src_mac) FROM connection_history
+             WHERE dst_ip = ?1 AND src_mac IS NOT NULL
+             AND first_seen >= datetime(?2, 'unixepoch')",
+            params![dst_ip, cutoff_ts],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("count_devices_to_destination failed: {e}"))
+    }
+
     // ── Anomaly link methods ──────────────────────────────────────
 
     /// Insert a new anomaly link and return its ID.

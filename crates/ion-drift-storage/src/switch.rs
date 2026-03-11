@@ -573,6 +573,7 @@ impl SwitchStore {
                 severity_filter TEXT,
                 vlan_filter TEXT,
                 disposition_filter TEXT,
+                verdict_filter TEXT,
                 cooldown_seconds INTEGER NOT NULL DEFAULT 300,
                 delivery_channels TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -686,6 +687,9 @@ impl SwitchStore {
         ] {
             let _ = conn.execute(alter, []);
         }
+
+        // Idempotent — add verdict_filter to alert_rules
+        let _ = conn.execute("ALTER TABLE alert_rules ADD COLUMN verdict_filter TEXT", []);
 
         // One-time migration: clear hardcoded VLAN config seeds so router sync
         // can repopulate with actual data. Detects the old seed by checking if

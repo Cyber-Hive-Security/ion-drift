@@ -153,6 +153,8 @@ const sankeyRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     vlan: (search.vlan as string) || undefined,
     dest: (search.dest as string) || undefined,
+    mac: (search.mac as string) || undefined,
+    country: (search.country as string) || undefined,
   }),
 });
 
