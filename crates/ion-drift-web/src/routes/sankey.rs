@@ -16,6 +16,11 @@ pub struct RangeQuery {
     pub range: Option<String>,
 }
 
+/// Strip "VLAN " prefix from DB format ("VLAN 25" → "25"), pass through "WAN"/"unknown".
+fn strip_vlan_prefix(s: &str) -> String {
+    s.strip_prefix("VLAN ").unwrap_or(s).to_string()
+}
+
 fn range_to_sqlite_offset(range: &str) -> String {
     let hours = match range {
         "1h" => 1,
@@ -83,8 +88,8 @@ pub async fn network_overview(
         let flows: Vec<SankeyNetworkFlow> = stmt
             .query_map(rusqlite::params![offset], |row| {
                 Ok(SankeyNetworkFlow {
-                    src_vlan: row.get(0)?,
-                    dst_vlan: row.get(1)?,
+                    src_vlan: strip_vlan_prefix(&row.get::<_, String>(0)?),
+                    dst_vlan: strip_vlan_prefix(&row.get::<_, String>(1)?),
                     bytes: row.get(2)?,
                     connections: row.get(3)?,
                     anomaly_count: row.get(4)?,
@@ -110,7 +115,7 @@ pub async fn network_overview(
         let vlans: Vec<SankeyNetworkVlan> = stmt2
             .query_map(rusqlite::params![offset], |row| {
                 Ok(SankeyNetworkVlan {
-                    vlan_id: row.get(0)?,
+                    vlan_id: strip_vlan_prefix(&row.get::<_, String>(0)?),
                     device_count: row.get(1)?,
                     total_bytes: row.get(2)?,
                     total_connections: row.get(3)?,

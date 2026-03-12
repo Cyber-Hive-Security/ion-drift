@@ -1251,6 +1251,7 @@ async fn sync_vlan_config_from_router(
         let config = VlanConfig {
             vlan_id: vlan.vlan_id,
             name: friendly_name,
+            interface_name: Some(raw_name.clone()),
             media_type: media_type.to_string(),
             subnet,
             color: Some(auto_color(vlan.vlan_id).to_string()),

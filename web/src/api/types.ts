@@ -314,6 +314,10 @@ export interface VlanFlow {
   source: string;
   target: string;
   bytes: number;
+  /** Router-authoritative VLAN ID for source (absent for WAN). */
+  source_vlan_id?: number;
+  /** Router-authoritative VLAN ID for target (absent for WAN). */
+  target_vlan_id?: number;
 }
 
 // Connection summary types (snake_case — custom Rust structs)
@@ -433,6 +437,8 @@ export interface FirewallDropsSummary {
 
 export interface VlanActivityEntry {
   name: string;
+  /** Router-authoritative VLAN ID (absent if interface not in vlan_config). */
+  vlan_id?: number;
   rx_bps: number;
   tx_bps: number;
 }
@@ -1302,6 +1308,8 @@ export interface SectorPosition {
 export interface VlanConfig {
   vlan_id: number;
   name: string;
+  /** Router interface name (e.g. "V-90-IoT"). */
+  interface_name?: string;
   media_type: "wired" | "wireless" | "mixed";
   subnet: string | null;
   color: string | null;

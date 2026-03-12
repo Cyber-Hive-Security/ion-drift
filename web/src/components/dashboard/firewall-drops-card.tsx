@@ -56,7 +56,7 @@ export function FirewallDropsCard({ data }: { data: FirewallDropsSummary }) {
           {(["24h", "7d"] as const).map((r) => (
             <button
               key={r}
-              onClick={() => setRange(r)}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setRange(r); }}
               className={cn(
                 "rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
                 range === r

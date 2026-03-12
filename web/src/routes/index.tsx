@@ -203,16 +203,10 @@ export function DashboardPage() {
   const dhcp = useDhcpLeases({ polling: true });
   const connections = useConnectionSummary();
   const drops = useFirewallDrops();
-  const handleSankeyClick = useCallback((srcVlan: string, dstVlan: string) => {
-    // Extract VLAN ID from Mikrotik interface name (e.g. "vlan90-IoT" → "90")
-    // WAN interface names (e.g. "1-WAN") pass through as "WAN"
-    const extractVlanId = (iface: string): string => {
-      const m = iface.match(/^vlan(\d+)/i);
-      if (m) return m[1];
-      if (iface.toLowerCase().includes("wan")) return "WAN";
-      return iface;
-    };
-    navigate({ to: "/sankey" as "/", search: { vlan: extractVlanId(srcVlan), dest: extractVlanId(dstVlan) } });
+  const handleSankeyClick = useCallback((srcVlanId: string, dstVlanId: string) => {
+    // VLAN IDs are resolved by the backend from the router's interface/vlan table —
+    // no regex parsing of interface names needed.
+    navigate({ to: "/sankey" as "/", search: { vlan: srcVlanId, dest: dstVlanId } });
   }, [navigate]);
   if (system.isLoading) return <LoadingSpinner />;
   if (system.error)

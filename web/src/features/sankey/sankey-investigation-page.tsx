@@ -215,6 +215,12 @@ function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text).catch(() => {});
 }
 
+/** Format a bare VLAN ID for display: "35" → "VLAN 35", "WAN" stays "WAN". */
+function vlanLabel(id: string): string {
+  if (!id || id === "WAN" || id === "unknown") return id;
+  return `VLAN ${id}`;
+}
+
 type View =
   | { level: "network" }
   | { level: "vlan"; vlanId: string; destVlan?: string }
@@ -263,7 +269,7 @@ export function SankeyInvestigationPage() {
       },
     ];
     if (view.level === "vlan") {
-      items.push({ label: `VLAN ${view.vlanId}` });
+      items.push({ label: vlanLabel(view.vlanId) });
     }
     if (view.level === "device") {
       items.push({ label: view.mac });
@@ -386,7 +392,7 @@ function NetworkOverview({
             onMouseEnter={() => prefetchVlan(vlan.vlan_id)}
             className="rounded-lg border border-border bg-card p-3 text-left hover:border-primary/50 transition-colors"
           >
-            <div className="text-sm font-medium">VLAN {vlan.vlan_id}</div>
+            <div className="text-sm font-medium">{vlanLabel(vlan.vlan_id)}</div>
             <div className="text-xs text-muted-foreground mt-1">
               {vlan.device_count} devices · {formatBytes(vlan.total_bytes)}
             </div>
@@ -409,9 +415,9 @@ function NetworkOverview({
               className="w-full flex items-center gap-4 px-4 py-2.5 text-left hover:bg-accent/50 transition-colors"
               onClick={() => onSelectVlan(flow.src_vlan, flow.dst_vlan)}
             >
-              <span className="text-sm font-medium w-24">{flow.src_vlan}</span>
+              <span className="text-sm font-medium w-24">{vlanLabel(flow.src_vlan)}</span>
               <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-sm font-medium w-24">{flow.dst_vlan}</span>
+              <span className="text-sm font-medium w-24">{vlanLabel(flow.dst_vlan)}</span>
               <span className="text-xs text-muted-foreground flex-1 text-right">
                 {formatBytes(flow.bytes)} · {flow.connections} conn
               </span>
@@ -496,7 +502,7 @@ function VlanDetail({
 
       {destVlan && (
         <div className="text-xs text-muted-foreground">
-          Filtered to flows: {vlanId} → {destVlan}
+          Filtered to flows: {vlanLabel(vlanId)} → {vlanLabel(destVlan)}
         </div>
       )}
 

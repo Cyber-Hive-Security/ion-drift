@@ -94,7 +94,7 @@ function VlanRow({
         </div>
         <Link
           to="/sankey"
-          search={{ vlan: entry.name.match(/^vlan(\d+)/i)?.[1] ?? entry.name }}
+          search={{ vlan: entry.vlan_id != null ? String(entry.vlan_id) : entry.name }}
           onClick={(e) => e.stopPropagation()}
           className="ml-auto rounded p-1 text-muted-foreground hover:bg-primary/15 hover:text-primary"
           title="Investigate VLAN traffic"

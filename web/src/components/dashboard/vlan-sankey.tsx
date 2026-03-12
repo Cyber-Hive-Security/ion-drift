@@ -92,12 +92,14 @@ interface SankeyLinkPayload {
     target: { name: string };
     value: number;
     rawBytes: number;
+    sourceVlanId?: number;
+    targetVlanId?: number;
   };
 }
 
 // CustomLink is created inside VlanTrafficBreakdown (needs closure access to tooltip ref)
 
-export function VlanTrafficBreakdown({ onLinkClick }: { onLinkClick?: (srcVlan: string, dstVlan: string) => void } = {}) {
+export function VlanTrafficBreakdown({ onLinkClick }: { onLinkClick?: (srcVlanId: string, dstVlanId: string) => void } = {}) {
   const { data: flows, isLoading } = useVlanFlows();
   const tooltipRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -148,9 +150,10 @@ export function VlanTrafficBreakdown({ onLinkClick }: { onLinkClick?: (srcVlan: 
 
       const handleClick = () => {
         if (onLinkClick) {
-          const src = payload.source.name.trim();
-          const dst = payload.target.name.trim();
-          onLinkClick(src, dst);
+          // Use router-authoritative VLAN IDs; fall back to "WAN" for non-VLAN interfaces
+          const srcId = payload.sourceVlanId != null ? String(payload.sourceVlanId) : "WAN";
+          const dstId = payload.targetVlanId != null ? String(payload.targetVlanId) : "WAN";
+          onLinkClick(srcId, dstId);
         }
       };
 
@@ -236,6 +239,8 @@ export function VlanTrafficBreakdown({ onLinkClick }: { onLinkClick?: (srcVlan: 
         target: n + dstIdx,
         value: scaleBytes(f.bytes),
         rawBytes: f.bytes,
+        sourceVlanId: f.source_vlan_id,
+        targetVlanId: f.target_vlan_id,
       };
     });
 
