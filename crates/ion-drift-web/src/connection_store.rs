@@ -319,6 +319,23 @@ fn is_ephemeral_port(port: i64) -> bool {
     port >= 49_152 && !KNOWN_SERVICE_PORTS.contains(&port)
 }
 
+/// Returns true if a port flow is significant enough for baseline tracking
+/// and anomaly classification.  Filters out internet scan noise by requiring
+/// minimum traffic thresholds for non-well-known ports.
+fn is_significant_port_flow(port: i64, total_bytes: i64, flow_count: i64) -> bool {
+    // Well-known ports are always significant
+    if KNOWN_SERVICE_PORTS.contains(&port) {
+        return true;
+    }
+    // IANA ephemeral range: filter unless high traffic
+    if port >= 49_152 {
+        return total_bytes >= 1_073_741_824; // 1 GB
+    }
+    // Non-well-known ports below ephemeral range: require meaningful traffic
+    // to filter out internet scan probes (typically 1-2 packets, < 1KB)
+    flow_count >= 5 && total_bytes >= 10_000 // 10 KB minimum
+}
+
 /// Weekly snapshot record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeeklySnapshot {
@@ -1194,6 +1211,12 @@ impl ConnectionStore {
 
         for row in rows {
             let (dir, proto, port, bytes, conns, srcs, dsts) = row?;
+
+            // Skip noise ports: scan probes and ephemeral traffic don't deserve baselines
+            if !is_significant_port_flow(port, bytes, conns) {
+                continue;
+            }
+
             let key = (dir, proto, port);
             let sources: Vec<String> = srcs
                 .unwrap_or_default()
@@ -1369,6 +1392,11 @@ impl ConnectionStore {
         let mut anomaly_count = 0;
 
         for flow in &current_flows {
+            // Skip noise: low-traffic non-well-known ports (scan probes, ephemeral)
+            if !is_significant_port_flow(flow.dst_port, flow.total_bytes, flow.flow_count) {
+                continue;
+            }
+
             let key = (flow.protocol.clone(), flow.dst_port);
 
             // Get current top sources for this flow
@@ -1475,13 +1503,20 @@ impl ConnectionStore {
             });
         }
 
-        // Find disappeared ports: baselines with days_present >= 5 that aren't in current flows
+        // Find disappeared ports: baselines with sufficient history that aren't in current flows.
+        // Only flag well-known service ports or ports with substantial traffic history
+        // to avoid noise from scan probes that happened to persist for a few days.
         let current_keys: std::collections::HashSet<(String, i64)> =
             current_flows.iter().map(|f| (f.protocol.clone(), f.dst_port)).collect();
 
         let disappeared: Vec<ClassifiedPortFlow> = baselines
             .iter()
-            .filter(|b| b.days_present >= 5 && !current_keys.contains(&(b.protocol.clone(), b.dst_port)))
+            .filter(|b| {
+                b.days_present >= 5
+                    && !current_keys.contains(&(b.protocol.clone(), b.dst_port))
+                    && (KNOWN_SERVICE_PORTS.contains(&b.dst_port)
+                        || b.avg_bytes_per_day >= 100_000) // 100KB/day avg = real service
+            })
             .map(|b| ClassifiedPortFlow {
                 dst_port: b.dst_port,
                 protocol: b.protocol.clone(),
