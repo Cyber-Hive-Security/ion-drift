@@ -1,9 +1,11 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
+import { useSearch } from "@tanstack/react-router";
 import {
   useConnectionsPage,
   useConnectionsHistory,
   useGeoSummary,
   useCitySummary,
+  useCountrySummary,
   useSnapshots,
   useSnapshot,
   useMapConfig,
@@ -19,7 +21,8 @@ import { countryFlag, isPrivateIp, vlanLabel } from "@/lib/country";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import { cn } from "@/lib/utils";
 import { portLabel } from "@/lib/services";
-import { ChevronDown, ChevronRight, Filter, Globe, Network, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Filter, Globe, Microscope, Network, X } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import {
   PieChart,
   Pie,
@@ -34,7 +37,7 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from "recharts";
-import type { ConnectionEntry, ConnectionsPageResponse, GeoSummaryEntry } from "@/api/types";
+import type { ConnectionEntry, ConnectionsPageResponse, CountrySummary, GeoSummaryEntry } from "@/api/types";
 
 // ── Tab definitions ─────────────────────────────────────────
 
@@ -1112,9 +1115,157 @@ function ConnectionHistoryChart() {
   );
 }
 
+// ── Country Investigation Panel ───────────────────────────────────
+
+function CountryInvestigationPanel({
+  countryCode,
+  onClose,
+  onViewConnections,
+}: {
+  countryCode: string;
+  onClose: () => void;
+  onViewConnections: (code: string) => void;
+}) {
+  const summary = useCountrySummary(countryCode);
+  const data = summary.data;
+
+  return (
+    <div className="mt-4 rounded-lg border border-primary/30 bg-card p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold">
+          {countryFlag(countryCode)} {data?.country || countryCode} — Investigation
+        </h3>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/sankey"
+            search={{ country: countryCode }}
+            className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/20"
+          >
+            <Microscope className="h-3 w-3" />
+            Investigate in Sankey
+          </Link>
+          <button
+            onClick={() => onViewConnections(countryCode)}
+            className="rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+          >
+            View connections
+          </button>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {summary.isLoading ? (
+        <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">Loading...</div>
+      ) : !data ? (
+        <div className="text-sm text-muted-foreground">No data available for this country.</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {/* Summary stats */}
+          <div className="space-y-2">
+            <div className="text-xs text-muted-foreground">Total</div>
+            <div className="text-lg font-bold">{formatNumber(data.total_connections)} connections</div>
+            <div className="text-xs text-muted-foreground">
+              {formatBytes(data.total_tx)} sent · {formatBytes(data.total_rx)} received
+            </div>
+          </div>
+
+          {/* Top devices */}
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-muted-foreground">Top Devices</div>
+            <div className="space-y-1">
+              {data.top_devices.slice(0, 5).map((d) => (
+                <div key={d.src_mac} className="flex items-center justify-between text-xs">
+                  <Link
+                    to="/sankey"
+                    search={{ mac: d.src_mac, country: countryCode }}
+                    className="truncate font-mono text-primary hover:underline"
+                    title={d.src_mac}
+                  >
+                    {d.hostname || d.src_ip}
+                  </Link>
+                  <span className="ml-2 text-muted-foreground">{formatNumber(d.connection_count)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Top destinations */}
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-muted-foreground">Top Destinations</div>
+            <div className="space-y-1">
+              {data.top_destinations.slice(0, 5).map((d) => (
+                <div key={d.dst_ip} className="flex items-center justify-between text-xs">
+                  <span className="truncate font-mono" title={d.dst_ip}>
+                    {d.org || d.dst_ip}
+                  </span>
+                  <span className="ml-2 text-muted-foreground">{formatNumber(d.connection_count)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Top ports */}
+          {data.top_ports.length > 0 && (
+            <div>
+              <div className="mb-1.5 text-xs font-medium text-muted-foreground">Top Ports</div>
+              <div className="space-y-1">
+                {data.top_ports.slice(0, 5).map((p) => (
+                  <div key={`${p.protocol}-${p.dst_port}`} className="flex items-center justify-between text-xs">
+                    <span>{portLabel(p.dst_port)} ({p.protocol.toUpperCase()})</span>
+                    <span className="text-muted-foreground">{formatNumber(p.connection_count)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Timeline sparkline */}
+          {data.timeline.length > 1 && (
+            <div className="lg:col-span-2">
+              <div className="mb-1.5 text-xs font-medium text-muted-foreground">Connection Timeline</div>
+              <ResponsiveContainer width="100%" height={80}>
+                <AreaChart data={data.timeline}>
+                  <defs>
+                    <linearGradient id="countryGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="oklch(0.65 0.2 250)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="oklch(0.65 0.2 250)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="date" tick={{ fill: "oklch(0.65 0.01 285)", fontSize: 9 }} interval="preserveStartEnd" />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "oklch(0.175 0.015 285)",
+                      border: "1px solid oklch(0.3 0.015 285)",
+                      borderRadius: "6px",
+                      color: "oklch(0.95 0.01 285)",
+                      fontSize: "11px",
+                    }}
+                    formatter={(value: number) => [formatNumber(value), "Connections"]}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="connection_count"
+                    stroke="oklch(0.65 0.2 250)"
+                    strokeWidth={1.5}
+                    fill="url(#countryGrad)"
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Page ────────────────────────────────────────────────────
 
-type ColumnFilterField = "src" | "dst" | "dst_port" | "protocol" | "state" | "country";
+type ColumnFilterField = "src" | "dst" | "dst_port" | "protocol" | "state" | "country" | "city";
 
 const COLUMN_FILTER_DEFS: { field: ColumnFilterField; label: string }[] = [
   { field: "src", label: "Source" },
@@ -1123,6 +1274,7 @@ const COLUMN_FILTER_DEFS: { field: ColumnFilterField; label: string }[] = [
   { field: "protocol", label: "Protocol" },
   { field: "state", label: "State" },
   { field: "country", label: "Country" },
+  { field: "city", label: "City" },
 ];
 
 function getFilterValue(c: ConnectionEntry, field: ColumnFilterField): string {
@@ -1133,11 +1285,19 @@ function getFilterValue(c: ConnectionEntry, field: ColumnFilterField): string {
     case "protocol": return c.protocol.toUpperCase();
     case "state": return c.tcp_state ?? "none";
     case "country": return c.dst_geo?.country_code ?? "";
+    case "city": return c.dst_geo?.city ?? "";
   }
 }
 
 export function ConnectionsPage() {
-  const [activeTab, setActiveTab] = useState<ConnTabId>("world-map");
+  const search = useSearch({ from: "/connections" });
+  // If URL has filter params, start on connections tab
+  const hasUrlFilters = !!(search.country || search.city || search.protocol || search.dst_port || search.src_ip || search.dst_ip);
+  const [activeTab, setActiveTab] = useState<ConnTabId>(
+    (search.tab as ConnTabId) || (hasUrlFilters ? "connections" : "world-map"),
+  );
+
+  const [investigateCountry, setInvestigateCountry] = useState<string | null>(search.country ?? null);
 
   // ── World map state ──
   const [timeRange, setTimeRange] = useState<TimeRange>("7");
@@ -1177,7 +1337,17 @@ export function ConnectionsPage() {
   const vlanLookup = useVlanLookup();
   const [filter, setFilter] = useState<FilterMode>("all");
   const [groupMode, setGroupMode] = useState<GroupMode>("flat");
-  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({});
+  const initialFilters = useMemo(() => {
+    const f: Record<string, Set<string>> = {};
+    if (search.country) f.country = new Set([search.country]);
+    if (search.city) f.city = new Set([search.city]);
+    if (search.dst_port) f.dst_port = new Set([search.dst_port]);
+    if (search.protocol) f.protocol = new Set([search.protocol]);
+    if (search.src_ip) f.src = new Set([search.src_ip]);
+    if (search.dst_ip) f.dst = new Set([search.dst_ip]);
+    return f;
+  }, []);
+  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>(initialFilters);
   const [openFilter, setOpenFilter] = useState<ColumnFilterField | null>(null);
 
   // Pre-filter by mode buttons
@@ -1276,14 +1446,13 @@ export function ConnectionsPage() {
     };
   }, [openFilter]);
 
-  // World map click → switch to connections tab with country filter
+  // World map click → show country investigation panel
   const handleMapCountryClick = useCallback((code: string) => {
-    setColumnFilters((prev) => ({ ...prev, country: new Set([code]) }));
-    setActiveTab("connections");
+    setInvestigateCountry(code);
   }, []);
 
-  const handleMapCityClick = useCallback((_city: string, countryCode: string) => {
-    setColumnFilters((prev) => ({ ...prev, country: new Set([countryCode]) }));
+  const handleMapCityClick = useCallback((city: string, countryCode: string) => {
+    setColumnFilters((prev) => ({ ...prev, country: new Set([countryCode]), city: new Set([city]) }));
     setActiveTab("connections");
   }, []);
 
@@ -1374,6 +1543,17 @@ export function ConnectionsPage() {
                 home={home}
                 homeCountry={homeCountry}
               />
+              {investigateCountry && (
+                <CountryInvestigationPanel
+                  countryCode={investigateCountry}
+                  onClose={() => setInvestigateCountry(null)}
+                  onViewConnections={(code) => {
+                    setColumnFilters((prev) => ({ ...prev, country: new Set([code]) }));
+                    setActiveTab("connections");
+                    setInvestigateCountry(null);
+                  }}
+                />
+              )}
               {mapData.length > 0 && (
                 <div className="mt-6">
                   <h2 className="mb-3 text-lg font-semibold">Country Breakdown</h2>

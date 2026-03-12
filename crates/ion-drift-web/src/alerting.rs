@@ -25,6 +25,7 @@ pub struct AlertRule {
     pub severity_filter: Option<String>,
     pub vlan_filter: Option<String>,
     pub disposition_filter: Option<String>,
+    pub verdict_filter: Option<String>,
     pub cooldown_seconds: i64,
     pub delivery_channels: String,
     pub created_at: String,
@@ -78,6 +79,10 @@ struct PendingAlert {
     body: String,
     anomaly_id: Option<i64>,
     delivery_channels: Vec<String>,
+    /// Investigation verdict (benign/routine/suspicious/threat/inconclusive), if available.
+    investigation_verdict: Option<String>,
+    /// Human-readable investigation summary, if available.
+    investigation_summary: Option<String>,
 }
 
 // ── Alert store helpers ─────────────────────────────────────────
@@ -87,8 +92,8 @@ pub async fn get_alert_rules(store: &SwitchStore) -> Result<Vec<AlertRule>, Stri
     let mut stmt = db
         .prepare(
             "SELECT id, name, enabled, event_type, severity_filter, vlan_filter,
-                    disposition_filter, cooldown_seconds, delivery_channels,
-                    created_at, updated_at
+                    disposition_filter, verdict_filter, cooldown_seconds,
+                    delivery_channels, created_at, updated_at
              FROM alert_rules ORDER BY id",
         )
         .map_err(|e| format!("prepare failed: {e}"))?;
@@ -102,10 +107,11 @@ pub async fn get_alert_rules(store: &SwitchStore) -> Result<Vec<AlertRule>, Stri
                 severity_filter: row.get(4)?,
                 vlan_filter: row.get(5)?,
                 disposition_filter: row.get(6)?,
-                cooldown_seconds: row.get(7)?,
-                delivery_channels: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
+                verdict_filter: row.get(7)?,
+                cooldown_seconds: row.get(8)?,
+                delivery_channels: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         })
         .map_err(|e| format!("query failed: {e}"))?;
@@ -229,6 +235,7 @@ pub struct CreateRuleRequest {
     pub severity_filter: Option<String>,
     pub vlan_filter: Option<String>,
     pub disposition_filter: Option<String>,
+    pub verdict_filter: Option<String>,
     pub cooldown_seconds: Option<i64>,
     pub delivery_channels: Option<String>,
 }
@@ -240,6 +247,7 @@ pub struct UpdateRuleRequest {
     pub severity_filter: Option<String>,
     pub vlan_filter: Option<String>,
     pub disposition_filter: Option<String>,
+    pub verdict_filter: Option<String>,
     pub cooldown_seconds: Option<i64>,
     pub delivery_channels: Option<String>,
 }
@@ -252,11 +260,11 @@ pub async fn create_rule(store: &SwitchStore, req: CreateRuleRequest) -> Result<
 
     db.execute(
         "INSERT INTO alert_rules (name, enabled, event_type, severity_filter, vlan_filter,
-         disposition_filter, cooldown_seconds, delivery_channels)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         disposition_filter, verdict_filter, cooldown_seconds, delivery_channels)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             req.name, enabled, req.event_type, req.severity_filter,
-            req.vlan_filter, req.disposition_filter, cooldown, channels
+            req.vlan_filter, req.disposition_filter, req.verdict_filter, cooldown, channels
         ],
     ).map_err(|e| format!("insert failed: {e}"))?;
 
@@ -291,6 +299,10 @@ pub async fn update_rule(store: &SwitchStore, id: i64, req: UpdateRuleRequest) -
     if let Some(ref df) = req.disposition_filter {
         sets.push("disposition_filter = ?");
         params.push(Box::new(df.clone()));
+    }
+    if let Some(ref vf) = req.verdict_filter {
+        sets.push("verdict_filter = ?");
+        params.push(Box::new(vf.clone()));
     }
     if let Some(cooldown) = req.cooldown_seconds {
         sets.push("cooldown_seconds = ?");
@@ -488,6 +500,12 @@ async fn deliver_webhook(
         "vlan_id": alert.and_then(|a| a.vlan_id),
         "fired_at": format!("{now_ts}"),
         "anomaly_id": alert.and_then(|a| a.anomaly_id),
+        "investigation": alert.and_then(|a| {
+            a.investigation_verdict.as_ref().map(|v| serde_json::json!({
+                "verdict": v,
+                "summary": a.investigation_summary.as_deref(),
+            }))
+        }),
     });
 
     let payload_bytes = serde_json::to_vec(&payload).map_err(|e| format!("json encode: {e}"))?;
@@ -716,6 +734,40 @@ async fn evaluate_cycle(
         }
     }
 
+    // Enrich anomaly alerts with investigation verdicts and filter by verdict_filter
+    for alert in &mut pending_alerts {
+        if let Some(anomaly_id) = alert.anomaly_id {
+            if let Ok(Some(inv)) = behavior_store.get_investigation_by_anomaly(anomaly_id).await {
+                // Enrich title and body with verdict
+                let verdict_label = inv.verdict.to_uppercase();
+                alert.title = format!("[{}] {}", verdict_label, alert.title);
+                alert.body = format!(
+                    "Verdict: {} — {}\n\n{}",
+                    inv.verdict,
+                    inv.summary,
+                    alert.body,
+                );
+                alert.investigation_verdict = Some(inv.verdict.clone());
+                alert.investigation_summary = Some(inv.summary.clone());
+            }
+        }
+    }
+
+    // Apply verdict_filter: drop alerts whose investigation verdict doesn't match the rule filter
+    pending_alerts.retain(|alert| {
+        if let Some(rule) = enabled_rules.iter().find(|r| r.id == alert.rule_id) {
+            if let Some(ref filter) = rule.verdict_filter {
+                // verdict_filter is a comma-separated list of accepted verdicts
+                let accepted: Vec<&str> = filter.split(',').map(|s| s.trim()).collect();
+                if let Some(ref verdict) = alert.investigation_verdict {
+                    return accepted.iter().any(|a| a.eq_ignore_ascii_case(verdict));
+                }
+                // No verdict yet — keep the alert (investigation may not have run)
+            }
+        }
+        true
+    });
+
     // Deliver alerts
     let mut total_fired = 0;
     for alert in &pending_alerts {
@@ -816,6 +868,8 @@ async fn collect_anomaly_alerts(
                 body: anomaly.description.clone(),
                 anomaly_id: Some(anomaly.id),
                 delivery_channels: channels.clone(),
+                investigation_verdict: None,
+                investigation_summary: None,
             });
         }
 
@@ -858,6 +912,8 @@ async fn collect_anomaly_alerts(
                 ),
                 anomaly_id: link.behavior_anomaly_id,
                 delivery_channels: channels.clone(),
+                investigation_verdict: None,
+                investigation_summary: None,
             });
         }
 
@@ -923,6 +979,8 @@ async fn collect_new_device_alerts(
             ),
             anomaly_id: None,
             delivery_channels: channels.clone(),
+            investigation_verdict: None,
+            investigation_summary: None,
         });
     }
 }
@@ -991,6 +1049,8 @@ async fn collect_flagged_device_alerts(
             body: format!("{display} ({ip_str}) has been marked as flagged. Review in Identity Manager."),
             anomaly_id: None,
             delivery_channels: channels.clone(),
+            investigation_verdict: None,
+            investigation_summary: None,
         });
     }
 }
@@ -1048,6 +1108,8 @@ async fn collect_port_violation_alerts(
             ),
             anomaly_id: None,
             delivery_channels: channels.clone(),
+            investigation_verdict: None,
+            investigation_summary: None,
         });
     }
 
@@ -1098,6 +1160,8 @@ async fn collect_anomaly_warning_alerts(
             body: anomaly.description.clone(),
             anomaly_id: Some(anomaly.id),
             delivery_channels: channels.clone(),
+            investigation_verdict: None,
+            investigation_summary: None,
         });
     }
 
@@ -1164,6 +1228,8 @@ async fn collect_interface_down_alerts(
                 body: format!("Port {port_name} on {device_id} has gone down."),
                 anomaly_id: None,
                 delivery_channels: channels.clone(),
+                investigation_verdict: None,
+                investigation_summary: None,
             });
         }
     }
@@ -1232,6 +1298,8 @@ async fn collect_device_offline_alerts(
                 body: format!("{display} ({ip_str}) has gone offline (not seen for >5 minutes)."),
                 anomaly_id: None,
                 delivery_channels: channels.clone(),
+                investigation_verdict: None,
+                investigation_summary: None,
             });
         }
     }
@@ -1332,6 +1400,8 @@ async fn collect_dhcp_pool_alerts(state: &AppState, rule: &AlertRule, alerts: &m
                 ),
                 anomaly_id: None,
                 delivery_channels: channels.clone(),
+                investigation_verdict: None,
+                investigation_summary: None,
             });
         }
     }
@@ -1388,6 +1458,8 @@ async fn collect_firewall_drop_spike_alerts(state: &AppState, rule: &AlertRule, 
             ),
             anomaly_id: None,
             delivery_channels: channels.clone(),
+            investigation_verdict: None,
+            investigation_summary: None,
         });
     }
 }

@@ -8,7 +8,9 @@ import {
   X,
   Filter,
   RotateCcw,
+  Microscope,
 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { PageShell } from "@/components/layout/page-shell";
 import { IdentityManagerHelp } from "@/components/help-content";
 import { StatCard } from "@/components/stat-card";
@@ -791,6 +793,20 @@ export default function IdentityManagerPage() {
         </span>
       ),
       sortValue: (row) => row.last_seen,
+    },
+    {
+      key: "investigate",
+      header: "",
+      render: (row) => (
+        <Link
+          to="/sankey"
+          search={{ mac: row.mac_address }}
+          className="rounded p-1 text-muted-foreground hover:bg-primary/15 hover:text-primary"
+          title="Investigate traffic"
+        >
+          <Microscope className="h-3.5 w-3.5" />
+        </Link>
+      ),
     },
     {
       key: "actions",

@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
-import { Network, ChevronDown, ChevronRight } from "lucide-react";
+import { Network, ChevronDown, ChevronRight, Microscope } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { useVlanActivity, useVlanMetricsHistory } from "@/api/queries";
 import {
   AreaChart,
@@ -91,6 +92,15 @@ function VlanRow({
             {formatBps(entry.tx_bps)}
           </span>
         </div>
+        <Link
+          to="/sankey"
+          search={{ vlan: entry.name }}
+          onClick={(e) => e.stopPropagation()}
+          className="ml-auto rounded p-1 text-muted-foreground hover:bg-primary/15 hover:text-primary"
+          title="Investigate VLAN traffic"
+        >
+          <Microscope className="h-3.5 w-3.5" />
+        </Link>
       </div>
       {expanded && sparkData.length > 1 && (
         <div className="rounded-b-md border border-t-0 border-border bg-card p-3">

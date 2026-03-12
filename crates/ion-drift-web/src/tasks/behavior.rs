@@ -7,15 +7,18 @@ use tokio::sync::RwLock;
 use crate::behavior_engine;
 use crate::connection_store;
 use crate::geo;
+use crate::investigation::InvestigationEngine;
 use crate::oui;
 
 /// Collect device observations, detect anomalies, and detect blocked attempts every 60s.
+/// After detection, runs the investigation engine on any new uninvestigated anomalies.
 /// 3-minute startup delay to let the server stabilize.
 pub fn spawn_behavior_collector(
     store: Arc<ion_drift_storage::BehaviorStore>,
     client: mikrotik_core::MikrotikClient,
     oui_db: Arc<oui::OuiDb>,
     geo_cache: Arc<geo::GeoCache>,
+    connection_store: Arc<connection_store::ConnectionStore>,
     firewall_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
     vlan_registry: Arc<RwLock<ion_drift_storage::behavior::VlanRegistry>>,
 ) {
@@ -25,6 +28,11 @@ pub fn spawn_behavior_collector(
         tracing::info!("behavior collector starting");
 
         let spike_candidates = behavior_engine::SpikeCandidates::new();
+        let investigation_engine = Arc::new(InvestigationEngine::new(
+            store.clone(),
+            connection_store,
+            geo_cache.clone(),
+        ));
         let mut cycle_count: u64 = 0;
 
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -69,6 +77,44 @@ pub fn spawn_behavior_collector(
                     }
                 }
                 Err(e) => tracing::warn!("behavior: blocked attempt detection failed: {e}"),
+            }
+
+            // Run investigation engine on any new uninvestigated anomalies
+            let cycle_start = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            // Look back 5 minutes to catch any we missed
+            let since = cycle_start - 300;
+            match store.get_uninvestigated_anomaly_ids(since).await {
+                Ok(ids) => {
+                    if !ids.is_empty() {
+                        let count = ids.len();
+                        let engine = investigation_engine.clone();
+                        let store_ref = store.clone();
+                        tokio::spawn(async move {
+                            let mut investigated = 0;
+                            for id in ids {
+                                match engine.investigate(id).await {
+                                    Ok(inv) => {
+                                        if let Err(e) = store_ref.record_investigation(&inv).await {
+                                            tracing::warn!("investigation: failed to store for anomaly {id}: {e}");
+                                        } else {
+                                            investigated += 1;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("investigation: failed for anomaly {id}: {e}");
+                                    }
+                                }
+                            }
+                            if investigated > 0 {
+                                tracing::info!("investigation: completed {investigated}/{count} investigations");
+                            }
+                        });
+                    }
+                }
+                Err(e) => tracing::warn!("investigation: failed to query uninvestigated anomalies: {e}"),
             }
 
             // Prune spike candidates every 10 minutes to avoid memory growth

@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useSearch, useNavigate } from "@tanstack/react-router";
 import { PageShell } from "@/components/layout/page-shell";
 import { InvestigationHelp } from "@/components/help-content";
 import { ErrorDisplay } from "@/components/error-display";
@@ -9,14 +10,17 @@ import {
   useSankeyDevice,
   useSankeyDestinationPeers,
   useSankeyConversation,
+  useDeviceInvestigations,
 } from "@/api/queries";
 import { apiFetch } from "@/api/client";
 import type {
   SankeyVlanResponse,
   SankeyDeviceResponse,
+  Investigation,
 } from "@/api/types";
 import { formatBytes } from "@/lib/format";
-import { ChevronRight, ArrowLeft, Download, Flag, Copy, Search, Network } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { ChevronRight, ArrowLeft, Download, Flag, Copy, Search, Network, Microscope, ChevronDown } from "lucide-react";
 
 const RANGES = ["1h", "6h", "24h", "7d", "30d"] as const;
 
@@ -217,16 +221,35 @@ type View =
   | { level: "conversation"; mac: string; destIp: string };
 
 export function SankeyInvestigationPage() {
+  const search = useSearch({ from: "/sankey" });
+  const navigate = useNavigate();
   const [range, setRange] = useState("24h");
-  const [view, setView] = useState<View>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const vlan = params.get("vlan");
-    if (vlan) {
-      const dest = params.get("dest") ?? undefined;
-      return { level: "vlan", vlanId: vlan, destVlan: dest };
-    }
+
+  // Derive initial view from URL search params
+  const initialView = useMemo((): View => {
+    if (search.mac) return { level: "device", mac: search.mac };
+    if (search.vlan) return { level: "vlan", vlanId: search.vlan, destVlan: search.dest };
     return { level: "network" };
-  });
+  }, []); // Only compute once on mount
+
+  const [view, setViewState] = useState<View>(initialView);
+
+  // Wrap setView to sync URL
+  const setView = useCallback((v: View) => {
+    setViewState(v);
+    const params: Record<string, string | undefined> = {};
+    if (v.level === "vlan") {
+      params.vlan = v.vlanId;
+      params.dest = v.destVlan;
+    } else if (v.level === "device") {
+      params.mac = v.mac;
+    } else if (v.level === "conversation") {
+      params.mac = v.mac;
+    }
+    // Keep country if it was in original params
+    if (search.country) params.country = search.country;
+    navigate({ to: "/sankey", search: params, replace: true });
+  }, [navigate, search.country]);
 
   const breadcrumb = (() => {
     const items: { label: string; onClick?: () => void }[] = [
@@ -576,6 +599,69 @@ function VlanDetail({
 
 // ── Device Trace (Level 2) ──────────────────────────────────
 
+// ── Verdict colors ──────────────────────────────────────────
+const VERDICT_CLASSES: Record<string, string> = {
+  benign: "bg-green-500/15 text-green-400",
+  routine: "bg-blue-500/15 text-blue-400",
+  suspicious: "bg-yellow-500/15 text-yellow-400",
+  threat: "bg-red-500/15 text-red-400",
+  inconclusive: "bg-zinc-500/15 text-zinc-400",
+};
+
+function DeviceInvestigationsPanel({ mac }: { mac: string }) {
+  const { data: investigations } = useDeviceInvestigations(mac);
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  if (!investigations || investigations.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-2 border-b border-border p-3">
+        <Microscope className="h-4 w-4 text-primary" />
+        <h3 className="text-sm font-semibold">Investigations ({investigations.length})</h3>
+      </div>
+      <div className="divide-y divide-border max-h-72 overflow-y-auto">
+        {investigations.map((inv: Investigation) => (
+          <div key={inv.id} className="px-4 py-2">
+            <button
+              onClick={() => setExpanded(expanded === inv.id ? null : inv.id)}
+              className="flex w-full items-center gap-2 text-left"
+            >
+              <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium uppercase", VERDICT_CLASSES[inv.verdict] ?? VERDICT_CLASSES.inconclusive)}>
+                {inv.verdict}
+              </span>
+              <span className="flex-1 truncate text-xs">{inv.summary}</span>
+              <ChevronDown className={cn("h-3 w-3 text-muted-foreground transition-transform", expanded === inv.id && "rotate-180")} />
+            </button>
+            {expanded === inv.id && (
+              <div className="mt-2 space-y-1 pl-2 text-xs text-muted-foreground">
+                {inv.dst_ip && <div>Destination: <span className="font-mono">{inv.dst_ip}</span> {inv.dst_org && `(${inv.dst_org})`}</div>}
+                {inv.dst_country && <div>Country: {inv.dst_country}</div>}
+                {inv.is_cdn && <div className="text-green-400">CDN/Cloud service detected</div>}
+                {inv.destination_commonality > 0 && <div>{inv.destination_commonality} other devices also connect here</div>}
+                {inv.evidence_chain && (
+                  <div className="mt-1">
+                    <div className="text-[10px] font-medium text-foreground/70 mb-0.5">Evidence Chain:</div>
+                    {JSON.parse(inv.evidence_chain).map((step: { check: string; result: string; passed: boolean }, i: number) => (
+                      <div key={i} className="flex items-center gap-1 text-[10px]">
+                        <span className={step.passed ? "text-green-400" : "text-red-400"}>{step.passed ? "✓" : "✗"}</span>
+                        <span>{step.check}: {step.result}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="text-[10px] text-muted-foreground/60">
+                  {new Date(inv.created_at).toLocaleString()}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DeviceTrace({
   mac,
   range,
@@ -626,6 +712,8 @@ function DeviceTrace({
           {data.baseline_status && ` · ${data.baseline_status}`}
         </div>
       </div>
+
+      <DeviceInvestigationsPanel mac={mac} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Protocols */}

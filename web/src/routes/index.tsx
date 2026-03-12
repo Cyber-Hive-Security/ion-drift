@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, Link } from "@tanstack/react-router";
 import {
   useSystemResources,
   useTraffic,
@@ -18,6 +18,7 @@ import { VlanTrafficBreakdown } from "@/components/dashboard/vlan-sankey";
 import { DirectionalPortSankeys } from "@/features/world-map/port-sankey";
 import { NetworkDevicesCard } from "@/components/dashboard/network-devices-card";
 import { IdentityOverviewCard } from "@/components/dashboard/identity-overview-card";
+import { InvestigationCard } from "@/components/dashboard/investigation-card";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { PageShell } from "@/components/layout/page-shell";
@@ -218,12 +219,13 @@ export function DashboardPage() {
   return (
     <PageShell title="Dashboard" help={<DashboardHelp />}>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {drops.data ? <FirewallDropsCard data={drops.data} /> : <CardSkeleton title="Firewall Drops" />}
-        {traffic.data ? <TrafficCard data={traffic.data} /> : <CardSkeleton title="WAN Traffic" />}
+        {drops.data ? <Link to="/firewall" className="block"><FirewallDropsCard data={drops.data} /></Link> : <CardSkeleton title="Firewall Drops" />}
+        {traffic.data ? <Link to="/connections" className="block"><TrafficCard data={traffic.data} /></Link> : <CardSkeleton title="WAN Traffic" />}
         <NetworkDevicesCard />
         {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
         <IdentityOverviewCard />
         {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
+        <InvestigationCard />
       </div>
 
       <VlanActivitySection />
@@ -235,7 +237,12 @@ export function DashboardPage() {
       </div>
 
       <div className="mt-6">
-        <DirectionalPortSankeys days={1} />
+        <DirectionalPortSankeys
+          days={1}
+          onFlowClick={(protocol, port) => {
+            navigate({ to: "/connections" as "/", search: { protocol, dst_port: port, tab: "connections" } });
+          }}
+        />
       </div>
 
       <div className="mt-6 flex justify-end">

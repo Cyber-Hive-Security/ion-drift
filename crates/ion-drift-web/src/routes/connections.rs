@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::connection_store::{
-    CitySummaryEntry, ClassifiedPortSummary, ConnectionHistoryStats, GeoSummaryEntry,
-    HistoryFilters, PaginatedHistory, PortBaselineStatus, PortSummaryEntry,
+    CitySummaryEntry, ClassifiedPortSummary, ConnectionHistoryStats, CountrySummary,
+    GeoSummaryEntry, HistoryFilters, PaginatedHistory, PortBaselineStatus, PortSummaryEntry,
 };
 use crate::geo::GeoInfo;
 use crate::middleware::{RequireAdmin, RequireAuth};
@@ -388,6 +388,28 @@ pub async fn city_summary(
         }
     }
 
+    Ok(Json(result))
+}
+
+/// Query params for country-summary.
+#[derive(Deserialize)]
+pub struct CountrySummaryQuery {
+    #[serde(default = "default_30")]
+    pub days: i64,
+}
+
+/// GET /api/connections/country/{code}/summary — per-country drill-down.
+pub async fn country_summary(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    axum::extract::Path(code): axum::extract::Path<String>,
+    Query(query): Query<CountrySummaryQuery>,
+) -> Result<Json<CountrySummary>, Response> {
+    let days = query.days.clamp(1, 365);
+    let result = state
+        .connection_store
+        .country_summary(&code, days)
+        .map_err(|e| internal_error("country summary", e))?;
     Ok(Json(result))
 }
 

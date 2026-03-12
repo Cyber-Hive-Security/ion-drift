@@ -113,6 +113,52 @@ pub struct CitySummaryEntry {
     pub flagged_count: i64,
 }
 
+/// Per-country drill-down summary for the country investigation panel.
+#[derive(Debug, Clone, Serialize)]
+pub struct CountrySummary {
+    pub country_code: String,
+    pub country: String,
+    pub total_connections: i64,
+    pub total_tx: i64,
+    pub total_rx: i64,
+    pub top_devices: Vec<CountryDeviceEntry>,
+    pub top_destinations: Vec<CountryDestEntry>,
+    pub top_ports: Vec<CountryPortEntry>,
+    pub timeline: Vec<CountryTimelineBucket>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CountryDeviceEntry {
+    pub src_mac: String,
+    pub src_ip: String,
+    pub hostname: Option<String>,
+    pub connection_count: i64,
+    pub total_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CountryDestEntry {
+    pub dst_ip: String,
+    pub org: Option<String>,
+    pub connection_count: i64,
+    pub total_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CountryPortEntry {
+    pub dst_port: i64,
+    pub protocol: String,
+    pub connection_count: i64,
+    pub total_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CountryTimelineBucket {
+    pub date: String,
+    pub connection_count: i64,
+    pub bytes: i64,
+}
+
 /// Aggregated per-port data for Sankey diagram.
 #[derive(Debug, Clone, Serialize)]
 pub struct PortSummaryEntry {
@@ -757,6 +803,105 @@ impl ConnectionStore {
         Ok(rows)
     }
 
+    /// Per-country drill-down: top devices, destinations, ports, and timeline.
+    pub fn country_summary(&self, country_code: &str, days: i64) -> anyhow::Result<CountrySummary> {
+        let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
+        let cutoff = now_iso_minus_secs(days * 86400);
+
+        // Totals
+        let (total_connections, total_tx, total_rx, country_name): (i64, i64, i64, String) = db.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(bytes_tx),0), COALESCE(SUM(bytes_rx),0),
+                    COALESCE(MAX(geo_country),'')
+             FROM connection_history
+             WHERE geo_country_code = ?1 AND first_seen >= ?2 AND dst_is_external = 1",
+            params![country_code, cutoff],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+
+        // Top devices by connection count
+        let mut stmt = db.prepare(
+            "SELECT COALESCE(src_mac,''), COALESCE(src_ip,''), src_hostname,
+                    COUNT(*) as cnt, COALESCE(SUM(bytes_tx + bytes_rx),0)
+             FROM connection_history
+             WHERE geo_country_code = ?1 AND first_seen >= ?2 AND dst_is_external = 1
+             GROUP BY src_mac
+             ORDER BY cnt DESC LIMIT 10"
+        )?;
+        let top_devices = stmt.query_map(params![country_code, cutoff], |row| {
+            Ok(CountryDeviceEntry {
+                src_mac: row.get(0)?,
+                src_ip: row.get(1)?,
+                hostname: row.get(2)?,
+                connection_count: row.get(3)?,
+                total_bytes: row.get(4)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        // Top destination IPs
+        let mut stmt = db.prepare(
+            "SELECT dst_ip, MAX(geo_org),
+                    COUNT(*) as cnt, COALESCE(SUM(bytes_tx + bytes_rx),0)
+             FROM connection_history
+             WHERE geo_country_code = ?1 AND first_seen >= ?2 AND dst_is_external = 1
+             GROUP BY dst_ip
+             ORDER BY cnt DESC LIMIT 10"
+        )?;
+        let top_destinations = stmt.query_map(params![country_code, cutoff], |row| {
+            Ok(CountryDestEntry {
+                dst_ip: row.get(0)?,
+                org: row.get(1)?,
+                connection_count: row.get(2)?,
+                total_bytes: row.get(3)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        // Top ports
+        let mut stmt = db.prepare(
+            "SELECT COALESCE(dst_port,0), COALESCE(protocol,''),
+                    COUNT(*) as cnt, COALESCE(SUM(bytes_tx + bytes_rx),0)
+             FROM connection_history
+             WHERE geo_country_code = ?1 AND first_seen >= ?2 AND dst_is_external = 1
+                   AND dst_port IS NOT NULL
+             GROUP BY dst_port, protocol
+             ORDER BY cnt DESC LIMIT 10"
+        )?;
+        let top_ports = stmt.query_map(params![country_code, cutoff], |row| {
+            Ok(CountryPortEntry {
+                dst_port: row.get(0)?,
+                protocol: row.get(1)?,
+                connection_count: row.get(2)?,
+                total_bytes: row.get(3)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        // Daily timeline
+        let mut stmt = db.prepare(
+            "SELECT DATE(first_seen) as d, COUNT(*), COALESCE(SUM(bytes_tx + bytes_rx),0)
+             FROM connection_history
+             WHERE geo_country_code = ?1 AND first_seen >= ?2 AND dst_is_external = 1
+             GROUP BY d ORDER BY d"
+        )?;
+        let timeline = stmt.query_map(params![country_code, cutoff], |row| {
+            Ok(CountryTimelineBucket {
+                date: row.get(0)?,
+                connection_count: row.get(1)?,
+                bytes: row.get(2)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        Ok(CountrySummary {
+            country_code: country_code.to_string(),
+            country: country_name,
+            total_connections,
+            total_tx,
+            total_rx,
+            top_devices,
+            top_destinations,
+            top_ports,
+            timeline,
+        })
+    }
+
     /// Aggregated per-port data for the Sankey diagram, filtered by direction.
     /// direction: "outbound" | "inbound" | "internal" | "" (all)
     pub fn port_summary(&self, days: i64, direction: &str) -> anyhow::Result<Vec<PortSummaryEntry>> {
@@ -1364,6 +1509,32 @@ impl ConnectionStore {
             flows: classified_flows,
             disappeared,
         })
+    }
+
+    // ── Investigation helpers ───────────────────────────────────────
+
+    /// Count unique source MACs that have connected to a given destination IP
+    /// within the specified number of days. Used by investigation engine to
+    /// determine if a destination is "common" (many devices talk to it).
+    pub fn count_devices_to_destination(&self, dst_ip: &str, days: i64) -> Result<i64, String> {
+        let db = self.db.lock().unwrap();
+        let cutoff_ts = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            now - (days * 86400)
+        };
+        // first_seen is stored as ISO8601 text, so compare as text timestamps
+        db.query_row(
+            "SELECT COUNT(DISTINCT src_mac) FROM connection_history
+             WHERE dst_ip = ?1 AND src_mac IS NOT NULL
+             AND first_seen >= datetime(?2, 'unixepoch')",
+            params![dst_ip, cutoff_ts],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("count_devices_to_destination failed: {e}"))
     }
 
     // ── Anomaly link methods ──────────────────────────────────────
