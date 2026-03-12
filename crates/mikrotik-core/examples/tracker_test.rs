@@ -3,7 +3,7 @@
 //! Usage:
 //!   cargo run --example tracker_test -- --password <pass>
 
-use mikrotik_core::{MikrotikClient, MikrotikConfig, TrafficTracker};
+use mikrotik_core::{MikrotikClient, MikrotikConfig, SecretString, TrafficTracker};
 use std::path::PathBuf;
 
 #[tokio::main]
@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tls: true,
         ca_cert_path: get_arg(&args, "--ca-cert").map(PathBuf::from),
         username: get_arg(&args, "--user").unwrap_or_else(|| "admin".into()),
-        password,
+        password: SecretString::from(password),
     };
 
     let client = MikrotikClient::new(config)?;

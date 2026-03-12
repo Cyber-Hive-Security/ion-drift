@@ -32,13 +32,13 @@ impl SpikeCandidates {
 
     /// Clear a candidate (spike was not detected this cycle).
     fn clear(&self, mac: &str, dedup_key: &str) {
-        let mut map = self.candidates.lock().unwrap();
+        let mut map = self.candidates.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(&(mac.to_string(), dedup_key.to_string()));
     }
 
     /// Prune all candidates (called periodically to avoid memory growth).
     pub fn prune(&self) {
-        let mut map = self.candidates.lock().unwrap();
+        let mut map = self.candidates.lock().unwrap_or_else(|e| e.into_inner());
         map.clear();
     }
 }
@@ -846,6 +846,9 @@ fn cidr_matches(spec: &str, ip: &str) -> bool {
             Ok(p) => p,
             Err(_) => return false,
         };
+        if prefix_len > 32 {
+            return false;
+        }
         let net_octets: Vec<u8> = network.split('.').filter_map(|o| o.parse().ok()).collect();
         let ip_octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
         if net_octets.len() != 4 || ip_octets.len() != 4 {

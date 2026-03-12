@@ -1517,7 +1517,7 @@ impl ConnectionStore {
     /// within the specified number of days. Used by investigation engine to
     /// determine if a destination is "common" (many devices talk to it).
     pub fn count_devices_to_destination(&self, dst_ip: &str, days: i64) -> Result<i64, String> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let cutoff_ts = {
             use std::time::{SystemTime, UNIX_EPOCH};
             let now = SystemTime::now()

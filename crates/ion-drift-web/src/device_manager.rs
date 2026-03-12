@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use mikrotik_core::{MikrotikClient, MikrotikConfig, SnmpClient, SwosClient};
+use mikrotik_core::{MikrotikClient, MikrotikConfig, SecretString, SnmpClient, SwosClient};
 use secrecy::ExposeSecret;
 use tokio::time::Instant;
 
@@ -133,20 +133,32 @@ impl DeviceManager {
                 DeviceClient::Snmp(snmp)
             } else if record.device_type == "swos_switch" {
                 // SwOS devices use HTTP (no TLS)
-                let swos = SwosClient::new(
+                match SwosClient::new(
                     record.host.clone(),
                     record.port,
                     username,
                     password,
-                );
-                tracing::info!(
-                    id = %record.id,
-                    name = %record.name,
-                    host = %record.host,
-                    device_type = %record.device_type,
-                    "SwOS client created"
-                );
-                DeviceClient::SwOs(swos)
+                ) {
+                    Ok(swos) => {
+                        tracing::info!(
+                            id = %record.id,
+                            name = %record.name,
+                            host = %record.host,
+                            device_type = %record.device_type,
+                            "SwOS client created"
+                        );
+                        DeviceClient::SwOs(swos)
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            id = %record.id,
+                            name = %record.name,
+                            error = %e,
+                            "failed to create SwOS client"
+                        );
+                        continue;
+                    }
+                }
             } else {
                 // RouterOS devices (router, switch)
                 let ca_cert_path = record
@@ -161,7 +173,7 @@ impl DeviceManager {
                     tls: record.tls,
                     ca_cert_path,
                     username,
-                    password,
+                    password: SecretString::from(password),
                 };
 
                 match MikrotikClient::new(config) {

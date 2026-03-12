@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use reqwest::Client;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tracing::{debug, trace};
@@ -33,8 +34,8 @@ pub struct MikrotikConfig {
     pub ca_cert_path: Option<PathBuf>,
     /// RouterOS username
     pub username: String,
-    /// RouterOS password
-    pub password: String,
+    /// RouterOS password (wrapped in Secret to prevent accidental logging)
+    pub password: SecretString,
 }
 
 impl Default for MikrotikConfig {
@@ -45,7 +46,7 @@ impl Default for MikrotikConfig {
             tls: true,
             ca_cert_path: None,
             username: DEFAULT_ROUTER_USERNAME.into(),
-            password: String::new(),
+            password: SecretString::from(String::new()),
         }
     }
 }
@@ -76,7 +77,7 @@ impl MikrotikConfig {
             return Err(MikrotikError::Config("router host cannot be empty".into()));
         }
 
-        if self.password.is_empty() {
+        if self.password.expose_secret().is_empty() {
             return Err(MikrotikError::Config("router password cannot be empty".into()));
         }
 
@@ -152,7 +153,7 @@ impl MikrotikClient {
             http,
             base_url,
             username: config.username,
-            password: config.password,
+            password: config.password.expose_secret().to_string(),
         })
     }
 

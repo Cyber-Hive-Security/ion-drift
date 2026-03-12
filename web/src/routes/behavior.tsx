@@ -966,6 +966,7 @@ export function BehaviorPage() {
             searchable
             searchPlaceholder="Search anomalies..."
             defaultSort={{ key: "severity" }}
+            virtualize
             rowStyle={(r) => ({
               borderLeft: r.severity === "critical"
                 ? "3px solid #FF4D4F"

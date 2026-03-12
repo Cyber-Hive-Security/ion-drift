@@ -419,7 +419,7 @@ impl ServerConfig {
             tls: self.router.tls,
             ca_cert_path: self.router.ca_cert_path.as_ref().map(PathBuf::from),
             username: self.router.username.clone(),
-            password: self.router.password.clone(),
+            password: mikrotik_core::SecretString::from(self.router.password.clone()),
         }
     }
 

@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { PageShell } from "@/components/layout/page-shell";
 import { InvestigationHelp } from "@/components/help-content";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { ErrorDisplay } from "@/components/error-display";
 import {
   useSankeyNetwork,
@@ -279,56 +280,58 @@ export function SankeyInvestigationPage() {
 
   return (
     <PageShell title="Investigation" help={<InvestigationHelp />}>
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <Breadcrumb items={breadcrumb} />
-          <TimeRangeSelector value={range} onChange={setRange} />
-        </div>
+      <ErrorBoundary>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <Breadcrumb items={breadcrumb} />
+            <TimeRangeSelector value={range} onChange={setRange} />
+          </div>
 
-        {view.level === "network" && (
-          <FadeIn key="network">
-            <NetworkOverview
-              range={range}
-              onSelectVlan={(vlanId, destVlan) =>
-                setView({ level: "vlan", vlanId, destVlan })
-              }
-            />
-          </FadeIn>
-        )}
-        {view.level === "vlan" && (
-          <FadeIn key={`vlan-${view.vlanId}`}>
-            <VlanDetail
-              vlanId={view.vlanId}
-              destVlan={view.destVlan}
-              range={range}
-              onBack={() => setView({ level: "network" })}
-              onSelectDevice={(mac) => setView({ level: "device", mac })}
-            />
-          </FadeIn>
-        )}
-        {view.level === "device" && (
-          <FadeIn key={`device-${view.mac}`}>
-            <DeviceTrace
-              mac={view.mac}
-              range={range}
-              onBack={() => setView({ level: "network" })}
-              onSelectConversation={(mac, destIp) =>
-                setView({ level: "conversation", mac, destIp })
-              }
-            />
-          </FadeIn>
-        )}
-        {view.level === "conversation" && (
-          <FadeIn key={`conv-${view.mac}-${view.destIp}`}>
-            <ConversationDetail
-              mac={view.mac}
-              destIp={view.destIp}
-              range={range}
-              onBack={() => setView({ level: "device", mac: view.mac })}
-            />
-          </FadeIn>
-        )}
-      </div>
+          {view.level === "network" && (
+            <FadeIn key="network">
+              <NetworkOverview
+                range={range}
+                onSelectVlan={(vlanId, destVlan) =>
+                  setView({ level: "vlan", vlanId, destVlan })
+                }
+              />
+            </FadeIn>
+          )}
+          {view.level === "vlan" && (
+            <FadeIn key={`vlan-${view.vlanId}`}>
+              <VlanDetail
+                vlanId={view.vlanId}
+                destVlan={view.destVlan}
+                range={range}
+                onBack={() => setView({ level: "network" })}
+                onSelectDevice={(mac) => setView({ level: "device", mac })}
+              />
+            </FadeIn>
+          )}
+          {view.level === "device" && (
+            <FadeIn key={`device-${view.mac}`}>
+              <DeviceTrace
+                mac={view.mac}
+                range={range}
+                onBack={() => setView({ level: "network" })}
+                onSelectConversation={(mac, destIp) =>
+                  setView({ level: "conversation", mac, destIp })
+                }
+              />
+            </FadeIn>
+          )}
+          {view.level === "conversation" && (
+            <FadeIn key={`conv-${view.mac}-${view.destIp}`}>
+              <ConversationDetail
+                mac={view.mac}
+                destIp={view.destIp}
+                range={range}
+                onBack={() => setView({ level: "device", mac: view.mac })}
+              />
+            </FadeIn>
+          )}
+        </div>
+      </ErrorBoundary>
     </PageShell>
   );
 }
@@ -637,8 +640,8 @@ function DeviceInvestigationsPanel({ mac }: { mac: string }) {
               <div className="mt-2 space-y-1 pl-2 text-xs text-muted-foreground">
                 {inv.dst_ip && <div>Destination: <span className="font-mono">{inv.dst_ip}</span> {inv.dst_org && `(${inv.dst_org})`}</div>}
                 {inv.dst_country && <div>Country: {inv.dst_country}</div>}
-                {inv.is_cdn && <div className="text-green-400">CDN/Cloud service detected</div>}
-                {inv.destination_commonality > 0 && <div>{inv.destination_commonality} other devices also connect here</div>}
+                {inv.dst_is_cdn && <div className="text-green-400">CDN/Cloud service detected</div>}
+                {inv.dst_seen_by_device_count > 0 && <div>{inv.dst_seen_by_device_count} other devices also connect here</div>}
                 {inv.evidence_chain && (
                   <div className="mt-1">
                     <div className="text-[10px] font-medium text-foreground/70 mb-0.5">Evidence Chain:</div>
@@ -651,7 +654,7 @@ function DeviceInvestigationsPanel({ mac }: { mac: string }) {
                   </div>
                 )}
                 <div className="text-[10px] text-muted-foreground/60">
-                  {new Date(inv.created_at).toLocaleString()}
+                  {new Date(inv.investigated_at).toLocaleString()}
                 </div>
               </div>
             )}

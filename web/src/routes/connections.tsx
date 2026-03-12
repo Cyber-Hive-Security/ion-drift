@@ -37,7 +37,7 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from "recharts";
-import type { ConnectionEntry, ConnectionsPageResponse, CountrySummary, GeoSummaryEntry } from "@/api/types";
+import type { ConnectionEntry, ConnectionsPageResponse, GeoSummaryEntry } from "@/api/types";
 
 // ── Tab definitions ─────────────────────────────────────────
 
@@ -1213,7 +1213,7 @@ function CountryInvestigationPanel({
               <div className="space-y-1">
                 {data.top_ports.slice(0, 5).map((p) => (
                   <div key={`${p.protocol}-${p.dst_port}`} className="flex items-center justify-between text-xs">
-                    <span>{portLabel(p.dst_port)} ({p.protocol.toUpperCase()})</span>
+                    <span>{portLabel(String(p.dst_port))} ({p.protocol.toUpperCase()})</span>
                     <span className="text-muted-foreground">{formatNumber(p.connection_count)}</span>
                   </div>
                 ))}
@@ -1750,6 +1750,7 @@ export function ConnectionsPage() {
           searchable
           searchPlaceholder="Search connections..."
           defaultSort={{ key: "flagged" }}
+          virtualize
           rowStyle={(r) =>
             r.flagged
               ? { borderLeft: "3px solid #FF4D4F" }

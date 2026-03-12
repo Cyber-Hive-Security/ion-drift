@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use mikrotik_core::MikrotikConfig;
+use mikrotik_core::{MikrotikConfig, SecretString};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Default)]
@@ -101,6 +101,6 @@ pub fn build_mikrotik_config(
         tls,
         ca_cert_path,
         username,
-        password,
+        password: SecretString::from(password),
     })
 }

@@ -60,7 +60,15 @@ const connectionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/connections",
   component: ConnectionsPage,
-  validateSearch: (search: Record<string, unknown>) => ({
+  validateSearch: (search: Record<string, unknown>): {
+    tab?: string;
+    country?: string;
+    city?: string;
+    protocol?: string;
+    dst_port?: string;
+    src_ip?: string;
+    dst_ip?: string;
+  } => ({
     tab: (search.tab as string) || undefined,
     country: (search.country as string) || undefined,
     city: (search.city as string) || undefined,
@@ -81,7 +89,7 @@ const behaviorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/behavior",
   component: BehaviorPage,
-  validateSearch: (search: Record<string, unknown>) => ({
+  validateSearch: (search: Record<string, unknown>): { mac?: string } => ({
     mac: (search.mac as string) || undefined,
   }),
 });
@@ -162,7 +170,12 @@ const sankeyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sankey",
   component: SankeyInvestigationPage,
-  validateSearch: (search: Record<string, unknown>) => ({
+  validateSearch: (search: Record<string, unknown>): {
+    vlan?: string;
+    dest?: string;
+    mac?: string;
+    country?: string;
+  } => ({
     vlan: (search.vlan as string) || undefined,
     dest: (search.dest as string) || undefined,
     mac: (search.mac as string) || undefined,
@@ -174,6 +187,9 @@ const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
   component: SettingsPage,
+  validateSearch: (search: Record<string, unknown>): { tab?: string } => ({
+    tab: (search.tab as string) || undefined,
+  }),
 });
 
 const setupWizardRoute = createRoute({

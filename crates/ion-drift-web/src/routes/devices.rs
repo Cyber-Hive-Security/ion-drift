@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 
-use mikrotik_core::{MikrotikClient, MikrotikConfig, SnmpClient, SwosClient};
+use mikrotik_core::{MikrotikClient, MikrotikConfig, SecretString, SnmpClient, SwosClient};
 
 use crate::device_manager::{DeviceClient, DeviceStatus, DeviceInfo};
 use crate::middleware::{RequireAdmin, RequireAuth};
@@ -191,7 +191,13 @@ pub async fn create_device(
             req.device.port,
             req.username.clone(),
             req.password.clone(),
-        );
+        ).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("failed to create SwOS client: {e}") })),
+            )
+                .into_response()
+        })?;
         let identity = swos.test_connection().await.map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
@@ -214,7 +220,7 @@ pub async fn create_device(
             tls: req.device.tls,
             ca_cert_path,
             username: req.username.clone(),
-            password: req.password.clone(),
+            password: SecretString::from(req.password.clone()),
         };
 
         let routeros = MikrotikClient::new(config).map_err(|e| {
@@ -526,7 +532,13 @@ pub async fn test_connection(
             req.port.unwrap_or(80),
             req.username,
             req.password,
-        );
+        ).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("failed to create SwOS client: {e}") })),
+            )
+                .into_response()
+        })?;
         match client.test_connection().await {
             Ok(identity) => Ok(Json(serde_json::json!({
                 "status": "online",
@@ -550,7 +562,7 @@ pub async fn test_connection(
             tls: req.tls.unwrap_or(true),
             ca_cert_path,
             username: req.username,
-            password: req.password,
+            password: SecretString::from(req.password),
         };
 
         let client = MikrotikClient::new(config).map_err(|e| {

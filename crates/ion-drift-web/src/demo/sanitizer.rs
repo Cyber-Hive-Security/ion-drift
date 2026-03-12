@@ -39,11 +39,11 @@ impl DemoSanitizer {
 
     /// Map a real VLAN ID to a fake one (10, 12, 14, ...).
     fn remap_vlan_id(&self, real_id: u16) -> u16 {
-        let mut cache = self.vlan_id_cache.lock().unwrap();
+        let mut cache = self.vlan_id_cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(&fake) = cache.get(&real_id) {
             return fake;
         }
-        let mut next = self.next_vlan_id.lock().unwrap();
+        let mut next = self.next_vlan_id.lock().unwrap_or_else(|e| e.into_inner());
         let fake = *next;
         *next += 2;
         cache.insert(real_id, fake);
@@ -156,7 +156,7 @@ impl DemoSanitizer {
     /// Map a real IP to a deterministic fake IP.
     fn sanitize_ip(&self, ip: &str) -> String {
         {
-            let cache = self.ip_cache.lock().unwrap();
+            let cache = self.ip_cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(cached) = cache.get(ip) {
                 return cached.clone();
             }
@@ -191,14 +191,14 @@ impl DemoSanitizer {
         };
 
         let result = fake.to_string();
-        self.ip_cache.lock().unwrap().insert(ip.to_string(), result.clone());
+        self.ip_cache.lock().unwrap_or_else(|e| e.into_inner()).insert(ip.to_string(), result.clone());
         result
     }
 
     /// Map a real MAC to a deterministic fake MAC.
     fn sanitize_mac(&self, mac: &str) -> String {
         {
-            let cache = self.mac_cache.lock().unwrap();
+            let cache = self.mac_cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(cached) = cache.get(mac) {
                 return cached.clone();
             }
@@ -221,7 +221,7 @@ impl DemoSanitizer {
             hash[5],
         );
 
-        self.mac_cache.lock().unwrap().insert(mac.to_string(), fake.clone());
+        self.mac_cache.lock().unwrap_or_else(|e| e.into_inner()).insert(mac.to_string(), fake.clone());
         fake
     }
 
@@ -232,13 +232,13 @@ impl DemoSanitizer {
         }
 
         {
-            let cache = self.hostname_cache.lock().unwrap();
+            let cache = self.hostname_cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(cached) = cache.get(hostname) {
                 return cached.clone();
             }
         }
 
-        let mut counter = self.hostname_counter.lock().unwrap();
+        let mut counter = self.hostname_counter.lock().unwrap_or_else(|e| e.into_inner());
         *counter += 1;
         let n = *counter;
 
@@ -251,7 +251,7 @@ impl DemoSanitizer {
         let prefix = prefixes[hash[0] as usize % prefixes.len()];
         let fake = format!("{prefix}-{n:03}");
 
-        self.hostname_cache.lock().unwrap().insert(hostname.to_string(), fake.clone());
+        self.hostname_cache.lock().unwrap_or_else(|e| e.into_inner()).insert(hostname.to_string(), fake.clone());
         fake
     }
 
