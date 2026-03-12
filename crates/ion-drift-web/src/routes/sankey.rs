@@ -178,9 +178,23 @@ pub async fn vlan_detail(
     let offset = range_to_sqlite_offset(range);
     let dest_filter = q.dest_vlan.clone().unwrap_or_default();
 
+    // Convert VLAN ID to DB format: "90" → "VLAN 90", "WAN" stays as-is
+    let db_vlan = if vlan_id.eq_ignore_ascii_case("wan") {
+        "WAN".to_string()
+    } else {
+        format!("VLAN {vlan_id}")
+    };
+    let db_dest = if dest_filter.eq_ignore_ascii_case("wan") {
+        "WAN".to_string()
+    } else if dest_filter.is_empty() {
+        String::new()
+    } else {
+        format!("VLAN {dest_filter}")
+    };
+
     // Run all DB access on a blocking thread
     let store = state.connection_store.clone();
-    let vlan_id_clone = vlan_id.clone();
+    let vlan_id_clone = db_vlan;
     let (devices, flows) = tokio::task::spawn_blocking(move || {
         let db = store.lock_db()
             .map_err(|e| format!("sankey db lock: {e}"))?;
@@ -215,7 +229,7 @@ pub async fn vlan_detail(
             .collect();
         drop(device_stmt);
 
-        let flows: Vec<SankeyVlanFlow> = if dest_filter.is_empty() {
+        let flows: Vec<SankeyVlanFlow> = if db_dest.is_empty() {
             let mut stmt = db.prepare(
                 "SELECT
                     COALESCE(src_mac, src_ip) as mac,
@@ -256,7 +270,7 @@ pub async fn vlan_detail(
                  LIMIT 500",
             ).map_err(|e| format!("sankey flow query: {e}"))?;
 
-            stmt.query_map(rusqlite::params![vlan_id_clone, offset, dest_filter], |row| {
+            stmt.query_map(rusqlite::params![vlan_id_clone, offset, db_dest], |row| {
                 Ok(SankeyVlanFlow {
                     src_mac: row.get(0)?,
                     dst_group: row.get(1)?,
