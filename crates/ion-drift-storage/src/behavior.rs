@@ -3,6 +3,7 @@
 //! Tracks device profiles, baseline behavior patterns, raw observations,
 //! and anomalies. Backed by SQLite via `rusqlite`.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -24,8 +25,6 @@ fn now_unix() -> i64 {
 // All VLAN-specific behavior (subnet→VLAN mapping, sensitivity levels,
 // anomaly severity, auto-resolve timeouts) is driven by VlanConfig
 // entries loaded from the database. No hardcoded VLAN IDs or subnets.
-
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum VlanSensitivity {
@@ -288,7 +287,7 @@ pub fn is_internal_ip(ip: &str) -> bool {
 }
 
 /// Classify flow direction — legacy shim.
-pub fn classify_direction(src_ip: &str, dst_ip: &str) -> &'static str {
+pub fn classify_direction(_src_ip: &str, dst_ip: &str) -> &'static str {
     let dst_external = !is_internal_ip(dst_ip);
     if dst_external {
         return "outbound";
@@ -895,6 +894,53 @@ impl BehaviorStore {
         )
         .optional()
         .map_err(|e| format!("get_profile failed: {e}"))
+    }
+
+    /// Fetch profiles for multiple MACs in a single query.
+    /// Returns a HashMap keyed by MAC address.
+    pub async fn get_profiles_bulk(&self, macs: &[&str]) -> Result<HashMap<String, DeviceProfile>, String> {
+        if macs.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let db = self.db.lock().await;
+
+        // Build "WHERE mac IN (?, ?, ...)" with dynamic placeholders
+        let placeholders: Vec<&str> = macs.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
+                    first_seen, last_seen, learning_until, baseline_status, notes
+             FROM device_profiles WHERE mac IN ({})",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("prepare bulk profiles: {e}"))?;
+
+        // Bind each MAC as a parameter
+        let params_vec: Vec<&dyn rusqlite::types::ToSql> = macs.iter().map(|m| m as &dyn rusqlite::types::ToSql).collect();
+        let rows = stmt
+            .query_map(params_vec.as_slice(), |row| {
+                Ok(DeviceProfile {
+                    mac: row.get(0)?,
+                    hostname: row.get(1)?,
+                    manufacturer: row.get(2)?,
+                    current_ip: row.get(3)?,
+                    current_vlan: row.get(4)?,
+                    first_seen: row.get(5)?,
+                    last_seen: row.get(6)?,
+                    learning_until: row.get(7)?,
+                    baseline_status: row.get(8)?,
+                    notes: row.get(9)?,
+                })
+            })
+            .map_err(|e| format!("bulk profile query: {e}"))?;
+
+        let mut map = HashMap::with_capacity(macs.len());
+        for row in rows {
+            let profile = row.map_err(|e| format!("bulk profile row: {e}"))?;
+            map.insert(profile.mac.clone(), profile);
+        }
+        Ok(map)
     }
 
     pub async fn get_all_profiles(&self) -> Result<Vec<DeviceProfile>, String> {

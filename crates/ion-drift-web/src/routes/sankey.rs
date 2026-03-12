@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::extract::{Path, Query, State};
 use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
@@ -60,10 +62,10 @@ pub async fn network_overview(
     let range = q.range.as_deref().unwrap_or("24h");
     let offset = range_to_sqlite_offset(range);
 
-    // All DB access in a sync block — MutexGuard is !Send
-    let (flows, vlans) = {
-        let db = state.connection_store.lock_db()
-            .map_err(|e| internal_error("sankey db lock", e))?;
+    let store = state.connection_store.clone();
+    let (flows, vlans) = tokio::task::spawn_blocking(move || {
+        let db = store.lock_db()
+            .map_err(|e| format!("sankey db lock: {e}"))?;
 
         let mut stmt = db.prepare(
             "SELECT
@@ -76,7 +78,7 @@ pub async fn network_overview(
              WHERE first_seen >= datetime('now', ?1)
              GROUP BY sv, dv
              ORDER BY total_bytes DESC",
-        ).map_err(|e| internal_error("sankey query", e))?;
+        ).map_err(|e| format!("sankey query: {e}"))?;
 
         let flows: Vec<SankeyNetworkFlow> = stmt
             .query_map(rusqlite::params![offset], |row| {
@@ -88,7 +90,7 @@ pub async fn network_overview(
                     anomaly_count: row.get(4)?,
                 })
             })
-            .map_err(|e| internal_error("sankey flow query", e))?
+            .map_err(|e| format!("sankey flow query: {e}"))?
             .filter_map(|r| r.ok())
             .collect();
         drop(stmt);
@@ -103,7 +105,7 @@ pub async fn network_overview(
              WHERE first_seen >= datetime('now', ?1)
              GROUP BY vlan_id
              ORDER BY total_bytes DESC",
-        ).map_err(|e| internal_error("sankey vlan query", e))?;
+        ).map_err(|e| format!("sankey vlan query: {e}"))?;
 
         let vlans: Vec<SankeyNetworkVlan> = stmt2
             .query_map(rusqlite::params![offset], |row| {
@@ -114,12 +116,15 @@ pub async fn network_overview(
                     total_connections: row.get(3)?,
                 })
             })
-            .map_err(|e| internal_error("sankey vlan query", e))?
+            .map_err(|e| format!("sankey vlan query: {e}"))?
             .filter_map(|r| r.ok())
             .collect();
 
-        (flows, vlans)
-    };
+        Ok::<_, String>((flows, vlans))
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("sankey network_overview", e))?;
 
     Ok(Json(SankeyNetworkResponse {
         flows,
@@ -173,10 +178,12 @@ pub async fn vlan_detail(
     let offset = range_to_sqlite_offset(range);
     let dest_filter = q.dest_vlan.clone().unwrap_or_default();
 
-    // All DB access in a sync block
-    let (devices, flows) = {
-        let db = state.connection_store.lock_db()
-            .map_err(|e| internal_error("sankey db lock", e))?;
+    // Run all DB access on a blocking thread
+    let store = state.connection_store.clone();
+    let vlan_id_clone = vlan_id.clone();
+    let (devices, flows) = tokio::task::spawn_blocking(move || {
+        let db = store.lock_db()
+            .map_err(|e| format!("sankey db lock: {e}"))?;
 
         let mut device_stmt = db.prepare(
             "SELECT
@@ -190,10 +197,10 @@ pub async fn vlan_detail(
              GROUP BY mac
              ORDER BY total_bytes DESC
              LIMIT 100",
-        ).map_err(|e| internal_error("sankey device query", e))?;
+        ).map_err(|e| format!("sankey device query: {e}"))?;
 
         let devices: Vec<SankeyVlanDevice> = device_stmt
-            .query_map(rusqlite::params![vlan_id, offset], |row| {
+            .query_map(rusqlite::params![vlan_id_clone, offset], |row| {
                 Ok(SankeyVlanDevice {
                     mac: row.get(0)?,
                     hostname: row.get(1)?,
@@ -203,7 +210,7 @@ pub async fn vlan_detail(
                     baseline_status: None,
                 })
             })
-            .map_err(|e| internal_error("sankey device query", e))?
+            .map_err(|e| format!("sankey device query: {e}"))?
             .filter_map(|r| r.ok())
             .collect();
         drop(device_stmt);
@@ -220,9 +227,9 @@ pub async fn vlan_detail(
                  GROUP BY mac, dst_group
                  ORDER BY total_bytes DESC
                  LIMIT 500",
-            ).map_err(|e| internal_error("sankey flow query", e))?;
+            ).map_err(|e| format!("sankey flow query: {e}"))?;
 
-            stmt.query_map(rusqlite::params![vlan_id, offset], |row| {
+            stmt.query_map(rusqlite::params![vlan_id_clone, offset], |row| {
                 Ok(SankeyVlanFlow {
                     src_mac: row.get(0)?,
                     dst_group: row.get(1)?,
@@ -231,7 +238,7 @@ pub async fn vlan_detail(
                     flow_state: "unknown".into(),
                 })
             })
-            .map_err(|e| internal_error("sankey flow query", e))?
+            .map_err(|e| format!("sankey flow query: {e}"))?
             .filter_map(|r| r.ok())
             .collect()
         } else {
@@ -247,9 +254,9 @@ pub async fn vlan_detail(
                  GROUP BY mac, dst_group
                  ORDER BY total_bytes DESC
                  LIMIT 500",
-            ).map_err(|e| internal_error("sankey flow query", e))?;
+            ).map_err(|e| format!("sankey flow query: {e}"))?;
 
-            stmt.query_map(rusqlite::params![vlan_id, offset, dest_filter], |row| {
+            stmt.query_map(rusqlite::params![vlan_id_clone, offset, dest_filter], |row| {
                 Ok(SankeyVlanFlow {
                     src_mac: row.get(0)?,
                     dst_group: row.get(1)?,
@@ -258,25 +265,40 @@ pub async fn vlan_detail(
                     flow_state: "unknown".into(),
                 })
             })
-            .map_err(|e| internal_error("sankey flow query", e))?
+            .map_err(|e| format!("sankey flow query: {e}"))?
             .filter_map(|r| r.ok())
             .collect()
         };
 
-        (devices, flows)
-    };
+        Ok::<_, String>((devices, flows))
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("sankey vlan_detail", e))?;
 
-    // Async enrichment — baseline status from behavior store
+    // Bulk profile lookup — collect all unique MACs from devices and flows
+    let mut all_macs: HashSet<String> = HashSet::new();
+    for dev in &devices {
+        all_macs.insert(dev.mac.clone());
+    }
+    for flow in &flows {
+        all_macs.insert(flow.src_mac.clone());
+    }
+    let mac_refs: Vec<&str> = all_macs.iter().map(|s| s.as_str()).collect();
+    let profiles = state.behavior_store.get_profiles_bulk(&mac_refs).await.unwrap_or_default();
+
+    // Enrich devices with baseline status
     let mut enriched_devices = devices;
     for dev in &mut enriched_devices {
-        if let Ok(Some(profile)) = state.behavior_store.get_profile(&dev.mac).await {
+        if let Some(profile) = profiles.get(&dev.mac) {
             dev.baseline_status = Some(profile.baseline_status.clone());
         }
     }
 
+    // Enrich flows with flow state
     let mut enriched_flows = flows;
     for flow in &mut enriched_flows {
-        if let Ok(Some(profile)) = state.behavior_store.get_profile(&flow.src_mac).await {
+        if let Some(profile) = profiles.get(&flow.src_mac) {
             flow.flow_state = match profile.baseline_status.as_str() {
                 "baselined" => "baselined".into(),
                 "sparse" => "unbaselined".into(),
@@ -365,9 +387,11 @@ pub async fn device_trace(
     let range = q.range.as_deref().unwrap_or("24h");
     let offset = range_to_sqlite_offset(range);
 
-    let (protocols, destinations, flows, hostname, ip) = {
-        let db = state.connection_store.lock_db()
-            .map_err(|e| internal_error("sankey db lock", e))?;
+    let store = state.connection_store.clone();
+    let mac_clone = mac.clone();
+    let (protocols, destinations, flows, hostname, ip) = tokio::task::spawn_blocking(move || {
+        let db = store.lock_db()
+            .map_err(|e| format!("sankey db lock: {e}"))?;
 
         // Protocols aggregated by (protocol, dst_port)
         let mut stmt_p = db.prepare(
@@ -377,10 +401,10 @@ pub async fn device_trace(
              GROUP BY protocol, dst_port
              ORDER BY total_bytes DESC
              LIMIT 100",
-        ).map_err(|e| internal_error("sankey device protocol query", e))?;
+        ).map_err(|e| format!("sankey device protocol query: {e}"))?;
 
         let protocols: Vec<SankeyDeviceProtocol> = stmt_p
-            .query_map(rusqlite::params![mac, offset], |row| {
+            .query_map(rusqlite::params![mac_clone, offset], |row| {
                 let proto: String = row.get(0)?;
                 let port: i64 = row.get(1)?;
                 Ok(SankeyDeviceProtocol {
@@ -391,7 +415,7 @@ pub async fn device_trace(
                     connections: row.get(3)?,
                 })
             })
-            .map_err(|e| internal_error("sankey device protocol query", e))?
+            .map_err(|e| format!("sankey device protocol query: {e}"))?
             .filter_map(|r| r.ok())
             .collect();
         drop(stmt_p);
@@ -405,10 +429,10 @@ pub async fn device_trace(
              GROUP BY dst_ip
              ORDER BY total_bytes DESC
              LIMIT 100",
-        ).map_err(|e| internal_error("sankey device dest query", e))?;
+        ).map_err(|e| format!("sankey device dest query: {e}"))?;
 
         let destinations: Vec<SankeyDeviceDestination> = stmt_d
-            .query_map(rusqlite::params![mac, offset], |row| {
+            .query_map(rusqlite::params![mac_clone, offset], |row| {
                 Ok(SankeyDeviceDestination {
                     dst_ip: row.get(0)?,
                     dst_hostname: row.get(1)?,
@@ -417,7 +441,7 @@ pub async fn device_trace(
                     connections: row.get(4)?,
                 })
             })
-            .map_err(|e| internal_error("sankey device dest query", e))?
+            .map_err(|e| format!("sankey device dest query: {e}"))?
             .filter_map(|r| r.ok())
             .collect();
         drop(stmt_d);
@@ -432,10 +456,10 @@ pub async fn device_trace(
              GROUP BY protocol, dst_port, dst_ip
              ORDER BY total_bytes DESC
              LIMIT 500",
-        ).map_err(|e| internal_error("sankey device flow query", e))?;
+        ).map_err(|e| format!("sankey device flow query: {e}"))?;
 
         let flows: Vec<SankeyDeviceFlow> = stmt_f
-            .query_map(rusqlite::params![mac, offset], |row| {
+            .query_map(rusqlite::params![mac_clone, offset], |row| {
                 Ok(SankeyDeviceFlow {
                     protocol: row.get(0)?,
                     dst_port: row.get(1)?,
@@ -445,7 +469,7 @@ pub async fn device_trace(
                     flagged: row.get::<_, i64>(5)? > 0,
                 })
             })
-            .map_err(|e| internal_error("sankey device flow query", e))?
+            .map_err(|e| format!("sankey device flow query: {e}"))?
             .filter_map(|r| r.ok())
             .collect();
         drop(stmt_f);
@@ -454,12 +478,15 @@ pub async fn device_trace(
         let meta: (Option<String>, Option<String>) = db.query_row(
             "SELECT src_hostname, src_ip FROM connection_history
              WHERE src_mac = ?1 ORDER BY first_seen DESC LIMIT 1",
-            rusqlite::params![mac],
+            rusqlite::params![mac_clone],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).unwrap_or((None, None));
 
-        (protocols, destinations, flows, meta.0, meta.1)
-    };
+        Ok::<_, String>((protocols, destinations, flows, meta.0, meta.1))
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("sankey device_trace", e))?;
 
     // Baseline enrichment
     let baseline_status = match state.behavior_store.get_profile(&mac).await {
@@ -561,126 +588,133 @@ pub async fn conversation_detail(
         _ => format!("strftime('{bucket_format}', first_seen)"),
     };
 
-    let (summary, timeline, connections, total_count, src_hostname, dst_hostname) = {
-        let db = state.connection_store.lock_db()
-            .map_err(|e| internal_error("sankey db lock", e))?;
+    let store = state.connection_store.clone();
+    let mac_clone = mac.clone();
+    let dst_ip_clone = dst_ip.clone();
+    let (summary, timeline, connections, total_count, src_hostname, dst_hostname) =
+        tokio::task::spawn_blocking(move || {
+            let db = store.lock_db()
+                .map_err(|e| format!("sankey db lock: {e}"))?;
 
-        // Summary stats
-        let summary: ConversationSummary = db.query_row(
-            &format!(
-                "SELECT
-                    COALESCE(SUM(bytes_tx + bytes_rx), 0),
-                    COUNT(*),
-                    MIN(first_seen),
-                    MAX(last_seen),
-                    COALESCE(SUM(CASE WHEN flagged = 1 THEN 1 ELSE 0 END), 0)
+            // Summary stats
+            let summary: ConversationSummary = db.query_row(
+                &format!(
+                    "SELECT
+                        COALESCE(SUM(bytes_tx + bytes_rx), 0),
+                        COUNT(*),
+                        MIN(first_seen),
+                        MAX(last_seen),
+                        COALESCE(SUM(CASE WHEN flagged = 1 THEN 1 ELSE 0 END), 0)
+                     FROM connection_history
+                     WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)"
+                ),
+                rusqlite::params![mac_clone, dst_ip_clone, offset],
+                |row| {
+                    Ok(ConversationSummary {
+                        total_bytes: row.get(0)?,
+                        total_connections: row.get(1)?,
+                        first_seen: row.get(2)?,
+                        last_seen: row.get(3)?,
+                        protocols: Vec::new(), // filled below
+                        flagged_count: row.get(4)?,
+                        blocked_count: 0, // no blocked column; derive from flagged
+                    })
+                },
+            ).map_err(|e| format!("sankey conversation summary: {e}"))?;
+
+            // Distinct protocols
+            let mut proto_stmt = db.prepare(
+                "SELECT DISTINCT protocol FROM connection_history
+                 WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
+                 ORDER BY protocol",
+            ).map_err(|e| format!("sankey conversation protocols: {e}"))?;
+
+            let protocols: Vec<String> = proto_stmt
+                .query_map(rusqlite::params![mac_clone, dst_ip_clone, offset], |row| row.get(0))
+                .map_err(|e| format!("sankey conversation protocols: {e}"))?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(proto_stmt);
+
+            let summary = ConversationSummary { protocols, ..summary };
+
+            // Timeline buckets
+            let timeline_sql = format!(
+                "SELECT {bucket_expr} as bucket,
+                        SUM(bytes_tx + bytes_rx) as total_bytes,
+                        COUNT(*) as conn_count
                  FROM connection_history
-                 WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)"
-            ),
-            rusqlite::params![mac, dst_ip, offset],
-            |row| {
-                Ok(ConversationSummary {
-                    total_bytes: row.get(0)?,
-                    total_connections: row.get(1)?,
-                    first_seen: row.get(2)?,
-                    last_seen: row.get(3)?,
-                    protocols: Vec::new(), // filled below
-                    flagged_count: row.get(4)?,
-                    blocked_count: 0, // no blocked column; derive from flagged
+                 WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
+                 GROUP BY bucket
+                 ORDER BY bucket"
+            );
+
+            let mut tl_stmt = db.prepare(&timeline_sql)
+                .map_err(|e| format!("sankey conversation timeline: {e}"))?;
+
+            let timeline: Vec<ConversationTimelineBucket> = tl_stmt
+                .query_map(rusqlite::params![mac_clone, dst_ip_clone, offset], |row| {
+                    Ok(ConversationTimelineBucket {
+                        bucket: row.get(0)?,
+                        bytes: row.get(1)?,
+                        connections: row.get(2)?,
+                    })
                 })
-            },
-        ).map_err(|e| internal_error("sankey conversation summary", e))?;
+                .map_err(|e| format!("sankey conversation timeline: {e}"))?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(tl_stmt);
 
-        // Distinct protocols
-        let mut proto_stmt = db.prepare(
-            "SELECT DISTINCT protocol FROM connection_history
-             WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
-             ORDER BY protocol",
-        ).map_err(|e| internal_error("sankey conversation protocols", e))?;
+            // Total count for pagination
+            let total_count: i64 = db.query_row(
+                "SELECT COUNT(*) FROM connection_history
+                 WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)",
+                rusqlite::params![mac_clone, dst_ip_clone, offset],
+                |row| row.get(0),
+            ).map_err(|e| format!("sankey conversation count: {e}"))?;
 
-        let protocols: Vec<String> = proto_stmt
-            .query_map(rusqlite::params![mac, dst_ip, offset], |row| row.get(0))
-            .map_err(|e| internal_error("sankey conversation protocols", e))?
-            .filter_map(|r| r.ok())
-            .collect();
-        drop(proto_stmt);
+            // Paginated connections
+            let mut conn_stmt = db.prepare(
+                "SELECT rowid, protocol, src_port, dst_port, bytes_tx, bytes_rx,
+                        first_seen, last_seen, COALESCE(flagged, 0)
+                 FROM connection_history
+                 WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
+                 ORDER BY first_seen DESC
+                 LIMIT ?4 OFFSET ?5",
+            ).map_err(|e| format!("sankey conversation connections: {e}"))?;
 
-        let summary = ConversationSummary { protocols, ..summary };
-
-        // Timeline buckets
-        let timeline_sql = format!(
-            "SELECT {bucket_expr} as bucket,
-                    SUM(bytes_tx + bytes_rx) as total_bytes,
-                    COUNT(*) as conn_count
-             FROM connection_history
-             WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
-             GROUP BY bucket
-             ORDER BY bucket"
-        );
-
-        let mut tl_stmt = db.prepare(&timeline_sql)
-            .map_err(|e| internal_error("sankey conversation timeline", e))?;
-
-        let timeline: Vec<ConversationTimelineBucket> = tl_stmt
-            .query_map(rusqlite::params![mac, dst_ip, offset], |row| {
-                Ok(ConversationTimelineBucket {
-                    bucket: row.get(0)?,
-                    bytes: row.get(1)?,
-                    connections: row.get(2)?,
+            let connections: Vec<ConversationConnection> = conn_stmt
+                .query_map(rusqlite::params![mac_clone, dst_ip_clone, offset, per_page, db_offset], |row| {
+                    Ok(ConversationConnection {
+                        id: row.get(0)?,
+                        protocol: row.get(1)?,
+                        src_port: row.get(2)?,
+                        dst_port: row.get(3)?,
+                        bytes_tx: row.get(4)?,
+                        bytes_rx: row.get(5)?,
+                        first_seen: row.get(6)?,
+                        last_seen: row.get(7)?,
+                        flagged: row.get::<_, i64>(8)? != 0,
+                    })
                 })
-            })
-            .map_err(|e| internal_error("sankey conversation timeline", e))?
-            .filter_map(|r| r.ok())
-            .collect();
-        drop(tl_stmt);
+                .map_err(|e| format!("sankey conversation connections: {e}"))?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(conn_stmt);
 
-        // Total count for pagination
-        let total_count: i64 = db.query_row(
-            "SELECT COUNT(*) FROM connection_history
-             WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)",
-            rusqlite::params![mac, dst_ip, offset],
-            |row| row.get(0),
-        ).map_err(|e| internal_error("sankey conversation count", e))?;
+            // Get hostnames from most recent connection
+            let (src_hostname, dst_hostname): (Option<String>, Option<String>) = db.query_row(
+                "SELECT src_hostname, dst_hostname FROM connection_history
+                 WHERE src_mac = ?1 AND dst_ip = ?2 ORDER BY first_seen DESC LIMIT 1",
+                rusqlite::params![mac_clone, dst_ip_clone],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap_or((None, None));
 
-        // Paginated connections
-        let mut conn_stmt = db.prepare(
-            "SELECT rowid, protocol, src_port, dst_port, bytes_tx, bytes_rx,
-                    first_seen, last_seen, COALESCE(flagged, 0)
-             FROM connection_history
-             WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
-             ORDER BY first_seen DESC
-             LIMIT ?4 OFFSET ?5",
-        ).map_err(|e| internal_error("sankey conversation connections", e))?;
-
-        let connections: Vec<ConversationConnection> = conn_stmt
-            .query_map(rusqlite::params![mac, dst_ip, offset, per_page, db_offset], |row| {
-                Ok(ConversationConnection {
-                    id: row.get(0)?,
-                    protocol: row.get(1)?,
-                    src_port: row.get(2)?,
-                    dst_port: row.get(3)?,
-                    bytes_tx: row.get(4)?,
-                    bytes_rx: row.get(5)?,
-                    first_seen: row.get(6)?,
-                    last_seen: row.get(7)?,
-                    flagged: row.get::<_, i64>(8)? != 0,
-                })
-            })
-            .map_err(|e| internal_error("sankey conversation connections", e))?
-            .filter_map(|r| r.ok())
-            .collect();
-        drop(conn_stmt);
-
-        // Get hostnames from most recent connection
-        let (src_hostname, dst_hostname): (Option<String>, Option<String>) = db.query_row(
-            "SELECT src_hostname, dst_hostname FROM connection_history
-             WHERE src_mac = ?1 AND dst_ip = ?2 ORDER BY first_seen DESC LIMIT 1",
-            rusqlite::params![mac, dst_ip],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).unwrap_or((None, None));
-
-        (summary, timeline, connections, total_count, src_hostname, dst_hostname)
-    };
+            Ok::<_, String>((summary, timeline, connections, total_count, src_hostname, dst_hostname))
+        })
+        .await
+        .map_err(|e| internal_error("spawn_blocking", e))?
+        .map_err(|e| internal_error("sankey conversation_detail", e))?;
 
     // Async enrichment — baseline status from behavior store
     let baseline_status = match state.behavior_store.get_profile(&mac).await {
@@ -732,9 +766,11 @@ pub async fn destination_peers(
     let range = q.range.as_deref().unwrap_or("24h");
     let offset = range_to_sqlite_offset(range);
 
-    let peers = {
-        let db = state.connection_store.lock_db()
-            .map_err(|e| internal_error("sankey db lock", e))?;
+    let store = state.connection_store.clone();
+    let dst_ip_clone = dst_ip.clone();
+    let peers = tokio::task::spawn_blocking(move || {
+        let db = store.lock_db()
+            .map_err(|e| format!("sankey db lock: {e}"))?;
 
         let mut stmt = db.prepare(
             "SELECT COALESCE(src_mac, src_ip) as mac, src_hostname, src_ip,
@@ -744,10 +780,10 @@ pub async fn destination_peers(
              GROUP BY mac
              ORDER BY total_bytes DESC
              LIMIT 100",
-        ).map_err(|e| internal_error("sankey dest peers query", e))?;
+        ).map_err(|e| format!("sankey dest peers query: {e}"))?;
 
         let peers: Vec<SankeyDestinationPeer> = stmt
-            .query_map(rusqlite::params![dst_ip, offset], |row| {
+            .query_map(rusqlite::params![dst_ip_clone, offset], |row| {
                 Ok(SankeyDestinationPeer {
                     mac: row.get(0)?,
                     hostname: row.get(1)?,
@@ -756,12 +792,15 @@ pub async fn destination_peers(
                     connections: row.get(4)?,
                 })
             })
-            .map_err(|e| internal_error("sankey dest peers query", e))?
+            .map_err(|e| format!("sankey dest peers query: {e}"))?
             .filter_map(|r| r.ok())
             .collect();
 
-        peers
-    };
+        Ok::<_, String>(peers)
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("sankey destination_peers", e))?;
 
     Ok(Json(SankeyDestinationPeersResponse {
         dst_ip,

@@ -225,8 +225,8 @@ impl SwosClient {
         if auth_status == reqwest::StatusCode::UNAUTHORIZED {
             tracing::error!(
                 url = %url,
-                auth_header = %auth_header,
-                "SwOS fetch: still 401 after auth — digest rejected"
+                user = %self.username,
+                "SwOS fetch: digest auth rejected"
             );
             return Err(MikrotikError::AuthFailed);
         }

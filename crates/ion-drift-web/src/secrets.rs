@@ -461,6 +461,9 @@ impl SecretsManager {
     }
 
     /// Add a new device to the registry and store its encrypted credentials.
+    ///
+    /// All writes (device row + encrypted credentials) happen in a single
+    /// SQLite transaction so the operation is atomic.
     pub async fn add_device(
         &self,
         device: &NewDevice,
@@ -468,34 +471,75 @@ impl SecretsManager {
         password: &str,
     ) -> anyhow::Result<()> {
         let now = now_unix();
-        {
-            let db = self.db.lock().await;
-            db.execute(
-                "INSERT INTO devices
-                 (id, name, host, port, tls, ca_cert_path, device_type, model,
-                  is_primary, enabled, poll_interval_secs, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
-                params![
-                    device.id,
-                    device.name,
-                    device.host,
-                    device.port as i64,
-                    device.tls as i32,
-                    device.ca_cert_path,
-                    device.device_type,
-                    device.model,
-                    device.is_primary as i32,
-                    device.enabled as i32,
-                    device.poll_interval_secs as i64,
-                    now,
-                ],
-            )?;
-        }
-        // Store encrypted credentials
-        self.encrypt_secret(&format!("device:{}:username", device.id), username)
-            .await?;
-        self.encrypt_secret(&format!("device:{}:password", device.id), password)
-            .await?;
+
+        // Pre-encrypt credentials before taking the DB lock
+        let user_secret_name = format!("device:{}:username", device.id);
+        let pass_secret_name = format!("device:{}:password", device.id);
+
+        let cipher = Aes256Gcm::new(&self.kek);
+
+        let user_nonce_bytes: [u8; 12] = rand::random();
+        let user_nonce = Nonce::from_slice(&user_nonce_bytes);
+        let user_ciphertext = cipher
+            .encrypt(
+                user_nonce,
+                Payload {
+                    msg: username.as_bytes(),
+                    aad: user_secret_name.as_bytes(),
+                },
+            )
+            .map_err(|e| anyhow::anyhow!("encryption failed for username: {e}"))?;
+
+        let pass_nonce_bytes: [u8; 12] = rand::random();
+        let pass_nonce = Nonce::from_slice(&pass_nonce_bytes);
+        let pass_ciphertext = cipher
+            .encrypt(
+                pass_nonce,
+                Payload {
+                    msg: password.as_bytes(),
+                    aad: pass_secret_name.as_bytes(),
+                },
+            )
+            .map_err(|e| anyhow::anyhow!("encryption failed for password: {e}"))?;
+
+        // Single transaction: device row + both credential secrets
+        let db = self.db.lock().await;
+        let tx = db.unchecked_transaction()?;
+
+        tx.execute(
+            "INSERT INTO devices
+             (id, name, host, port, tls, ca_cert_path, device_type, model,
+              is_primary, enabled, poll_interval_secs, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+            params![
+                device.id,
+                device.name,
+                device.host,
+                device.port as i64,
+                device.tls as i32,
+                device.ca_cert_path,
+                device.device_type,
+                device.model,
+                device.is_primary as i32,
+                device.enabled as i32,
+                device.poll_interval_secs as i64,
+                now,
+            ],
+        )?;
+
+        tx.execute(
+            "INSERT OR REPLACE INTO encrypted_secrets (name, ciphertext, nonce, key_fingerprint, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![user_secret_name, user_ciphertext, user_nonce_bytes.as_slice(), self.key_fingerprint, now],
+        )?;
+
+        tx.execute(
+            "INSERT OR REPLACE INTO encrypted_secrets (name, ciphertext, nonce, key_fingerprint, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![pass_secret_name, pass_ciphertext, pass_nonce_bytes.as_slice(), self.key_fingerprint, now],
+        )?;
+
+        tx.commit()?;
         Ok(())
     }
 
@@ -550,17 +594,32 @@ impl SecretsManager {
         Ok(())
     }
 
-    /// Remove a device and its credentials.
+    /// Remove a device and its credentials atomically.
+    ///
+    /// Device row and all associated secrets are deleted in a single
+    /// transaction.  If any secret deletion fails, the entire operation
+    /// is rolled back so no orphaned rows are left behind.
     pub async fn remove_device(&self, id: &str) -> anyhow::Result<()> {
+        let secret_names: Vec<String> = vec![
+            format!("device:{id}:username"),
+            format!("device:{id}:password"),
+            format!("device:{id}:snmp_priv_password"),
+            format!("device:{id}:snmp_auth_proto"),
+            format!("device:{id}:snmp_priv_proto"),
+        ];
+
         let db = self.db.lock().await;
-        db.execute("DELETE FROM devices WHERE id = ?1", params![id])?;
-        drop(db);
-        // Remove encrypted credentials (ignore errors if they don't exist)
-        let _ = self.delete_secret(&format!("device:{id}:username")).await;
-        let _ = self.delete_secret(&format!("device:{id}:password")).await;
-        let _ = self.delete_secret(&format!("device:{id}:snmp_priv_password")).await;
-        let _ = self.delete_secret(&format!("device:{id}:snmp_auth_proto")).await;
-        let _ = self.delete_secret(&format!("device:{id}:snmp_priv_proto")).await;
+        let tx = db.unchecked_transaction()?;
+
+        tx.execute("DELETE FROM devices WHERE id = ?1", params![id])?;
+        for name in &secret_names {
+            tx.execute(
+                "DELETE FROM encrypted_secrets WHERE name = ?1",
+                params![name],
+            )?;
+        }
+
+        tx.commit()?;
         Ok(())
     }
 

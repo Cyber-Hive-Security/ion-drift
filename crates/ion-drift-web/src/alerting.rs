@@ -429,10 +429,11 @@ async fn deliver_ntfy(
     title: &str,
     body: &str,
     severity: &str,
+    ntfy_token: Option<&str>,
 ) -> Result<(), String> {
     let url = config.get("url").and_then(|v| v.as_str()).unwrap_or("");
     let topic = config.get("topic").and_then(|v| v.as_str()).unwrap_or("");
-    let token = config.get("token").and_then(|v| v.as_str()).unwrap_or("");
+    let token = ntfy_token.unwrap_or("");
 
     if url.is_empty() {
         return Err("ntfy server URL not configured".into());
@@ -476,9 +477,10 @@ async fn deliver_webhook(
     body: &str,
     severity: &str,
     alert: Option<&PendingAlert>,
+    webhook_secret: Option<&str>,
 ) -> Result<(), String> {
     let url = config.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    let secret = config.get("secret").and_then(|v| v.as_str()).unwrap_or("");
+    let secret = webhook_secret.unwrap_or("");
 
     if url.is_empty() {
         return Err("webhook URL not configured".into());
@@ -643,11 +645,14 @@ pub async fn update_channel_config(
 }
 
 /// Send a test notification to a channel.
+///
+/// `channel_secret` is the decrypted secret for this channel type:
+/// SMTP password, ntfy token, or webhook HMAC secret.
 pub async fn test_channel(
     http: &reqwest::Client,
     store: &SwitchStore,
     channel: &str,
-    smtp_password: Option<&str>,
+    channel_secret: Option<&str>,
 ) -> Result<(), String> {
     let channels = get_delivery_channels(store).await?;
     let config = channels.iter().find(|c| c.channel == channel)
@@ -659,19 +664,26 @@ pub async fn test_channel(
     );
 
     match channel {
-        "ntfy" => deliver_ntfy(http, &config.config_json, title, body, "info").await,
-        "webhook" => deliver_webhook(http, &config.config_json, title, body, "info", None).await,
-        "smtp" => deliver_smtp(&config.config_json, smtp_password, title, body).await,
+        "ntfy" => deliver_ntfy(http, &config.config_json, title, body, "info", channel_secret).await,
+        "webhook" => deliver_webhook(http, &config.config_json, title, body, "info", None, channel_secret).await,
+        "smtp" => deliver_smtp(&config.config_json, channel_secret, title, body).await,
         _ => Err(format!("unknown channel '{channel}'")),
     }
 }
 
 // ── Alert engine evaluation cycle ───────────────────────────────
 
+/// Resolved secrets for all delivery channels, decrypted from SecretsManager.
+struct ChannelSecrets {
+    smtp_password: Option<String>,
+    ntfy_token: Option<String>,
+    webhook_secret: Option<String>,
+}
+
 async fn evaluate_cycle(
     state: &AppState,
     http: &reqwest::Client,
-    smtp_password: Option<&str>,
+    secrets: &ChannelSecrets,
 ) {
     let switch_store = &state.switch_store;
     let behavior_store = &state.behavior_store;
@@ -786,9 +798,9 @@ async fn evaluate_cycle(
             if let Some(ch_config) = channels.iter().find(|c| &c.channel == ch_name && c.enabled) {
                 attempted.push(ch_name.clone());
                 let result = match ch_name.as_str() {
-                    "ntfy" => deliver_ntfy(http, &ch_config.config_json, &alert.title, &alert.body, &alert.severity).await,
-                    "webhook" => deliver_webhook(http, &ch_config.config_json, &alert.title, &alert.body, &alert.severity, Some(alert)).await,
-                    "smtp" => deliver_smtp(&ch_config.config_json, smtp_password, &alert.title, &alert.body).await,
+                    "ntfy" => deliver_ntfy(http, &ch_config.config_json, &alert.title, &alert.body, &alert.severity, secrets.ntfy_token.as_deref()).await,
+                    "webhook" => deliver_webhook(http, &ch_config.config_json, &alert.title, &alert.body, &alert.severity, Some(alert), secrets.webhook_secret.as_deref()).await,
+                    "smtp" => deliver_smtp(&ch_config.config_json, secrets.smtp_password.as_deref(), &alert.title, &alert.body).await,
                     _ => Err(format!("channel '{ch_name}' not implemented")),
                 };
                 match result {
@@ -1482,24 +1494,40 @@ pub fn spawn_alert_engine(supervisor: &TaskSupervisor, state: AppState) {
         loop {
             interval.tick().await;
 
-            // Resolve SMTP password from encrypted secrets if available
-            let smtp_pw = if let Some(ref sm) = state.secrets_manager {
+            // Resolve all channel secrets from encrypted storage
+            let secrets = if let Some(ref sm) = state.secrets_manager {
                 let sm_guard = sm.read().await;
-                match sm_guard.decrypt_secret("smtp_password").await {
+
+                let smtp_password = match sm_guard.decrypt_secret("smtp_password").await {
                     Ok(Some(secret)) => {
                         use secrecy::ExposeSecret;
                         Some(secret.expose_secret().to_string())
                     }
                     _ => None,
-                }
+                };
+                let ntfy_token = match sm_guard.decrypt_secret("alert_channel_ntfy_token").await {
+                    Ok(Some(secret)) => {
+                        use secrecy::ExposeSecret;
+                        Some(secret.expose_secret().to_string())
+                    }
+                    _ => None,
+                };
+                let webhook_secret = match sm_guard.decrypt_secret("alert_channel_webhook_secret").await {
+                    Ok(Some(secret)) => {
+                        use secrecy::ExposeSecret;
+                        Some(secret.expose_secret().to_string())
+                    }
+                    _ => None,
+                };
+                ChannelSecrets { smtp_password, ntfy_token, webhook_secret }
             } else {
-                None
+                ChannelSecrets { smtp_password: None, ntfy_token: None, webhook_secret: None }
             };
 
             evaluate_cycle(
                 &state,
                 &state.http_client,
-                smtp_pw.as_deref(),
+                &secrets,
             )
             .await;
         }

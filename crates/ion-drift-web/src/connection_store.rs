@@ -350,7 +350,7 @@ pub struct PaginatedHistory {
 }
 
 /// Filters for history queries.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct HistoryFilters {
     pub src_ip: Option<String>,
     pub dst_ip: Option<String>,

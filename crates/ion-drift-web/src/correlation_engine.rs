@@ -1131,20 +1131,6 @@ fn mac_to_u64(mac: &str) -> Option<u64> {
     u64::from_str_radix(&hex, 16).ok()
 }
 
-/// Convert a u64 back to a colon-separated MAC string.
-#[allow(dead_code)]
-fn u64_to_mac(val: u64) -> String {
-    format!(
-        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-        (val >> 40) & 0xFF,
-        (val >> 32) & 0xFF,
-        (val >> 24) & 0xFF,
-        (val >> 16) & 0xFF,
-        (val >> 8) & 0xFF,
-        val & 0xFF,
-    )
-}
-
 /// Build the set of all switch-local MAC addresses using exact observed values.
 ///
 /// Uses only the is_local=true MACs that switches explicitly report — no range

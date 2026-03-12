@@ -74,15 +74,14 @@ pub async fn list_channels(
 ) -> Response {
     match alerting::get_delivery_channels(&state.switch_store).await {
         Ok(mut channels) => {
-            // Strip sensitive fields from config_json before returning
+            // Strip sensitive fields from config_json before returning.
+            // Secrets are stored encrypted via SecretsManager, not in config_json,
+            // but strip them defensively in case of legacy data.
             for ch in &mut channels {
                 if let Some(obj) = ch.config_json.as_object_mut() {
+                    obj.remove("password");
                     obj.remove("token");
                     obj.remove("secret");
-                    // For SMTP, indicate password is set without revealing it
-                    if ch.channel == "smtp" {
-                        // Don't return password field at all
-                    }
                 }
             }
             Json(channels).into_response()
@@ -98,29 +97,40 @@ pub async fn update_channel(
     axum::extract::Path(channel): axum::extract::Path<String>,
     Json(body): Json<UpdateChannelBody>,
 ) -> Response {
-    // Extract password for SMTP and store via encrypted secrets
-    if channel == "smtp" {
-        if let Some(password) = body.config.get("password").and_then(|v| v.as_str()) {
-            if !password.is_empty() {
-                if let Some(ref sm) = state.secrets_manager {
-                    let sm_guard = sm.read().await;
-                    if let Err(e) = sm_guard.encrypt_secret("smtp_password", password).await {
-                        return super::internal_error("store smtp password", e).into_response();
+    // Extract secrets and store via encrypted SecretsManager
+    {
+        let secret_fields: &[(&str, &str)] = match channel.as_str() {
+            "smtp" => &[("password", "smtp_password")],
+            "ntfy" => &[("token", "alert_channel_ntfy_token")],
+            "webhook" => &[("secret", "alert_channel_webhook_secret")],
+            _ => &[],
+        };
+
+        for &(field, secret_key) in secret_fields {
+            if let Some(value) = body.config.get(field).and_then(|v| v.as_str()) {
+                if !value.is_empty() {
+                    if let Some(ref sm) = state.secrets_manager {
+                        let sm_guard = sm.read().await;
+                        if let Err(e) = sm_guard.encrypt_secret(secret_key, value).await {
+                            return super::internal_error("store channel secret", e).into_response();
+                        }
+                    } else {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({ "error": "bootstrap mode required for secret storage" })),
+                        ).into_response();
                     }
-                } else {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": "bootstrap mode required for SMTP password storage" })),
-                    ).into_response();
                 }
             }
         }
     }
 
-    // Build config_json without sensitive fields (password is stored separately)
+    // Build config_json without sensitive fields (secrets are stored separately via SecretsManager)
     let mut config_json = serde_json::Value::Object(body.config);
     if let Some(obj) = config_json.as_object_mut() {
         obj.remove("password");
+        obj.remove("token");
+        obj.remove("secret");
         obj.remove("enabled"); // enabled is handled separately
     }
 
@@ -195,11 +205,18 @@ pub async fn test_channel(
     State(state): State<AppState>,
     axum::extract::Path(channel): axum::extract::Path<String>,
 ) -> Response {
-    // Resolve SMTP password if needed
-    let smtp_pw = if channel == "smtp" {
+    // Resolve the appropriate secret for this channel from encrypted storage
+    let secret_key = match channel.as_str() {
+        "smtp" => Some("smtp_password"),
+        "ntfy" => Some("alert_channel_ntfy_token"),
+        "webhook" => Some("alert_channel_webhook_secret"),
+        _ => None,
+    };
+
+    let channel_secret = if let Some(key) = secret_key {
         if let Some(ref sm) = state.secrets_manager {
             let sm_guard = sm.read().await;
-            match sm_guard.decrypt_secret("smtp_password").await {
+            match sm_guard.decrypt_secret(key).await {
                 Ok(Some(secret)) => {
                     use secrecy::ExposeSecret;
                     Some(secret.expose_secret().to_string())
@@ -213,7 +230,7 @@ pub async fn test_channel(
         None
     };
 
-    match alerting::test_channel(&state.http_client, &state.switch_store, &channel, smtp_pw.as_deref()).await {
+    match alerting::test_channel(&state.http_client, &state.switch_store, &channel, channel_secret.as_deref()).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
     }
