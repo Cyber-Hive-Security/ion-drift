@@ -358,6 +358,7 @@ export function useMetricsHistory(range: "24h" | "7d") {
     queryKey: ["metrics", "history", range],
     queryFn: () => apiFetch<MetricsPoint[]>(`/api/metrics/history?range=${range}`),
     refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -368,6 +369,7 @@ export function useDropsHistory(range: "24h" | "7d") {
     queryKey: ["metrics", "drops", range],
     queryFn: () => apiFetch<DropMetricsPoint[]>(`/api/metrics/drops?range=${range}`),
     refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 

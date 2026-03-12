@@ -717,6 +717,17 @@ export function BehaviorPage() {
   const investigationsQuery = useInvestigations({ limit: 200 });
   const investigationStatsQuery = useInvestigationStats();
 
+  const investigations = investigationsQuery.data ?? [];
+
+  // Build anomaly_id → Investigation lookup (must be before early returns)
+  const investigationMap = useMemo(() => {
+    const map = new Map<number, Investigation>();
+    for (const inv of investigations) {
+      map.set(inv.anomaly_id, inv);
+    }
+    return map;
+  }, [investigations]);
+
   if (overview.isLoading) return <LoadingSpinner />;
   if (overview.error) {
     return (
@@ -735,17 +746,7 @@ export function BehaviorPage() {
   const anomalies = macFilter
     ? allAnomalies.filter((a) => a.mac === macFilter)
     : allAnomalies;
-  const investigations = investigationsQuery.data ?? [];
   const invStats = investigationStatsQuery.data;
-
-  // Build anomaly_id → Investigation lookup
-  const investigationMap = useMemo(() => {
-    const map = new Map<number, Investigation>();
-    for (const inv of investigations) {
-      map.set(inv.anomaly_id, inv);
-    }
-    return map;
-  }, [investigations]);
 
   // Sort VLANs: those with anomalies first
   const sortedSummaries = [...data.vlan_summaries].sort((a, b) => {
