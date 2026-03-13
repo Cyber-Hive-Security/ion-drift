@@ -319,6 +319,7 @@ export function SankeyInvestigationPage() {
                 vlanId={view.vlanId}
                 destVlan={view.destVlan}
                 range={range}
+                country={search.country}
                 onBack={() => setView({ level: "network" })}
                 onSelectDevice={(mac) => setView({ level: "device", mac })}
               />
@@ -329,6 +330,7 @@ export function SankeyInvestigationPage() {
               <DeviceTrace
                 mac={view.mac}
                 range={range}
+                country={search.country}
                 onBack={() => setView({ level: "network" })}
                 onSelectConversation={(mac, destIp) =>
                   setView({ level: "conversation", mac, destIp })
@@ -463,16 +465,18 @@ function VlanDetail({
   vlanId,
   destVlan,
   range,
+  country,
   onBack,
   onSelectDevice,
 }: {
   vlanId: string;
   destVlan?: string;
   range: string;
+  country?: string;
   onBack: () => void;
   onSelectDevice: (mac: string) => void;
 }) {
-  const { data, isLoading, error, refetch } = useSankeyVlan(vlanId, range, destVlan);
+  const { data, isLoading, error, refetch } = useSankeyVlan(vlanId, range, destVlan, country);
   const queryClient = useQueryClient();
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; mac: string; hostname?: string; ip?: string } | null>(null);
 
@@ -692,15 +696,17 @@ function DeviceInvestigationsPanel({ mac }: { mac: string }) {
 function DeviceTrace({
   mac,
   range,
+  country,
   onBack,
   onSelectConversation,
 }: {
   mac: string;
   range: string;
+  country?: string;
   onBack: () => void;
   onSelectConversation: (mac: string, destIp: string) => void;
 }) {
-  const { data, isLoading, error, refetch } = useSankeyDevice(mac, range);
+  const { data, isLoading, error, refetch } = useSankeyDevice(mac, range, country);
   const [selectedDst, setSelectedDst] = useState<string | null>(null);
   const peers = useSankeyDestinationPeers(selectedDst ?? undefined, range);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ip: string; hostname?: string } | null>(null);

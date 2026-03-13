@@ -14,6 +14,7 @@ use super::internal_error;
 #[derive(Deserialize)]
 pub struct RangeQuery {
     pub range: Option<String>,
+    pub country: Option<String>,
 }
 
 /// Strip "VLAN " prefix from DB format ("VLAN 25" → "25"), pass through "WAN".
@@ -144,6 +145,7 @@ pub async fn network_overview(
 pub struct VlanDetailQuery {
     pub range: Option<String>,
     pub dest_vlan: Option<String>,
+    pub country: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -182,6 +184,7 @@ pub async fn vlan_detail(
     let range = q.range.as_deref().unwrap_or("24h");
     let offset = range_to_sqlite_offset(range);
     let dest_filter = q.dest_vlan.clone().unwrap_or_default();
+    let country_filter = q.country.clone();
 
     // Convert VLAN ID to DB format: "90" → "VLAN 90"
     // "WAN" means src_vlan IS NULL in the DB (traffic with no matching VLAN subnet)
@@ -207,58 +210,59 @@ pub async fn vlan_detail(
         let db = store.lock_db()
             .map_err(|e| format!("sankey db lock: {e}"))?;
 
-        let device_sql = if src_is_wan {
-            "SELECT
-                COALESCE(src_mac, src_ip) as mac,
-                src_hostname,
-                src_ip,
-                SUM(bytes_tx + bytes_rx) as total_bytes,
-                COUNT(*) as conn_count
-             FROM connection_history
-             WHERE src_vlan IS NULL AND first_seen >= datetime('now', ?1)
-             GROUP BY mac
-             ORDER BY total_bytes DESC
-             LIMIT 100"
-        } else {
-            "SELECT
-                COALESCE(src_mac, src_ip) as mac,
-                src_hostname,
-                src_ip,
-                SUM(bytes_tx + bytes_rx) as total_bytes,
-                COUNT(*) as conn_count
-             FROM connection_history
-             WHERE src_vlan = ?1 AND first_seen >= datetime('now', ?2)
-             GROUP BY mac
-             ORDER BY total_bytes DESC
-             LIMIT 100"
-        };
-        let mut device_stmt = db.prepare(device_sql)
-            .map_err(|e| format!("sankey device query: {e}"))?;
+        // --- Device query (dynamic params) ---
+        let (device_sql, device_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = {
+            let src_clause = if src_is_wan { "src_vlan IS NULL" } else { "src_vlan = ?" };
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            if !src_is_wan {
+                params.push(Box::new(vlan_id_clone.clone()));
+            }
+            params.push(Box::new(offset.clone()));
+            let time_param = params.len();
 
-        let map_device = |row: &rusqlite::Row| -> rusqlite::Result<SankeyVlanDevice> {
-            Ok(SankeyVlanDevice {
-                mac: row.get(0)?,
-                hostname: row.get(1)?,
-                ip: row.get(2)?,
-                total_bytes: row.get(3)?,
-                total_connections: row.get(4)?,
-                baseline_status: None,
+            let country_clause = if let Some(ref cc) = country_filter {
+                params.push(Box::new(cc.clone()));
+                format!(" AND geo_country_code = ?{}", params.len())
+            } else {
+                String::new()
+            };
+
+            let sql = format!(
+                "SELECT
+                    COALESCE(src_mac, src_ip) as mac,
+                    src_hostname,
+                    src_ip,
+                    SUM(bytes_tx + bytes_rx) as total_bytes,
+                    COUNT(*) as conn_count
+                 FROM connection_history
+                 WHERE {src_clause} AND first_seen >= datetime('now', ?{time_param}){country_clause}
+                 GROUP BY mac
+                 ORDER BY total_bytes DESC
+                 LIMIT 100"
+            );
+            (sql, params)
+        };
+        let mut device_stmt = db.prepare(&device_sql)
+            .map_err(|e| format!("sankey device query: {e}"))?;
+        let device_refs: Vec<&dyn rusqlite::types::ToSql> = device_params.iter().map(|p| p.as_ref()).collect();
+
+        let devices: Vec<SankeyVlanDevice> = device_stmt
+            .query_map(device_refs.as_slice(), |row| {
+                Ok(SankeyVlanDevice {
+                    mac: row.get(0)?,
+                    hostname: row.get(1)?,
+                    ip: row.get(2)?,
+                    total_bytes: row.get(3)?,
+                    total_connections: row.get(4)?,
+                    baseline_status: None,
+                })
             })
-        };
-        let devices: Vec<SankeyVlanDevice> = if src_is_wan {
-            device_stmt.query_map(rusqlite::params![offset], map_device)
-                .map_err(|e| format!("sankey device query: {e}"))?
-                .filter_map(|r| r.ok())
-                .collect()
-        } else {
-            device_stmt.query_map(rusqlite::params![vlan_id_clone, offset], map_device)
-                .map_err(|e| format!("sankey device query: {e}"))?
-                .filter_map(|r| r.ok())
-                .collect()
-        };
+            .map_err(|e| format!("sankey device query: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
         drop(device_stmt);
 
-        // Build flow query dynamically based on WAN vs named VLAN
+        // --- Flow query (dynamic params) ---
         let (flow_sql, flow_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = {
             let src_clause = if src_is_wan { "src_vlan IS NULL" } else { "src_vlan = ?" };
             let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -266,6 +270,7 @@ pub async fn vlan_detail(
                 params.push(Box::new(vlan_id_clone.clone()));
             }
             params.push(Box::new(offset.clone()));
+            let time_param = params.len();
 
             let dest_clause = if db_dest.is_empty() {
                 String::new()
@@ -275,6 +280,13 @@ pub async fn vlan_detail(
                 format!(" AND (dst_vlan = ?{dp} OR (dst_is_external = 1 AND ?{dp} = 'WAN'))")
             };
 
+            let country_clause = if let Some(ref cc) = country_filter {
+                params.push(Box::new(cc.clone()));
+                format!(" AND geo_country_code = ?{}", params.len())
+            } else {
+                String::new()
+            };
+
             let sql = format!(
                 "SELECT
                     COALESCE(src_mac, src_ip) as mac,
@@ -282,11 +294,10 @@ pub async fn vlan_detail(
                     SUM(bytes_tx + bytes_rx) as total_bytes,
                     COUNT(*) as conn_count
                  FROM connection_history
-                 WHERE {src_clause} AND first_seen >= datetime('now', ?{time_param}){dest_clause}
+                 WHERE {src_clause} AND first_seen >= datetime('now', ?{time_param}){dest_clause}{country_clause}
                  GROUP BY mac, dst_group
                  ORDER BY total_bytes DESC
-                 LIMIT 500",
-                time_param = if src_is_wan { 1 } else { 2 },
+                 LIMIT 500"
             );
             (sql, params)
         };
@@ -423,6 +434,7 @@ pub async fn device_trace(
 ) -> Result<Json<SankeyDeviceResponse>, Response> {
     let range = q.range.as_deref().unwrap_or("24h");
     let offset = range_to_sqlite_offset(range);
+    let country_filter = q.country.clone();
 
     let store = state.connection_store.clone();
     let mac_clone = mac.clone();
@@ -433,18 +445,30 @@ pub async fn device_trace(
         // Match by src_mac, OR by src_ip when src_mac is NULL (WAN traffic)
         let src_match = "(src_mac = ?1 OR (src_mac IS NULL AND src_ip = ?1))";
 
+        // Build base params: ?1=mac, ?2=offset, optionally ?3=country
+        let mut base_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        base_params.push(Box::new(mac_clone.clone()));
+        base_params.push(Box::new(offset.clone()));
+        let country_clause = if let Some(ref cc) = country_filter {
+            base_params.push(Box::new(cc.clone()));
+            format!(" AND geo_country_code = ?{}", base_params.len())
+        } else {
+            String::new()
+        };
+        let base_refs: Vec<&dyn rusqlite::types::ToSql> = base_params.iter().map(|p| p.as_ref()).collect();
+
         // Protocols aggregated by (protocol, dst_port)
         let mut stmt_p = db.prepare(
             &format!("SELECT protocol, dst_port, SUM(bytes_tx + bytes_rx) as total_bytes, COUNT(*) as conn_count
              FROM connection_history
-             WHERE {src_match} AND first_seen >= datetime('now', ?2) AND dst_port IS NOT NULL
+             WHERE {src_match} AND first_seen >= datetime('now', ?2) AND dst_port IS NOT NULL{country_clause}
              GROUP BY protocol, dst_port
              ORDER BY total_bytes DESC
              LIMIT 100"),
         ).map_err(|e| format!("sankey device protocol query: {e}"))?;
 
         let protocols: Vec<SankeyDeviceProtocol> = stmt_p
-            .query_map(rusqlite::params![mac_clone, offset], |row| {
+            .query_map(base_refs.as_slice(), |row| {
                 let proto: String = row.get(0)?;
                 let port: i64 = row.get(1)?;
                 Ok(SankeyDeviceProtocol {
@@ -465,14 +489,14 @@ pub async fn device_trace(
             &format!("SELECT dst_ip, dst_hostname, dst_is_external,
                     SUM(bytes_tx + bytes_rx) as total_bytes, COUNT(*) as conn_count
              FROM connection_history
-             WHERE {src_match} AND first_seen >= datetime('now', ?2)
+             WHERE {src_match} AND first_seen >= datetime('now', ?2){country_clause}
              GROUP BY dst_ip
              ORDER BY total_bytes DESC
              LIMIT 100"),
         ).map_err(|e| format!("sankey device dest query: {e}"))?;
 
         let destinations: Vec<SankeyDeviceDestination> = stmt_d
-            .query_map(rusqlite::params![mac_clone, offset], |row| {
+            .query_map(base_refs.as_slice(), |row| {
                 Ok(SankeyDeviceDestination {
                     dst_ip: row.get(0)?,
                     dst_hostname: row.get(1)?,
@@ -492,14 +516,14 @@ pub async fn device_trace(
                     SUM(bytes_tx + bytes_rx) as total_bytes, COUNT(*) as conn_count,
                     SUM(CASE WHEN flagged = 1 THEN 1 ELSE 0 END) as flag_count
              FROM connection_history
-             WHERE {src_match} AND first_seen >= datetime('now', ?2) AND dst_port IS NOT NULL
+             WHERE {src_match} AND first_seen >= datetime('now', ?2) AND dst_port IS NOT NULL{country_clause}
              GROUP BY protocol, dst_port, dst_ip
              ORDER BY total_bytes DESC
              LIMIT 500"),
         ).map_err(|e| format!("sankey device flow query: {e}"))?;
 
         let flows: Vec<SankeyDeviceFlow> = stmt_f
-            .query_map(rusqlite::params![mac_clone, offset], |row| {
+            .query_map(base_refs.as_slice(), |row| {
                 Ok(SankeyDeviceFlow {
                     protocol: row.get(0)?,
                     dst_port: row.get(1)?,

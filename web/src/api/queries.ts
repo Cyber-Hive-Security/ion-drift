@@ -1648,21 +1648,24 @@ export function useInferenceMacDetail(mac: string | null) {
   });
 }
 
-export function useSankeyVlan(vlanId: string | undefined, range = "24h", destVlan?: string) {
+export function useSankeyVlan(vlanId: string | undefined, range = "24h", destVlan?: string, country?: string) {
   const params = new URLSearchParams({ range });
   if (destVlan) params.set("dest_vlan", destVlan);
+  if (country) params.set("country", country);
   return useQuery({
-    queryKey: ["sankey", "vlan", vlanId, range, destVlan],
+    queryKey: ["sankey", "vlan", vlanId, range, destVlan, country],
     queryFn: () => apiFetch<SankeyVlanResponse>(`/api/sankey/vlan/${encodeURIComponent(vlanId!)}?${params}`),
     enabled: !!vlanId,
     refetchInterval: 30_000,
   });
 }
 
-export function useSankeyDevice(mac: string | undefined, range = "24h") {
+export function useSankeyDevice(mac: string | undefined, range = "24h", country?: string) {
+  const params = new URLSearchParams({ range });
+  if (country) params.set("country", country);
   return useQuery({
-    queryKey: ["sankey", "device", mac, range],
-    queryFn: () => apiFetch<SankeyDeviceResponse>(`/api/sankey/device/${encodeURIComponent(mac!)}?range=${range}`),
+    queryKey: ["sankey", "device", mac, range, country],
+    queryFn: () => apiFetch<SankeyDeviceResponse>(`/api/sankey/device/${encodeURIComponent(mac!)}?${params}`),
     enabled: !!mac,
     refetchInterval: 30_000,
   });
