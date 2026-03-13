@@ -21,6 +21,7 @@ import type {
 } from "@/api/types";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { countryFlag } from "@/lib/country";
 import { ChevronRight, ArrowLeft, Download, Flag, Copy, Search, Network, Microscope, ChevronDown } from "lucide-react";
 
 const RANGES = ["1h", "6h", "24h", "7d", "30d"] as const;
@@ -230,12 +231,14 @@ type View =
 export function SankeyInvestigationPage() {
   const search = useSearch({ from: "/sankey" });
   const navigate = useNavigate();
-  const [range, setRange] = useState("24h");
+  const [range, setRange] = useState(search.country ? "30d" : "24h");
 
   // Derive initial view from URL search params
   const initialView = useMemo((): View => {
     if (search.mac) return { level: "device", mac: search.mac };
     if (search.vlan) return { level: "vlan", vlanId: search.vlan, destVlan: search.dest };
+    // Country param → jump straight to WAN vlan (all country traffic is WAN)
+    if (search.country) return { level: "vlan", vlanId: "WAN" };
     return { level: "network" };
   }, []); // Only compute once on mount
 
@@ -289,7 +292,14 @@ export function SankeyInvestigationPage() {
       <ErrorBoundary>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <Breadcrumb items={breadcrumb} />
+            <div className="flex items-center gap-3">
+              <Breadcrumb items={breadcrumb} />
+              {search.country && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2.5 py-0.5 text-xs font-medium text-destructive">
+                  {countryFlag(search.country)} {search.country}
+                </span>
+              )}
+            </div>
             <TimeRangeSelector value={range} onChange={setRange} />
           </div>
 
