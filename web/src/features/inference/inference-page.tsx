@@ -247,7 +247,7 @@ interface MacRow {
 
 // ── Main page ───────────────────────────────────────────────────
 
-export function InferencePage() {
+export function InferencePage({ embedded = false }: { embedded?: boolean }) {
   const status = useInferenceStatus();
   const observations = useInferenceObservations();
   const statesQuery = useAttachmentStates();
@@ -377,25 +377,21 @@ export function InferencePage() {
   );
 
   if (status.isLoading) {
-    return (
-      <PageShell title="Topology Inference" help={<InferenceHelp />}>
-        <LoadingSpinner />
-      </PageShell>
-    );
+    const loading = <LoadingSpinner />;
+    if (embedded) return loading;
+    return <PageShell title="Topology Inference" help={<InferenceHelp />}>{loading}</PageShell>;
   }
 
   if (status.error || !status.data) {
-    return (
-      <PageShell title="Topology Inference" help={<InferenceHelp />}>
-        <ErrorDisplay message={status.error ? String(status.error) : "No data available"} />
-      </PageShell>
-    );
+    const err = <ErrorDisplay message={status.error ? String(status.error) : "No data available"} />;
+    if (embedded) return err;
+    return <PageShell title="Topology Inference" help={<InferenceHelp />}>{err}</PageShell>;
   }
 
   const s = status.data;
 
-  return (
-    <PageShell title="Topology Inference" help={<InferenceHelp />}>
+  const content = (
+    <div>
       {/* Mode banner */}
       <div className="mb-4 flex items-center gap-3">
         <Brain className="h-5 w-5 text-primary" />
@@ -522,12 +518,17 @@ export function InferencePage() {
             searchable
             searchPlaceholder="Search MAC, device, port..."
             defaultSort={{ key: "confidence", asc: false }}
+            expandedRow={(r) =>
+              expandedMac === r.mac_address ? <MacDetail mac={r.mac_address} /> : null
+            }
           />
-          {expandedMac && <MacDetail mac={expandedMac} />}
         </>
       )}
-    </PageShell>
+  </div>
   );
+
+  if (embedded) return content;
+  return <PageShell title="Topology Inference" help={<InferenceHelp />}>{content}</PageShell>;
 }
 
 export default InferencePage;

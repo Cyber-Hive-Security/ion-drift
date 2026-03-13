@@ -430,14 +430,17 @@ pub async fn device_trace(
         let db = store.lock_db()
             .map_err(|e| format!("sankey db lock: {e}"))?;
 
+        // Match by src_mac, OR by src_ip when src_mac is NULL (WAN traffic)
+        let src_match = "(src_mac = ?1 OR (src_mac IS NULL AND src_ip = ?1))";
+
         // Protocols aggregated by (protocol, dst_port)
         let mut stmt_p = db.prepare(
-            "SELECT protocol, dst_port, SUM(bytes_tx + bytes_rx) as total_bytes, COUNT(*) as conn_count
+            &format!("SELECT protocol, dst_port, SUM(bytes_tx + bytes_rx) as total_bytes, COUNT(*) as conn_count
              FROM connection_history
-             WHERE src_mac = ?1 AND first_seen >= datetime('now', ?2) AND dst_port IS NOT NULL
+             WHERE {src_match} AND first_seen >= datetime('now', ?2) AND dst_port IS NOT NULL
              GROUP BY protocol, dst_port
              ORDER BY total_bytes DESC
-             LIMIT 100",
+             LIMIT 100"),
         ).map_err(|e| format!("sankey device protocol query: {e}"))?;
 
         let protocols: Vec<SankeyDeviceProtocol> = stmt_p
@@ -459,13 +462,13 @@ pub async fn device_trace(
 
         // Destinations aggregated by dst_ip
         let mut stmt_d = db.prepare(
-            "SELECT dst_ip, dst_hostname, dst_is_external,
+            &format!("SELECT dst_ip, dst_hostname, dst_is_external,
                     SUM(bytes_tx + bytes_rx) as total_bytes, COUNT(*) as conn_count
              FROM connection_history
-             WHERE src_mac = ?1 AND first_seen >= datetime('now', ?2)
+             WHERE {src_match} AND first_seen >= datetime('now', ?2)
              GROUP BY dst_ip
              ORDER BY total_bytes DESC
-             LIMIT 100",
+             LIMIT 100"),
         ).map_err(|e| format!("sankey device dest query: {e}"))?;
 
         let destinations: Vec<SankeyDeviceDestination> = stmt_d
@@ -485,14 +488,14 @@ pub async fn device_trace(
 
         // Individual flows: protocol+port+destination
         let mut stmt_f = db.prepare(
-            "SELECT protocol, dst_port, dst_ip,
+            &format!("SELECT protocol, dst_port, dst_ip,
                     SUM(bytes_tx + bytes_rx) as total_bytes, COUNT(*) as conn_count,
                     SUM(CASE WHEN flagged = 1 THEN 1 ELSE 0 END) as flag_count
              FROM connection_history
-             WHERE src_mac = ?1 AND first_seen >= datetime('now', ?2) AND dst_port IS NOT NULL
+             WHERE {src_match} AND first_seen >= datetime('now', ?2) AND dst_port IS NOT NULL
              GROUP BY protocol, dst_port, dst_ip
              ORDER BY total_bytes DESC
-             LIMIT 500",
+             LIMIT 500"),
         ).map_err(|e| format!("sankey device flow query: {e}"))?;
 
         let flows: Vec<SankeyDeviceFlow> = stmt_f
@@ -513,8 +516,8 @@ pub async fn device_trace(
 
         // Get device hostname/IP from most recent connection
         let meta: (Option<String>, Option<String>) = db.query_row(
-            "SELECT src_hostname, src_ip FROM connection_history
-             WHERE src_mac = ?1 ORDER BY first_seen DESC LIMIT 1",
+            &format!("SELECT src_hostname, src_ip FROM connection_history
+             WHERE {src_match} ORDER BY first_seen DESC LIMIT 1"),
             rusqlite::params![mac_clone],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).unwrap_or((None, None));
@@ -633,6 +636,9 @@ pub async fn conversation_detail(
             let db = store.lock_db()
                 .map_err(|e| format!("sankey db lock: {e}"))?;
 
+            // Match by src_mac, OR by src_ip when src_mac is NULL (WAN traffic)
+            let src_match = "(src_mac = ?1 OR (src_mac IS NULL AND src_ip = ?1))";
+
             // Summary stats
             let summary: ConversationSummary = db.query_row(
                 &format!(
@@ -643,7 +649,7 @@ pub async fn conversation_detail(
                         MAX(last_seen),
                         COALESCE(SUM(CASE WHEN flagged = 1 THEN 1 ELSE 0 END), 0)
                      FROM connection_history
-                     WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)"
+                     WHERE {src_match} AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)"
                 ),
                 rusqlite::params![mac_clone, dst_ip_clone, offset],
                 |row| {
@@ -661,9 +667,9 @@ pub async fn conversation_detail(
 
             // Distinct protocols
             let mut proto_stmt = db.prepare(
-                "SELECT DISTINCT protocol FROM connection_history
-                 WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
-                 ORDER BY protocol",
+                &format!("SELECT DISTINCT protocol FROM connection_history
+                 WHERE {src_match} AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
+                 ORDER BY protocol"),
             ).map_err(|e| format!("sankey conversation protocols: {e}"))?;
 
             let protocols: Vec<String> = proto_stmt
@@ -681,7 +687,7 @@ pub async fn conversation_detail(
                         SUM(bytes_tx + bytes_rx) as total_bytes,
                         COUNT(*) as conn_count
                  FROM connection_history
-                 WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
+                 WHERE {src_match} AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
                  GROUP BY bucket
                  ORDER BY bucket"
             );
@@ -704,20 +710,20 @@ pub async fn conversation_detail(
 
             // Total count for pagination
             let total_count: i64 = db.query_row(
-                "SELECT COUNT(*) FROM connection_history
-                 WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)",
+                &format!("SELECT COUNT(*) FROM connection_history
+                 WHERE {src_match} AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)"),
                 rusqlite::params![mac_clone, dst_ip_clone, offset],
                 |row| row.get(0),
             ).map_err(|e| format!("sankey conversation count: {e}"))?;
 
             // Paginated connections
             let mut conn_stmt = db.prepare(
-                "SELECT rowid, protocol, src_port, dst_port, bytes_tx, bytes_rx,
+                &format!("SELECT rowid, protocol, src_port, dst_port, bytes_tx, bytes_rx,
                         first_seen, last_seen, COALESCE(flagged, 0)
                  FROM connection_history
-                 WHERE src_mac = ?1 AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
+                 WHERE {src_match} AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
                  ORDER BY first_seen DESC
-                 LIMIT ?4 OFFSET ?5",
+                 LIMIT ?4 OFFSET ?5"),
             ).map_err(|e| format!("sankey conversation connections: {e}"))?;
 
             let connections: Vec<ConversationConnection> = conn_stmt
@@ -741,8 +747,8 @@ pub async fn conversation_detail(
 
             // Get hostnames from most recent connection
             let (src_hostname, dst_hostname): (Option<String>, Option<String>) = db.query_row(
-                "SELECT src_hostname, dst_hostname FROM connection_history
-                 WHERE src_mac = ?1 AND dst_ip = ?2 ORDER BY first_seen DESC LIMIT 1",
+                &format!("SELECT src_hostname, dst_hostname FROM connection_history
+                 WHERE {src_match} AND dst_ip = ?2 ORDER BY first_seen DESC LIMIT 1"),
                 rusqlite::params![mac_clone, dst_ip_clone],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             ).unwrap_or((None, None));

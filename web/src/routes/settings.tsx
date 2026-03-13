@@ -6,12 +6,14 @@ import { SettingsDevices } from "@/features/settings/settings-devices";
 import { SettingsVlans } from "@/features/settings/settings-vlans";
 import { SettingsSecurity } from "@/features/settings/settings-security";
 import { SettingsSystem } from "@/features/settings/settings-system";
+import { InferencePage } from "@/features/inference/inference-page";
 import {
   Wand2,
   Bell,
   Network,
   Shield,
   Server,
+  Brain,
 } from "lucide-react";
 
 const TABS = [
@@ -20,6 +22,7 @@ const TABS = [
   { id: "vlans", label: "VLANs", icon: Server },
   { id: "security", label: "Security", icon: Shield },
   { id: "system", label: "System", icon: Wand2 },
+  { id: "inference", label: "Inference", icon: Brain },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -70,6 +73,7 @@ export function SettingsPage() {
         {activeTab === "vlans" && <SettingsVlans />}
         {activeTab === "security" && <SettingsSecurity />}
         {activeTab === "system" && <SettingsSystem />}
+        {activeTab === "inference" && <InferencePage embedded />}
       </div>
     </PageShell>
   );

@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+import React, { useState, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
 import { ArrowUpDown, Search } from "lucide-react";
@@ -27,6 +27,8 @@ interface DataTableProps<T> {
   estimateRowHeight?: number;
   /** Max height of the virtualized table body in pixels. Default: 600 */
   virtualMaxHeight?: number;
+  /** Render expanded content below a row (return null to collapse) */
+  expandedRow?: (row: T) => ReactNode | null;
 }
 
 export function DataTable<T>({
@@ -42,6 +44,7 @@ export function DataTable<T>({
   virtualize = false,
   estimateRowHeight = 37,
   virtualMaxHeight = 600,
+  expandedRow,
 }: DataTableProps<T>) {
   const [sortCol, setSortCol] = useState<string | null>(defaultSort?.key ?? null);
   const [sortAsc, setSortAsc] = useState(defaultSort?.asc ?? true);
@@ -110,71 +113,112 @@ export function DataTable<T>({
           )}
         </div>
       )}
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border bg-muted/50">
-              {columns.map((col) => (
-                <th
-                  key={col.key}
-                  className={cn(
-                    "px-3 py-2 text-left font-medium text-muted-foreground",
-                    col.sortValue && "cursor-pointer select-none hover:text-foreground",
-                  )}
-                  title={col.headerTitle}
-                  onClick={col.sortValue ? () => toggleSort(col.key) : undefined}
-                >
-                  <span className="inline-flex items-center gap-1">
-                    {col.header}
-                    {col.sortValue && (
-                      <ArrowUpDown className="h-3 w-3 opacity-50" />
+      {shouldVirtualize ? (
+        <div className="rounded-lg border border-border">
+          {/* Sticky header */}
+          <table className="w-full text-sm" style={{ tableLayout: "fixed" }}>
+            <thead>
+              <tr className="border-b border-border bg-muted/50">
+                {columns.map((col) => (
+                  <th
+                    key={col.key}
+                    className={cn(
+                      "px-3 py-2 text-left font-medium text-muted-foreground",
+                      col.sortValue && "cursor-pointer select-none hover:text-foreground",
                     )}
-                  </span>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          {filteredAndSorted.length === 0 ? (
-            <tbody>
-              <tr>
-                <td
-                  colSpan={columns.length}
-                  className="px-3 py-8 text-center text-muted-foreground"
-                >
-                  {search ? "No matching results" : emptyMessage}
-                </td>
+                    title={col.headerTitle}
+                    onClick={col.sortValue ? () => toggleSort(col.key) : undefined}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {col.header}
+                      {col.sortValue && (
+                        <ArrowUpDown className="h-3 w-3 opacity-50" />
+                      )}
+                    </span>
+                  </th>
+                ))}
               </tr>
-            </tbody>
-          ) : shouldVirtualize ? (
-            <VirtualizedBody
-              rows={filteredAndSorted}
-              columns={columns}
-              rowKey={rowKey}
-              rowStyle={rowStyle}
-              onRowClick={onRowClick}
-              estimateRowHeight={estimateRowHeight}
-              maxHeight={virtualMaxHeight}
-            />
-          ) : (
-            <tbody>
-              {filteredAndSorted.map((row) => (
-                <tr
-                  key={rowKey(row)}
-                  className={cn("border-b border-border/50 hover:bg-muted/30", onRowClick && "cursor-pointer")}
-                  style={rowStyle?.(row)}
-                  onClick={onRowClick ? () => onRowClick(row) : undefined}
-                >
-                  {columns.map((col) => (
-                    <td key={col.key} className="px-3 py-2">
-                      {col.render(row)}
-                    </td>
-                  ))}
+            </thead>
+          </table>
+          {/* Scrollable virtualized body */}
+          <VirtualizedBody
+            rows={filteredAndSorted}
+            columns={columns}
+            rowKey={rowKey}
+            rowStyle={rowStyle}
+            onRowClick={onRowClick}
+            estimateRowHeight={estimateRowHeight}
+            maxHeight={virtualMaxHeight}
+          />
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border bg-muted/50">
+                {columns.map((col) => (
+                  <th
+                    key={col.key}
+                    className={cn(
+                      "px-3 py-2 text-left font-medium text-muted-foreground",
+                      col.sortValue && "cursor-pointer select-none hover:text-foreground",
+                    )}
+                    title={col.headerTitle}
+                    onClick={col.sortValue ? () => toggleSort(col.key) : undefined}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {col.header}
+                      {col.sortValue && (
+                        <ArrowUpDown className="h-3 w-3 opacity-50" />
+                      )}
+                    </span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            {filteredAndSorted.length === 0 ? (
+              <tbody>
+                <tr>
+                  <td
+                    colSpan={columns.length}
+                    className="px-3 py-8 text-center text-muted-foreground"
+                  >
+                    {search ? "No matching results" : emptyMessage}
+                  </td>
                 </tr>
-              ))}
-            </tbody>
-          )}
-        </table>
-      </div>
+              </tbody>
+            ) : (
+              <tbody>
+                {filteredAndSorted.map((row) => {
+                  const expanded = expandedRow?.(row);
+                  return (
+                    <React.Fragment key={rowKey(row)}>
+                      <tr
+                        className={cn("border-b border-border/50 hover:bg-muted/30", onRowClick && "cursor-pointer")}
+                        style={rowStyle?.(row)}
+                        onClick={onRowClick ? () => onRowClick(row) : undefined}
+                      >
+                        {columns.map((col) => (
+                          <td key={col.key} className="px-3 py-2">
+                            {col.render(row)}
+                          </td>
+                        ))}
+                      </tr>
+                      {expanded && (
+                        <tr>
+                          <td colSpan={columns.length} className="p-0">
+                            {expanded}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            )}
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -197,7 +241,7 @@ function VirtualizedBody<T>({
   estimateRowHeight: number;
   maxHeight: number;
 }) {
-  const parentRef = useRef<HTMLTableSectionElement>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -207,56 +251,49 @@ function VirtualizedBody<T>({
   });
 
   return (
-    <tbody
+    <div
       ref={parentRef}
-      style={{
-        display: "block",
-        maxHeight: `${maxHeight}px`,
-        overflow: "auto",
-      }}
+      style={{ maxHeight: `${maxHeight}px`, overflow: "auto" }}
     >
-      <tr
+      <div
         style={{
-          display: "block",
           height: `${virtualizer.getTotalSize()}px`,
           position: "relative",
         }}
       >
-        <td style={{ display: "block", height: 0, padding: 0, border: "none" }}>
-          {virtualizer.getVirtualItems().map((virtualRow) => {
-            const row = rows[virtualRow.index];
-            return (
-              <table
-                key={rowKey(row)}
-                ref={virtualizer.measureElement}
-                data-index={virtualRow.index}
-                className="w-full text-sm"
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  transform: `translateY(${virtualRow.start}px)`,
-                  width: "100%",
-                }}
-              >
-                <tbody>
-                  <tr
-                    className={cn("border-b border-border/50 hover:bg-muted/30", onRowClick && "cursor-pointer")}
-                    style={rowStyle?.(row)}
-                    onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  >
-                    {columns.map((col) => (
-                      <td key={col.key} className="px-3 py-2">
-                        {col.render(row)}
-                      </td>
-                    ))}
-                  </tr>
-                </tbody>
-              </table>
-            );
-          })}
-        </td>
-      </tr>
-    </tbody>
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const row = rows[virtualRow.index];
+          return (
+            <table
+              key={rowKey(row)}
+              ref={virtualizer.measureElement}
+              data-index={virtualRow.index}
+              className="w-full text-sm"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                transform: `translateY(${virtualRow.start}px)`,
+                tableLayout: "fixed",
+              }}
+            >
+              <tbody>
+                <tr
+                  className={cn("border-b border-border/50 hover:bg-muted/30", onRowClick && "cursor-pointer")}
+                  style={rowStyle?.(row)}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                >
+                  {columns.map((col) => (
+                    <td key={col.key} className="px-3 py-2">
+                      {col.render(row)}
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          );
+        })}
+      </div>
+    </div>
   );
 }

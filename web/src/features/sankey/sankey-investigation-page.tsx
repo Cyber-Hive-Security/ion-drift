@@ -413,7 +413,15 @@ function NetworkOverview({
             <button
               key={i}
               className="w-full flex items-center gap-4 px-4 py-2.5 text-left hover:bg-accent/50 transition-colors"
-              onClick={() => onSelectVlan(flow.src_vlan, flow.dst_vlan)}
+              onClick={() => {
+                // When source is WAN, drill into the destination VLAN (our local devices)
+                // instead of WAN (100s of external IPs)
+                if (flow.src_vlan === "WAN" && flow.dst_vlan !== "WAN") {
+                  onSelectVlan(flow.dst_vlan, flow.src_vlan);
+                } else {
+                  onSelectVlan(flow.src_vlan, flow.dst_vlan);
+                }
+              }}
             >
               <span className="text-sm font-medium w-24">{vlanLabel(flow.src_vlan)}</span>
               <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
