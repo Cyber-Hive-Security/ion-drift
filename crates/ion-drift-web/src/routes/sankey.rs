@@ -16,7 +16,7 @@ pub struct RangeQuery {
     pub range: Option<String>,
 }
 
-/// Strip "VLAN " prefix from DB format ("VLAN 25" → "25"), pass through "WAN"/"unknown".
+/// Strip "VLAN " prefix from DB format ("VLAN 25" → "25"), pass through "WAN".
 fn strip_vlan_prefix(s: &str) -> String {
     s.strip_prefix("VLAN ").unwrap_or(s).to_string()
 }
@@ -74,8 +74,8 @@ pub async fn network_overview(
 
         let mut stmt = db.prepare(
             "SELECT
-                COALESCE(src_vlan, 'unknown') as sv,
-                COALESCE(dst_vlan, CASE WHEN dst_is_external = 1 THEN 'WAN' ELSE 'unknown' END) as dv,
+                COALESCE(src_vlan, 'WAN') as sv,
+                COALESCE(dst_vlan, CASE WHEN dst_is_external = 1 THEN 'WAN' ELSE 'WAN' END) as dv,
                 SUM(bytes_tx + bytes_rx) as total_bytes,
                 COUNT(*) as conn_count,
                 SUM(CASE WHEN flagged = 1 THEN 1 ELSE 0 END) as anomaly_count
@@ -102,7 +102,7 @@ pub async fn network_overview(
 
         let mut stmt2 = db.prepare(
             "SELECT
-                COALESCE(src_vlan, 'unknown') as vlan_id,
+                COALESCE(src_vlan, 'WAN') as vlan_id,
                 COUNT(DISTINCT src_mac) as device_count,
                 SUM(bytes_tx + bytes_rx) as total_bytes,
                 COUNT(*) as conn_count
@@ -183,13 +183,16 @@ pub async fn vlan_detail(
     let offset = range_to_sqlite_offset(range);
     let dest_filter = q.dest_vlan.clone().unwrap_or_default();
 
-    // Convert VLAN ID to DB format: "90" → "VLAN 90", "WAN" stays as-is
-    let db_vlan = if vlan_id.eq_ignore_ascii_case("wan") {
-        "WAN".to_string()
+    // Convert VLAN ID to DB format: "90" → "VLAN 90"
+    // "WAN" means src_vlan IS NULL in the DB (traffic with no matching VLAN subnet)
+    let src_is_wan = vlan_id.eq_ignore_ascii_case("wan");
+    let db_vlan = if src_is_wan {
+        String::new() // unused — we use IS NULL instead
     } else {
         format!("VLAN {vlan_id}")
     };
-    let db_dest = if dest_filter.eq_ignore_ascii_case("wan") {
+    let dest_is_wan = dest_filter.eq_ignore_ascii_case("wan");
+    let db_dest = if dest_is_wan {
         "WAN".to_string()
     } else if dest_filter.is_empty() {
         String::new()
@@ -204,7 +207,19 @@ pub async fn vlan_detail(
         let db = store.lock_db()
             .map_err(|e| format!("sankey db lock: {e}"))?;
 
-        let mut device_stmt = db.prepare(
+        let device_sql = if src_is_wan {
+            "SELECT
+                COALESCE(src_mac, src_ip) as mac,
+                src_hostname,
+                src_ip,
+                SUM(bytes_tx + bytes_rx) as total_bytes,
+                COUNT(*) as conn_count
+             FROM connection_history
+             WHERE src_vlan IS NULL AND first_seen >= datetime('now', ?1)
+             GROUP BY mac
+             ORDER BY total_bytes DESC
+             LIMIT 100"
+        } else {
             "SELECT
                 COALESCE(src_mac, src_ip) as mac,
                 src_hostname,
@@ -215,79 +230,82 @@ pub async fn vlan_detail(
              WHERE src_vlan = ?1 AND first_seen >= datetime('now', ?2)
              GROUP BY mac
              ORDER BY total_bytes DESC
-             LIMIT 100",
-        ).map_err(|e| format!("sankey device query: {e}"))?;
+             LIMIT 100"
+        };
+        let mut device_stmt = db.prepare(device_sql)
+            .map_err(|e| format!("sankey device query: {e}"))?;
 
-        let devices: Vec<SankeyVlanDevice> = device_stmt
-            .query_map(rusqlite::params![vlan_id_clone, offset], |row| {
-                Ok(SankeyVlanDevice {
-                    mac: row.get(0)?,
-                    hostname: row.get(1)?,
-                    ip: row.get(2)?,
-                    total_bytes: row.get(3)?,
-                    total_connections: row.get(4)?,
-                    baseline_status: None,
-                })
+        let map_device = |row: &rusqlite::Row| -> rusqlite::Result<SankeyVlanDevice> {
+            Ok(SankeyVlanDevice {
+                mac: row.get(0)?,
+                hostname: row.get(1)?,
+                ip: row.get(2)?,
+                total_bytes: row.get(3)?,
+                total_connections: row.get(4)?,
+                baseline_status: None,
             })
-            .map_err(|e| format!("sankey device query: {e}"))?
-            .filter_map(|r| r.ok())
-            .collect();
+        };
+        let devices: Vec<SankeyVlanDevice> = if src_is_wan {
+            device_stmt.query_map(rusqlite::params![offset], map_device)
+                .map_err(|e| format!("sankey device query: {e}"))?
+                .filter_map(|r| r.ok())
+                .collect()
+        } else {
+            device_stmt.query_map(rusqlite::params![vlan_id_clone, offset], map_device)
+                .map_err(|e| format!("sankey device query: {e}"))?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
         drop(device_stmt);
 
-        let flows: Vec<SankeyVlanFlow> = if db_dest.is_empty() {
-            let mut stmt = db.prepare(
+        // Build flow query dynamically based on WAN vs named VLAN
+        let (flow_sql, flow_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = {
+            let src_clause = if src_is_wan { "src_vlan IS NULL" } else { "src_vlan = ?" };
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            if !src_is_wan {
+                params.push(Box::new(vlan_id_clone.clone()));
+            }
+            params.push(Box::new(offset.clone()));
+
+            let dest_clause = if db_dest.is_empty() {
+                String::new()
+            } else {
+                params.push(Box::new(db_dest.clone()));
+                let dp = params.len();
+                format!(" AND (dst_vlan = ?{dp} OR (dst_is_external = 1 AND ?{dp} = 'WAN'))")
+            };
+
+            let sql = format!(
                 "SELECT
                     COALESCE(src_mac, src_ip) as mac,
-                    COALESCE(dst_vlan, CASE WHEN dst_is_external = 1 THEN 'WAN' ELSE 'unknown' END) as dst_group,
+                    COALESCE(dst_vlan, 'WAN') as dst_group,
                     SUM(bytes_tx + bytes_rx) as total_bytes,
                     COUNT(*) as conn_count
                  FROM connection_history
-                 WHERE src_vlan = ?1 AND first_seen >= datetime('now', ?2)
+                 WHERE {src_clause} AND first_seen >= datetime('now', ?{time_param}){dest_clause}
                  GROUP BY mac, dst_group
                  ORDER BY total_bytes DESC
                  LIMIT 500",
-            ).map_err(|e| format!("sankey flow query: {e}"))?;
-
-            stmt.query_map(rusqlite::params![vlan_id_clone, offset], |row| {
-                Ok(SankeyVlanFlow {
-                    src_mac: row.get(0)?,
-                    dst_group: row.get(1)?,
-                    bytes: row.get(2)?,
-                    connections: row.get(3)?,
-                    flow_state: "unknown".into(),
-                })
-            })
-            .map_err(|e| format!("sankey flow query: {e}"))?
-            .filter_map(|r| r.ok())
-            .collect()
-        } else {
-            let mut stmt = db.prepare(
-                "SELECT
-                    COALESCE(src_mac, src_ip) as mac,
-                    COALESCE(dst_vlan, CASE WHEN dst_is_external = 1 THEN 'WAN' ELSE 'unknown' END) as dst_group,
-                    SUM(bytes_tx + bytes_rx) as total_bytes,
-                    COUNT(*) as conn_count
-                 FROM connection_history
-                 WHERE src_vlan = ?1 AND first_seen >= datetime('now', ?2)
-                   AND (dst_vlan = ?3 OR (dst_is_external = 1 AND ?3 = 'WAN'))
-                 GROUP BY mac, dst_group
-                 ORDER BY total_bytes DESC
-                 LIMIT 500",
-            ).map_err(|e| format!("sankey flow query: {e}"))?;
-
-            stmt.query_map(rusqlite::params![vlan_id_clone, offset, db_dest], |row| {
-                Ok(SankeyVlanFlow {
-                    src_mac: row.get(0)?,
-                    dst_group: row.get(1)?,
-                    bytes: row.get(2)?,
-                    connections: row.get(3)?,
-                    flow_state: "unknown".into(),
-                })
-            })
-            .map_err(|e| format!("sankey flow query: {e}"))?
-            .filter_map(|r| r.ok())
-            .collect()
+                time_param = if src_is_wan { 1 } else { 2 },
+            );
+            (sql, params)
         };
+        let mut flow_stmt = db.prepare(&flow_sql)
+            .map_err(|e| format!("sankey flow query: {e}"))?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = flow_params.iter().map(|p| p.as_ref()).collect();
+        let flows: Vec<SankeyVlanFlow> = flow_stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok(SankeyVlanFlow {
+                    src_mac: row.get(0)?,
+                    dst_group: row.get(1)?,
+                    bytes: row.get(2)?,
+                    connections: row.get(3)?,
+                    flow_state: "unknown".into(),
+                })
+            })
+            .map_err(|e| format!("sankey flow query: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
 
         Ok::<_, String>((devices, flows))
     })

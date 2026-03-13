@@ -217,7 +217,7 @@ function copyToClipboard(text: string) {
 
 /** Format a bare VLAN ID for display: "35" → "VLAN 35", "WAN" stays "WAN". */
 function vlanLabel(id: string): string {
-  if (!id || id === "WAN" || id === "unknown") return id;
+  if (!id || id === "WAN") return id;
   return `VLAN ${id}`;
 }
 
