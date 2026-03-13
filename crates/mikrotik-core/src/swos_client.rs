@@ -85,7 +85,7 @@ pub struct SwosClient {
 
 impl SwosClient {
     /// Create a new SwOS client. Does not make any network requests.
-    pub fn new(host: String, port: u16, username: String, password: String) -> Self {
+    pub fn new(host: String, port: u16, username: String, password: String) -> Result<Self, MikrotikError> {
         // SwOS is a simple HTTP/1.0 server:
         // - Title-case headers required (it does case-sensitive header matching)
         // - No connection pooling (each digest auth needs fresh connections)
@@ -97,15 +97,15 @@ impl SwosClient {
             .http1_only()
             .http1_title_case_headers()
             .build()
-            .expect("failed to build HTTP client");
+            .map_err(|e| MikrotikError::TlsConfig(format!("failed to build HTTP client: {e}")))?;
 
-        Self {
+        Ok(Self {
             host,
             port,
             username,
             password,
             http,
-        }
+        })
     }
 
     fn base_url(&self) -> String {
@@ -225,8 +225,8 @@ impl SwosClient {
         if auth_status == reqwest::StatusCode::UNAUTHORIZED {
             tracing::error!(
                 url = %url,
-                auth_header = %auth_header,
-                "SwOS fetch: still 401 after auth — digest rejected"
+                user = %self.username,
+                "SwOS fetch: digest auth rejected"
             );
             return Err(MikrotikError::AuthFailed);
         }

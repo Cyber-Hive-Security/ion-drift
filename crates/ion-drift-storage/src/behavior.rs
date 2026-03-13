@@ -3,6 +3,7 @@
 //! Tracks device profiles, baseline behavior patterns, raw observations,
 //! and anomalies. Backed by SQLite via `rusqlite`.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -24,8 +25,6 @@ fn now_unix() -> i64 {
 // All VLAN-specific behavior (subnet→VLAN mapping, sensitivity levels,
 // anomaly severity, auto-resolve timeouts) is driven by VlanConfig
 // entries loaded from the database. No hardcoded VLAN IDs or subnets.
-
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum VlanSensitivity {
@@ -288,7 +287,7 @@ pub fn is_internal_ip(ip: &str) -> bool {
 }
 
 /// Classify flow direction — legacy shim.
-pub fn classify_direction(src_ip: &str, dst_ip: &str) -> &'static str {
+pub fn classify_direction(_src_ip: &str, dst_ip: &str) -> &'static str {
     let dst_external = !is_internal_ip(dst_ip);
     if dst_external {
         return "outbound";
@@ -440,6 +439,103 @@ pub struct NewAnomaly {
     pub firewall_correlation: Option<String>,
     pub firewall_rule_id: Option<String>,
     pub firewall_rule_comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Investigation {
+    pub id: i64,
+    pub anomaly_id: i64,
+    pub device_mac: String,
+    pub device_hostname: Option<String>,
+    pub device_manufacturer: Option<String>,
+    pub device_disposition: Option<String>,
+    pub device_first_seen: i64,
+    pub device_baseline_status: Option<String>,
+    pub vlan_id: i64,
+    pub vlan_sensitivity: Option<String>,
+    pub dst_ip: Option<String>,
+    pub dst_country: Option<String>,
+    pub dst_city: Option<String>,
+    pub dst_asn: Option<i64>,
+    pub dst_org: Option<String>,
+    pub dst_is_cdn: bool,
+    pub dst_reverse_dns: Option<String>,
+    pub dst_seen_by_device_count: i64,
+    pub anomaly_type: String,
+    pub prior_anomaly_count_24h: i64,
+    pub prior_anomaly_count_7d: i64,
+    pub same_pattern_count_24h: i64,
+    pub baseline_coverage_pct: Option<f64>,
+    pub current_volume_bytes: Option<i64>,
+    pub baseline_volume_bytes: Option<i64>,
+    pub volume_ratio: Option<f64>,
+    pub unique_destinations_1h: Option<i64>,
+    pub unique_ports_1h: Option<i64>,
+    pub other_devices_same_dest: Option<i64>,
+    pub firewall_rule_id: Option<String>,
+    pub firewall_action: Option<String>,
+    pub firewall_rule_comment: Option<String>,
+    pub firewall_correlation: Option<String>,
+    pub verdict: String,
+    pub recommended_action: String,
+    pub reason: String,
+    pub summary: String,
+    pub evidence_chain: Option<String>,
+    pub investigated_at: i64,
+    pub duration_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewInvestigation {
+    pub anomaly_id: i64,
+    pub device_mac: String,
+    pub device_hostname: Option<String>,
+    pub device_manufacturer: Option<String>,
+    pub device_disposition: Option<String>,
+    pub device_first_seen: i64,
+    pub device_baseline_status: Option<String>,
+    pub vlan_id: i64,
+    pub vlan_sensitivity: Option<String>,
+    pub dst_ip: Option<String>,
+    pub dst_country: Option<String>,
+    pub dst_city: Option<String>,
+    pub dst_asn: Option<i64>,
+    pub dst_org: Option<String>,
+    pub dst_is_cdn: bool,
+    pub dst_reverse_dns: Option<String>,
+    pub dst_seen_by_device_count: i64,
+    pub anomaly_type: String,
+    pub prior_anomaly_count_24h: i64,
+    pub prior_anomaly_count_7d: i64,
+    pub same_pattern_count_24h: i64,
+    pub baseline_coverage_pct: Option<f64>,
+    pub current_volume_bytes: Option<i64>,
+    pub baseline_volume_bytes: Option<i64>,
+    pub volume_ratio: Option<f64>,
+    pub unique_destinations_1h: Option<i64>,
+    pub unique_ports_1h: Option<i64>,
+    pub other_devices_same_dest: Option<i64>,
+    pub firewall_rule_id: Option<String>,
+    pub firewall_action: Option<String>,
+    pub firewall_rule_comment: Option<String>,
+    pub firewall_correlation: Option<String>,
+    pub verdict: String,
+    pub recommended_action: String,
+    pub reason: String,
+    pub summary: String,
+    pub evidence_chain: Option<String>,
+    pub investigated_at: i64,
+    pub duration_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InvestigationStats {
+    pub benign: i64,
+    pub routine: i64,
+    pub suspicious: i64,
+    pub threat: i64,
+    pub inconclusive: i64,
+    pub total: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -685,6 +781,62 @@ impl BehaviorStore {
             .map_err(|e| format!("migration (confidence column) failed: {e}"))?;
         }
 
+        // Migration: create investigations table
+        let has_investigations: bool = conn
+            .prepare("SELECT id FROM investigations LIMIT 0")
+            .is_ok();
+        if !has_investigations {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS investigations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    anomaly_id INTEGER NOT NULL UNIQUE,
+                    device_mac TEXT NOT NULL,
+                    device_hostname TEXT,
+                    device_manufacturer TEXT,
+                    device_disposition TEXT,
+                    device_first_seen INTEGER NOT NULL DEFAULT 0,
+                    device_baseline_status TEXT,
+                    vlan_id INTEGER NOT NULL,
+                    vlan_sensitivity TEXT,
+                    dst_ip TEXT,
+                    dst_country TEXT,
+                    dst_city TEXT,
+                    dst_asn INTEGER,
+                    dst_org TEXT,
+                    dst_is_cdn INTEGER NOT NULL DEFAULT 0,
+                    dst_reverse_dns TEXT,
+                    dst_seen_by_device_count INTEGER NOT NULL DEFAULT 0,
+                    anomaly_type TEXT NOT NULL,
+                    prior_anomaly_count_24h INTEGER NOT NULL DEFAULT 0,
+                    prior_anomaly_count_7d INTEGER NOT NULL DEFAULT 0,
+                    same_pattern_count_24h INTEGER NOT NULL DEFAULT 0,
+                    baseline_coverage_pct REAL,
+                    current_volume_bytes INTEGER,
+                    baseline_volume_bytes INTEGER,
+                    volume_ratio REAL,
+                    unique_destinations_1h INTEGER,
+                    unique_ports_1h INTEGER,
+                    other_devices_same_dest INTEGER,
+                    firewall_rule_id TEXT,
+                    firewall_action TEXT,
+                    firewall_rule_comment TEXT,
+                    firewall_correlation TEXT,
+                    verdict TEXT NOT NULL,
+                    recommended_action TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    evidence_chain TEXT,
+                    investigated_at INTEGER NOT NULL,
+                    duration_ms INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_investigations_anomaly ON investigations(anomaly_id);
+                CREATE INDEX IF NOT EXISTS idx_investigations_verdict ON investigations(verdict);
+                CREATE INDEX IF NOT EXISTS idx_investigations_device ON investigations(device_mac);
+                CREATE INDEX IF NOT EXISTS idx_investigations_time ON investigations(investigated_at);",
+            )
+            .map_err(|e| format!("investigations table creation failed: {e}"))?;
+        }
+
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
         })
@@ -742,6 +894,53 @@ impl BehaviorStore {
         )
         .optional()
         .map_err(|e| format!("get_profile failed: {e}"))
+    }
+
+    /// Fetch profiles for multiple MACs in a single query.
+    /// Returns a HashMap keyed by MAC address.
+    pub async fn get_profiles_bulk(&self, macs: &[&str]) -> Result<HashMap<String, DeviceProfile>, String> {
+        if macs.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let db = self.db.lock().await;
+
+        // Build "WHERE mac IN (?, ?, ...)" with dynamic placeholders
+        let placeholders: Vec<&str> = macs.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
+                    first_seen, last_seen, learning_until, baseline_status, notes
+             FROM device_profiles WHERE mac IN ({})",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("prepare bulk profiles: {e}"))?;
+
+        // Bind each MAC as a parameter
+        let params_vec: Vec<&dyn rusqlite::types::ToSql> = macs.iter().map(|m| m as &dyn rusqlite::types::ToSql).collect();
+        let rows = stmt
+            .query_map(params_vec.as_slice(), |row| {
+                Ok(DeviceProfile {
+                    mac: row.get(0)?,
+                    hostname: row.get(1)?,
+                    manufacturer: row.get(2)?,
+                    current_ip: row.get(3)?,
+                    current_vlan: row.get(4)?,
+                    first_seen: row.get(5)?,
+                    last_seen: row.get(6)?,
+                    learning_until: row.get(7)?,
+                    baseline_status: row.get(8)?,
+                    notes: row.get(9)?,
+                })
+            })
+            .map_err(|e| format!("bulk profile query: {e}"))?;
+
+        let mut map = HashMap::with_capacity(macs.len());
+        for row in rows {
+            let profile = row.map_err(|e| format!("bulk profile row: {e}"))?;
+            map.insert(profile.mac.clone(), profile);
+        }
+        Ok(map)
     }
 
     pub async fn get_all_profiles(&self) -> Result<Vec<DeviceProfile>, String> {
@@ -1799,6 +1998,275 @@ impl BehaviorStore {
         })
     }
 
+    // ── Investigation methods ──
+
+    pub async fn record_investigation(&self, inv: &NewInvestigation) -> Result<i64, String> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT OR REPLACE INTO investigations
+                (anomaly_id, device_mac, device_hostname, device_manufacturer,
+                 device_disposition, device_first_seen, device_baseline_status,
+                 vlan_id, vlan_sensitivity,
+                 dst_ip, dst_country, dst_city, dst_asn, dst_org,
+                 dst_is_cdn, dst_reverse_dns, dst_seen_by_device_count,
+                 anomaly_type, prior_anomaly_count_24h, prior_anomaly_count_7d,
+                 same_pattern_count_24h, baseline_coverage_pct,
+                 current_volume_bytes, baseline_volume_bytes, volume_ratio,
+                 unique_destinations_1h, unique_ports_1h, other_devices_same_dest,
+                 firewall_rule_id, firewall_action, firewall_rule_comment, firewall_correlation,
+                 verdict, recommended_action, reason, summary, evidence_chain,
+                 investigated_at, duration_ms)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39)",
+            params![
+                inv.anomaly_id, inv.device_mac, inv.device_hostname, inv.device_manufacturer,
+                inv.device_disposition, inv.device_first_seen, inv.device_baseline_status,
+                inv.vlan_id, inv.vlan_sensitivity,
+                inv.dst_ip, inv.dst_country, inv.dst_city, inv.dst_asn, inv.dst_org,
+                inv.dst_is_cdn as i32, inv.dst_reverse_dns, inv.dst_seen_by_device_count,
+                inv.anomaly_type, inv.prior_anomaly_count_24h, inv.prior_anomaly_count_7d,
+                inv.same_pattern_count_24h, inv.baseline_coverage_pct,
+                inv.current_volume_bytes, inv.baseline_volume_bytes, inv.volume_ratio,
+                inv.unique_destinations_1h, inv.unique_ports_1h, inv.other_devices_same_dest,
+                inv.firewall_rule_id, inv.firewall_action, inv.firewall_rule_comment, inv.firewall_correlation,
+                inv.verdict, inv.recommended_action, inv.reason, inv.summary, inv.evidence_chain,
+                inv.investigated_at, inv.duration_ms,
+            ],
+        )
+        .map_err(|e| format!("record_investigation failed: {e}"))?;
+        Ok(db.last_insert_rowid())
+    }
+
+    pub async fn get_investigation_by_anomaly(&self, anomaly_id: i64) -> Result<Option<Investigation>, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT id, anomaly_id, device_mac, device_hostname, device_manufacturer,
+                    device_disposition, device_first_seen, device_baseline_status,
+                    vlan_id, vlan_sensitivity,
+                    dst_ip, dst_country, dst_city, dst_asn, dst_org,
+                    dst_is_cdn, dst_reverse_dns, dst_seen_by_device_count,
+                    anomaly_type, prior_anomaly_count_24h, prior_anomaly_count_7d,
+                    same_pattern_count_24h, baseline_coverage_pct,
+                    current_volume_bytes, baseline_volume_bytes, volume_ratio,
+                    unique_destinations_1h, unique_ports_1h, other_devices_same_dest,
+                    firewall_rule_id, firewall_action, firewall_rule_comment, firewall_correlation,
+                    verdict, recommended_action, reason, summary, evidence_chain,
+                    investigated_at, duration_ms
+             FROM investigations WHERE anomaly_id = ?1",
+            params![anomaly_id],
+            Self::map_investigation_row,
+        )
+        .optional()
+        .map_err(|e| format!("get_investigation_by_anomaly failed: {e}"))
+    }
+
+    pub async fn get_investigations_by_device(
+        &self,
+        mac: &str,
+        limit: i64,
+    ) -> Result<Vec<Investigation>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db
+            .prepare(
+                "SELECT id, anomaly_id, device_mac, device_hostname, device_manufacturer,
+                        device_disposition, device_first_seen, device_baseline_status,
+                        vlan_id, vlan_sensitivity,
+                        dst_ip, dst_country, dst_city, dst_asn, dst_org,
+                        dst_is_cdn, dst_reverse_dns, dst_seen_by_device_count,
+                        anomaly_type, prior_anomaly_count_24h, prior_anomaly_count_7d,
+                        same_pattern_count_24h, baseline_coverage_pct,
+                        current_volume_bytes, baseline_volume_bytes, volume_ratio,
+                        unique_destinations_1h, unique_ports_1h, other_devices_same_dest,
+                        firewall_rule_id, firewall_action, firewall_rule_comment, firewall_correlation,
+                        verdict, recommended_action, reason, summary, evidence_chain,
+                        investigated_at, duration_ms
+                 FROM investigations WHERE device_mac = ?1 ORDER BY investigated_at DESC LIMIT ?2",
+            )
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map(params![mac, limit], Self::map_investigation_row)
+            .map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect failed: {e}"))
+    }
+
+    pub async fn get_investigation_stats(&self, hours: i64) -> Result<InvestigationStats, String> {
+        let db = self.db.lock().await;
+        let cutoff = now_unix() - (hours * 3600);
+        let mut stats = InvestigationStats {
+            benign: 0,
+            routine: 0,
+            suspicious: 0,
+            threat: 0,
+            inconclusive: 0,
+            total: 0,
+        };
+        let mut stmt = db
+            .prepare("SELECT verdict, COUNT(*) FROM investigations WHERE investigated_at >= ?1 GROUP BY verdict")
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map(params![cutoff], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| format!("query failed: {e}"))?;
+        for row in rows {
+            let (verdict, count) = row.map_err(|e| format!("row failed: {e}"))?;
+            match verdict.as_str() {
+                "benign" => stats.benign = count,
+                "routine" => stats.routine = count,
+                "suspicious" => stats.suspicious = count,
+                "threat" => stats.threat = count,
+                "inconclusive" => stats.inconclusive = count,
+                _ => {}
+            }
+            stats.total += count;
+        }
+        Ok(stats)
+    }
+
+    pub async fn get_investigations(
+        &self,
+        verdict: Option<&str>,
+        mac: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Investigation>, String> {
+        let db = self.db.lock().await;
+        let mut sql = String::from(
+            "SELECT id, anomaly_id, device_mac, device_hostname, device_manufacturer,
+                    device_disposition, device_first_seen, device_baseline_status,
+                    vlan_id, vlan_sensitivity,
+                    dst_ip, dst_country, dst_city, dst_asn, dst_org,
+                    dst_is_cdn, dst_reverse_dns, dst_seen_by_device_count,
+                    anomaly_type, prior_anomaly_count_24h, prior_anomaly_count_7d,
+                    same_pattern_count_24h, baseline_coverage_pct,
+                    current_volume_bytes, baseline_volume_bytes, volume_ratio,
+                    unique_destinations_1h, unique_ports_1h, other_devices_same_dest,
+                    firewall_rule_id, firewall_action, firewall_rule_comment, firewall_correlation,
+                    verdict, recommended_action, reason, summary, evidence_chain,
+                    investigated_at, duration_ms
+             FROM investigations WHERE 1=1",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        if let Some(v) = verdict {
+            param_values.push(Box::new(v.to_string()));
+            sql.push_str(&format!(" AND verdict = ?{}", param_values.len()));
+        }
+        if let Some(m) = mac {
+            param_values.push(Box::new(m.to_string()));
+            sql.push_str(&format!(" AND device_mac = ?{}", param_values.len()));
+        }
+        sql.push_str(" ORDER BY investigated_at DESC");
+        param_values.push(Box::new(limit));
+        sql.push_str(&format!(" LIMIT ?{}", param_values.len()));
+        param_values.push(Box::new(offset));
+        sql.push_str(&format!(" OFFSET ?{}", param_values.len()));
+
+        let mut stmt = db
+            .prepare(&sql)
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(params_ref.as_slice(), Self::map_investigation_row)
+            .map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect failed: {e}"))
+    }
+
+    /// Count anomalies for a device within a time window.
+    pub async fn count_anomalies_since(&self, mac: &str, since: i64) -> Result<i64, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT COUNT(*) FROM device_anomalies WHERE mac = ?1 AND timestamp >= ?2",
+            params![mac, since],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("count_anomalies_since failed: {e}"))
+    }
+
+    /// Count anomalies of the same type and pattern for a device within a time window.
+    pub async fn count_same_pattern_anomalies(
+        &self,
+        mac: &str,
+        anomaly_type: &str,
+        since: i64,
+    ) -> Result<i64, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT COUNT(*) FROM device_anomalies WHERE mac = ?1 AND anomaly_type = ?2 AND timestamp >= ?3",
+            params![mac, anomaly_type, since],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("count_same_pattern_anomalies failed: {e}"))
+    }
+
+    /// Count unique destinations a device has communicated with in a time window.
+    pub async fn count_unique_destinations(&self, mac: &str, window_secs: i64) -> Result<i64, String> {
+        let db = self.db.lock().await;
+        let cutoff = now_unix() - window_secs;
+        db.query_row(
+            "SELECT COUNT(DISTINCT dst_subnet) FROM device_observations WHERE mac = ?1 AND timestamp >= ?2",
+            params![mac, cutoff],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("count_unique_destinations failed: {e}"))
+    }
+
+    /// Count unique destination ports a device has communicated with in a time window.
+    pub async fn count_unique_ports(&self, mac: &str, window_secs: i64) -> Result<i64, String> {
+        let db = self.db.lock().await;
+        let cutoff = now_unix() - window_secs;
+        db.query_row(
+            "SELECT COUNT(DISTINCT dst_port) FROM device_observations WHERE mac = ?1 AND timestamp >= ?2 AND dst_port IS NOT NULL",
+            params![mac, cutoff],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("count_unique_ports failed: {e}"))
+    }
+
+    /// Count how many baselines a device has vs how many unique flows observed.
+    pub async fn baseline_coverage(&self, mac: &str) -> Result<(i64, i64), String> {
+        let db = self.db.lock().await;
+        let baseline_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM device_baselines WHERE mac = ?1",
+                params![mac],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("baseline count failed: {e}"))?;
+        let flow_count: i64 = db
+            .query_row(
+                "SELECT COUNT(DISTINCT protocol || ':' || COALESCE(dst_port, -1) || ':' || dst_subnet || ':' || direction)
+                 FROM device_observations WHERE mac = ?1 AND timestamp >= ?2",
+                params![mac, now_unix() - 7 * 86400],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("flow count failed: {e}"))?;
+        Ok((baseline_count, flow_count))
+    }
+
+    /// Get IDs of recent anomalies that haven't been investigated yet.
+    /// Used by the investigation engine to find work.
+    pub async fn get_uninvestigated_anomaly_ids(&self, since: i64) -> Result<Vec<i64>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db
+            .prepare(
+                "SELECT a.id FROM device_anomalies a
+                 LEFT JOIN investigations i ON i.anomaly_id = a.id
+                 WHERE a.timestamp >= ?1
+                   AND a.status = 'pending'
+                   AND i.id IS NULL
+                 ORDER BY a.timestamp ASC
+                 LIMIT 100",
+            )
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map(params![since], |row| row.get(0))
+            .map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect failed: {e}"))
+    }
+
     fn map_anomaly_row(row: &rusqlite::Row) -> rusqlite::Result<DeviceAnomaly> {
         Ok(DeviceAnomaly {
             id: row.get(0)?,
@@ -1816,6 +2284,51 @@ impl BehaviorStore {
             status: row.get(12)?,
             resolved_at: row.get(13)?,
             resolved_by: row.get(14)?,
+        })
+    }
+
+    fn map_investigation_row(row: &rusqlite::Row) -> rusqlite::Result<Investigation> {
+        Ok(Investigation {
+            id: row.get(0)?,
+            anomaly_id: row.get(1)?,
+            device_mac: row.get(2)?,
+            device_hostname: row.get(3)?,
+            device_manufacturer: row.get(4)?,
+            device_disposition: row.get(5)?,
+            device_first_seen: row.get(6)?,
+            device_baseline_status: row.get(7)?,
+            vlan_id: row.get(8)?,
+            vlan_sensitivity: row.get(9)?,
+            dst_ip: row.get(10)?,
+            dst_country: row.get(11)?,
+            dst_city: row.get(12)?,
+            dst_asn: row.get(13)?,
+            dst_org: row.get(14)?,
+            dst_is_cdn: row.get::<_, i32>(15)? != 0,
+            dst_reverse_dns: row.get(16)?,
+            dst_seen_by_device_count: row.get(17)?,
+            anomaly_type: row.get(18)?,
+            prior_anomaly_count_24h: row.get(19)?,
+            prior_anomaly_count_7d: row.get(20)?,
+            same_pattern_count_24h: row.get(21)?,
+            baseline_coverage_pct: row.get(22)?,
+            current_volume_bytes: row.get(23)?,
+            baseline_volume_bytes: row.get(24)?,
+            volume_ratio: row.get(25)?,
+            unique_destinations_1h: row.get(26)?,
+            unique_ports_1h: row.get(27)?,
+            other_devices_same_dest: row.get(28)?,
+            firewall_rule_id: row.get(29)?,
+            firewall_action: row.get(30)?,
+            firewall_rule_comment: row.get(31)?,
+            firewall_correlation: row.get(32)?,
+            verdict: row.get(33)?,
+            recommended_action: row.get(34)?,
+            reason: row.get(35)?,
+            summary: row.get(36)?,
+            evidence_chain: row.get(37)?,
+            investigated_at: row.get(38)?,
+            duration_ms: row.get(39)?,
         })
     }
 }

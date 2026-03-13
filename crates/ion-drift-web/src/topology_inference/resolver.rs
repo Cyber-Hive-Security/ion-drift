@@ -21,8 +21,6 @@ pub struct ResolvedAttachment {
     pub confidence: f64,
     pub state: AttachmentState,
     pub binding_changed: bool,
-    #[allow(dead_code)]
-    pub all_candidates: Vec<ScoredCandidate>,
 }
 
 /// The inference mode (controlled by TOPOLOGY_INFERENCE_MODE env var).
@@ -49,7 +47,6 @@ impl InferenceMode {
         }
     }
 
-    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Legacy => "legacy",
@@ -137,7 +134,6 @@ pub fn resolve_mac(
             confidence: 0.0,
             state,
             binding_changed: false,
-            all_candidates: Vec::new(),
         };
     }
 
@@ -185,7 +181,6 @@ pub fn resolve_mac(
                 confidence,
                 state,
                 binding_changed: false,
-                all_candidates: scored,
             };
         }
     }
@@ -214,7 +209,6 @@ pub fn resolve_mac(
         confidence,
         state,
         binding_changed,
-        all_candidates: scored,
     }
 }
 

@@ -314,6 +314,10 @@ export interface VlanFlow {
   source: string;
   target: string;
   bytes: number;
+  /** Router-authoritative VLAN ID for source (absent for WAN). */
+  source_vlan_id?: number;
+  /** Router-authoritative VLAN ID for target (absent for WAN). */
+  target_vlan_id?: number;
 }
 
 // Connection summary types (snake_case — custom Rust structs)
@@ -433,6 +437,8 @@ export interface FirewallDropsSummary {
 
 export interface VlanActivityEntry {
   name: string;
+  /** Router-authoritative VLAN ID (absent if interface not in vlan_config). */
+  vlan_id?: number;
   rx_bps: number;
   tx_bps: number;
 }
@@ -750,6 +756,46 @@ export interface CitySummaryEntry {
   bytes_rx: number;
   top_orgs: string[];
   flagged_count: number;
+}
+
+export interface CountrySummary {
+  country_code: string;
+  country: string;
+  total_connections: number;
+  total_tx: number;
+  total_rx: number;
+  top_devices: CountryDeviceEntry[];
+  top_destinations: CountryDestEntry[];
+  top_ports: CountryPortEntry[];
+  timeline: CountryTimelineBucket[];
+}
+
+export interface CountryDeviceEntry {
+  src_mac: string;
+  src_ip: string;
+  hostname: string | null;
+  connection_count: number;
+  total_bytes: number;
+}
+
+export interface CountryDestEntry {
+  dst_ip: string;
+  org: string | null;
+  connection_count: number;
+  total_bytes: number;
+}
+
+export interface CountryPortEntry {
+  dst_port: number;
+  protocol: string;
+  connection_count: number;
+  total_bytes: number;
+}
+
+export interface CountryTimelineBucket {
+  date: string;
+  connection_count: number;
+  bytes: number;
 }
 
 export interface PortSummaryEntry {
@@ -1262,6 +1308,8 @@ export interface SectorPosition {
 export interface VlanConfig {
   vlan_id: number;
   name: string;
+  /** Router interface name (e.g. "V-90-IoT"). */
+  interface_name?: string;
   media_type: "wired" | "wireless" | "mixed";
   subnet: string | null;
   color: string | null;
@@ -1513,6 +1561,7 @@ export interface AlertRule {
   severity_filter: string | null;
   vlan_filter: string | null;
   disposition_filter: string | null;
+  verdict_filter: string | null;
   cooldown_seconds: number;
   delivery_channels: string;
   created_at: string;
@@ -1591,4 +1640,60 @@ export interface DeliveryChannelConfig {
   channel: string;
   enabled: boolean;
   config_json: Record<string, unknown>;
+}
+
+// ── Investigation Engine ──────────────────────────────────────
+
+export type InvestigationVerdict = "benign" | "routine" | "suspicious" | "threat" | "inconclusive";
+
+export interface Investigation {
+  id: number;
+  anomaly_id: number;
+  device_mac: string;
+  device_hostname: string | null;
+  device_manufacturer: string | null;
+  device_disposition: string | null;
+  device_first_seen: number;
+  device_baseline_status: string | null;
+  vlan_id: number;
+  vlan_sensitivity: string | null;
+  dst_ip: string | null;
+  dst_country: string | null;
+  dst_city: string | null;
+  dst_asn: number | null;
+  dst_org: string | null;
+  dst_is_cdn: boolean;
+  dst_reverse_dns: string | null;
+  dst_seen_by_device_count: number;
+  anomaly_type: string;
+  prior_anomaly_count_24h: number;
+  prior_anomaly_count_7d: number;
+  same_pattern_count_24h: number;
+  baseline_coverage_pct: number | null;
+  current_volume_bytes: number | null;
+  baseline_volume_bytes: number | null;
+  volume_ratio: number | null;
+  unique_destinations_1h: number | null;
+  unique_ports_1h: number | null;
+  other_devices_same_dest: number | null;
+  firewall_rule_id: string | null;
+  firewall_action: string | null;
+  firewall_rule_comment: string | null;
+  firewall_correlation: string | null;
+  verdict: InvestigationVerdict;
+  recommended_action: string;
+  reason: string;
+  summary: string;
+  evidence_chain: string | null;
+  investigated_at: number;
+  duration_ms: number;
+}
+
+export interface InvestigationStats {
+  benign: number;
+  routine: number;
+  suspicious: number;
+  threat: number;
+  inconclusive: number;
+  total: number;
 }

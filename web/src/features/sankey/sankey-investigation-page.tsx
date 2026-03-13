@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useSearch, useNavigate } from "@tanstack/react-router";
 import { PageShell } from "@/components/layout/page-shell";
 import { InvestigationHelp } from "@/components/help-content";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { ErrorDisplay } from "@/components/error-display";
 import {
   useSankeyNetwork,
@@ -9,14 +11,18 @@ import {
   useSankeyDevice,
   useSankeyDestinationPeers,
   useSankeyConversation,
+  useDeviceInvestigations,
 } from "@/api/queries";
 import { apiFetch } from "@/api/client";
 import type {
   SankeyVlanResponse,
   SankeyDeviceResponse,
+  Investigation,
 } from "@/api/types";
 import { formatBytes } from "@/lib/format";
-import { ChevronRight, ArrowLeft, Download, Flag, Copy, Search, Network } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { countryFlag } from "@/lib/country";
+import { ChevronRight, ArrowLeft, Download, Flag, Copy, Search, Network, Microscope, ChevronDown } from "lucide-react";
 
 const RANGES = ["1h", "6h", "24h", "7d", "30d"] as const;
 
@@ -210,6 +216,12 @@ function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text).catch(() => {});
 }
 
+/** Format a bare VLAN ID for display: "35" → "VLAN 35", "WAN" stays "WAN". */
+function vlanLabel(id: string): string {
+  if (!id || id === "WAN") return id;
+  return `VLAN ${id}`;
+}
+
 type View =
   | { level: "network" }
   | { level: "vlan"; vlanId: string; destVlan?: string }
@@ -217,16 +229,37 @@ type View =
   | { level: "conversation"; mac: string; destIp: string };
 
 export function SankeyInvestigationPage() {
-  const [range, setRange] = useState("24h");
-  const [view, setView] = useState<View>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const vlan = params.get("vlan");
-    if (vlan) {
-      const dest = params.get("dest") ?? undefined;
-      return { level: "vlan", vlanId: vlan, destVlan: dest };
-    }
+  const search = useSearch({ from: "/sankey" });
+  const navigate = useNavigate();
+  const [range, setRange] = useState(search.country ? "30d" : "24h");
+
+  // Derive initial view from URL search params
+  const initialView = useMemo((): View => {
+    if (search.mac) return { level: "device", mac: search.mac };
+    if (search.vlan) return { level: "vlan", vlanId: search.vlan, destVlan: search.dest };
+    // Country param → jump straight to WAN vlan (all country traffic is WAN)
+    if (search.country) return { level: "vlan", vlanId: "WAN" };
     return { level: "network" };
-  });
+  }, []); // Only compute once on mount
+
+  const [view, setViewState] = useState<View>(initialView);
+
+  // Wrap setView to sync URL
+  const setView = useCallback((v: View) => {
+    setViewState(v);
+    const params: Record<string, string | undefined> = {};
+    if (v.level === "vlan") {
+      params.vlan = v.vlanId;
+      params.dest = v.destVlan;
+    } else if (v.level === "device") {
+      params.mac = v.mac;
+    } else if (v.level === "conversation") {
+      params.mac = v.mac;
+    }
+    // Keep country if it was in original params
+    if (search.country) params.country = search.country;
+    navigate({ to: "/sankey", search: params, replace: true });
+  }, [navigate, search.country]);
 
   const breadcrumb = (() => {
     const items: { label: string; onClick?: () => void }[] = [
@@ -239,7 +272,7 @@ export function SankeyInvestigationPage() {
       },
     ];
     if (view.level === "vlan") {
-      items.push({ label: `VLAN ${view.vlanId}` });
+      items.push({ label: vlanLabel(view.vlanId) });
     }
     if (view.level === "device") {
       items.push({ label: view.mac });
@@ -256,56 +289,67 @@ export function SankeyInvestigationPage() {
 
   return (
     <PageShell title="Investigation" help={<InvestigationHelp />}>
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <Breadcrumb items={breadcrumb} />
-          <TimeRangeSelector value={range} onChange={setRange} />
-        </div>
+      <ErrorBoundary>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Breadcrumb items={breadcrumb} />
+              {search.country && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2.5 py-0.5 text-xs font-medium text-destructive">
+                  {countryFlag(search.country)} {search.country}
+                </span>
+              )}
+            </div>
+            <TimeRangeSelector value={range} onChange={setRange} />
+          </div>
 
-        {view.level === "network" && (
-          <FadeIn key="network">
-            <NetworkOverview
-              range={range}
-              onSelectVlan={(vlanId, destVlan) =>
-                setView({ level: "vlan", vlanId, destVlan })
-              }
-            />
-          </FadeIn>
-        )}
-        {view.level === "vlan" && (
-          <FadeIn key={`vlan-${view.vlanId}`}>
-            <VlanDetail
-              vlanId={view.vlanId}
-              destVlan={view.destVlan}
-              range={range}
-              onBack={() => setView({ level: "network" })}
-              onSelectDevice={(mac) => setView({ level: "device", mac })}
-            />
-          </FadeIn>
-        )}
-        {view.level === "device" && (
-          <FadeIn key={`device-${view.mac}`}>
-            <DeviceTrace
-              mac={view.mac}
-              range={range}
-              onBack={() => setView({ level: "network" })}
-              onSelectConversation={(mac, destIp) =>
-                setView({ level: "conversation", mac, destIp })
-              }
-            />
-          </FadeIn>
-        )}
-        {view.level === "conversation" && (
-          <FadeIn key={`conv-${view.mac}-${view.destIp}`}>
-            <ConversationDetail
-              mac={view.mac}
-              destIp={view.destIp}
-              range={range}
-              onBack={() => setView({ level: "device", mac: view.mac })}
-            />
-          </FadeIn>
-        )}
-      </div>
+          {view.level === "network" && (
+            <FadeIn key="network">
+              <NetworkOverview
+                range={range}
+                onSelectVlan={(vlanId, destVlan) =>
+                  setView({ level: "vlan", vlanId, destVlan })
+                }
+              />
+            </FadeIn>
+          )}
+          {view.level === "vlan" && (
+            <FadeIn key={`vlan-${view.vlanId}`}>
+              <VlanDetail
+                vlanId={view.vlanId}
+                destVlan={view.destVlan}
+                range={range}
+                country={search.country}
+                onBack={() => setView({ level: "network" })}
+                onSelectDevice={(mac) => setView({ level: "device", mac })}
+              />
+            </FadeIn>
+          )}
+          {view.level === "device" && (
+            <FadeIn key={`device-${view.mac}`}>
+              <DeviceTrace
+                mac={view.mac}
+                range={range}
+                country={search.country}
+                onBack={() => setView({ level: "network" })}
+                onSelectConversation={(mac, destIp) =>
+                  setView({ level: "conversation", mac, destIp })
+                }
+              />
+            </FadeIn>
+          )}
+          {view.level === "conversation" && (
+            <FadeIn key={`conv-${view.mac}-${view.destIp}`}>
+              <ConversationDetail
+                mac={view.mac}
+                destIp={view.destIp}
+                range={range}
+                onBack={() => setView({ level: "device", mac: view.mac })}
+              />
+            </FadeIn>
+          )}
+        </div>
+      </ErrorBoundary>
     </PageShell>
   );
 }
@@ -360,7 +404,7 @@ function NetworkOverview({
             onMouseEnter={() => prefetchVlan(vlan.vlan_id)}
             className="rounded-lg border border-border bg-card p-3 text-left hover:border-primary/50 transition-colors"
           >
-            <div className="text-sm font-medium">VLAN {vlan.vlan_id}</div>
+            <div className="text-sm font-medium">{vlanLabel(vlan.vlan_id)}</div>
             <div className="text-xs text-muted-foreground mt-1">
               {vlan.device_count} devices · {formatBytes(vlan.total_bytes)}
             </div>
@@ -381,11 +425,19 @@ function NetworkOverview({
             <button
               key={i}
               className="w-full flex items-center gap-4 px-4 py-2.5 text-left hover:bg-accent/50 transition-colors"
-              onClick={() => onSelectVlan(flow.src_vlan, flow.dst_vlan)}
+              onClick={() => {
+                // When source is WAN, drill into the destination VLAN (our local devices)
+                // instead of WAN (100s of external IPs)
+                if (flow.src_vlan === "WAN" && flow.dst_vlan !== "WAN") {
+                  onSelectVlan(flow.dst_vlan, flow.src_vlan);
+                } else {
+                  onSelectVlan(flow.src_vlan, flow.dst_vlan);
+                }
+              }}
             >
-              <span className="text-sm font-medium w-24">{flow.src_vlan}</span>
+              <span className="text-sm font-medium w-24">{vlanLabel(flow.src_vlan)}</span>
               <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-sm font-medium w-24">{flow.dst_vlan}</span>
+              <span className="text-sm font-medium w-24">{vlanLabel(flow.dst_vlan)}</span>
               <span className="text-xs text-muted-foreground flex-1 text-right">
                 {formatBytes(flow.bytes)} · {flow.connections} conn
               </span>
@@ -413,16 +465,18 @@ function VlanDetail({
   vlanId,
   destVlan,
   range,
+  country,
   onBack,
   onSelectDevice,
 }: {
   vlanId: string;
   destVlan?: string;
   range: string;
+  country?: string;
   onBack: () => void;
   onSelectDevice: (mac: string) => void;
 }) {
-  const { data, isLoading, error, refetch } = useSankeyVlan(vlanId, range, destVlan);
+  const { data, isLoading, error, refetch } = useSankeyVlan(vlanId, range, destVlan, country);
   const queryClient = useQueryClient();
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; mac: string; hostname?: string; ip?: string } | null>(null);
 
@@ -470,7 +524,7 @@ function VlanDetail({
 
       {destVlan && (
         <div className="text-xs text-muted-foreground">
-          Filtered to flows: {vlanId} → {destVlan}
+          Filtered to flows: {vlanLabel(vlanId)} → {vlanLabel(destVlan)}
         </div>
       )}
 
@@ -576,18 +630,83 @@ function VlanDetail({
 
 // ── Device Trace (Level 2) ──────────────────────────────────
 
+// ── Verdict colors ──────────────────────────────────────────
+const VERDICT_CLASSES: Record<string, string> = {
+  benign: "bg-green-500/15 text-green-400",
+  routine: "bg-blue-500/15 text-blue-400",
+  suspicious: "bg-yellow-500/15 text-yellow-400",
+  threat: "bg-red-500/15 text-red-400",
+  inconclusive: "bg-zinc-500/15 text-zinc-400",
+};
+
+function DeviceInvestigationsPanel({ mac }: { mac: string }) {
+  const { data: investigations } = useDeviceInvestigations(mac);
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  if (!investigations || investigations.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-2 border-b border-border p-3">
+        <Microscope className="h-4 w-4 text-primary" />
+        <h3 className="text-sm font-semibold">Investigations ({investigations.length})</h3>
+      </div>
+      <div className="divide-y divide-border max-h-72 overflow-y-auto">
+        {investigations.map((inv: Investigation) => (
+          <div key={inv.id} className="px-4 py-2">
+            <button
+              onClick={() => setExpanded(expanded === inv.id ? null : inv.id)}
+              className="flex w-full items-center gap-2 text-left"
+            >
+              <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium uppercase", VERDICT_CLASSES[inv.verdict] ?? VERDICT_CLASSES.inconclusive)}>
+                {inv.verdict}
+              </span>
+              <span className="flex-1 truncate text-xs">{inv.summary}</span>
+              <ChevronDown className={cn("h-3 w-3 text-muted-foreground transition-transform", expanded === inv.id && "rotate-180")} />
+            </button>
+            {expanded === inv.id && (
+              <div className="mt-2 space-y-1 pl-2 text-xs text-muted-foreground">
+                {inv.dst_ip && <div>Destination: <span className="font-mono">{inv.dst_ip}</span> {inv.dst_org && `(${inv.dst_org})`}</div>}
+                {inv.dst_country && <div>Country: {inv.dst_country}</div>}
+                {inv.dst_is_cdn && <div className="text-green-400">CDN/Cloud service detected</div>}
+                {inv.dst_seen_by_device_count > 0 && <div>{inv.dst_seen_by_device_count} other devices also connect here</div>}
+                {inv.evidence_chain && (
+                  <div className="mt-1">
+                    <div className="text-[10px] font-medium text-foreground/70 mb-0.5">Evidence Chain:</div>
+                    {JSON.parse(inv.evidence_chain).map((step: { check: string; result: string; passed: boolean }, i: number) => (
+                      <div key={i} className="flex items-center gap-1 text-[10px]">
+                        <span className={step.passed ? "text-green-400" : "text-red-400"}>{step.passed ? "✓" : "✗"}</span>
+                        <span>{step.check}: {step.result}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="text-[10px] text-muted-foreground/60">
+                  {new Date(inv.investigated_at).toLocaleString()}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DeviceTrace({
   mac,
   range,
+  country,
   onBack,
   onSelectConversation,
 }: {
   mac: string;
   range: string;
+  country?: string;
   onBack: () => void;
   onSelectConversation: (mac: string, destIp: string) => void;
 }) {
-  const { data, isLoading, error, refetch } = useSankeyDevice(mac, range);
+  const { data, isLoading, error, refetch } = useSankeyDevice(mac, range, country);
   const [selectedDst, setSelectedDst] = useState<string | null>(null);
   const peers = useSankeyDestinationPeers(selectedDst ?? undefined, range);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ip: string; hostname?: string } | null>(null);
@@ -626,6 +745,8 @@ function DeviceTrace({
           {data.baseline_status && ` · ${data.baseline_status}`}
         </div>
       </div>
+
+      <DeviceInvestigationsPanel mac={mac} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Protocols */}

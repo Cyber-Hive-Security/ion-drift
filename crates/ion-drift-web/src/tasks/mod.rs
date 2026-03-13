@@ -43,12 +43,13 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
     // Session cleanup
     spawn_session_cleanup(state.sessions.clone());
 
-    // Behavior analysis
+    // Behavior analysis + automated investigation
     behavior::spawn_behavior_collector(
         state.behavior_store.clone(),
         state.mikrotik.clone(),
         state.oui_db.clone(),
         state.geo_cache.clone(),
+        state.connection_store.clone(),
         state.firewall_rules_cache.clone(),
         state.vlan_registry.clone(),
     );

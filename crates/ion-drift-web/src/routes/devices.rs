@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 
-use mikrotik_core::{MikrotikClient, MikrotikConfig, SnmpClient, SwosClient};
+use mikrotik_core::{MikrotikClient, MikrotikConfig, SecretString, SnmpClient, SwosClient};
 
 use crate::device_manager::{DeviceClient, DeviceStatus, DeviceInfo};
 use crate::middleware::{RequireAdmin, RequireAuth};
@@ -38,13 +38,38 @@ fn is_blocked_host(host: &str) -> bool {
     false
 }
 
+fn bad_request(msg: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": msg })),
+    )
+        .into_response()
+}
+
 fn validate_ca_cert_path(path: &str) -> Result<(), Response> {
     if path.contains("..") || (!path.starts_with("/app/data/certs/") && !path.starts_with("/app/certs/")) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "ca_cert_path must be within /app/data/certs/ or /app/certs/" })),
-        )
-            .into_response());
+        return Err(bad_request("ca_cert_path must be within /app/data/certs/ or /app/certs/"));
+    }
+    Ok(())
+}
+
+fn validate_host(host: &str) -> Result<(), Response> {
+    if host.is_empty() || host.len() > 253 || host.contains(char::is_whitespace) {
+        return Err(bad_request("invalid host: 1-253 chars, no whitespace"));
+    }
+    if is_blocked_host(host) {
+        return Err(bad_request("host resolves to a blocked address"));
+    }
+    Ok(())
+}
+
+/// Validate optional host and ca_cert_path fields on an update request.
+fn validate_device_update(update: &UpdateDevice) -> Result<(), Response> {
+    if let Some(ref host) = update.host {
+        validate_host(host)?;
+    }
+    if let Some(ref path) = update.ca_cert_path {
+        validate_ca_cert_path(path)?;
     }
     Ok(())
 }
@@ -126,31 +151,9 @@ pub async fn create_device(
         )
             .into_response());
     }
-    if req.device.host.is_empty()
-        || req.device.host.len() > 253
-        || req.device.host.contains(char::is_whitespace)
-    {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "invalid host: 1-253 chars, no whitespace" })),
-        )
-            .into_response());
-    }
+    validate_host(&req.device.host)?;
     if req.device.name.len() > 128 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "invalid name: max 128 chars" })),
-        )
-            .into_response());
-    }
-
-    // SSRF protection: block connections to loopback, link-local, metadata IPs
-    if is_blocked_host(&req.device.host) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "host resolves to a blocked address" })),
-        )
-            .into_response());
+        return Err(bad_request("invalid name: max 128 chars"));
     }
 
     // Validate ca_cert_path if provided
@@ -191,7 +194,13 @@ pub async fn create_device(
             req.device.port,
             req.username.clone(),
             req.password.clone(),
-        );
+        ).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("failed to create SwOS client: {e}") })),
+            )
+                .into_response()
+        })?;
         let identity = swos.test_connection().await.map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
@@ -214,7 +223,7 @@ pub async fn create_device(
             tls: req.device.tls,
             ca_cert_path,
             username: req.username.clone(),
-            password: req.password.clone(),
+            password: SecretString::from(req.password.clone()),
         };
 
         let routeros = MikrotikClient::new(config).map_err(|e| {
@@ -301,6 +310,9 @@ pub async fn update_device(
         )
             .into_response()
     })?;
+
+    // Validate host (SSRF) and ca_cert_path (path traversal) before persisting
+    validate_device_update(&update)?;
 
     let sm_read = sm.read().await;
     sm_read
@@ -471,22 +483,7 @@ pub async fn test_connection(
     Json(req): Json<TestConnectionRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
     // Input validation
-    if req.host.is_empty() || req.host.len() > 253 || req.host.contains(char::is_whitespace) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "invalid host: 1-253 chars, no whitespace" })),
-        )
-            .into_response());
-    }
-
-    // SSRF protection: block connections to loopback, link-local, metadata IPs
-    if is_blocked_host(&req.host) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "host resolves to a blocked address" })),
-        )
-            .into_response());
-    }
+    validate_host(&req.host)?;
 
     // Validate ca_cert_path if provided
     if let Some(ref path) = req.ca_cert_path {
@@ -526,7 +523,13 @@ pub async fn test_connection(
             req.port.unwrap_or(80),
             req.username,
             req.password,
-        );
+        ).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("failed to create SwOS client: {e}") })),
+            )
+                .into_response()
+        })?;
         match client.test_connection().await {
             Ok(identity) => Ok(Json(serde_json::json!({
                 "status": "online",
@@ -550,7 +553,7 @@ pub async fn test_connection(
             tls: req.tls.unwrap_or(true),
             ca_cert_path,
             username: req.username,
-            password: req.password,
+            password: SecretString::from(req.password),
         };
 
         let client = MikrotikClient::new(config).map_err(|e| {

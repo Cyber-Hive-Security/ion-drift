@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback } from "react";
 import * as d3 from "d3";
 import * as topojson from "topojson-client";
 import type { Topology, GeometryCollection } from "topojson-specification";
@@ -132,7 +132,17 @@ export function WorldMap({
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const [dimensions, setDimensions] = useState({ width: 960, height: 500 });
 
-  // Observe container size
+  // Read initial size synchronously before first paint
+  useLayoutEffect(() => {
+    const svg = svgRef.current;
+    const container = svg?.parentElement;
+    if (container) {
+      const w = container.offsetWidth;
+      if (w > 0) setDimensions({ width: w, height: Math.max(500, w * 0.6) });
+    }
+  }, []);
+
+  // Observe container size for ongoing resizes
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;

@@ -36,7 +36,6 @@ pub struct InfrastructureGraph {
     /// Trunk peer map: (device_id, port_name_lowercase) → peer_device_id.
     pub trunk_peers: HashMap<(String, String), String>,
     /// The router device ID (root of the tree).
-    #[allow(dead_code)]
     pub router_id: String,
     /// Maximum depth in the graph (for normalization).
     pub max_depth: u32,
@@ -174,18 +173,6 @@ impl InfrastructureGraph {
         self.depth.get(device_id).copied()
     }
 
-    /// Get the parent device in the BFS tree.
-    #[allow(dead_code)]
-    pub fn parent_of(&self, device_id: &str) -> Option<&str> {
-        self.parent.get(device_id).map(|s| s.as_str())
-    }
-
-    /// Get children of a device in the BFS tree.
-    #[allow(dead_code)]
-    pub fn children_of(&self, device_id: &str) -> &[String] {
-        self.children.get(device_id).map(|v| v.as_slice()).unwrap_or(&[])
-    }
-
     /// Check if `child` is a descendant of `ancestor` in the BFS tree.
     pub fn is_descendant_of(&self, child: &str, ancestor: &str) -> bool {
         let mut current = child;
@@ -198,29 +185,9 @@ impl InfrastructureGraph {
         false
     }
 
-    /// Get the path from a device to the root (inclusive).
-    #[allow(dead_code)]
-    pub fn path_to_root(&self, device_id: &str) -> Vec<String> {
-        let mut path = vec![device_id.to_string()];
-        let mut current = device_id;
-        while let Some(parent) = self.parent.get(current) {
-            path.push(parent.clone());
-            current = parent;
-        }
-        path
-    }
-
     /// Check if a (device_id, port_name) pair is a trunk port.
     pub fn is_trunk_port(&self, device_id: &str, port_name: &str) -> bool {
         self.trunk_ports.contains(&(device_id.to_string(), canonicalize_port_name(port_name)))
-    }
-
-    /// Get the peer device on the other end of a trunk port.
-    #[allow(dead_code)]
-    pub fn trunk_peer_of(&self, device_id: &str, port_name: &str) -> Option<&str> {
-        self.trunk_peers
-            .get(&(device_id.to_string(), canonicalize_port_name(port_name)))
-            .map(|s| s.as_str())
     }
 
     /// Normalized depth score for a device (0.0 = router, 1.0 = deepest).

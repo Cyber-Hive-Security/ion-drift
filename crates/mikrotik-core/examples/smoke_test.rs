@@ -3,7 +3,7 @@
 //! Usage:
 //!   cargo run --example smoke_test -- --host 192.168.88.1 --user admin --password <pass> --ca-cert /path/to/ca.pem
 
-use mikrotik_core::{MikrotikClient, MikrotikConfig};
+use mikrotik_core::{MikrotikClient, MikrotikConfig, SecretString};
 use std::path::PathBuf;
 
 #[tokio::main]
@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tls: true,
         ca_cert_path: ca_cert.map(PathBuf::from),
         username: user,
-        password,
+        password: SecretString::from(password),
     };
 
     let client = MikrotikClient::new(config)?;

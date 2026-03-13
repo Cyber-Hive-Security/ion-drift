@@ -12,6 +12,7 @@ mod topology_inference;
 mod device_manager;
 mod dns;
 mod geo;
+mod investigation;
 mod live_traffic;
 mod log_parser;
 mod middleware;

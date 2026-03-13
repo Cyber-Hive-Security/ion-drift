@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::Serialize;
 use tracing::{debug, info};
 
@@ -12,6 +13,12 @@ pub struct VlanFlow {
     pub source: String,
     pub target: String,
     pub bytes: u64,
+    /// Router-authoritative VLAN ID for the source interface (None for WAN).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_vlan_id: Option<u32>,
+    /// Router-authoritative VLAN ID for the target interface (None for WAN).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_vlan_id: Option<u32>,
 }
 
 /// Manages mangle passthrough rules used to count inter-VLAN traffic flows.
@@ -123,8 +130,16 @@ impl VlanFlowManager {
     /// Query current flow data from ion-drift mangle rules.
     ///
     /// Returns flows that have accumulated at least 1 byte.
+    /// Each flow includes router-authoritative VLAN IDs resolved from `/interface/vlan`.
     pub async fn get_flows(client: &MikrotikClient) -> Result<Vec<VlanFlow>, MikrotikError> {
         let rules = client.firewall_mangle_rules().await?;
+
+        // Build interface name → VLAN ID lookup from the router
+        let vlan_ifaces = client.vlan_interfaces().await?;
+        let iface_to_vlan: HashMap<&str, u32> = vlan_ifaces
+            .iter()
+            .map(|v| (v.name.as_str(), v.vlan_id))
+            .collect();
 
         let flows: Vec<VlanFlow> = rules
             .iter()
@@ -142,6 +157,8 @@ impl VlanFlowManager {
                     source: src.to_string(),
                     target: dst.to_string(),
                     bytes,
+                    source_vlan_id: iface_to_vlan.get(src).copied(),
+                    target_vlan_id: iface_to_vlan.get(dst).copied(),
                 })
             })
             .collect();

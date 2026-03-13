@@ -1,4 +1,4 @@
-use mikrotik_core::MikrotikConfig;
+use mikrotik_core::{MikrotikConfig, SecretString};
 
 #[test]
 fn mikrotik_config_rejects_empty_host() {
@@ -8,7 +8,7 @@ fn mikrotik_config_rejects_empty_host() {
         tls: true,
         ca_cert_path: None,
         username: "admin".into(),
-        password: "secret".into(),
+        password: SecretString::from("secret".to_string()),
     };
     assert!(cfg.validate().is_err());
 }
@@ -21,7 +21,7 @@ fn mikrotik_config_warns_on_default_host() {
         tls: true,
         ca_cert_path: None,
         username: "admin".into(),
-        password: "secret".into(),
+        password: SecretString::from("secret".to_string()),
     };
     let warnings = cfg.validate().expect("validate");
     assert!(!warnings.is_empty());
@@ -35,7 +35,7 @@ fn mikrotik_config_accepts_custom_host() {
         tls: true,
         ca_cert_path: None,
         username: "admin".into(),
-        password: "secret".into(),
+        password: SecretString::from("secret".to_string()),
     };
     let warnings = cfg.validate().expect("validate");
     assert!(warnings.is_empty());

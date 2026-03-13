@@ -1,14 +1,14 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-08 — Monitored Regions settings, runtime config mounts, release cleanup
+> **Last updated:** 2026-03-12 (`373892d`) — Authoritative VLAN ID lookup, security audit, investigation engine, drill-down navigation, settings refactor
 
 ## Overview
 
 ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network discovery platform. Manages a primary router plus multiple managed switches with automatic device discovery, identity correlation, and topology visualization. Dual interface: CLI tool + Axum web server serving a React frontend. Authenticates via OIDC (Keycloak or compatible). Deployed as Docker container behind a reverse proxy. All network configuration (VLANs, subnets, sensitivity levels) is stored in the database and configurable via UI — no hardcoded environment references in source code.
 
 **Tech Stack:**
-- Backend: Rust (Axum, Tokio async runtime, SQLite)
-- Frontend: React (Vite, TypeScript, TanStack Query, Recharts, D3.js, Tailwind CSS)
+- Backend: Rust (Axum, Tokio async runtime, SQLite, `secrecy` for credential handling)
+- Frontend: React 19 (Vite, TypeScript, TanStack Router v1 + Query v5, Recharts, D3.js, Tailwind CSS 4, `@tanstack/react-virtual` for table virtualization)
 - Auth: Keycloak OIDC with PKCE flow, mTLS bootstrap for secrets encryption
 - Router API: RouterOS v7 REST over HTTPS (Smallstep CA)
 
@@ -33,6 +33,7 @@ ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network 
 - Config and CA cert provided at runtime via bind mounts (not baked into image)
 - Persistent volume for SQLite databases, certs, GeoIP data
 - Designed for deployment behind any reverse proxy (Traefik, nginx, etc.)
+- **Demo mode:** `ION_DRIFT_MODE=demo` — sanitizes all IPs (mapped to 10.249.VLAN.host), VLAN names, IDs, and interface names for safe screenshots
 
 ---
 
@@ -45,8 +46,12 @@ ion-drift is a Rust-based Mikrotik RouterOS management, monitoring, and network 
 - **Cert Rotation:** CertWarden integration, hourly expiry checks, auto-renewal within configurable threshold
 - **Session Tokens:** 32-byte cryptographic random, login rate limiting
 - **CORS:** Fail-closed (default reject, explicit allow list)
-- **SSRF Guard:** Block private IP ranges in outbound requests
+- **SSRF Guard:** Block private IP ranges in outbound requests, URL-encoded bypass prevention
 - **XSS Prevention:** HTML-escaped user input on display
+- **Input Validation:** Centralized `validate_host()` and `validate_device_update()` for device management endpoints
+- **Atomic Operations:** Device add/remove wrapped in SQLite transactions
+- **Auth Logging:** Failed login attempts logged with session metadata
+- **Password Handling:** `secrecy::SecretString` for router passwords (zeroized on drop)
 - **Setup Mode:** Binds to localhost only until initial configuration completes
 - **Endpoints:** `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/status`
 
@@ -406,6 +411,7 @@ VLAN metadata (name, color, subnet, media type, sensitivity) is stored in the `v
 | Field | Description |
 |-------|-------------|
 | `name` | Display name (e.g. "Trusted Services") |
+| `interface_name` | Router interface name (e.g. "V-90-IoT") — authoritative mapping for VLAN ID resolution |
 | `media_type` | `wired`, `wireless`, or `mixed` — controls WAP attribution |
 | `subnet` | CIDR notation (e.g. "10.20.25.0/24") — used for IP→VLAN matching |
 | `color` | Hex color for UI rendering |
@@ -530,7 +536,7 @@ Manual switch-to-switch interconnect configuration for devices without LLDP supp
 
 ### Write Operations
 
-- **VLAN Flow Counters:** Auto-creates mangle rules for inter-VLAN + WAN traffic accounting
+- **VLAN Flow Counters:** Auto-creates mangle rules for inter-VLAN + WAN traffic accounting. Flow data enriched with router-authoritative VLAN IDs from `/interface/vlan` (never parsed from interface names).
 - **Syslog Configuration:** Auto-creates remote logging action, firewall topic routing rule, and filter log rules for new connections on forward + input chains
 - **Firewall Log Rules:** `action=log, connection-state=new, log-prefix=ION` at top of forward and input chains
 
@@ -540,16 +546,22 @@ Manual switch-to-switch interconnect configuration for devices without LLDP supp
 
 | Card | Data Source |
 |------|------------|
-| CPU gauge | System resources (10s poll) |
-| Memory gauge | System resources (10s poll) |
-| Uptime | System resources |
-| WAN Traffic | Interface RX/TX counters, live rate calculation |
+| Firewall Drops | Drop rule byte/packet counters, links to `/firewall` |
+| WAN Traffic | Interface RX/TX counters, live rate calculation, links to `/connections` |
+| Network Devices | Registered device status (online/offline) |
 | Connections | Conntrack count by protocol (TCP/UDP/other), flagged count |
-| Firewall Drops | Drop rule byte/packet counters, rate chart |
+| Identity Overview | Device identity stats from correlation engine |
 | DHCP Leases | Active lease count, subnet utilization |
-| VLAN Sankey | Inter-VLAN traffic flows (mangle rule byte counters) |
-| VLAN Activity | Per-VLAN RX/TX rates (line chart) |
+| Investigations | Recent automated investigation verdicts |
+| VLAN Activity | Per-VLAN RX/TX sparklines, expandable charts, investigate link per VLAN |
+| System History | CPU load + memory usage area charts (24h / 7d toggle) |
+| VLAN Sankey | Inter-VLAN traffic flows (mangle rule byte counters), click-to-investigate |
 | Directional Port Sankeys | Outbound/Inbound/Internal port flows with anomaly detection |
+| Uptime | System uptime |
+
+**Resilience:** Each card wrapped in `CardErrorBoundary` — a single card failure doesn't crash the page. Range selector uses `keepPreviousData` to prevent flash on time-range toggle.
+
+**VLAN ID Resolution:** Sankey click handler and VLAN Activity investigate links use router-authoritative VLAN IDs from `VlanFlow.source_vlan_id`/`target_vlan_id` and `VlanActivityEntry.vlan_id` — no regex parsing of interface names.
 
 ---
 
@@ -612,7 +624,8 @@ Manual switch-to-switch interconnect configuration for devices without LLDP supp
 - **Outbound:** `dst_is_external = 1` (internal -> external)
 - **Inbound:** `dst_is_external = 0 AND src_vlan IS NULL` (external -> internal)
 - **Internal:** `dst_is_external = 0 AND src_vlan IS NOT NULL` (both internal)
-- Minimum 100KB traffic filter, ephemeral port suppression (>= 10000 unless > 1GB)
+- Minimum 100KB traffic filter
+- **Ephemeral port noise filter** (`is_significant_port_flow`): Known service ports always included; ephemeral ports (>= 49152) require >= 1 GB to appear; other ports require >= 5 flows and >= 10 KB. Applied at baseline computation, anomaly classification, and disappeared-flow detection.
 
 ### Port Flow Baselines
 
@@ -679,6 +692,61 @@ Bridges the two independent anomaly systems (port flow baselines + device behavi
 - **Sankey banner:** Each anomaly item includes device count
 - **Behavior page:** Anomaly cards show "Network Context" section for correlator-created anomalies (source: port_flow), with device count and total network bytes
 - **Device detail API:** Returns `port_flow_contexts` with port baseline status, correlated flag, other device count, network-level classification
+
+---
+
+## Investigation Engine
+
+Automated anomaly investigation that enriches each anomaly with contextual intelligence and produces a verdict + recommended action. Runs as part of the alert engine cycle — every new anomaly is investigated before alert delivery.
+
+### Investigation Context
+
+Each investigation gathers:
+
+| Context | Source |
+|---------|--------|
+| Device profile | MAC, hostname, manufacturer, baseline status, disposition, first seen |
+| VLAN sensitivity | From `vlan_config` table |
+| Destination intelligence | Reverse DNS, GeoIP (country, city, ASN, org), CDN detection |
+| Destination commonality | How many other devices talk to the same destination |
+| Anomaly history | Prior anomaly counts (24h, 7d), same-pattern recurrence (24h) |
+| Baseline coverage | Percentage of device's traffic covered by baselines |
+| Volume context | Current bytes vs baseline bytes, volume ratio |
+| Behavioral breadth | Unique destinations and ports in the last hour |
+| Firewall correlation | Matching rule ID, action, comment |
+
+### Verdicts
+
+| Verdict | Meaning |
+|---------|---------|
+| `benign` | Normal behavior, no concern |
+| `routine` | Expected pattern, low priority |
+| `suspicious` | Warrants attention |
+| `threat` | Active threat indicator |
+| `inconclusive` | Insufficient context to determine |
+
+Each verdict includes: `recommended_action`, `reason` (human-readable), `summary`, `evidence_chain` (structured JSON), and `duration_ms`.
+
+### APIs
+
+- `GET /api/sankey/network` — Network-level VLAN flow summary with anomaly counts
+- `GET /api/sankey/vlan/{vlan_id}` — VLAN drill-down: devices, flows, flow states
+- `GET /api/sankey/device/{mac}` — Device drill-down: protocols, destinations, individual flows
+- `GET /api/sankey/conversation/{mac}/{dst_ip}` — Conversation detail: timeline, connection list
+- `GET /api/sankey/destination/{dst_ip}/peers` — All devices talking to a destination
+
+### Frontend: Drill-Down Navigation
+
+Multi-level investigation flow from dashboard to individual conversations:
+
+```
+Dashboard VLAN Sankey → /sankey (network overview)
+  → Click VLAN → VLAN detail (devices + flows)
+    → Click device → Device detail (protocols + destinations)
+      → Click destination → Conversation detail (timeline + connections)
+```
+
+Each level is a `/sankey` route with progressive URL search params (`vlan`, `dest`, `mac`, `country`). Investigate links (microscope icon) appear on dashboard cards, VLAN activity rows, behavior anomalies, and connection tables.
 
 ---
 
@@ -870,17 +938,20 @@ Each anomaly record includes:
 
 ## Settings Page
 
-| Section | Features |
-|---------|----------|
-| Network Devices | Device registry: add/edit/delete/test, per-device credentials, polling interval |
-| VLAN Configuration | Editable table: VLAN ID, name, media type (wired/wireless/mixed dropdown), subnet, color picker. Auto-saves on change. |
-| Monitored Regions | Tag-based add/remove of ISO 3166-1 alpha-2 country codes. Countries in this list are highlighted red on the world map. Empty by default. Persisted to `app_settings` table, takes effect immediately without restart. Admin-only. |
-| Encrypted Secrets | Status of managed secrets, add/update interface, key fingerprint |
-| mTLS Certificate | Subject, issuer, expiry countdown, auto-renewal status |
-| Encryption Key | KEK fingerprint, source (Keycloak mTLS), secrets integrity check |
-| Syslog Listener | Status, port, event counts, RouterOS config reference |
-| GeoIP Database | MaxMind loaded/not, credentials configured, fallback status |
-| Connection History | Record count, database size, retention, oldest record |
+Tabbed layout with URL-synced tab selection (`/settings?tab=...`). Each tab is a separate component for code splitting.
+
+| Tab | Section | Features |
+|-----|---------|----------|
+| Devices | Network Devices | Device registry: add/edit/delete/test, per-device credentials, polling interval |
+| VLANs | VLAN Configuration | Editable table: VLAN ID, name, interface name (read-only, from router), media type dropdown, subnet, color picker. Auto-saves on change. |
+| Security | Encrypted Secrets | Status of managed secrets, add/update interface, key fingerprint |
+| Security | mTLS Certificate | Subject, issuer, expiry countdown, auto-renewal status |
+| Security | Encryption Key | KEK fingerprint, source (Keycloak mTLS), secrets integrity check |
+| Alerts | Alert Rules | Event-type triggers, severity/VLAN/disposition filters, delivery channels (ntfy, webhook), cooldown, alert history |
+| System | Monitored Regions | Tag-based add/remove of ISO 3166-1 alpha-2 country codes |
+| System | Syslog Listener | Status, port, event counts, RouterOS config reference |
+| System | GeoIP Database | MaxMind loaded/not, credentials configured, fallback status |
+| System | Connection History | Record count, database size, retention, oldest record |
 
 ---
 
@@ -952,12 +1023,13 @@ Output formats: `--format table|json|csv`
 
 | Route | Page | Key Features |
 |-------|------|--------------|
-| `/` | Dashboard | Stat cards, VLAN Sankey, VLAN activity chart, directional port Sankeys |
+| `/` | Dashboard | Stat cards, VLAN Sankey, VLAN activity chart, system history, directional port Sankeys |
 | `/interfaces` | Interfaces | Interface list with traffic counters |
 | `/ip` | IP | Addresses, routes, DHCP, ARP, pools, DNS |
 | `/firewall` | Firewall | Filter/NAT/mangle rule tables, drop stats |
 | `/connections` | Connections | Live table, geo summary, port Sankey |
-| `/behavior` | Behavior | Device profiles, anomalies, baselines |
+| `/behavior` | Behavior | Device profiles, anomalies, baselines (virtualized tables) |
+| `/sankey` | Investigation | Multi-level drill-down: network → VLAN → device → conversation |
 | `/history` | History | World map (D3), weekly snapshots |
 | `/logs` | Logs | Firewall log browser |
 | `/network-map` | Tactical Map | Hand-curated D3 force-directed topology (legacy) |
@@ -966,4 +1038,4 @@ Output formats: `--format table|json|csv`
 | `/inference` | Inference Diagnostics | Mode badge, state distribution, divergence analytics, per-MAC drill-down |
 | `/topology` | Network Topology | Auto-generated D3 hierarchical map, VLAN sectors, drag-to-pin |
 | `/switches/$deviceId` | Switch Detail | Per-switch port metrics, MAC table, VLANs, port roles |
-| `/settings` | Settings | Device registry, secrets, cert, syslog, GeoIP, monitored regions, connection stats |
+| `/settings` | Settings | Tabbed: Devices, VLANs, Security, Alerts, System |

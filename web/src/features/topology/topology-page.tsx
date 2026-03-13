@@ -18,6 +18,7 @@ import {
 } from "./hooks/use-d3-topology";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import "../topology/topology-map.css";
+import { Link } from "@tanstack/react-router";
 import {
   RefreshCw,
   Search,
@@ -28,6 +29,9 @@ import {
   Grid3x3,
   ChevronDown,
   ChevronUp,
+  Microscope,
+  Activity,
+  History,
 } from "lucide-react";
 
 // ─── Detail Panel ───────────────────────────────────────
@@ -493,6 +497,37 @@ function NodeContextMenu({
               View device details
             </button>
           </>
+        )}
+
+        {/* Investigation links */}
+        {node.mac && (
+          <div className="border-t border-border mt-0.5 pt-0.5">
+            <Link
+              to="/sankey"
+              search={{ mac: node.mac }}
+              onClick={onClose}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+            >
+              <Microscope className="h-3 w-3 text-muted-foreground" />
+              Investigate traffic
+            </Link>
+            <Link
+              to="/behavior"
+              onClick={onClose}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+            >
+              <Activity className="h-3 w-3 text-muted-foreground" />
+              View behavior
+            </Link>
+            <Link
+              to="/history"
+              onClick={onClose}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted"
+            >
+              <History className="h-3 w-3 text-muted-foreground" />
+              Connection history
+            </Link>
+          </div>
         )}
 
         {/* Snap options — always available */}

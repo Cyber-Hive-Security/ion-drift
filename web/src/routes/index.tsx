@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, Link } from "@tanstack/react-router";
 import {
   useSystemResources,
   useTraffic,
@@ -18,11 +18,13 @@ import { VlanTrafficBreakdown } from "@/components/dashboard/vlan-sankey";
 import { DirectionalPortSankeys } from "@/features/world-map/port-sankey";
 import { NetworkDevicesCard } from "@/components/dashboard/network-devices-card";
 import { IdentityOverviewCard } from "@/components/dashboard/identity-overview-card";
+import { InvestigationCard } from "@/components/dashboard/investigation-card";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { PageShell } from "@/components/layout/page-shell";
 import { DashboardHelp } from "@/components/help-content";
 import { StatCard } from "@/components/stat-card";
+import { CardErrorBoundary } from "@/components/card-error-boundary";
 import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 import {
@@ -201,8 +203,10 @@ export function DashboardPage() {
   const dhcp = useDhcpLeases({ polling: true });
   const connections = useConnectionSummary();
   const drops = useFirewallDrops();
-  const handleSankeyClick = useCallback((srcVlan: string, dstVlan: string) => {
-    navigate({ to: "/sankey" as "/", search: { vlan: srcVlan, dest: dstVlan } });
+  const handleSankeyClick = useCallback((srcVlanId: string, dstVlanId: string) => {
+    // VLAN IDs are resolved by the backend from the router's interface/vlan table —
+    // no regex parsing of interface names needed.
+    navigate({ to: "/sankey" as "/", search: { vlan: srcVlanId, dest: dstVlanId } });
   }, [navigate]);
   if (system.isLoading) return <LoadingSpinner />;
   if (system.error)
@@ -218,25 +222,53 @@ export function DashboardPage() {
   return (
     <PageShell title="Dashboard" help={<DashboardHelp />}>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {drops.data ? <FirewallDropsCard data={drops.data} /> : <CardSkeleton title="Firewall Drops" />}
-        {traffic.data ? <TrafficCard data={traffic.data} /> : <CardSkeleton title="WAN Traffic" />}
-        <NetworkDevicesCard />
-        {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
-        <IdentityOverviewCard />
-        {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
+        <CardErrorBoundary name="Firewall Drops">
+          {drops.data ? <Link to="/firewall" className="block"><FirewallDropsCard data={drops.data} /></Link> : <CardSkeleton title="Firewall Drops" />}
+        </CardErrorBoundary>
+        <CardErrorBoundary name="WAN Traffic">
+          {traffic.data ? <Link to="/connections" className="block"><TrafficCard data={traffic.data} /></Link> : <CardSkeleton title="WAN Traffic" />}
+        </CardErrorBoundary>
+        <CardErrorBoundary name="Network Devices">
+          <NetworkDevicesCard />
+        </CardErrorBoundary>
+        <CardErrorBoundary name="Connections">
+          {connections.data ? <ConnectionsCard data={connections.data} /> : <CardSkeleton title="Connections" />}
+        </CardErrorBoundary>
+        <CardErrorBoundary name="Identity Overview">
+          <IdentityOverviewCard />
+        </CardErrorBoundary>
+        <CardErrorBoundary name="DHCP Leases">
+          {dhcp.data ? <DhcpCard data={dhcp.data} /> : <CardSkeleton title="DHCP Leases" />}
+        </CardErrorBoundary>
+        <CardErrorBoundary name="Investigations">
+          <InvestigationCard />
+        </CardErrorBoundary>
       </div>
 
-      <VlanActivitySection />
+      <CardErrorBoundary name="VLAN Activity">
+        <VlanActivitySection />
+      </CardErrorBoundary>
 
-      <SystemHistorySection />
+      <CardErrorBoundary name="System History">
+        <SystemHistorySection />
+      </CardErrorBoundary>
 
-      <div className="mt-6">
-        <VlanTrafficBreakdown onLinkClick={handleSankeyClick} />
-      </div>
+      <CardErrorBoundary name="VLAN Traffic Breakdown">
+        <div className="mt-6">
+          <VlanTrafficBreakdown onLinkClick={handleSankeyClick} />
+        </div>
+      </CardErrorBoundary>
 
-      <div className="mt-6">
-        <DirectionalPortSankeys days={1} />
-      </div>
+      <CardErrorBoundary name="Port Sankeys">
+        <div className="mt-6">
+          <DirectionalPortSankeys
+            days={1}
+            onFlowClick={(protocol, port) => {
+              navigate({ to: "/connections" as "/", search: { protocol, dst_port: port, tab: "connections" } });
+            }}
+          />
+        </div>
+      </CardErrorBoundary>
 
       <div className="mt-6 flex justify-end">
         {system.data && <div className="w-full md:w-1/2 xl:w-1/3"><UptimeCard data={system.data} /></div>}

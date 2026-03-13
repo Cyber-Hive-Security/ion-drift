@@ -1,4 +1,6 @@
 import { useState, useMemo, type CSSProperties } from "react";
+import { Microscope } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import {
   useFirewallFilter,
   useFirewallNat,
@@ -61,6 +63,21 @@ const filterColumns: Column<Numbered<FilterRule>>[] = [
     sortValue: (r) => r.packets ?? 0,
   },
   { key: "comment", header: "Comment", render: (r) => <span className={cn(r.disabled && "opacity-50")}>{r.comment ?? ""}</span> },
+  {
+    key: "investigate",
+    header: "",
+    render: (r) =>
+      r["src-address"] ? (
+        <Link
+          to="/sankey"
+          search={{ mac: r["src-address"] }}
+          className="rounded p-1 text-muted-foreground hover:bg-primary/15 hover:text-primary"
+          title={`Investigate ${r["src-address"]}`}
+        >
+          <Microscope className="h-3.5 w-3.5" />
+        </Link>
+      ) : null,
+  },
 ];
 
 const natColumns: Column<Numbered<NatRule>>[] = [

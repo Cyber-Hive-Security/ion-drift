@@ -361,6 +361,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             get(connections::port_summary_classified),
         )
         .route("/connections/city-summary", get(connections::city_summary))
+        .route("/connections/country/{code}/summary", get(connections::country_summary))
         .route("/connections/stats", get(connections::history_stats))
         // ARP + enhanced endpoints
         .route("/ip/arp", get(arp::list))
@@ -411,6 +412,17 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             delete(behavior::delete_suppression),
         )
         .route("/behavior/alerts", get(behavior::alerts))
+        // Investigations
+        .route("/investigations", get(behavior::list_investigations))
+        .route(
+            "/investigations/anomaly/{anomaly_id}",
+            get(behavior::get_investigation),
+        )
+        .route(
+            "/investigations/device/{mac}",
+            get(behavior::get_device_investigations),
+        )
+        .route("/investigations/stats", get(behavior::investigation_stats))
         .route("/behavior/anomaly-links", get(behavior::anomaly_links))
         .route(
             "/behavior/anomaly-links/port/{protocol}/{port}",

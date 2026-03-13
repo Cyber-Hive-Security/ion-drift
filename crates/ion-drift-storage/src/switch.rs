@@ -274,6 +274,10 @@ pub struct DevicePort {
 pub struct VlanConfig {
     pub vlan_id: u32,
     pub name: String,
+    /// Router interface name (e.g. "V-90-IoT"). Maps interface names
+    /// from metrics/flows back to authoritative VLAN IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_name: Option<String>,
     pub media_type: String,
     pub subnet: Option<String>,
     pub color: Option<String>,
@@ -573,6 +577,7 @@ impl SwitchStore {
                 severity_filter TEXT,
                 vlan_filter TEXT,
                 disposition_filter TEXT,
+                verdict_filter TEXT,
                 cooldown_seconds INTEGER NOT NULL DEFAULT 300,
                 delivery_channels TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -687,6 +692,9 @@ impl SwitchStore {
             let _ = conn.execute(alter, []);
         }
 
+        // Idempotent — add verdict_filter to alert_rules
+        let _ = conn.execute("ALTER TABLE alert_rules ADD COLUMN verdict_filter TEXT", []);
+
         // One-time migration: clear hardcoded VLAN config seeds so router sync
         // can repopulate with actual data. Detects the old seed by checking if
         // VLAN 40 has an empty subnet (the hardcoded seed used '' for Guest).
@@ -714,6 +722,12 @@ impl SwitchStore {
         // Migration: add sensitivity column to vlan_config
         let _ = conn.execute(
             "ALTER TABLE vlan_config ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'monitor'",
+            [],
+        );
+
+        // Migration: add interface_name column to vlan_config (router interface name)
+        let _ = conn.execute(
+            "ALTER TABLE vlan_config ADD COLUMN interface_name TEXT",
             [],
         );
 
@@ -2186,12 +2200,13 @@ impl SwitchStore {
     pub async fn get_vlan_configs(&self) -> Result<Vec<VlanConfig>, rusqlite::Error> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT vlan_id, name, media_type, subnet, color, sensitivity FROM vlan_config ORDER BY vlan_id",
+            "SELECT vlan_id, name, media_type, subnet, color, sensitivity, interface_name FROM vlan_config ORDER BY vlan_id",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(VlanConfig {
                 vlan_id: row.get::<_, i64>(0)? as u32,
                 name: row.get(1)?,
+                interface_name: row.get(6)?,
                 media_type: row.get(2)?,
                 subnet: row.get(3)?,
                 color: row.get(4)?,
@@ -2205,14 +2220,15 @@ impl SwitchStore {
     pub async fn upsert_vlan_config(&self, config: &VlanConfig) -> Result<(), rusqlite::Error> {
         let db = self.db.lock().await;
         db.execute(
-            "INSERT INTO vlan_config (vlan_id, name, media_type, subnet, color, sensitivity)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO vlan_config (vlan_id, name, media_type, subnet, color, sensitivity, interface_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(vlan_id) DO UPDATE SET
                  name = excluded.name,
                  media_type = excluded.media_type,
                  subnet = excluded.subnet,
                  color = excluded.color,
-                 sensitivity = excluded.sensitivity",
+                 sensitivity = excluded.sensitivity,
+                 interface_name = excluded.interface_name",
             params![
                 config.vlan_id as i64,
                 config.name,
@@ -2220,6 +2236,7 @@ impl SwitchStore {
                 config.subnet,
                 config.color,
                 config.sensitivity,
+                config.interface_name,
             ],
         )?;
         Ok(())
@@ -2230,8 +2247,8 @@ impl SwitchStore {
     pub async fn insert_vlan_config_if_missing(&self, config: &VlanConfig) -> Result<bool, rusqlite::Error> {
         let db = self.db.lock().await;
         let affected = db.execute(
-            "INSERT OR IGNORE INTO vlan_config (vlan_id, name, media_type, subnet, color, sensitivity)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR IGNORE INTO vlan_config (vlan_id, name, media_type, subnet, color, sensitivity, interface_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 config.vlan_id as i64,
                 config.name,
@@ -2239,8 +2256,18 @@ impl SwitchStore {
                 config.subnet,
                 config.color,
                 config.sensitivity,
+                config.interface_name,
             ],
         )?;
+        // If the row already existed but interface_name is NULL, backfill it
+        if affected == 0 {
+            if let Some(ref iface) = config.interface_name {
+                let _ = db.execute(
+                    "UPDATE vlan_config SET interface_name = ?1 WHERE vlan_id = ?2 AND interface_name IS NULL",
+                    params![iface, config.vlan_id as i64],
+                );
+            }
+        }
         Ok(affected > 0)
     }
 

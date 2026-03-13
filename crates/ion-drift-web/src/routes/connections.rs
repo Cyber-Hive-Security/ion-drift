@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::connection_store::{
-    CitySummaryEntry, ClassifiedPortSummary, ConnectionHistoryStats, GeoSummaryEntry,
-    HistoryFilters, PaginatedHistory, PortBaselineStatus, PortSummaryEntry,
+    CitySummaryEntry, ClassifiedPortSummary, ConnectionHistoryStats, CountrySummary,
+    GeoSummaryEntry, HistoryFilters, PaginatedHistory, PortBaselineStatus, PortSummaryEntry,
 };
 use crate::geo::GeoInfo;
 use crate::middleware::{RequireAdmin, RequireAuth};
@@ -238,10 +238,14 @@ pub async fn history(
     State(state): State<AppState>,
     Query(filters): Query<HistoryFilters>,
 ) -> Result<Json<PaginatedHistory>, Response> {
-    let result = state
-        .connection_store
-        .query_history(&filters)
-        .map_err(|e| internal_error("connection history query", e))?;
+    let store = state.connection_store.clone();
+    let filters = filters.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        store.query_history(&filters)
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("connection history query", e))?;
     Ok(Json(result))
 }
 
@@ -263,10 +267,13 @@ pub async fn geo_summary(
     Query(query): Query<GeoSummaryQuery>,
 ) -> Result<Json<Vec<GeoSummaryEntry>>, Response> {
     let days = query.days.clamp(1, 365);
-    let mut result = state
-        .connection_store
-        .geo_summary(days)
-        .map_err(|e| internal_error("geo summary", e))?;
+    let store = state.connection_store.clone();
+    let mut result = tokio::task::spawn_blocking(move || {
+        store.geo_summary(days)
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("geo summary", e))?;
 
     // Recompute flagged_count dynamically from current monitored regions
     // rather than relying on the historical flagged column in the database.
@@ -304,11 +311,14 @@ pub async fn port_summary(
     Query(query): Query<PortSummaryQuery>,
 ) -> Result<Json<Vec<PortSummaryEntry>>, Response> {
     let days = query.days.clamp(1, 365);
-    let direction = query.direction.as_deref().unwrap_or("");
-    let result = state
-        .connection_store
-        .port_summary(days, direction)
-        .map_err(|e| internal_error("port summary", e))?;
+    let direction = query.direction.as_deref().unwrap_or("").to_string();
+    let store = state.connection_store.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        store.port_summary(days, &direction)
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("port summary", e))?;
     Ok(Json(result))
 }
 
@@ -319,11 +329,14 @@ pub async fn port_summary_classified(
     Query(query): Query<PortSummaryQuery>,
 ) -> Result<Json<ClassifiedPortSummary>, Response> {
     let days = query.days.clamp(1, 365);
-    let direction = query.direction.as_deref().unwrap_or("");
-    let result = state
-        .connection_store
-        .classified_port_summary(days, direction)
-        .map_err(|e| internal_error("classified port summary", e))?;
+    let direction = query.direction.as_deref().unwrap_or("").to_string();
+    let store = state.connection_store.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        store.classified_port_summary(days, &direction)
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("classified port summary", e))?;
     Ok(Json(result))
 }
 
@@ -332,10 +345,13 @@ pub async fn port_baseline_status(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<PortBaselineStatus>, Response> {
-    let result = state
-        .connection_store
-        .port_baseline_status()
-        .map_err(|e| internal_error("port baseline status", e))?;
+    let store = state.connection_store.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        store.port_baseline_status()
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("port baseline status", e))?;
     Ok(Json(result))
 }
 
@@ -344,10 +360,13 @@ pub async fn compute_port_baselines(
     RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let count = state
-        .connection_store
-        .compute_port_flow_baselines()
-        .map_err(|e| internal_error("compute port baselines", e))?;
+    let store = state.connection_store.clone();
+    let count = tokio::task::spawn_blocking(move || {
+        store.compute_port_flow_baselines()
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("compute port baselines", e))?;
     Ok(Json(serde_json::json!({ "baselines_computed": count })))
 }
 
@@ -371,10 +390,14 @@ pub async fn city_summary(
     Query(query): Query<CitySummaryQuery>,
 ) -> Result<Json<Vec<CitySummaryEntry>>, Response> {
     let days = query.days.clamp(1, 365);
-    let mut result = state
-        .connection_store
-        .city_summary(days, query.min_connections)
-        .map_err(|e| internal_error("city summary", e))?;
+    let min_connections = query.min_connections;
+    let store = state.connection_store.clone();
+    let mut result = tokio::task::spawn_blocking(move || {
+        store.city_summary(days, min_connections)
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("city summary", e))?;
 
     // Recompute flagged_count dynamically from current monitored regions.
     let monitored = state.geo_cache.get_monitored_regions();
@@ -391,15 +414,43 @@ pub async fn city_summary(
     Ok(Json(result))
 }
 
+/// Query params for country-summary.
+#[derive(Deserialize)]
+pub struct CountrySummaryQuery {
+    #[serde(default = "default_30")]
+    pub days: i64,
+}
+
+/// GET /api/connections/country/{code}/summary — per-country drill-down.
+pub async fn country_summary(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    axum::extract::Path(code): axum::extract::Path<String>,
+    Query(query): Query<CountrySummaryQuery>,
+) -> Result<Json<CountrySummary>, Response> {
+    let days = query.days.clamp(1, 365);
+    let store = state.connection_store.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        store.country_summary(&code, days)
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("country summary", e))?;
+    Ok(Json(result))
+}
+
 /// GET /api/connections/stats — connection history stats for settings page.
 pub async fn history_stats(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<ConnectionHistoryStats>, Response> {
-    let result = state
-        .connection_store
-        .stats()
-        .map_err(|e| internal_error("connection stats", e))?;
+    let store = state.connection_store.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        store.stats()
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("connection stats", e))?;
     Ok(Json(result))
 }
 
@@ -420,10 +471,13 @@ pub async fn syslog_status(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<SyslogStatus>, Response> {
-    let (today, week) = state
-        .connection_store
-        .syslog_event_counts()
-        .map_err(|e| internal_error("syslog counts", e))?;
+    let store = state.connection_store.clone();
+    let (today, week) = tokio::task::spawn_blocking(move || {
+        store.syslog_event_counts()
+    })
+    .await
+    .map_err(|e| internal_error("spawn_blocking", e))?
+    .map_err(|e| internal_error("syslog counts", e))?;
 
     Ok(Json(SyslogStatus {
         port: state.config.syslog.port,

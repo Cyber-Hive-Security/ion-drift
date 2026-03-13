@@ -218,16 +218,4 @@ impl AttachmentState {
             self.state = AttachmentStateKind::Candidate;
         }
     }
-
-    /// Pin the binding as human-confirmed (cannot be overridden by inference).
-    #[allow(dead_code)]
-    pub fn pin_human(&mut self, device_id: &str, port_name: &str, now_ts: i64) {
-        self.current_device_id = Some(device_id.to_string());
-        self.current_port_name = Some(port_name.to_string());
-        self.state = AttachmentStateKind::HumanPinned;
-        self.confidence = 1.0;
-        self.consecutive_wins = 0;
-        self.consecutive_losses = 0;
-        self.updated_at = now_ts;
-    }
 }

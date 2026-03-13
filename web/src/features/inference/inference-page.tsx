@@ -236,6 +236,7 @@ function MacDetail({ mac }: { mac: string }) {
 
 interface MacRow {
   mac_address: string;
+  hostname: string | null;
   state: string;
   device_id: string;
   port_name: string;
@@ -247,7 +248,7 @@ interface MacRow {
 
 // ── Main page ───────────────────────────────────────────────────
 
-export function InferencePage() {
+export function InferencePage({ embedded = false }: { embedded?: boolean }) {
   const status = useInferenceStatus();
   const observations = useInferenceObservations();
   const statesQuery = useAttachmentStates();
@@ -257,16 +258,18 @@ export function InferencePage() {
   const states = statesQuery.data ?? [];
   const identities = identitiesQuery.data ?? [];
 
-  // Build identity lookup for divergence detection
+  // Build identity lookup for divergence detection and hostname display
   const identityMap = useMemo(() => {
-    const m = new Map<string, { device_id: string; port: string }>();
+    const m = new Map<string, { device_id: string; port: string; hostname: string | null }>();
     for (const ident of identities) {
-      if (ident.switch_device_id && ident.switch_port) {
-        m.set(ident.mac_address.toUpperCase(), {
-          device_id: ident.switch_device_id,
-          port: ident.switch_port,
-        });
-      }
+      const key = ident.mac_address.toUpperCase();
+      const existing = m.get(key);
+      // Always store hostname; only require switch info for device_id/port
+      m.set(key, {
+        device_id: existing?.device_id ?? ident.switch_device_id ?? "",
+        port: existing?.port ?? ident.switch_port ?? "",
+        hostname: existing?.hostname ?? ident.hostname,
+      });
     }
     return m;
   }, [identities]);
@@ -274,14 +277,15 @@ export function InferencePage() {
   // Build table rows
   const rows: MacRow[] = useMemo(() => {
     return states.map((st) => {
-      const legacy = identityMap.get(st.mac_address.toUpperCase());
+      const ident = identityMap.get(st.mac_address.toUpperCase());
       const divergent =
-        !!legacy &&
+        !!ident && !!ident.device_id &&
         !!(st.current_device_id || st.current_port_name) &&
-        (legacy.device_id !== (st.current_device_id ?? "") ||
-          legacy.port !== (st.current_port_name ?? ""));
+        (ident.device_id !== (st.current_device_id ?? "") ||
+          ident.port !== (st.current_port_name ?? ""));
       return {
         mac_address: st.mac_address,
+        hostname: ident?.hostname ?? null,
         state: st.state,
         device_id: st.current_device_id ?? "—",
         port_name: st.current_port_name ?? "—",
@@ -318,11 +322,16 @@ export function InferencePage() {
       },
       {
         key: "mac",
-        header: "MAC",
+        header: "Device",
         render: (row: MacRow) => (
-          <span className="font-mono text-xs">{row.mac_address}</span>
+          <div className="min-w-0">
+            {row.hostname && (
+              <div className="text-xs font-medium truncate">{row.hostname}</div>
+            )}
+            <div className="font-mono text-[11px] text-muted-foreground">{row.mac_address}</div>
+          </div>
         ),
-        sortValue: (row: MacRow) => row.mac_address,
+        sortValue: (row: MacRow) => row.hostname ?? row.mac_address,
       },
       {
         key: "state",
@@ -377,25 +386,21 @@ export function InferencePage() {
   );
 
   if (status.isLoading) {
-    return (
-      <PageShell title="Topology Inference" help={<InferenceHelp />}>
-        <LoadingSpinner />
-      </PageShell>
-    );
+    const loading = <LoadingSpinner />;
+    if (embedded) return loading;
+    return <PageShell title="Topology Inference" help={<InferenceHelp />}>{loading}</PageShell>;
   }
 
   if (status.error || !status.data) {
-    return (
-      <PageShell title="Topology Inference" help={<InferenceHelp />}>
-        <ErrorDisplay message={status.error ? String(status.error) : "No data available"} />
-      </PageShell>
-    );
+    const err = <ErrorDisplay message={status.error ? String(status.error) : "No data available"} />;
+    if (embedded) return err;
+    return <PageShell title="Topology Inference" help={<InferenceHelp />}>{err}</PageShell>;
   }
 
   const s = status.data;
 
-  return (
-    <PageShell title="Topology Inference" help={<InferenceHelp />}>
+  const content = (
+    <div>
       {/* Mode banner */}
       <div className="mb-4 flex items-center gap-3">
         <Brain className="h-5 w-5 text-primary" />
@@ -522,12 +527,17 @@ export function InferencePage() {
             searchable
             searchPlaceholder="Search MAC, device, port..."
             defaultSort={{ key: "confidence", asc: false }}
+            expandedRow={(r) =>
+              expandedMac === r.mac_address ? <MacDetail mac={r.mac_address} /> : null
+            }
           />
-          {expandedMac && <MacDetail mac={expandedMac} />}
         </>
       )}
-    </PageShell>
+  </div>
   );
+
+  if (embedded) return content;
+  return <PageShell title="Topology Inference" help={<InferenceHelp />}>{content}</PageShell>;
 }
 
 export default InferencePage;
