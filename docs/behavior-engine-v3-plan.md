@@ -264,16 +264,30 @@ Condition:
     AND destination IP is NOT IN the authorized_targets
     AND firewall_correlation == "expected_allow"
 
-Verdict: "threat"
-Action: "escalate"
+Verdict: "suspicious"  (default — escalate to "threat" only with corroborating evidence)
+Action: "investigate"
 Tier: 1
-Severity: escalated to "alert" (minimum)
+Severity: "alert" (minimum floor)
 Reason: "Shadow {service}: device {mac} using non-authoritative {service} server {ip}
          — firewall allows this traffic but router policy does not authorize it.
-         Possible: rogue {service} server, DNS hijack, misconfigured firewall rule."
+         Possible: rogue {service} server, misconfigured firewall rule,
+         or device with hardcoded fallback infrastructure."
 ```
 
-This is the high-value detection. A device using a DNS server that isn't in the DHCP options, and the firewall lets it through — that's either a misconfiguration or an attack.
+**Escalation to `threat` verdict** requires one or more corroborating signals:
+
+| Evidence | Why It Escalates |
+|----------|-----------------|
+| Device is flagged (`disposition == "flagged"`) | Operator already suspects this device |
+| Recurring pattern (`same_pattern_24h >= 3`) | Persistent shadow service, not transient |
+| Sensitive VLAN (`sensitivity == "strictest"` or `"strict"`) | Higher-value network segment |
+| Destination is in a flagged country | Geopolitical risk indicator |
+| Destination has zero peer commonality (`seen_by_device_count == 0`) | No other device talks to this IP |
+| Device is acting as server for the protocol (e.g., responding to DNS queries) | Rogue service, not just a misconfigured client |
+
+Without corroborating evidence, the Shadow Service detection stays at `suspicious` / Tier 1 — it always gets operator attention, but the verdict doesn't overclaim. Many Shadow Service hits will turn out to be IoT devices with hardcoded DNS (Google 8.8.8.8), incomplete policy discovery on first sync, or intentional exceptions the operator hasn't documented yet.
+
+This is the high-value detection. A device using a DNS server that isn't in the DHCP options, and the firewall lets it through — that's a real finding worth investigating, whether it's a misconfiguration, an intentional exception, or an actual attack.
 
 **New Rule P3: Blocked Non-Authoritative — Firewall Caught It**
 
@@ -321,7 +335,7 @@ Reason: "Traffic matched operator-ignored firewall rule: {rule_comment}"
 
 ```
 P1: Authoritative Service (policy match → benign, tier 3)
-P2: Shadow Service (policy miss + allowed → threat, tier 1)
+P2: Shadow Service (policy miss + allowed → suspicious, tier 1; escalate to threat with evidence)
 P3: Blocked Non-Authoritative (policy miss + blocked → routine, tier 3)
 P4: ION-CRITICAL match (→ threat, tier 1)
 P5: ION-IGNORE match (→ benign, tier 3)
@@ -704,12 +718,19 @@ BUT: if this device contacts tcp:443 on an IP in a flagged country → Rule 8: s
 
 **Current engine:** Creates "new_destination" anomaly, investigation says "benign" (common destination, CDN ASN). Lost in 10,000 other anomalies.
 
-**Phase 2 engine:** Rule P2 fires: "Shadow DNS: thermostat using non-authoritative DNS server 8.8.4.4. Router DHCP policy authorizes only 10.20.25.5 for VLAN 90. Firewall allows this traffic — possible misconfiguration."
+**Phase 2 engine:** Rule P2 fires: "Shadow DNS: thermostat using non-authoritative DNS server 8.8.4.4. Router DHCP policy authorizes only 10.20.25.5 for VLAN 90. Firewall allows this traffic."
+
+**Initial verdict: `suspicious`** (Tier 1, severity alert). The operator sees it immediately.
+
+**Escalation check:** Google DNS (8.8.4.4) has high peer commonality (many devices use it) and is a well-known CDN ASN — no corroborating evidence for `threat`. Verdict stays `suspicious`.
+
+Compare: if the thermostat were instead querying `185.x.x.x` (flagged country, zero peer commonality) — that hits two escalation signals, verdict escalates to `threat`.
 
 **Tier 1 alert.** The operator now knows:
 1. The IoT device is bypassing the local DNS filter
 2. The firewall rule needs tightening
 3. The device might be hardcoded to use Google DNS (common with cheap IoT)
+4. The verdict is `suspicious` not `threat` — investigate, but don't panic
 
 ### Scenario 5: Firewall Comment Tag (current: N/A → proposed: instant ignore/escalate)
 
