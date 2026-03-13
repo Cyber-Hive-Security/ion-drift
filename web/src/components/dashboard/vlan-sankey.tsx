@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect, useLayoutEffect } from "react";
 import { formatBytes } from "@/lib/format";
 import { useVlanFlows } from "@/api/queries";
 import { Sankey, Rectangle, Layer } from "recharts";
@@ -105,6 +105,16 @@ export function VlanTrafficBreakdown({ onLinkClick }: { onLinkClick?: (srcVlanId
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
 
+  // Read initial size synchronously before first paint
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (el) {
+      const w = el.offsetWidth;
+      if (w > 0) setContainerWidth(w);
+    }
+  }, []);
+
+  // Observe for ongoing resizes
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
