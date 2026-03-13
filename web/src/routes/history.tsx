@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Microscope } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { useConnectionHistory } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { HistoryHelp } from "@/components/help-content";
@@ -129,8 +129,9 @@ const historyColumns: Column<ConnectionHistoryEntry>[] = [
 // ── Main History Page ───────────────────────────────────────
 
 export function HistoryPage() {
+  const search = useSearch({ from: "/history" });
   const [historyPage, setHistoryPage] = useState(1);
-  const [countryFilter, setCountryFilter] = useState<string | undefined>();
+  const [countryFilter, setCountryFilter] = useState<string | undefined>(search.country);
 
   const connectionHistory = useConnectionHistory({
     page: historyPage,

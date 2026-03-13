@@ -98,6 +98,11 @@ const historyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/history",
   component: HistoryPage,
+  validateSearch: (search: Record<string, unknown>): {
+    country?: string;
+  } => ({
+    country: (search.country as string) || undefined,
+  }),
 });
 
 class TopologyErrorBoundary extends React.Component<

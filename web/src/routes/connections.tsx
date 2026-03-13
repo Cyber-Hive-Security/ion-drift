@@ -1120,11 +1120,9 @@ function ConnectionHistoryChart() {
 function CountryInvestigationPanel({
   countryCode,
   onClose,
-  onViewConnections,
 }: {
   countryCode: string;
   onClose: () => void;
-  onViewConnections: (code: string) => void;
 }) {
   const summary = useCountrySummary(countryCode);
   const data = summary.data;
@@ -1142,14 +1140,15 @@ function CountryInvestigationPanel({
             className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/20"
           >
             <Microscope className="h-3 w-3" />
-            Investigate in Sankey
+            Investigate
           </Link>
-          <button
-            onClick={() => onViewConnections(countryCode)}
+          <Link
+            to={"/history" as "/"}
+            search={{ country: countryCode }}
             className="rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
           >
-            View connections
-          </button>
+            View history
+          </Link>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
@@ -1176,15 +1175,21 @@ function CountryInvestigationPanel({
             <div className="mb-1.5 text-xs font-medium text-muted-foreground">Top Devices</div>
             <div className="space-y-1">
               {data.top_devices.slice(0, 5).map((d) => (
-                <div key={d.src_mac} className="flex items-center justify-between text-xs">
-                  <Link
-                    to="/sankey"
-                    search={{ mac: d.src_mac, country: countryCode }}
-                    className="truncate font-mono text-primary hover:underline"
-                    title={d.src_mac}
-                  >
-                    {d.hostname || d.src_ip}
-                  </Link>
+                <div key={d.src_mac || d.src_ip} className="flex items-center justify-between text-xs">
+                  {d.src_mac ? (
+                    <Link
+                      to="/sankey"
+                      search={{ mac: d.src_mac }}
+                      className="truncate font-mono text-primary hover:underline"
+                      title={d.src_mac}
+                    >
+                      {d.hostname || d.src_ip}
+                    </Link>
+                  ) : (
+                    <span className="truncate font-mono" title={d.src_ip}>
+                      {d.hostname || d.src_ip}
+                    </span>
+                  )}
                   <span className="ml-2 text-muted-foreground">{formatNumber(d.connection_count)}</span>
                 </div>
               ))}
@@ -1547,11 +1552,6 @@ export function ConnectionsPage() {
                 <CountryInvestigationPanel
                   countryCode={investigateCountry}
                   onClose={() => setInvestigateCountry(null)}
-                  onViewConnections={(code) => {
-                    setColumnFilters((prev) => ({ ...prev, country: new Set([code]) }));
-                    setActiveTab("connections");
-                    setInvestigateCountry(null);
-                  }}
                 />
               )}
               {mapData.length > 0 && (

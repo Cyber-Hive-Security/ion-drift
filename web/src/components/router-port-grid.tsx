@@ -11,6 +11,8 @@ import type { RouterInterface } from "@/api/types";
 
 interface PortCell {
   name: string;
+  /** Original interface name (e.g. "ether1") for grid positioning — falls back to name */
+  defaultName: string;
   shortName: string;
   running: boolean;
   disabled: boolean;
@@ -27,25 +29,31 @@ export function RouterPortGrid({ interfaces }: { interfaces: RouterInterface[] }
 
   // Build cells from physical interfaces only (active families)
   const cells = useMemo(() => {
-    const all: PortCell[] = interfaces.map((iface) => ({
-      name: iface.name,
-      shortName: portShortName(iface.name),
-      running: iface.running,
-      disabled: iface.disabled,
-      rxBytes: iface["rx-byte"] ?? 0,
-      txBytes: iface["tx-byte"] ?? 0,
-      type: iface.type,
-      comment: iface.comment ?? "",
-      mac: iface["mac-address"] ?? "",
-    }));
+    const all: PortCell[] = interfaces.map((iface) => {
+      // Use default-name (original hw name like "ether1") for grid layout;
+      // fall back to the user-given name if default-name isn't present.
+      const defaultName = iface["default-name"] ?? iface.name;
+      return {
+        name: iface.name,
+        defaultName,
+        shortName: portShortName(defaultName),
+        running: iface.running,
+        disabled: iface.disabled,
+        rxBytes: iface["rx-byte"] ?? 0,
+        txBytes: iface["tx-byte"] ?? 0,
+        type: iface.type,
+        comment: iface.comment ?? "",
+        mac: iface["mac-address"] ?? "",
+      };
+    });
 
-    // Only include ports that have a grid position
-    const gridEligible = all.filter((c) => portToGridPosition(c.name) !== null);
+    // Only include ports that have a grid position (based on default/hw name)
+    const gridEligible = all.filter((c) => portToGridPosition(c.defaultName) !== null);
 
     // Filter to active families
     const familyMap = new Map<string, PortCell[]>();
     for (const cell of gridEligible) {
-      const fam = portFamily(cell.name);
+      const fam = portFamily(cell.defaultName);
       const list = familyMap.get(fam) ?? [];
       list.push(cell);
       familyMap.set(fam, list);
@@ -56,8 +64,8 @@ export function RouterPortGrid({ interfaces }: { interfaces: RouterInterface[] }
     }
 
     return gridEligible
-      .filter((c) => activeFamilies.has(portFamily(c.name)))
-      .sort((a, b) => portSortKey(a.name) - portSortKey(b.name));
+      .filter((c) => activeFamilies.has(portFamily(c.defaultName)))
+      .sort((a, b) => portSortKey(a.defaultName) - portSortKey(b.defaultName));
   }, [interfaces]);
 
   // Build grid rows
@@ -67,7 +75,7 @@ export function RouterPortGrid({ interfaces }: { interfaces: RouterInterface[] }
     const gridded: { cell: PortCell; col: number; row: "top" | "bottom" }[] = [];
 
     for (const cell of cells) {
-      const pos = portToGridPosition(cell.name);
+      const pos = portToGridPosition(cell.defaultName);
       if (!pos) continue;
       if (pos.col === -1) {
         if (pos.row === "top") st = cell;
@@ -111,7 +119,7 @@ export function RouterPortGrid({ interfaces }: { interfaces: RouterInterface[] }
 
     const traffic = (cell.rxBytes + cell.txBytes) / maxTraffic;
     const glowOpacity = cell.running ? Math.max(0.05, traffic * 0.5) : 0;
-    const isSfp = cell.name.startsWith("sfp");
+    const isSfp = cell.defaultName.startsWith("sfp");
 
     return (
       <div
@@ -177,8 +185,11 @@ export function RouterPortGrid({ interfaces }: { interfaces: RouterInterface[] }
         >
           <div className="mb-1.5 text-sm font-semibold text-foreground">
             {hoveredCell.name}
+            {hoveredCell.name !== hoveredCell.defaultName && (
+              <span className="ml-2 font-normal text-muted-foreground">({hoveredCell.defaultName})</span>
+            )}
             {hoveredCell.comment && (
-              <span className="ml-2 font-normal text-muted-foreground">({hoveredCell.comment})</span>
+              <span className="ml-2 font-normal text-muted-foreground">{hoveredCell.name !== hoveredCell.defaultName ? "— " : "("}{hoveredCell.comment}{hoveredCell.name === hoveredCell.defaultName && ")"}</span>
             )}
           </div>
           <div className="space-y-1 text-xs text-muted-foreground">
