@@ -755,7 +755,7 @@ pub async fn conversation_detail(
 
             // Paginated connections
             let mut conn_stmt = db.prepare(
-                &format!("SELECT rowid, protocol, src_port, dst_port, bytes_tx, bytes_rx,
+                &format!("SELECT rowid, protocol, dst_port, bytes_tx, bytes_rx,
                         first_seen, last_seen, COALESCE(flagged, 0)
                  FROM connection_history
                  WHERE {src_match} AND dst_ip = ?2 AND first_seen >= datetime('now', ?3)
@@ -768,13 +768,13 @@ pub async fn conversation_detail(
                     Ok(ConversationConnection {
                         id: row.get(0)?,
                         protocol: row.get(1)?,
-                        src_port: row.get(2)?,
-                        dst_port: row.get(3)?,
-                        bytes_tx: row.get(4)?,
-                        bytes_rx: row.get(5)?,
-                        first_seen: row.get(6)?,
-                        last_seen: row.get(7)?,
-                        flagged: row.get::<_, i64>(8)? != 0,
+                        src_port: None,
+                        dst_port: row.get(2)?,
+                        bytes_tx: row.get(3)?,
+                        bytes_rx: row.get(4)?,
+                        first_seen: row.get(5)?,
+                        last_seen: row.get(6)?,
+                        flagged: row.get::<_, i64>(7)? != 0,
                     })
                 })
                 .map_err(|e| format!("sankey conversation connections: {e}"))?
