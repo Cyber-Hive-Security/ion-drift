@@ -289,6 +289,22 @@ Without corroborating evidence, the Shadow Service detection stays at `suspiciou
 
 This is the high-value detection. A device using a DNS server that isn't in the DHCP options, and the firewall lets it through — that's a real finding worth investigating, whether it's a misconfiguration, an intentional exception, or an actual attack.
 
+**Freshness Guard: Point-in-Time Policy Verification**
+
+Before P2 issues a `suspicious` or `threat` verdict on a critical protocol (DNS, NTP, DHCP, LDAP), the investigation engine performs a **single-point verification** — a live API call to the router for the specific setting that would confirm or deny the policy violation.
+
+```
+if P2 matches on a critical protocol:
+    1. Fetch current DHCP network options for the device's VLAN (live API call)
+    2. Compare destination against the LIVE authorized targets
+    3. If destination is NOW in the live policy → verdict "benign", tier 3
+       (policy map was stale — the sync will catch up on next cycle)
+    4. If destination is still NOT in live policy → proceed with P2 verdict
+    5. Trigger an immediate policy sync to update the local cache
+```
+
+This prevents false positive storms after network config changes (DHCP lease rotation, DNS server swap, NTP pool update). The 60-minute sync interval is fine for steady state, but a high-stakes verdict on DNS/NTP is worth one extra API call to confirm. The live check adds ~100ms latency to the investigation — negligible given investigations already target < 500ms.
+
 **New Rule P3: Blocked Non-Authoritative — Firewall Caught It**
 
 ```
@@ -521,13 +537,50 @@ Anomaly:
                   Top source countries: {countries}."
 ```
 
-### 6.3 Dashboard Widget
+### 6.3 Targeted Port Override
+
+Aggregation solves the volume problem, but it creates a blind spot: a low-and-slow scan targeting a specific sensitive port stays below the surge threshold. One attacker probing your WinBox port (8291) every 10 minutes won't trigger a "10x average" alert — but it's exactly the kind of reconnaissance you want to know about.
+
+**Sensitive WAN Ports** are defined in a configurable list (seeded from the router's own exposed services):
+
+```sql
+CREATE TABLE IF NOT EXISTS wan_sensitive_ports (
+    port INTEGER NOT NULL,
+    protocol TEXT NOT NULL DEFAULT 'tcp',
+    service_name TEXT,                -- "WinBox", "SSH", "HTTPS", etc.
+    source TEXT NOT NULL,             -- 'auto' (discovered from router listeners) or 'manual'
+    PRIMARY KEY (port, protocol)
+);
+```
+
+**Auto-discovery:** During policy sync, the engine checks which ports the router is listening on (from firewall rules with `action=accept` on the WAN interface, plus known management ports like 8291, 8728, 8729). These are automatically added as sensitive.
+
+**Override rule:**
+
+```
+For each WAN blocked_attempt:
+    if dst_port IN wan_sensitive_ports:
+        DO create a Tier 1 anomaly (not aggregated)
+        type: "wan_targeted_probe"
+        tier: 1
+        severity: "alert"
+        dedup_key: "{protocol}|{dst_port}" (one alert per port, until resolved)
+        description: "Targeted probe on sensitive port {service_name} ({port}/{protocol})
+                      from {src_ip} ({country}). This port is exposed or management-critical."
+    else:
+        aggregate into wan_scan_pressure as normal
+```
+
+The dedup key is per-port (not per-source-IP), so 50 different scanners hitting SSH still produces one Tier 1 alert — but it's an alert, not telemetry. The `occurrence_count` tracks how many probes hit this port.
+
+### 6.4 Dashboard Widget
 
 The `wan_scan_pressure` table feeds a new dashboard card:
 - Time-series sparkline of probe rate
 - Top 5 targeted ports (current hour)
 - Top 5 source countries (current hour)
 - Alert indicator if surge threshold exceeded
+- Separate callout for any sensitive port probes (with link to Tier 1 alert)
 
 ---
 
@@ -540,8 +593,8 @@ The `wan_scan_pressure` table feeds a new dashboard card:
 1. Add `tier`, `dedup_key`, `occurrence_count`, `last_occurrence` columns to `device_anomalies`
 2. Rewrite `has_recent_anomaly()` to use dedicated `dedup_key` column with "until resolved" semantics
 3. Update `detect_anomalies()` and `detect_blocked_attempts()` to populate `dedup_key`
-4. Add `wan_scan_pressure` table and aggregation logic
-5. Stop creating individual WAN blocked_attempt anomalies; route to aggregation
+4. Add `wan_scan_pressure` and `wan_sensitive_ports` tables
+5. Add WAN scan routing: sensitive port probes → Tier 1 `wan_targeted_probe` anomalies; everything else → aggregation
 6. Assign tiers based on existing investigation verdicts (no policy rules yet):
    - `suspicious` / `threat` → Tier 1
    - `inconclusive` → Tier 2
@@ -569,11 +622,13 @@ The `wan_scan_pressure` table feeds a new dashboard card:
    - Address lists → management/custom policies
 4. Implement `firewall_ion_tags` table and tag parser
 5. Add new investigation rules P1–P5 (policy-based)
-6. Update tier assignment to incorporate policy compliance
-7. Add API endpoint: `GET /api/policy` (view current policy map)
-8. Add frontend Policy Map page (read-only, shows what the router declares)
+6. Add P2 freshness guard: live API verification on critical protocol verdicts before issuing suspicious/threat
+7. Auto-discover WAN sensitive ports during policy sync (router listener ports + management ports)
+8. Update tier assignment to incorporate policy compliance
+9. Add API endpoint: `GET /api/policy` (view current policy map)
+10. Add frontend Policy Map page (read-only, shows what the router declares)
 
-**Estimated scope:** ~800 lines Rust, ~300 lines TypeScript
+**Estimated scope:** ~900 lines Rust, ~300 lines TypeScript
 
 ### Phase 3: Refinement
 
@@ -600,6 +655,7 @@ The `wan_scan_pressure` table feeds a new dashboard card:
 | `infrastructure_policy` | 2 | Authoritative service→target mappings from router config |
 | `firewall_ion_tags` | 2 | Parsed `[ION-*]` tags from firewall rule comments |
 | `wan_scan_pressure` | 1 | 5-minute aggregated inbound scan metrics |
+| `wan_sensitive_ports` | 1 | Ports that generate Tier 1 alerts even when WAN scan pressure is normal |
 
 ### Altered Tables
 
