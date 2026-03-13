@@ -211,12 +211,19 @@ pub async fn vlan_detail(
             .map_err(|e| format!("sankey db lock: {e}"))?;
 
         // --- Device query (dynamic params) ---
+        // When country is specified, skip VLAN filter — country IS the filter
         let (device_sql, device_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = {
-            let src_clause = if src_is_wan { "src_vlan IS NULL" } else { "src_vlan = ?" };
             let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            if !src_is_wan {
+
+            let src_clause = if country_filter.is_some() {
+                "1=1".to_string() // no VLAN filter when country is the filter
+            } else if src_is_wan {
+                "src_vlan IS NULL".to_string()
+            } else {
                 params.push(Box::new(vlan_id_clone.clone()));
-            }
+                format!("src_vlan = ?{}", params.len())
+            };
+
             params.push(Box::new(offset.clone()));
             let time_param = params.len();
 
@@ -264,15 +271,21 @@ pub async fn vlan_detail(
 
         // --- Flow query (dynamic params) ---
         let (flow_sql, flow_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = {
-            let src_clause = if src_is_wan { "src_vlan IS NULL" } else { "src_vlan = ?" };
             let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            if !src_is_wan {
+
+            let src_clause = if country_filter.is_some() {
+                "1=1".to_string()
+            } else if src_is_wan {
+                "src_vlan IS NULL".to_string()
+            } else {
                 params.push(Box::new(vlan_id_clone.clone()));
-            }
+                format!("src_vlan = ?{}", params.len())
+            };
+
             params.push(Box::new(offset.clone()));
             let time_param = params.len();
 
-            let dest_clause = if db_dest.is_empty() {
+            let dest_clause = if country_filter.is_some() || db_dest.is_empty() {
                 String::new()
             } else {
                 params.push(Box::new(db_dest.clone()));
