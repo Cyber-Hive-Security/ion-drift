@@ -33,7 +33,7 @@ COPY docker/entrypoint.sh /entrypoint.sh
 # Config and certs are provided at runtime via volume mounts:
 #   -v /path/to/server.toml:/app/config/server.toml:ro
 #   -v /path/to/ca.crt:/app/certs/root_ca.crt:ro
-RUN mkdir -p /app/config /app/data/certs && chown -R app:app /app
+RUN mkdir -p /app/config /app/certs /app/data/certs && chown -R app:app /app
 
 ENV RUST_LOG=info
 ENV XDG_DATA_HOME=/app/data
