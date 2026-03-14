@@ -35,8 +35,9 @@ Thumbs.db
 *.csv
 !data/oui.csv
 
-# Spec docs and diagnostics (live on development branch)
+# Spec docs and diagnostics (contain secrets, live locally only)
 SpecDocs/
+docs/license-key-spec.md
 diagnostics/
 
 # Claude
