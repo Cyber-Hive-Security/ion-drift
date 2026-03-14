@@ -287,19 +287,42 @@ async fn extract_nat_service_ports(router: &MikrotikClient) -> HashSet<u32> {
     ports
 }
 
+/// Maximum number of ports to expand from a single range specification.
+/// Ranges wider than this are truncated with a warning log.
+const MAX_PORT_RANGE_EXPANSION: u32 = 1000;
+
 /// Parse a RouterOS port specification into individual port numbers.
 /// Supports: single port ("443"), comma-separated ("80,443"), ranges ("8080-8090").
+/// Validates ports are in the valid TCP/UDP range (1..=65535).
 fn parse_port_spec(spec: &str) -> Vec<u32> {
     let mut result = Vec::new();
     for part in spec.split(',') {
         let part = part.trim();
         if let Some((start, end)) = part.split_once('-') {
             if let (Ok(s), Ok(e)) = (start.trim().parse::<u32>(), end.trim().parse::<u32>()) {
-                for p in s..=e.min(s + 100) {
+                if s == 0 || s > 65535 || e == 0 || e > 65535 {
+                    tracing::warn!(range = %part, "ignoring invalid port range (ports must be 1-65535)");
+                    continue;
+                }
+                let capped = e.min(s + MAX_PORT_RANGE_EXPANSION);
+                if capped < e {
+                    tracing::warn!(
+                        range = %part,
+                        kept = %(s..=capped).count(),
+                        dropped = %(e - capped),
+                        "port range truncated to {MAX_PORT_RANGE_EXPANSION} ports; ports {}-{} excluded",
+                        capped + 1, e,
+                    );
+                }
+                for p in s..=capped {
                     result.push(p);
                 }
             }
         } else if let Ok(p) = part.parse::<u32>() {
+            if p == 0 || p > 65535 {
+                tracing::warn!(port = %p, "ignoring invalid port (must be 1-65535)");
+                continue;
+            }
             result.push(p);
         }
     }
