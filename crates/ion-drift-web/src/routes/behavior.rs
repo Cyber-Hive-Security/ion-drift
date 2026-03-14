@@ -13,10 +13,16 @@ use crate::state::AppState;
 // ── Request / Response types ─────────────────────────────────
 
 #[derive(Deserialize)]
+pub struct WanScanParams {
+    pub hours: Option<i64>,
+}
+
+#[derive(Deserialize)]
 pub struct AnomalyQueryParams {
     pub status: Option<String>,
     pub severity: Option<String>,
     pub vlan: Option<i64>,
+    pub tier: Option<i32>,
     pub limit: Option<i64>,
 }
 
@@ -71,7 +77,7 @@ pub async fn vlan_detail(
 
     let anomalies = state
         .behavior_store
-        .get_anomalies(Some("pending"), None, Some(vlan_id), Some(100))
+        .get_anomalies(Some("pending"), None, Some(vlan_id), None, Some(100))
         .await
         .map_err(|e| internal_error("behavior vlan anomalies", e))?;
 
@@ -153,6 +159,7 @@ pub async fn anomalies(
             params.status.as_deref(),
             params.severity.as_deref(),
             params.vlan,
+            params.tier,
             params.limit.or(Some(100)),
         )
         .await
@@ -313,6 +320,7 @@ pub async fn export_anomalies_csv(
             params.status.as_deref(),
             params.severity.as_deref(),
             params.vlan,
+            params.tier,
             params.limit.or(Some(10_000)),
         )
         .await
@@ -610,4 +618,19 @@ pub async fn investigation_stats(
         .await
         .map_err(|e| internal_error("investigation stats", e))?;
     Ok(Json(stats))
+}
+
+/// GET /api/behavior/wan-scan-pressure
+pub async fn wan_scan_pressure(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(params): Query<WanScanParams>,
+) -> Result<Json<Vec<ion_drift_storage::behavior::WanScanBucket>>, Response> {
+    let hours = params.hours.unwrap_or(24);
+    let buckets = state
+        .behavior_store
+        .get_wan_scan_pressure(hours)
+        .await
+        .map_err(|e| internal_error("wan scan pressure", e))?;
+    Ok(Json(buckets))
 }

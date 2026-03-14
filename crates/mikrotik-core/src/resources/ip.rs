@@ -147,6 +147,40 @@ pub struct ArpEntry {
     pub comment: Option<String>,
 }
 
+/// DHCP server network — `/ip/dhcp-server/network`
+/// Contains per-pool options like DNS, NTP, gateway.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DhcpNetwork {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub address: String,
+    #[serde(default)]
+    pub gateway: Option<String>,
+    #[serde(default)]
+    pub dns_server: Option<String>,
+    #[serde(default)]
+    pub ntp_server: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+/// DNS server configuration — `/ip/dns`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DnsConfig {
+    #[serde(default)]
+    pub servers: Option<String>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub allow_remote_requests: Option<bool>,
+    #[serde(default, deserialize_with = "ros_u32_opt")]
+    pub cache_size: Option<u32>,
+    #[serde(default, deserialize_with = "ros_u32_opt")]
+    pub cache_max_ttl: Option<u32>,
+}
+
 // ── Client methods ─────────────────────────────────────────────
 
 impl MikrotikClient {
@@ -183,5 +217,15 @@ impl MikrotikClient {
     /// List ARP table entries.
     pub async fn arp_table(&self) -> Result<Vec<ArpEntry>, MikrotikError> {
         self.get("ip/arp").await
+    }
+
+    /// List DHCP server network configurations.
+    pub async fn dhcp_networks(&self) -> Result<Vec<DhcpNetwork>, MikrotikError> {
+        self.get("ip/dhcp-server/network").await
+    }
+
+    /// Get DNS server configuration.
+    pub async fn dns_config(&self) -> Result<DnsConfig, MikrotikError> {
+        self.get("ip/dns").await
     }
 }

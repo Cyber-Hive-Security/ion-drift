@@ -2,6 +2,7 @@ mod behavior;
 mod cert;
 mod connections;
 mod metrics;
+mod policy_sync;
 mod traffic;
 
 use crate::state::AppState;
@@ -66,6 +67,13 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
     crate::anomaly_correlator::spawn_anomaly_correlator(
         &state.task_supervisor,
         state.connection_store.clone(),
+        state.behavior_store.clone(),
+        state.vlan_registry.clone(),
+    );
+
+    // Policy synchronization
+    policy_sync::spawn_policy_sync(
+        state.mikrotik.clone(),
         state.behavior_store.clone(),
         state.vlan_registry.clone(),
     );

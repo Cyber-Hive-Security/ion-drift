@@ -849,7 +849,7 @@ async fn collect_anomaly_alerts(
         let last_id: i64 = last_id_str.parse().unwrap_or(0);
 
         let anomalies = match behavior_store
-            .get_anomalies(Some("pending"), Some("critical"), None, Some(50))
+            .get_anomalies(Some("pending"), Some("critical"), None, None, Some(50))
             .await
         {
             Ok(a) => a,
@@ -1142,7 +1142,7 @@ async fn collect_anomaly_warning_alerts(
     let last_id: i64 = last_id_str.parse().unwrap_or(0);
 
     let anomalies = match behavior_store
-        .get_anomalies(Some("pending"), Some("warning"), None, Some(50))
+        .get_anomalies(Some("pending"), Some("warning"), None, None, Some(50))
         .await
     {
         Ok(a) => a,

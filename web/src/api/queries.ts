@@ -446,12 +446,14 @@ export function useBehaviorAnomalies(params?: {
   status?: string;
   severity?: string;
   vlan?: number;
+  tier?: number;
   limit?: number;
 }) {
   const qs = new URLSearchParams();
   if (params?.status) qs.set("status", params.status);
   if (params?.severity) qs.set("severity", params.severity);
   if (params?.vlan != null) qs.set("vlan", String(params.vlan));
+  if (params?.tier != null) qs.set("tier", String(params.tier));
   if (params?.limit) qs.set("limit", String(params.limit));
   const qsStr = qs.toString();
   return useQuery({

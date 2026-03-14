@@ -149,6 +149,24 @@ pub struct CreateMangleRule {
     pub comment: String,
 }
 
+/// Address list entry — `/ip/firewall/address-list`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct AddressListEntry {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub list: String,
+    pub address: String,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub disabled: Option<bool>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub dynamic: Option<bool>,
+    #[serde(default)]
+    pub comment: Option<String>,
+    #[serde(default)]
+    pub creation_time: Option<String>,
+}
+
 // ── Client methods ─────────────────────────────────────────────
 
 impl MikrotikClient {
@@ -170,5 +188,10 @@ impl MikrotikClient {
     /// Create a new mangle rule.
     pub async fn create_mangle_rule(&self, rule: &CreateMangleRule) -> Result<MangleRule, MikrotikError> {
         self.put("ip/firewall/mangle", rule).await
+    }
+
+    /// List firewall address list entries.
+    pub async fn firewall_address_lists(&self) -> Result<Vec<AddressListEntry>, MikrotikError> {
+        self.get("ip/firewall/address-list").await
     }
 }

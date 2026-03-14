@@ -12,6 +12,7 @@ import { FirewallPage } from "./firewall";
 import { ConnectionsPage } from "./connections";
 import { LogsPage } from "./logs";
 import { BehaviorPage } from "./behavior";
+import { PolicyPage } from "./policy";
 import { HistoryPage } from "./history";
 import { SettingsPage } from "./settings";
 import { NotFoundPage } from "./__root";
@@ -92,6 +93,12 @@ const behaviorRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { mac?: string } => ({
     mac: (search.mac as string) || undefined,
   }),
+});
+
+const policyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/policy",
+  component: PolicyPage,
 });
 
 const historyRoute = createRoute({
@@ -211,6 +218,7 @@ const routeTree = rootRoute.addChildren([
   connectionsRoute,
   logsRoute,
   behaviorRoute,
+  policyRoute,
   historyRoute,
   topologyRoute,
   switchDetailRoute,

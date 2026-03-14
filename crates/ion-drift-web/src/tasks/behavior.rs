@@ -32,6 +32,7 @@ pub fn spawn_behavior_collector(
             store.clone(),
             connection_store,
             geo_cache.clone(),
+            vlan_registry.clone(),
         ));
         let mut cycle_count: u64 = 0;
 
@@ -117,9 +118,18 @@ pub fn spawn_behavior_collector(
                 Err(e) => tracing::warn!("investigation: failed to query uninvestigated anomalies: {e}"),
             }
 
-            // Prune spike candidates every 10 minutes to avoid memory growth
+            let _ = &spike_candidates; // placeholder for future spike candidate tracking
+
+            // Promote eligible devices every 10 minutes (10 × 60s cycles)
             if cycle_count % 10 == 0 {
-                spike_candidates.prune();
+                match store.promote_eligible_devices().await {
+                    Ok((baselined, sparse)) => {
+                        if baselined > 0 || sparse > 0 {
+                            tracing::info!("behavior: promoted {baselined} to baselined, {sparse} to sparse");
+                        }
+                    }
+                    Err(e) => tracing::warn!("behavior: device promotion failed: {e}"),
+                }
             }
         }
     });
@@ -175,6 +185,16 @@ async fn run_behavior_maintenance(
     switch_store: &ion_drift_storage::SwitchStore,
     vlan_registry: &RwLock<ion_drift_storage::behavior::VlanRegistry>,
 ) {
+    // Promote devices whose learning period has elapsed
+    match store.promote_eligible_devices().await {
+        Ok((baselined, sparse)) => {
+            if baselined > 0 || sparse > 0 {
+                tracing::info!("behavior: promoted {baselined} to baselined, {sparse} to sparse");
+            }
+        }
+        Err(e) => tracing::warn!("behavior: device promotion failed: {e}"),
+    }
+
     tracing::info!("behavior maintenance: recomputing baselines");
     match store.recompute_all_baselines(7 * 86400).await {
         Ok(count) => tracing::info!("behavior: recomputed baselines for {count} devices"),

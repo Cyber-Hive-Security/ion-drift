@@ -9,6 +9,8 @@ export interface Column<T> {
   headerTitle?: string;
   render: (row: T) => ReactNode;
   sortValue?: (row: T) => string | number | boolean;
+  /** CSS width for this column (e.g. "80px", "20%"). Applied to both header and body cells. */
+  width?: string;
 }
 
 interface DataTableProps<T> {
@@ -126,6 +128,7 @@ export function DataTable<T>({
                       "px-3 py-2 text-left font-medium text-muted-foreground",
                       col.sortValue && "cursor-pointer select-none hover:text-foreground",
                     )}
+                    style={col.width ? { width: col.width } : undefined}
                     title={col.headerTitle}
                     onClick={col.sortValue ? () => toggleSort(col.key) : undefined}
                   >
@@ -163,6 +166,7 @@ export function DataTable<T>({
                       "px-3 py-2 text-left font-medium text-muted-foreground",
                       col.sortValue && "cursor-pointer select-none hover:text-foreground",
                     )}
+                    style={col.width ? { width: col.width } : undefined}
                     title={col.headerTitle}
                     onClick={col.sortValue ? () => toggleSort(col.key) : undefined}
                   >
@@ -284,7 +288,7 @@ function VirtualizedBody<T>({
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                 >
                   {columns.map((col) => (
-                    <td key={col.key} className="px-3 py-2">
+                    <td key={col.key} className="px-3 py-2" style={col.width ? { width: col.width } : undefined}>
                       {col.render(row)}
                     </td>
                   ))}

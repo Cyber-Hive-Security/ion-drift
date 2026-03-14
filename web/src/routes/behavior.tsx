@@ -8,6 +8,7 @@ import {
   useDeleteAllAnomalies,
   useInvestigations,
   useInvestigationStats,
+  useBehaviorAlerts,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { BehaviorHelp } from "@/components/help-content";
@@ -55,7 +56,6 @@ const SPECIAL_VLAN_NAMES: Record<number, string> = {
 function vlanLabel(vlan: number, vlanNames: Record<number, string>): string {
   const special = SPECIAL_VLAN_NAMES[vlan];
   if (special) return special;
-  if (vlan <= 0) return "Unclassified";
   const name = vlanNames[vlan];
   return name ? `VLAN ${vlan}: ${name}` : `VLAN ${vlan}`;
 }
@@ -103,7 +103,7 @@ function severityBg(severity: string): string {
 }
 
 function formatTimeAgo(ts: number): string {
-  const secs = Math.floor(Date.now() / 1000 - ts);
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - ts));
   if (secs < 60) return `${secs}s ago`;
   if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
   if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
@@ -572,13 +572,39 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
   {
     key: "severity",
     header: "Severity",
-    render: (r) => (
-      <span
-        className={cn("text-xs font-semibold uppercase", severityColor(r.severity))}
-      >
-        {r.severity}
-      </span>
-    ),
+    width: "75px",
+    render: (r) => {
+      const tierLabel = r.tier === 1 ? "T1" : r.tier === 2 ? "T2" : r.tier === 3 ? "T3" : "";
+      const tierTitle = r.tier === 1
+        ? "Tier 1: Alert — policy violation, threat, or operator-escalated"
+        : r.tier === 2
+        ? "Tier 2: Digest — behavioral shift, policy-compliant"
+        : r.tier === 3
+        ? "Tier 3: Telemetry — benign/routine, forensic lookback"
+        : "";
+      return (
+        <span className="inline-flex items-center gap-1">
+          <span
+            className={cn("text-xs font-semibold uppercase", severityColor(r.severity))}
+          >
+            {r.severity}
+          </span>
+          {tierLabel && (
+            <span
+              className={cn(
+                "rounded px-1 text-[10px] font-medium",
+                r.tier === 1 ? "bg-destructive/15 text-destructive"
+                  : r.tier === 3 ? "bg-muted text-muted-foreground/60"
+                  : "bg-muted text-muted-foreground",
+              )}
+              title={tierTitle}
+            >
+              {tierLabel}
+            </span>
+          )}
+        </span>
+      );
+    },
     sortValue: (r) => {
       const order: Record<string, number> = { critical: 0, alert: 1, warning: 2, info: 3 };
       return order[r.severity] ?? 4;
@@ -587,6 +613,7 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
   {
     key: "mac",
     header: "Device",
+    width: "18%",
     render: (r) => {
       const d = parseDetails(r.details);
       return (
@@ -601,6 +628,7 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
   {
     key: "type",
     header: "Type",
+    width: "95px",
     render: (r) => (
       <span className="text-xs">{r.anomaly_type.replace(/_/g, " ")}</span>
     ),
@@ -615,16 +643,21 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
       const dstIp = d.dst_ip ?? d.dst_subnet ?? "";
       const dstPort = d.dst_port != null ? `:${d.dst_port}` : "";
       const proto = d.protocol ? ` ${(d.protocol as string).toUpperCase()}` : "";
+      const occBadge = r.occurrence_count > 1 ? (
+        <span className="ml-1 rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+          ×{r.occurrence_count}
+        </span>
+      ) : null;
       if (srcIp || dstIp) {
         return (
           <span className="max-w-xs truncate font-mono text-xs" title={r.description}>
-            {srcIp} &rarr; {dstIp}{dstPort}{proto}
+            {srcIp} &rarr; {dstIp}{dstPort}{proto}{occBadge}
           </span>
         );
       }
       return (
         <span className="max-w-xs truncate text-xs" title={r.description}>
-          {r.description}
+          {r.description}{occBadge}
         </span>
       );
     },
@@ -632,12 +665,14 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
   {
     key: "vlan",
     header: "VLAN",
+    width: "75px",
     render: (r) => <span className="text-xs">{vlanLabel(r.vlan, vlanNames)}</span>,
     sortValue: (r) => r.vlan,
   },
   {
     key: "confidence",
     header: "Conf.",
+    width: "60px",
     render: (r) => (
       <span
         className={cn(
@@ -657,6 +692,7 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
   {
     key: "verdict",
     header: "Verdict",
+    width: "80px",
     render: (r) => <VerdictBadge investigation={investigationMap.get(r.id)} />,
     sortValue: (r) => {
       const v = investigationMap.get(r.id)?.verdict ?? "z";
@@ -667,6 +703,7 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
   {
     key: "timestamp",
     header: "Time",
+    width: "80px",
     render: (r) => (
       <span className="text-xs text-muted-foreground">
         {formatTimeAgo(r.timestamp)}
@@ -677,6 +714,7 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
   {
     key: "status",
     header: "Status",
+    width: "70px",
     render: (r) => (
       <span
         className={cn(
@@ -703,13 +741,16 @@ export function BehaviorPage() {
   const macFilter = search.mac ?? null;
   const [tab, setTab] = useState<TabMode>(macFilter ? "anomalies" : "overview");
   const [anomalyFilter, setAnomalyFilter] = useState<AnomalyFilter>("pending");
+  const [tierFilter, setTierFilter] = useState<number | null>(1);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const vlan = useVlanLookup();
 
   const overview = useBehaviorOverview();
+  const alertCounts = useBehaviorAlerts();
   const anomaliesQuery = useBehaviorAnomalies({
     status: anomalyFilter === "all" ? undefined : anomalyFilter,
-    limit: 200,
+    tier: tierFilter ?? undefined,
+    limit: 500,
   });
   const resolveMutation = useResolveAnomaly();
   const bulkMutation = useBulkResolveAnomalies();
@@ -728,6 +769,38 @@ export function BehaviorPage() {
     return map;
   }, [investigations]);
 
+  // Digest grouping for Tier 2 (must be before early returns — Rules of Hooks)
+  const displayAnomalies = useMemo(() => {
+    const raw = anomaliesQuery.data ?? [];
+    if (tierFilter !== 2) return raw;
+
+    // Group by mac + anomaly_type
+    const groups = new Map<string, DeviceAnomaly[]>();
+    for (const a of raw) {
+      const key = `${a.mac}|${a.anomaly_type}`;
+      const group = groups.get(key) ?? [];
+      group.push(a);
+      groups.set(key, group);
+    }
+
+    // Return the most recent anomaly from each group with aggregated occurrence_count
+    const result: DeviceAnomaly[] = [];
+    for (const [, group] of groups) {
+      // Pick the most recent as representative
+      const sorted = group.sort((a, b) => b.timestamp - a.timestamp);
+      const representative = { ...sorted[0] };
+      representative.occurrence_count = group.reduce((sum, a) => sum + a.occurrence_count, 0);
+      result.push(representative);
+    }
+    return result;
+  }, [anomaliesQuery.data, tierFilter]);
+
+  // Memoize column definitions to prevent unnecessary DataTable re-renders
+  const memoizedColumns = useMemo(
+    () => anomalyColumns(vlan.names, investigationMap),
+    [vlan.names, investigationMap],
+  );
+
   if (overview.isLoading) return <LoadingSpinner />;
   if (overview.error) {
     return (
@@ -742,10 +815,10 @@ export function BehaviorPage() {
   if (!overview.data) return null;
 
   const data = overview.data;
-  const allAnomalies = anomaliesQuery.data ?? [];
+
   const anomalies = macFilter
-    ? allAnomalies.filter((a) => a.mac === macFilter)
-    : allAnomalies;
+    ? displayAnomalies.filter((a) => a.mac === macFilter)
+    : displayAnomalies;
   const invStats = investigationStatsQuery.data;
 
   // Sort VLANs: those with anomalies first
@@ -843,6 +916,34 @@ export function BehaviorPage() {
       {/* Anomalies tab */}
       {tab === "anomalies" && (
         <div>
+          {/* Tier filter */}
+          <div className="flex items-center gap-2 text-sm mb-2">
+            <span className="text-muted-foreground">Tier:</span>
+            {[
+              { label: "Alerts", value: 1 as number | null },
+              { label: "Digests", value: 2 as number | null },
+              { label: "Telemetry", value: 3 as number | null },
+              { label: "All", value: null as number | null },
+            ].map((t) => (
+              <button
+                key={t.label}
+                className={cn(
+                  "rounded px-2 py-0.5 text-xs font-medium transition-colors",
+                  tierFilter === t.value
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setTierFilter(t.value)}
+              >
+                {t.label}
+                {t.value === 1 && alertCounts.data && alertCounts.data.tier1_pending > 0 && (
+                  <span className="ml-1 rounded-full bg-destructive px-1.5 text-[10px] text-destructive-foreground">
+                    {alertCounts.data.tier1_pending}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
           {/* Status filter + bulk actions */}
           <div className="mb-3 flex flex-wrap items-center gap-2">
             {statusFilters.map((f) => (
@@ -950,7 +1051,13 @@ export function BehaviorPage() {
 
               {/* CSV export */}
               <a
-                href={`/api/behavior/anomalies/export.csv${anomalyFilter !== "all" ? `?status=${anomalyFilter}` : ""}`}
+                href={`/api/behavior/anomalies/export.csv${(() => {
+                  const params = new URLSearchParams();
+                  if (anomalyFilter !== "all") params.set("status", anomalyFilter);
+                  if (tierFilter != null) params.set("tier", String(tierFilter));
+                  const qs = params.toString();
+                  return qs ? `?${qs}` : "";
+                })()}`}
                 download
                 className="flex items-center gap-1 rounded-md bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
                 title="Export as CSV"
@@ -961,7 +1068,7 @@ export function BehaviorPage() {
           </div>
 
           <DataTable
-            columns={anomalyColumns(vlan.names, investigationMap)}
+            columns={memoizedColumns}
             data={anomalies}
             rowKey={(r) => String(r.id)}
             searchable

@@ -13,8 +13,9 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use ion_drift_storage::behavior::{
-    BehaviorStore, DeviceAnomaly, DeviceProfile, NewInvestigation, VlanRegistry,
+    BehaviorStore, DeviceAnomaly, DeviceProfile, NewInvestigation, VlanRegistry, VlanSensitivity,
 };
+use tokio::sync::RwLock;
 
 use crate::connection_store::ConnectionStore;
 use crate::geo::GeoCache;
@@ -77,6 +78,7 @@ pub struct InvestigationEngine {
     behavior_store: Arc<BehaviorStore>,
     connection_store: Arc<ConnectionStore>,
     geo_cache: Arc<GeoCache>,
+    vlan_registry: Arc<RwLock<VlanRegistry>>,
 }
 
 impl InvestigationEngine {
@@ -84,11 +86,13 @@ impl InvestigationEngine {
         behavior_store: Arc<BehaviorStore>,
         connection_store: Arc<ConnectionStore>,
         geo_cache: Arc<GeoCache>,
+        vlan_registry: Arc<RwLock<VlanRegistry>>,
     ) -> Self {
         Self {
             behavior_store,
             connection_store,
             geo_cache,
+            vlan_registry,
         }
     }
 
@@ -140,13 +144,28 @@ impl InvestigationEngine {
             &behavior_ctx,
             &traffic_ctx,
             &fw_ctx,
-        );
+        ).await;
 
         let summary = self.generate_summary(
             &anomaly, &device_ctx, &dest_ctx, &verdict, &reason,
         );
 
         let duration_ms = start.elapsed().as_millis() as i64;
+
+        // Assign tier based on verdict and policy compliance
+        let tier: i32 = match verdict.as_str() {
+            "threat" => 1,
+            "suspicious" => 1,
+            "routine" => 3,
+            "benign" => 3,
+            "inconclusive" => 2,
+            _ => 2,
+        };
+
+        // Update the anomaly's tier in the database
+        if let Err(e) = self.behavior_store.update_anomaly_tier(anomaly_id, tier).await {
+            tracing::warn!("failed to update anomaly tier: {e}");
+        }
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -263,16 +282,33 @@ impl InvestigationEngine {
             .ok()
             .flatten();
 
-        let disposition = match &profile {
-            Some(_p) => {
-                // Check switch store for disposition — but we don't have switch_store here.
-                // Use what we can infer from the profile.
-                None
-            }
-            None => None,
+        // Check if device was previously flagged (has any flagged anomalies)
+        let disposition = if self.behavior_store
+            .get_anomalies(Some("flagged"), Some(&anomaly.mac), None, None, Some(1))
+            .await
+            .map(|a| !a.is_empty())
+            .unwrap_or(false)
+        {
+            Some("flagged".to_string())
+        } else {
+            None
         };
 
-        let vlan_sensitivity = None; // Will be set later from registry if needed
+        // Look up VLAN sensitivity from registry
+        let registry = self.vlan_registry.read().await;
+        let vlan_sensitivity = if anomaly.vlan > 0 {
+            let sensitivity = registry.sensitivity(anomaly.vlan as u16);
+            Some(match sensitivity {
+                VlanSensitivity::Strictest => "strictest",
+                VlanSensitivity::Strict => "strict",
+                VlanSensitivity::Moderate => "moderate",
+                VlanSensitivity::Loose => "loose",
+                VlanSensitivity::Monitor => "monitor",
+            }.to_string())
+        } else {
+            None
+        };
+        drop(registry);
 
         match profile {
             Some(p) => DeviceContext {
@@ -287,7 +323,7 @@ impl InvestigationEngine {
             None => DeviceContext {
                 hostname: None,
                 manufacturer: None,
-                disposition: None,
+                disposition,
                 first_seen: 0,
                 baseline_status: None,
                 vlan_sensitivity,
@@ -451,7 +487,7 @@ impl InvestigationEngine {
 // ── Verdict Determination ───────────────────────────────────
 
 impl InvestigationEngine {
-    fn determine_verdict(
+    async fn determine_verdict(
         &self,
         anomaly: &DeviceAnomaly,
         device: &DeviceContext,
@@ -461,8 +497,186 @@ impl InvestigationEngine {
         fw: &FirewallContext,
     ) -> (String, String, String, Vec<EvidenceStep>) {
         let mut evidence = Vec::new();
-        let source_zone = self.extract_zone(&anomaly.details, "source_zone");
+        let source_zone = self.extract_field(&anomaly.details, "source_zone");
         let dst_port = self.extract_dst_port(&anomaly.details);
+
+        // ── Policy Rules (P1-P5) ──────────────────────────────────
+
+        // Extract protocol and port for policy matching
+        let protocol = self.extract_field(&anomaly.details, "protocol");
+        let dst_ip = dest.ip.as_deref().unwrap_or("");
+
+        // Map protocol+port to service name for policy lookup
+        let service_for_policy = match (protocol.as_deref(), dst_port) {
+            (Some("udp"), Some(123)) => Some("ntp"),
+            (Some("udp"), Some(53)) | (Some("tcp"), Some(53)) => Some("dns"),
+            (Some("udp"), Some(67)) | (Some("udp"), Some(68)) => Some("dhcp"),
+            (Some("tcp"), Some(389)) | (Some("tcp"), Some(636)) => Some("ldap"),
+            (Some("tcp"), Some(445)) => Some("smb"),
+            (Some("udp"), Some(161)) | (Some("udp"), Some(162)) => Some("snmp"),
+            (Some("udp"), Some(514)) => Some("syslog"),
+            (Some("tcp"), Some(25)) | (Some("tcp"), Some(587)) => Some("smtp"),
+            _ => None,
+        };
+
+        // Rule P4: ION-CRITICAL firewall rule match
+        if let Some(ref comment) = fw.rule_comment {
+            if comment.to_uppercase().contains("[ION-CRITICAL]") {
+                evidence.push(EvidenceStep {
+                    check: "ION-CRITICAL tag".into(),
+                    result: format!("Matched critical firewall rule: {comment}"),
+                    passed: true,
+                });
+                return (
+                    "threat".into(),
+                    "escalate".into(),
+                    format!("Traffic matched critical firewall rule: {comment}"),
+                    evidence,
+                );
+            }
+        }
+
+        // Rule P5: ION-IGNORE firewall rule match
+        if let Some(ref comment) = fw.rule_comment {
+            if comment.to_uppercase().contains("[ION-IGNORE]") {
+                evidence.push(EvidenceStep {
+                    check: "ION-IGNORE tag".into(),
+                    result: format!("Matched operator-ignored firewall rule: {comment}"),
+                    passed: true,
+                });
+                return (
+                    "benign".into(),
+                    "no_action".into(),
+                    format!("Traffic matched operator-ignored firewall rule: {comment}"),
+                    evidence,
+                );
+            }
+        }
+
+        // Rules P1-P3: Policy-based rules (only if a service policy exists)
+        if let Some(service) = service_for_policy {
+            if !dst_ip.is_empty() {
+                let has_policy = self.behavior_store
+                    .has_policy_for_service(service, protocol.as_deref(), dst_port)
+                    .await
+                    .unwrap_or(false);
+
+                if has_policy {
+                    let vlan = Some(anomaly.vlan);
+                    let authorized = self.behavior_store
+                        .check_policy_authorization(service, protocol.as_deref(), dst_port, vlan, dst_ip)
+                        .await
+                        .unwrap_or(None);
+
+                    if let Some(policy) = authorized {
+                        // Rule P1: Authoritative Service — destination is in the policy map
+                        if anomaly.anomaly_type == "new_destination"
+                            || anomaly.anomaly_type == "new_port"
+                            || anomaly.anomaly_type == "volume_spike"
+                        {
+                            evidence.push(EvidenceStep {
+                                check: "Policy authorization".into(),
+                                result: format!(
+                                    "Destination {dst_ip} is authoritative for {service} (source: {})",
+                                    policy.source
+                                ),
+                                passed: true,
+                            });
+                            return (
+                                "benign".into(),
+                                "no_action".into(),
+                                format!(
+                                    "Destination {} is authoritative for {} (source: {})",
+                                    dst_ip, service, policy.source
+                                ),
+                                evidence,
+                            );
+                        }
+                    } else {
+                        // Destination NOT authorized — check firewall correlation
+                        let fw_allows = fw.correlation.as_deref() == Some("expected_allow")
+                            || fw.action.as_deref() == Some("expected_allow");
+
+                        if anomaly.anomaly_type == "blocked_attempt" {
+                            // Rule P3: Blocked Non-Authoritative — firewall caught it
+                            if fw.correlation.as_deref() == Some("expected_deny") {
+                                evidence.push(EvidenceStep {
+                                    check: "Non-authoritative blocked".into(),
+                                    result: format!(
+                                        "Non-authoritative {service} attempt blocked by firewall"
+                                    ),
+                                    passed: true,
+                                });
+                                return (
+                                    "routine".into(),
+                                    "no_action".into(),
+                                    format!(
+                                        "Non-authoritative {} attempt blocked by firewall rule {}",
+                                        service,
+                                        fw.rule_id.as_deref().unwrap_or("unknown")
+                                    ),
+                                    evidence,
+                                );
+                            }
+                        } else if fw_allows
+                            && (anomaly.anomaly_type == "new_destination"
+                                || anomaly.anomaly_type == "new_port")
+                        {
+                            // Rule P2: Shadow Service — not in policy, but firewall allows it
+                            evidence.push(EvidenceStep {
+                                check: "Shadow service detection".into(),
+                                result: format!(
+                                    "Shadow {}: device using non-authoritative {} server {}. Firewall allows this traffic.",
+                                    service, service, dst_ip
+                                ),
+                                passed: true,
+                            });
+
+                            // Check for escalation signals
+                            let mut escalation_signals = 0;
+                            if device.disposition.as_deref() == Some("flagged") {
+                                escalation_signals += 1;
+                            }
+                            if behavior.same_pattern_24h >= 3 {
+                                escalation_signals += 1;
+                            }
+                            if device.vlan_sensitivity.as_deref() == Some("strictest")
+                                || device.vlan_sensitivity.as_deref() == Some("strict")
+                            {
+                                escalation_signals += 1;
+                            }
+                            if dest.is_flagged_country {
+                                escalation_signals += 1;
+                            }
+                            if dest.seen_by_device_count == 0 {
+                                escalation_signals += 1;
+                            }
+
+                            let (verdict, action) = if escalation_signals >= 2 {
+                                evidence.push(EvidenceStep {
+                                    check: "Escalation check".into(),
+                                    result: format!("{escalation_signals} corroborating signals — escalating to threat"),
+                                    passed: true,
+                                });
+                                ("threat".into(), "escalate".into())
+                            } else {
+                                ("suspicious".into(), "investigate".into())
+                            };
+
+                            return (
+                                verdict,
+                                action,
+                                format!(
+                                    "Shadow {}: device {} using non-authoritative {} server {} — firewall allows this traffic but router policy does not authorize it",
+                                    service, anomaly.mac, service, dst_ip
+                                ),
+                                evidence,
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         // Rule 1: Flagged device — always suspicious
         if device.disposition.as_deref() == Some("flagged") {
@@ -725,7 +939,7 @@ impl InvestigationEngine {
 
     // ── Helpers ─────────────────────────────────────────────
 
-    fn extract_zone(&self, details: &Option<String>, field: &str) -> Option<String> {
+    fn extract_field(&self, details: &Option<String>, field: &str) -> Option<String> {
         details
             .as_deref()
             .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())

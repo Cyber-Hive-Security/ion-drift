@@ -115,7 +115,7 @@ async fn correlate_port_to_device(
                 let severity = escalated_severity(
                     classification_str,
                     correlated,
-                    !flow.days_in_baseline > 0,
+                    flow.days_in_baseline == 0,
                     device_count,
                     device.vlan.as_deref(),
                     registry,
@@ -184,6 +184,8 @@ async fn correlate_port_to_device(
                             firewall_correlation: None,
                             firewall_rule_id: None,
                             firewall_rule_comment: None,
+                            tier: 2,
+                            dedup_key: None,
                         })
                         .await
                     {
@@ -206,7 +208,7 @@ async fn correlate_device_to_port(
 
     // Get recent pending device anomalies of relevant types
     let anomalies = behavior_store
-        .get_anomalies(Some("pending"), None, None, Some(200))
+        .get_anomalies(Some("pending"), None, None, None, Some(200))
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -283,12 +285,11 @@ async fn auto_resolve_links(
         // If link has a behavior anomaly ID, check if it's been resolved
         if let Some(anomaly_id) = link.behavior_anomaly_id {
             // Check if the behavior anomaly is still pending
-            let is_resolved = behavior_store
-                .get_anomalies(Some("pending"), None, None, Some(10000))
-                .await
-                .unwrap_or_default()
-                .iter()
-                .all(|a| a.id != anomaly_id);
+            let is_resolved = match behavior_store.get_anomaly_by_id(anomaly_id).await {
+                Ok(Some(a)) => a.status != "pending" && a.status != "flagged",
+                Ok(None) => true,  // anomaly was deleted
+                Err(_) => false,   // can't tell, leave it alone
+            };
 
             if is_resolved {
                 conn_store.resolve_link(link.id, "auto")?;

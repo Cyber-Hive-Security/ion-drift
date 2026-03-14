@@ -14,6 +14,7 @@ pub mod logs;
 pub mod metrics;
 pub mod neighbor_aliases;
 pub mod network_map_status;
+pub mod policy;
 pub mod provision;
 pub mod sankey;
 pub mod settings;
@@ -412,6 +413,9 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             delete(behavior::delete_suppression),
         )
         .route("/behavior/alerts", get(behavior::alerts))
+        .route("/behavior/wan-scan-pressure", get(behavior::wan_scan_pressure))
+        // Policy
+        .route("/policy", get(policy::policy_overview))
         // Investigations
         .route("/investigations", get(behavior::list_investigations))
         .route(

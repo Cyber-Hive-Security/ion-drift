@@ -17,29 +17,14 @@ use crate::geo::GeoCache;
 use crate::log_parser;
 use crate::oui::OuiDb;
 
-/// In-memory tracker for volume spike candidates.
-/// Requires 2 consecutive detections (2 × 60s cycles = 2 min) before firing.
+/// Placeholder for volume spike candidate tracking (currently unused —
+/// multi-window persistence uses `count_elevated_observations` instead).
 #[derive(Default)]
-pub struct SpikeCandidates {
-    /// Map of (mac, dedup_key) → consecutive detection count.
-    candidates: std::sync::Mutex<HashMap<(String, String), u32>>,
-}
+pub struct SpikeCandidates;
 
 impl SpikeCandidates {
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Clear a candidate (spike was not detected this cycle).
-    fn clear(&self, mac: &str, dedup_key: &str) {
-        let mut map = self.candidates.lock().unwrap_or_else(|e| e.into_inner());
-        map.remove(&(mac.to_string(), dedup_key.to_string()));
-    }
-
-    /// Prune all candidates (called periodically to avoid memory growth).
-    pub fn prune(&self) {
-        let mut map = self.candidates.lock().unwrap_or_else(|e| e.into_inner());
-        map.clear();
+        Self
     }
 }
 
@@ -367,7 +352,7 @@ pub async fn detect_anomalies(
                     && hourly_projected > baseline.avg_bytes_per_hour * 5.0;
                 let above_floor = hourly_projected > VOLUME_SPIKE_FLOOR;
 
-                let dedup_key = format!("{}:{}", obs.dst_subnet, obs.dst_port.unwrap_or(-1));
+                let dedup_key = format!("{}:{}:{}", obs.dst_subnet, obs.protocol, obs.dst_port.unwrap_or(-1));
                 if above_floor && exceeds_max && exceeds_avg {
                     // Multi-window persistence: require at least 2 elevated
                     // observations in the last 5 minutes (300s)
@@ -384,9 +369,11 @@ pub async fn detect_anomalies(
                         .await?;
 
                     if elevated_count >= 2 {
-                        if !store
-                            .has_recent_anomaly(&profile.mac, "volume_spike", &dedup_key, 3600)
-                            .await?
+                        // Check if there's an existing anomaly with same dedup key
+                        if let Some(existing_id) = store.find_dedup_anomaly(&profile.mac, "volume_spike", &dedup_key).await? {
+                            store.bump_anomaly_occurrence(existing_id).await?;
+                            continue;
+                        }
                         {
                             let base_severity = registry.anomaly_severity(
                                 if vlan >= 0 { vlan as u16 } else { 0 },
@@ -488,6 +475,8 @@ pub async fn detect_anomalies(
                                     ),
                                     firewall_rule_id: fw_rule_id,
                                     firewall_rule_comment: fw_rule_comment,
+                                    tier: 2,
+                                    dedup_key: Some(dedup_key.clone()),
                                 })
                                 .await?;
                             if let Some(action) = suppression_action.as_deref() {
@@ -501,8 +490,8 @@ pub async fn detect_anomalies(
                         }
                     }
                 } else {
-                    // Not spiking this cycle — reset persistence counter
-                    spike_candidates.clear(&profile.mac, &dedup_key);
+                    // Not spiking this cycle — no action needed
+                    let _ = spike_candidates; // suppress unused warning
                 }
             } else {
                 // New behavior — not in any baseline
@@ -522,9 +511,11 @@ pub async fn detect_anomalies(
                     obs.protocol,
                     obs.dst_port.unwrap_or(-1)
                 );
-                if !store
-                    .has_recent_anomaly(&profile.mac, anomaly_type, &dedup_key, 3600)
-                    .await?
+                // Check if there's an existing anomaly with same dedup key
+                if let Some(existing_id) = store.find_dedup_anomaly(&profile.mac, anomaly_type, &dedup_key).await? {
+                    store.bump_anomaly_occurrence(existing_id).await?;
+                    continue;
+                }
                 {
                     let base_severity = registry
                         .anomaly_severity(if vlan >= 0 { vlan as u16 } else { 0 }, anomaly_type);
@@ -617,6 +608,8 @@ pub async fn detect_anomalies(
                             ),
                             firewall_rule_id: fw_rule_id,
                             firewall_rule_comment: fw_rule_comment,
+                            tier: 2,
+                            dedup_key: Some(dedup_key.clone()),
                         })
                         .await?;
                     if let Some(action) = suppression_action.as_deref() {
@@ -708,13 +701,111 @@ pub async fn detect_blocked_attempts(
         let protocol = fields.protocol.as_deref().unwrap_or("unknown");
         let vlan = classify_vlan(registry, src_ip);
 
-        // Dedup: same device + dst_ip + dst_port within 1 hour
-        let dedup_key = format!("{dst_ip}:{dst_port}");
-        if store
-            .has_recent_anomaly(&mac, "blocked_attempt", &dedup_key, 3600)
-            .await?
-        {
+        // Dedup: same device + protocol + dst_port (per-port, not per-source-IP)
+        let dedup_key = format!("{protocol}|{dst_port}");
+        // Check if there's an existing anomaly with same dedup key
+        if let Some(existing_id) = store.find_dedup_anomaly(&mac, "blocked_attempt", &dedup_key).await? {
+            store.bump_anomaly_occurrence(existing_id).await?;
             continue;
+        }
+
+        // WAN scan routing: aggregate non-sensitive port probes, create Tier 1 for sensitive ports
+        if vlan == -1 {
+            let proto_str = protocol;
+            if store.is_wan_sensitive_port(dst_port as u16, proto_str).await? {
+                // Sensitive port probe -> create Tier 1 anomaly with per-port dedup
+                let wan_dedup_key = format!("{}|{}", proto_str, dst_port);
+                if let Some(existing_id) = store.find_dedup_anomaly(&mac, "wan_targeted_probe", &wan_dedup_key).await? {
+                    store.bump_anomaly_occurrence(existing_id).await?;
+                    continue;
+                }
+
+                // GeoIP enrichment for description
+                let dst_country = if let Some(ref country) = fields.dst_country {
+                    format!(" ({})", country.country)
+                } else {
+                    String::new()
+                };
+
+                // Compute confidence for WAN targeted probe
+                let blocked_confidence = if let Ok(Some(prof)) = store.get_profile(&mac).await {
+                    let (obs_count, earliest) = store.get_baseline_stats(&mac).await.unwrap_or((0, 0));
+                    let age_days = if earliest > 0 {
+                        (BehaviorStore::now_unix_pub() - earliest) as f64 / 86400.0
+                    } else {
+                        0.0
+                    };
+                    compute_confidence(
+                        "blocked_attempt",
+                        &prof.baseline_status,
+                        obs_count,
+                        age_days,
+                        true,
+                        registry.sensitivity(if vlan >= 0 { vlan as u16 } else { 0 }),
+                    )
+                } else {
+                    compute_confidence(
+                        "blocked_attempt",
+                        "learning",
+                        0,
+                        0.0,
+                        true,
+                        registry.sensitivity(if vlan >= 0 { vlan as u16 } else { 0 }),
+                    )
+                };
+
+                let src_hostname = ip_to_hostname.get(src_ip).cloned();
+                let src_manufacturer = oui_db.lookup(&mac).map(|s| s.to_string());
+                let dst_vlan = registry.ip_to_vlan(dst_ip).map(|v| v as i64);
+                let dst_vlan_name = dst_vlan.map(|v| registry.vlan_name(v).to_string());
+                let dst_hostname = ip_to_hostname.get(dst_ip).cloned();
+                let source_zone = zone_from_vlan(registry, Some(vlan), src_ip);
+                let destination_zone = zone_from_vlan(registry, dst_vlan, dst_ip);
+
+                let details_json = serde_json::json!({
+                    "src_ip": src_ip,
+                    "src_hostname": src_hostname,
+                    "src_manufacturer": src_manufacturer,
+                    "dst_ip": dst_ip,
+                    "dst_port": dst_port,
+                    "dst_hostname": dst_hostname,
+                    "dst_vlan": dst_vlan,
+                    "dst_vlan_name": dst_vlan_name,
+                    "protocol": protocol,
+                    "direction": fields.direction,
+                    "in_interface": fields.in_interface,
+                    "dst_country": fields.dst_country,
+                    "policy_outcome": "expected_deny",
+                    "source_zone": source_zone,
+                    "destination_zone": destination_zone,
+                });
+
+                let anomaly_id = store
+                    .record_anomaly(&NewAnomaly {
+                        mac: mac.clone(),
+                        anomaly_type: "wan_targeted_probe".to_string(),
+                        severity: "alert".to_string(),
+                        confidence: blocked_confidence,
+                        description: format!(
+                            "Targeted probe on sensitive port {dst_port}/{protocol} from {src_ip}{dst_country}",
+                        ),
+                        details: Some(details_json.to_string()),
+                        vlan,
+                        firewall_correlation: Some("expected_deny".to_string()),
+                        firewall_rule_id: None,
+                        firewall_rule_comment: None,
+                        tier: 1,
+                        dedup_key: Some(wan_dedup_key),
+                    })
+                    .await?;
+                let _ = anomaly_id; // used for potential future resolution
+                anomaly_count += 1;
+            } else {
+                // Non-sensitive port -> aggregate into WAN scan pressure bucket
+                let country = fields.dst_country.as_ref().map(|c| c.country.clone());
+                store.record_wan_scan_probes(&[(src_ip.to_string(), dst_port as u16, country)]).await?;
+            }
+            continue; // Don't create individual blocked_attempt anomaly for WAN traffic
         }
 
         let base_severity =
@@ -792,7 +883,7 @@ pub async fn detect_blocked_attempts(
             "direction": fields.direction,
             "in_interface": fields.in_interface,
             "dst_country": fields.dst_country,
-            "dst_subnet": dedup_key,
+            "dst_subnet": dst_ip,
             "policy_outcome": "expected_deny",
             "traffic_class": traffic_class,
             "source_zone": source_zone,
@@ -818,6 +909,8 @@ pub async fn detect_blocked_attempts(
                 ),
                 firewall_rule_id: None,
                 firewall_rule_comment: None,
+                tier: 2,
+                dedup_key: Some(dedup_key.clone()),
             })
             .await?;
         if let Some(action) = suppression_action.as_deref() {

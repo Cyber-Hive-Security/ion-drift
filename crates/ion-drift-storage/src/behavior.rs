@@ -253,28 +253,7 @@ impl VlanRegistry {
     }
 }
 
-// ── Legacy compatibility shims ──────────────────────────────
-// These free functions maintain backward compatibility for code
-// that hasn't been migrated to use VlanRegistry yet.
-// They use a default (empty) registry, so they won't match any
-// VLAN subnets. Code should migrate to VlanRegistry methods.
-
-/// Classify a destination IP — legacy shim, prefers VlanRegistry method.
-pub fn classify_destination(dst_ip: &str) -> String {
-    // Without a registry, still handle RFC1918 grouping
-    let octets: Vec<u8> = dst_ip.split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() != 4 {
-        return format!("{}.0.0.0/8", dst_ip.split('.').next().unwrap_or("0"));
-    }
-    match (octets[0], octets[1]) {
-        (10, _) => format!("10.{}.{}.0/24", octets[1], octets[2]),
-        (172, 16..=31) => format!("172.{}.{}.0/24", octets[1], octets[2]),
-        (192, 168) => format!("192.168.{}.0/24", octets[2]),
-        _ => format!("{}.{}.0.0/16", octets[0], octets[1]),
-    }
-}
-
-/// Check if IP is RFC1918 private — legacy shim.
+/// Check if IP is RFC1918 private.
 pub fn is_internal_ip(ip: &str) -> bool {
     let octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
     if octets.len() != 4 {
@@ -284,15 +263,6 @@ pub fn is_internal_ip(ip: &str) -> bool {
         (octets[0], octets[1]),
         (10, _) | (172, 16..=31) | (192, 168)
     )
-}
-
-/// Classify flow direction — legacy shim.
-pub fn classify_direction(_src_ip: &str, dst_ip: &str) -> &'static str {
-    let dst_external = !is_internal_ip(dst_ip);
-    if dst_external {
-        return "outbound";
-    }
-    "internal"
 }
 
 // ── Confidence Scoring ───────────────────────────────────────
@@ -424,6 +394,10 @@ pub struct DeviceAnomaly {
     pub status: String,
     pub resolved_at: Option<i64>,
     pub resolved_by: Option<String>,
+    pub tier: i32,
+    pub dedup_key: Option<String>,
+    pub occurrence_count: i64,
+    pub last_occurrence: Option<i64>,
 }
 
 /// New anomaly to insert (no id yet).
@@ -439,6 +413,33 @@ pub struct NewAnomaly {
     pub firewall_correlation: Option<String>,
     pub firewall_rule_id: Option<String>,
     pub firewall_rule_comment: Option<String>,
+    pub tier: i32,
+    pub dedup_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InfrastructurePolicy {
+    pub id: i64,
+    pub service: String,
+    pub protocol: Option<String>,
+    pub port: Option<i64>,
+    pub authorized_targets: Vec<String>,
+    pub vlan_scope: Option<Vec<i64>>,
+    pub source: String,
+    pub priority: String,
+    pub last_synced: i64,
+    pub router_entity_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FirewallIonTag {
+    pub rule_id: String,
+    pub chain: String,
+    pub action: String,
+    pub tag: String,
+    pub comment: String,
+    pub rule_summary: String,
+    pub last_synced: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -575,6 +576,7 @@ pub struct AlertCount {
     pub pending_count: i64,
     pub critical_count: i64,
     pub warning_count: i64,
+    pub tier1_pending: i64,
     pub anomaly_macs: Vec<String>,
 }
 
@@ -589,6 +591,16 @@ pub struct PatternSuppression {
     pub action: String,
     pub created_by: String,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WanScanBucket {
+    pub bucket: i64,
+    pub total_probes: i64,
+    pub unique_sources: i64,
+    pub unique_ports: i64,
+    pub top_ports: Option<String>,
+    pub top_countries: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -836,6 +848,80 @@ impl BehaviorStore {
             )
             .map_err(|e| format!("investigations table creation failed: {e}"))?;
         }
+
+        // Migration: add v3 columns (tier, dedup_key, occurrence_count, last_occurrence)
+        let has_tier: bool = conn.prepare("SELECT tier FROM device_anomalies LIMIT 0").is_ok();
+        if !has_tier {
+            conn.execute_batch(
+                "ALTER TABLE device_anomalies ADD COLUMN tier INTEGER NOT NULL DEFAULT 2;
+                 ALTER TABLE device_anomalies ADD COLUMN dedup_key TEXT;
+                 ALTER TABLE device_anomalies ADD COLUMN occurrence_count INTEGER NOT NULL DEFAULT 1;
+                 ALTER TABLE device_anomalies ADD COLUMN last_occurrence INTEGER;
+                 CREATE INDEX IF NOT EXISTS idx_anomaly_tier ON device_anomalies(tier, status);
+                 CREATE INDEX IF NOT EXISTS idx_anomaly_dedup ON device_anomalies(mac, anomaly_type, dedup_key, status);",
+            ).map_err(|e| format!("migration (v3 columns) failed: {e}"))?;
+        }
+
+        // Migration: WAN scan pressure and sensitive ports tables
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS wan_scan_pressure (
+                bucket INTEGER PRIMARY KEY,
+                total_probes INTEGER NOT NULL DEFAULT 0,
+                unique_sources INTEGER NOT NULL DEFAULT 0,
+                unique_ports INTEGER NOT NULL DEFAULT 0,
+                top_ports TEXT,
+                top_countries TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS wan_sensitive_ports (
+                port INTEGER NOT NULL,
+                protocol TEXT NOT NULL DEFAULT 'tcp',
+                service_name TEXT,
+                source TEXT NOT NULL DEFAULT 'manual',
+                PRIMARY KEY (port, protocol)
+            );
+
+            -- Seed default sensitive ports
+            INSERT OR IGNORE INTO wan_sensitive_ports (port, protocol, service_name, source) VALUES
+                (22, 'tcp', 'SSH', 'default'),
+                (80, 'tcp', 'HTTP', 'default'),
+                (443, 'tcp', 'HTTPS', 'default'),
+                (8291, 'tcp', 'WinBox', 'default'),
+                (8728, 'tcp', 'RouterOS API', 'default'),
+                (8729, 'tcp', 'RouterOS API-SSL', 'default'),
+                (161, 'udp', 'SNMP', 'default'),
+                (3389, 'tcp', 'RDP', 'default');",
+        ).map_err(|e| format!("WAN tables creation failed: {e}"))?;
+
+        // Migration: infrastructure policy table (Phase 2)
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS infrastructure_policy (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service TEXT NOT NULL,
+                protocol TEXT,
+                port INTEGER,
+                authorized_targets TEXT NOT NULL,
+                vlan_scope TEXT NOT NULL DEFAULT '__global__',
+                source TEXT NOT NULL,
+                priority TEXT NOT NULL DEFAULT 'high',
+                last_synced INTEGER NOT NULL,
+                router_entity_id TEXT,
+                UNIQUE(service, protocol, port, vlan_scope)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_policy_service ON infrastructure_policy(service, protocol, port);
+            CREATE INDEX IF NOT EXISTS idx_policy_vlan ON infrastructure_policy(vlan_scope);
+
+            CREATE TABLE IF NOT EXISTS firewall_ion_tags (
+                rule_id TEXT PRIMARY KEY,
+                chain TEXT NOT NULL,
+                action TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                comment TEXT NOT NULL,
+                rule_summary TEXT NOT NULL,
+                last_synced INTEGER NOT NULL
+            );",
+        ).map_err(|e| format!("Phase 2 tables creation failed: {e}"))?;
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -1302,8 +1388,9 @@ impl BehaviorStore {
         db.execute(
             "INSERT INTO device_anomalies
                 (mac, timestamp, anomaly_type, severity, confidence, description, details,
-                 vlan, firewall_correlation, firewall_rule_id, firewall_rule_comment)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 vlan, firewall_correlation, firewall_rule_id, firewall_rule_comment,
+                 tier, dedup_key, occurrence_count, last_occurrence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?2)",
             params![
                 anomaly.mac,
                 now,
@@ -1316,6 +1403,8 @@ impl BehaviorStore {
                 anomaly.firewall_correlation,
                 anomaly.firewall_rule_id,
                 anomaly.firewall_rule_comment,
+                anomaly.tier,
+                anomaly.dedup_key,
             ],
         )
         .map_err(|e| format!("record_anomaly failed: {e}"))?;
@@ -1382,27 +1471,41 @@ impl BehaviorStore {
         Ok(count)
     }
 
-    /// Check if a similar anomaly already exists and is pending for dedup.
-    pub async fn has_recent_anomaly(
+    /// Check for existing pending/flagged anomaly with same dedup key.
+    /// Returns Some(id) if found (for occurrence_count update), None if no match.
+    pub async fn find_dedup_anomaly(
         &self,
         mac: &str,
         anomaly_type: &str,
-        dst_subnet: &str,
-        within_secs: i64,
-    ) -> Result<bool, String> {
+        dedup_key: &str,
+    ) -> Result<Option<i64>, String> {
         let db = self.db.lock().await;
-        let cutoff = now_unix() - within_secs;
-        let count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM device_anomalies
-                 WHERE mac = ?1 AND anomaly_type = ?2 AND status = 'pending'
-                   AND timestamp >= ?3
-                   AND (details LIKE '%' || ?4 || '%' OR ?4 = '')",
-                params![mac, anomaly_type, cutoff, dst_subnet],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("has_recent_anomaly failed: {e}"))?;
-        Ok(count > 0)
+        db.query_row(
+            "SELECT id FROM device_anomalies
+             WHERE mac = ?1 AND anomaly_type = ?2 AND dedup_key = ?3
+               AND status IN ('pending', 'flagged')
+             LIMIT 1",
+            params![mac, anomaly_type, dedup_key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("find_dedup_anomaly failed: {e}"))
+    }
+
+    /// Increment occurrence count on an existing anomaly instead of creating a new one.
+    pub async fn bump_anomaly_occurrence(&self, anomaly_id: i64) -> Result<(), String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        db.execute(
+            "UPDATE device_anomalies
+             SET occurrence_count = occurrence_count + 1,
+                 last_occurrence = ?1,
+                 timestamp = ?1
+             WHERE id = ?2",
+            params![now, anomaly_id],
+        )
+        .map_err(|e| format!("bump_anomaly_occurrence failed: {e}"))?;
+        Ok(())
     }
 
     pub async fn get_anomalies(
@@ -1410,13 +1513,15 @@ impl BehaviorStore {
         status: Option<&str>,
         severity: Option<&str>,
         vlan: Option<i64>,
+        tier: Option<i32>,
         limit: Option<i64>,
     ) -> Result<Vec<DeviceAnomaly>, String> {
         let db = self.db.lock().await;
         let mut sql = String::from(
             "SELECT id, mac, timestamp, anomaly_type, severity, confidence, description, details,
                     vlan, firewall_correlation, firewall_rule_id, firewall_rule_comment,
-                    status, resolved_at, resolved_by
+                    status, resolved_at, resolved_by,
+                    tier, dedup_key, occurrence_count, last_occurrence
              FROM device_anomalies WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -1432,6 +1537,10 @@ impl BehaviorStore {
         if let Some(v) = vlan {
             param_values.push(Box::new(v));
             sql.push_str(&format!(" AND vlan = ?{}", param_values.len()));
+        }
+        if let Some(t) = tier {
+            param_values.push(Box::new(t));
+            sql.push_str(&format!(" AND tier = ?{}", param_values.len()));
         }
         sql.push_str(" ORDER BY timestamp DESC");
         if let Some(l) = limit {
@@ -1457,7 +1566,8 @@ impl BehaviorStore {
             .prepare(
                 "SELECT id, mac, timestamp, anomaly_type, severity, confidence, description, details,
                         vlan, firewall_correlation, firewall_rule_id, firewall_rule_comment,
-                        status, resolved_at, resolved_by
+                        status, resolved_at, resolved_by,
+                        tier, dedup_key, occurrence_count, last_occurrence
                  FROM device_anomalies WHERE mac = ?1 ORDER BY timestamp DESC",
             )
             .map_err(|e| format!("prepare failed: {e}"))?;
@@ -1473,7 +1583,8 @@ impl BehaviorStore {
         db.query_row(
             "SELECT id, mac, timestamp, anomaly_type, severity, confidence, description, details,
                     vlan, firewall_correlation, firewall_rule_id, firewall_rule_comment,
-                    status, resolved_at, resolved_by
+                    status, resolved_at, resolved_by,
+                    tier, dedup_key, occurrence_count, last_occurrence
              FROM device_anomalies WHERE id = ?1",
             params![id],
             Self::map_anomaly_row,
@@ -1505,6 +1616,13 @@ impl BehaviorStore {
                 |row| row.get(0),
             )
             .map_err(|e| format!("count failed: {e}"))?;
+        let tier1_pending: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM device_anomalies WHERE status = 'pending' AND tier = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("count failed: {e}"))?;
         let mut stmt = db
             .prepare("SELECT DISTINCT mac FROM device_anomalies WHERE status = 'pending'")
             .map_err(|e| format!("anomaly macs query failed: {e}"))?;
@@ -1517,6 +1635,7 @@ impl BehaviorStore {
             pending_count: pending,
             critical_count: critical,
             warning_count: warning,
+            tier1_pending,
             anomaly_macs,
         })
     }
@@ -1956,10 +2075,18 @@ impl BehaviorStore {
                 |row| row.get(0),
             )
             .map_err(|e| format!("count failed: {e}"))?;
+        let tier1_pending: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM device_anomalies WHERE status = 'pending' AND tier = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("count failed: {e}"))?;
         Ok(AlertCount {
             pending_count: pending,
             critical_count: critical,
             warning_count: warning,
+            tier1_pending,
             anomaly_macs: Vec::new(),
         })
     }
@@ -2267,6 +2394,353 @@ impl BehaviorStore {
             .map_err(|e| format!("collect failed: {e}"))
     }
 
+    // ── WAN scan pressure methods ──
+
+    /// Record a batch of WAN scan probes into the 5-minute pressure bucket.
+    pub async fn record_wan_scan_probes(
+        &self,
+        probes: &[(String, u16, Option<String>)],  // (src_ip, dst_port, country_code)
+    ) -> Result<(), String> {
+        if probes.is_empty() { return Ok(()); }
+        let db = self.db.lock().await;
+        let now = now_unix();
+        let bucket = now - (now % 300);  // 5-minute bucket
+
+        let unique_sources: std::collections::HashSet<&str> = probes.iter().map(|(ip, _, _)| ip.as_str()).collect();
+        let unique_ports: std::collections::HashSet<u16> = probes.iter().map(|(_, p, _)| *p).collect();
+
+        // Count top ports
+        let mut port_counts: std::collections::HashMap<u16, usize> = std::collections::HashMap::new();
+        for (_, port, _) in probes {
+            *port_counts.entry(*port).or_default() += 1;
+        }
+        let mut top_ports: Vec<_> = port_counts.into_iter().collect();
+        top_ports.sort_by(|a, b| b.1.cmp(&a.1));
+        top_ports.truncate(10);
+        let top_ports_json = serde_json::to_string(&top_ports.iter().map(|(p, c)| serde_json::json!({"port": p, "count": c})).collect::<Vec<_>>()).unwrap_or_default();
+
+        // Count top countries
+        let mut country_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (_, _, cc) in probes {
+            if let Some(c) = cc.as_deref() {
+                *country_counts.entry(c).or_default() += 1;
+            }
+        }
+        let mut top_countries: Vec<_> = country_counts.into_iter().collect();
+        top_countries.sort_by(|a, b| b.1.cmp(&a.1));
+        top_countries.truncate(10);
+        let top_countries_json = serde_json::to_string(&top_countries.iter().map(|(c, n)| serde_json::json!({"country": c, "count": n})).collect::<Vec<_>>()).unwrap_or_default();
+
+        db.execute(
+            "INSERT INTO wan_scan_pressure (bucket, total_probes, unique_sources, unique_ports, top_ports, top_countries)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(bucket) DO UPDATE SET
+                total_probes = total_probes + ?2,
+                unique_sources = MAX(unique_sources, ?3),
+                unique_ports = MAX(unique_ports, ?4),
+                top_ports = ?5,
+                top_countries = ?6",
+            params![
+                bucket,
+                probes.len() as i64,
+                unique_sources.len() as i64,
+                unique_ports.len() as i64,
+                top_ports_json,
+                top_countries_json,
+            ],
+        ).map_err(|e| format!("record_wan_scan_probes failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Check if a port is in the WAN sensitive ports list.
+    pub async fn is_wan_sensitive_port(&self, port: u16, protocol: &str) -> Result<bool, String> {
+        let db = self.db.lock().await;
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM wan_sensitive_ports WHERE port = ?1 AND protocol = ?2",
+            params![port as i64, protocol],
+            |row| row.get(0),
+        ).map_err(|e| format!("is_wan_sensitive_port failed: {e}"))?;
+        Ok(count > 0)
+    }
+
+    /// Get WAN scan pressure buckets for the last N hours.
+    pub async fn get_wan_scan_pressure(&self, hours: i64) -> Result<Vec<WanScanBucket>, String> {
+        let db = self.db.lock().await;
+        let cutoff = now_unix() - (hours * 3600);
+        let mut stmt = db.prepare(
+            "SELECT bucket, total_probes, unique_sources, unique_ports, top_ports, top_countries
+             FROM wan_scan_pressure WHERE bucket >= ?1 ORDER BY bucket ASC",
+        ).map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt.query_map(params![cutoff], |row| {
+            Ok(WanScanBucket {
+                bucket: row.get(0)?,
+                total_probes: row.get(1)?,
+                unique_sources: row.get(2)?,
+                unique_ports: row.get(3)?,
+                top_ports: row.get(4)?,
+                top_countries: row.get(5)?,
+            })
+        }).map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("collect failed: {e}"))
+    }
+
+
+    // ── Policy Methods ──
+
+    /// Upsert an infrastructure policy entry.
+    pub async fn upsert_policy(
+        &self,
+        service: &str,
+        protocol: Option<&str>,
+        port: Option<i64>,
+        authorized_targets: &[String],
+        vlan_scope: Option<&[i64]>,
+        source: &str,
+        priority: &str,
+        router_entity_id: Option<&str>,
+    ) -> Result<(), String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        let targets_json = serde_json::to_string(authorized_targets).unwrap_or_default();
+        let vlan_json = vlan_scope
+            .map(|v| {
+                let mut sorted = v.to_vec();
+                sorted.sort();
+                serde_json::to_string(&sorted).unwrap_or_default()
+            })
+            .unwrap_or_else(|| "__global__".to_string());
+        db.execute(
+            "INSERT INTO infrastructure_policy
+                (service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(service, protocol, port, vlan_scope) DO UPDATE SET
+                authorized_targets = ?4,
+                source = ?6,
+                priority = ?7,
+                last_synced = ?8,
+                router_entity_id = ?9",
+            params![service, protocol, port, targets_json, vlan_json, source, priority, now, router_entity_id],
+        ).map_err(|e| format!("upsert_policy failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Get all policies for a given service+protocol+port, optionally filtered by VLAN.
+    pub async fn get_policies_for_service(
+        &self,
+        service: &str,
+        protocol: Option<&str>,
+        port: Option<i64>,
+        vlan: Option<i64>,
+    ) -> Result<Vec<InfrastructurePolicy>, String> {
+        let db = self.db.lock().await;
+        let mut sql = String::from(
+            "SELECT id, service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id
+             FROM infrastructure_policy WHERE service = ?1",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        param_values.push(Box::new(service.to_string()));
+
+        if let Some(p) = protocol {
+            param_values.push(Box::new(p.to_string()));
+            sql.push_str(&format!(" AND (protocol = ?{} OR protocol IS NULL)", param_values.len()));
+        }
+        if let Some(pt) = port {
+            param_values.push(Box::new(pt));
+            sql.push_str(&format!(" AND (port = ?{} OR port IS NULL)", param_values.len()));
+        }
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt.query_map(params_ref.as_slice(), |row| {
+            let targets_str: String = row.get(4)?;
+            let vlan_str: Option<String> = row.get(5)?;
+            Ok(InfrastructurePolicy {
+                id: row.get(0)?,
+                service: row.get(1)?,
+                protocol: row.get(2)?,
+                port: row.get(3)?,
+                authorized_targets: serde_json::from_str(&targets_str).unwrap_or_default(),
+                vlan_scope: vlan_str.and_then(|s| serde_json::from_str(&s).ok()),
+                source: row.get(6)?,
+                priority: row.get(7)?,
+                last_synced: row.get(8)?,
+                router_entity_id: row.get(9)?,
+            })
+        }).map_err(|e| format!("query failed: {e}"))?;
+
+        let mut results: Vec<InfrastructurePolicy> = Vec::new();
+        for row in rows {
+            let policy = row.map_err(|e| format!("row error: {e}"))?;
+            // Filter by VLAN if specified
+            if let Some(v) = vlan {
+                if let Some(ref scope) = policy.vlan_scope {
+                    if !scope.contains(&v) {
+                        continue;
+                    }
+                }
+                // vlan_scope == None means global (all VLANs) — include it
+            }
+            results.push(policy);
+        }
+        Ok(results)
+    }
+
+    /// Check if a destination IP is authorized for a given service on a VLAN.
+    /// Returns Some(policy) if authorized, None if not.
+    pub async fn check_policy_authorization(
+        &self,
+        service: &str,
+        protocol: Option<&str>,
+        port: Option<i64>,
+        vlan: Option<i64>,
+        destination_ip: &str,
+    ) -> Result<Option<InfrastructurePolicy>, String> {
+        let policies = self.get_policies_for_service(service, protocol, port, vlan).await?;
+        for policy in policies {
+            for target in &policy.authorized_targets {
+                if ip_matches_target(destination_ip, target) {
+                    return Ok(Some(policy));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Check if ANY policy exists for a given service+protocol+port.
+    /// Used to determine if we should apply policy rules or fall through to behavioral rules.
+    pub async fn has_policy_for_service(
+        &self,
+        service: &str,
+        protocol: Option<&str>,
+        port: Option<i64>,
+    ) -> Result<bool, String> {
+        let db = self.db.lock().await;
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM infrastructure_policy WHERE service = ?1 AND (protocol = ?2 OR protocol IS NULL) AND (port = ?3 OR port IS NULL)",
+            params![service, protocol, port],
+            |row| row.get(0),
+        ).map_err(|e| format!("has_policy_for_service failed: {e}"))?;
+        Ok(count > 0)
+    }
+
+    /// Get all policies (for display on the policy page).
+    pub async fn get_all_policies(&self) -> Result<Vec<InfrastructurePolicy>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT id, service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id
+             FROM infrastructure_policy ORDER BY service, port",
+        ).map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt.query_map([], |row| {
+            let targets_str: String = row.get(4)?;
+            let vlan_str: Option<String> = row.get(5)?;
+            Ok(InfrastructurePolicy {
+                id: row.get(0)?,
+                service: row.get(1)?,
+                protocol: row.get(2)?,
+                port: row.get(3)?,
+                authorized_targets: serde_json::from_str(&targets_str).unwrap_or_default(),
+                vlan_scope: vlan_str.and_then(|s| serde_json::from_str(&s).ok()),
+                source: row.get(6)?,
+                priority: row.get(7)?,
+                last_synced: row.get(8)?,
+                router_entity_id: row.get(9)?,
+            })
+        }).map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("collect failed: {e}"))
+    }
+
+    /// Upsert a firewall ION tag.
+    pub async fn upsert_ion_tag(
+        &self,
+        rule_id: &str,
+        chain: &str,
+        action: &str,
+        tag: &str,
+        comment: &str,
+        rule_summary: &str,
+    ) -> Result<(), String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        db.execute(
+            "INSERT INTO firewall_ion_tags (rule_id, chain, action, tag, comment, rule_summary, last_synced)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(rule_id) DO UPDATE SET
+                chain = ?2, action = ?3, tag = ?4, comment = ?5, rule_summary = ?6, last_synced = ?7",
+            params![rule_id, chain, action, tag, comment, rule_summary, now],
+        ).map_err(|e| format!("upsert_ion_tag failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Get all ION tags.
+    pub async fn get_ion_tags(&self) -> Result<Vec<FirewallIonTag>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT rule_id, chain, action, tag, comment, rule_summary, last_synced FROM firewall_ion_tags",
+        ).map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt.query_map([], |row| {
+            Ok(FirewallIonTag {
+                rule_id: row.get(0)?,
+                chain: row.get(1)?,
+                action: row.get(2)?,
+                tag: row.get(3)?,
+                comment: row.get(4)?,
+                rule_summary: row.get(5)?,
+                last_synced: row.get(6)?,
+            })
+        }).map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("collect failed: {e}"))
+    }
+
+    /// Get the ION tag for a specific firewall rule.
+    pub async fn get_ion_tag_for_rule(&self, rule_id: &str) -> Result<Option<FirewallIonTag>, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT rule_id, chain, action, tag, comment, rule_summary, last_synced FROM firewall_ion_tags WHERE rule_id = ?1",
+            params![rule_id],
+            |row| Ok(FirewallIonTag {
+                rule_id: row.get(0)?,
+                chain: row.get(1)?,
+                action: row.get(2)?,
+                tag: row.get(3)?,
+                comment: row.get(4)?,
+                rule_summary: row.get(5)?,
+                last_synced: row.get(6)?,
+            }),
+        ).optional().map_err(|e| format!("get_ion_tag_for_rule failed: {e}"))
+    }
+
+    /// Remove stale policies not updated in the latest sync.
+    pub async fn remove_stale_policies(&self, sync_cutoff: i64) -> Result<usize, String> {
+        let db = self.db.lock().await;
+        let deleted = db.execute(
+            "DELETE FROM infrastructure_policy WHERE last_synced < ?1",
+            params![sync_cutoff],
+        ).map_err(|e| format!("remove_stale_policies failed: {e}"))?;
+        Ok(deleted)
+    }
+
+    /// Remove stale ION tags not updated in the latest sync.
+    pub async fn remove_stale_ion_tags(&self, sync_cutoff: i64) -> Result<usize, String> {
+        let db = self.db.lock().await;
+        let deleted = db.execute(
+            "DELETE FROM firewall_ion_tags WHERE last_synced < ?1",
+            params![sync_cutoff],
+        ).map_err(|e| format!("remove_stale_ion_tags failed: {e}"))?;
+        Ok(deleted)
+    }
+
+    /// Update the tier of an anomaly (called after investigation determines the tier).
+    pub async fn update_anomaly_tier(&self, anomaly_id: i64, tier: i32) -> Result<(), String> {
+        let db = self.db.lock().await;
+        db.execute(
+            "UPDATE device_anomalies SET tier = ?1 WHERE id = ?2",
+            params![tier, anomaly_id],
+        ).map_err(|e| format!("update_anomaly_tier failed: {e}"))?;
+        Ok(())
+    }
+
+    // ── Row mappers ──
+
     fn map_anomaly_row(row: &rusqlite::Row) -> rusqlite::Result<DeviceAnomaly> {
         Ok(DeviceAnomaly {
             id: row.get(0)?,
@@ -2284,6 +2758,10 @@ impl BehaviorStore {
             status: row.get(12)?,
             resolved_at: row.get(13)?,
             resolved_by: row.get(14)?,
+            tier: row.get(15)?,
+            dedup_key: row.get(16)?,
+            occurrence_count: row.get(17)?,
+            last_occurrence: row.get(18)?,
         })
     }
 
@@ -2331,4 +2809,47 @@ impl BehaviorStore {
             duration_ms: row.get(39)?,
         })
     }
+
+    /// Add a WAN sensitive port if it does not already exist.
+    pub async fn add_wan_sensitive_port_if_missing(
+        &self,
+        port: u16,
+        protocol: &str,
+        service_name: &str,
+    ) -> Result<(), String> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT OR IGNORE INTO wan_sensitive_ports (port, protocol, service_name, source) VALUES (?1, ?2, ?3, 'auto')",
+            params![port as i64, protocol, service_name],
+        ).map_err(|e| format!("add_wan_sensitive_port_if_missing failed: {e}"))?;
+        Ok(())
+    }
+}
+
+/// Check if an IP address matches a target (exact IP or CIDR notation).
+fn ip_matches_target(ip: &str, target: &str) -> bool {
+    if ip == target {
+        return true;
+    }
+    // CIDR match
+    if let Some(slash_pos) = target.find('/') {
+        let network = &target[..slash_pos];
+        let prefix_len: u32 = match target[slash_pos + 1..].parse() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        if prefix_len > 32 {
+            return false;
+        }
+        let net_octets: Vec<u8> = network.split('.').filter_map(|o| o.parse().ok()).collect();
+        let ip_octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
+        if net_octets.len() != 4 || ip_octets.len() != 4 {
+            return false;
+        }
+        let net_u32 = u32::from_be_bytes([net_octets[0], net_octets[1], net_octets[2], net_octets[3]]);
+        let ip_u32 = u32::from_be_bytes([ip_octets[0], ip_octets[1], ip_octets[2], ip_octets[3]]);
+        let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
+        return (net_u32 & mask) == (ip_u32 & mask);
+    }
+    false
 }

@@ -562,6 +562,10 @@ export interface DeviceAnomaly {
   status: string;
   resolved_at: number | null;
   resolved_by: string | null;
+  tier: number;
+  dedup_key: string | null;
+  occurrence_count: number;
+  last_occurrence: number | null;
 }
 
 export interface VlanBehaviorSummary {
@@ -635,6 +639,7 @@ export interface AlertCount {
   pending_count: number;
   critical_count: number;
   warning_count: number;
+  tier1_pending: number;
   anomaly_macs: string[];
 }
 
