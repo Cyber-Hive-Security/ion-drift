@@ -327,6 +327,12 @@ pub async fn setup_submit(
             .into_response();
     }
 
+    // Store install date for license evaluation period tracking
+    let today = chrono::Utc::now().date_naive().to_string();
+    if let Err(e) = sm.encrypt_secret("install_date", &today).await {
+        tracing::error!("failed to store install date: {e}");
+    }
+
     tracing::info!(
         "setup complete — cert fetched, KEK bootstrapped, secrets encrypted, restarting..."
     );
@@ -547,6 +553,12 @@ pub async fn local_setup_submit(
     if let Err(e) = sm.encrypt_secret(crate::secrets::SECRET_SESSION_SECRET, &session_secret).await {
         tracing::error!("failed to store session secret: {e}");
         return Html(render_local_setup_html(Some("Failed to store session secret. Check server logs."))).into_response();
+    }
+
+    // Store install date for license evaluation period tracking
+    let today = chrono::Utc::now().date_naive().to_string();
+    if let Err(e) = sm.encrypt_secret("install_date", &today).await {
+        tracing::error!("failed to store install date: {e}");
     }
 
     // Store the KEK fingerprint so we know this is a local-auth installation

@@ -1653,6 +1653,18 @@ export interface DeliveryChannelConfig {
   config_json: Record<string, unknown>;
 }
 
+// ── License types (snake_case — custom Rust structs) ──────────
+
+export interface LicenseStatus {
+  mode: "evaluation" | "community" | "licensed";
+  days_remaining?: number;
+  acknowledged?: boolean;
+  licensee?: string;
+  tier?: "business" | "education" | "nonprofit" | "government";
+  expires?: string;
+  device_limit?: number;
+}
+
 // ── Investigation Engine ──────────────────────────────────────
 
 export type InvestigationVerdict = "benign" | "routine" | "suspicious" | "threat" | "inconclusive";

@@ -1,4 +1,12 @@
-PolyForm Shield License 1.0.0
+Required Notice: Copyright (c) 2026 Cyber Hive Security LLC
+                 (https://cyberhivesecurity.com)
+
+This software is additionally subject to the Cyber Hive Security
+Use Agreement found in the USE-AGREEMENT file in this repository.
+
+---
+
+# PolyForm Shield License 1.0.0
 
 <https://polyformproject.org/licenses/shield/1.0.0>
 
@@ -35,7 +43,7 @@ URL above, as well as copies of any plain-text lines beginning
 with `Required Notice:` that the licensor provided with the
 software.  For example:
 
-> Required Notice: Copyright Cyber Hive Security LLC (https://cyberhivesecurity.com)
+> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
 
 ## Changes and New Works License
 
@@ -52,27 +60,18 @@ to license, that you would infringe by using the software.
 ## Noncompete
 
 Any purpose is a permitted purpose, except for providing any
-product that competes with the software or any product the
-licensor or any of its affiliates provides using the software.
+product or service that competes with the software or any
+product or service the licensor or any of its affiliates
+provides using the software.
 
 ## Competition
 
 Goods and services compete even when they provide functionality
 through different kinds of interfaces or for different technical
-platforms.  Applications can compete with infrastructure software
-and vice versa.  Services compete even when provided through
-different business models.
-
-## Discontinued Products
-
-If the licensor or any of its affiliates discontinues a
-competing product, it ceases to compete.
-
-## New Products
-
-If you are using the software to provide a product that does
-not compete, you may continue doing so even if the licensor
-or any of its affiliates later provides a competing product.
+platforms.  Applications can compete with services, libraries
+with frameworks, and so on, even if they're written in different
+programming languages or for different computer architectures.
+Goods and services compete even when provided free of charge.
 
 ## No Other Rights
 
@@ -103,8 +102,8 @@ end immediately.
 
 ***As far as the law allows, the software comes as is, without
 any warranty or condition, and the licensor will not be liable
-to anyone for any damages related to this software or this
-license, under any kind of legal claim.***
+to you for any damages arising out of these terms or the use
+or nature of the software, under any kind of legal claim.***
 
 ## Definitions
 

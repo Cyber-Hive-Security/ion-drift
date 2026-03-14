@@ -9,6 +9,7 @@ pub mod history;
 pub mod identity;
 pub mod inference;
 pub mod interfaces;
+pub mod license;
 pub mod ip;
 pub mod logs;
 pub mod metrics;
@@ -688,6 +689,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             "/network/inference/observations",
             get(inference::observation_stats),
         )
+        // License
+        .route("/license", get(license::get_license))
+        .route("/license/key", post(license::submit_license_key))
+        .route("/license/acknowledge", post(license::acknowledge_license))
         // Demo mode sanitization (outermost — runs after response is built)
         .layer(middleware::from_fn(demo_sanitize_layer))
         // Global auth middleware for all API routes

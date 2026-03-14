@@ -1543,6 +1543,7 @@ dependencies = [
  "cookie",
  "dashmap",
  "dirs",
+ "ed25519-dalek",
  "flate2",
  "futures",
  "hex",

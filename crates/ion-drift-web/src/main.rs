@@ -12,6 +12,7 @@ mod device_manager;
 mod dns;
 mod geo;
 mod investigation;
+mod license;
 mod live_traffic;
 mod log_parser;
 mod middleware;

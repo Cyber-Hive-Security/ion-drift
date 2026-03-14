@@ -12,6 +12,7 @@ pub mod device_manager;
 pub mod dns;
 pub mod geo;
 pub mod investigation;
+pub mod license;
 pub mod live_traffic;
 pub mod log_parser;
 pub mod middleware;

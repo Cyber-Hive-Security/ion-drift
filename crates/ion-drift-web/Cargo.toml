@@ -20,7 +20,7 @@ tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header"]
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-manual-roots", "rustls-tls-webpki-roots"] }
 openidconnect = { version = "=4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
@@ -41,6 +41,7 @@ argon2 = "0.5"
 secrecy = { version = "0.10", features = ["serde"] }
 base64 = "0.22"
 hex = "0.4"
+ed25519-dalek = { version = "2", features = ["std"] }
 hmac = "=0.12.1"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder", "tokio1"] }
 x509-parser = "0.16"

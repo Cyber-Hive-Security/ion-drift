@@ -105,6 +105,7 @@ import type {
   DeliveryChannelConfig,
   Investigation,
   InvestigationStats,
+  LicenseStatus,
   CountrySummary,
 } from "./types";
 
@@ -1887,5 +1888,15 @@ export function useInvestigationStats(hours = 24) {
     queryKey: ["investigations", "stats", hours],
     queryFn: () => apiFetch<InvestigationStats>(`/api/investigations/stats?hours=${hours}`),
     refetchInterval: 30_000,
+  });
+}
+
+// ── License ─────────────────────────────────────────────────────
+
+export function useLicenseStatus() {
+  return useQuery({
+    queryKey: ["license"],
+    queryFn: () => apiFetch<LicenseStatus>("/api/license"),
+    staleTime: 60_000,
   });
 }
