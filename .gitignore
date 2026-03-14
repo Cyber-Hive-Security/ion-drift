@@ -16,9 +16,9 @@ certs/
 *.key
 *.crt
 
-# Node modules (frontend)
+# Node modules and build output (frontend)
 web/node_modules/
-# web/dist/ — tracked so git pull deploys built assets
+web/dist/
 
 # IDE
 .idea/
@@ -30,6 +30,10 @@ web/node_modules/
 # OS
 .DS_Store
 Thumbs.db
+
+# Diagnostic exports
+*.csv
+!data/oui.csv
 
 # Spec docs and diagnostics (live on development branch)
 SpecDocs/

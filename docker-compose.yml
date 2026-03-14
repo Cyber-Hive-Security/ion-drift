@@ -23,7 +23,7 @@ services:
     volumes:
       - ion-drift-data:/app/data
       - ./config/production.toml:/app/config/server.toml:ro
-      - ./docker/root_ca.crt:/app/certs/root_ca.crt:ro
+      - ./certs/root_ca.crt:/app/certs/root_ca.crt:ro
 
 volumes:
   ion-drift-data:

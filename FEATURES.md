@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-12 (`373892d`) — Authoritative VLAN ID lookup, security audit, investigation engine, drill-down navigation, settings refactor
+> **Last updated:** 2026-03-13 — Behavior engine v3: tiered anomalies, policy sync, dedup overhaul, WAN scan pressure
 
 ## Overview
 
@@ -557,6 +557,7 @@ Manual switch-to-switch interconnect configuration for devices without LLDP supp
 | System History | CPU load + memory usage area charts (24h / 7d toggle) |
 | VLAN Sankey | Inter-VLAN traffic flows (mangle rule byte counters), click-to-investigate |
 | Directional Port Sankeys | Outbound/Inbound/Internal port flows with anomaly detection |
+| WAN Scan Pressure | WAN probe aggregation (24h sparkline, top ports/sources) |
 | Uptime | System uptime |
 
 **Resilience:** Each card wrapped in `CardErrorBoundary` — a single card failure doesn't crash the page. Range selector uses `keepPreviousData` to prevent flash on time-range toggle.
@@ -727,6 +728,16 @@ Each investigation gathers:
 
 Each verdict includes: `recommended_action`, `reason` (human-readable), `summary`, `evidence_chain` (structured JSON), and `duration_ms`.
 
+### Investigation Rules (P1-P5)
+
+| Rule | Name | Trigger | Verdict |
+|------|------|---------|---------|
+| P1 | Authoritative Service | Destination matches infrastructure policy (DHCP, DNS, route target) | `benign` — device is talking to an authorized service |
+| P2 | Shadow Service | Device running a service not in infrastructure policy | `suspicious` (default), `threat` if on sensitive VLAN |
+| P3 | Blocked Non-Authoritative | Firewall blocked traffic to non-policy destination | `routine` — firewall working as intended |
+| P4 | ION-CRITICAL Match | Traffic matches an ION-CRITICAL tagged firewall rule | `threat` — operator-flagged critical rule |
+| P5 | ION-IGNORE Match | Traffic matches an ION-IGNORE tagged firewall rule | `benign` — operator explicitly ignoring |
+
 ### APIs
 
 - `GET /api/sankey/network` — Network-level VLAN flow summary with anomaly counts
@@ -862,6 +873,50 @@ Resolving an anomaly triggers side effects:
 
 Priority boosts stored in `anomaly_priority_boosts` table, keyed by pattern (device + vlan + protocol + port + traffic_class).
 
+### Tiered Anomaly System
+
+Anomalies are classified into three tiers that control visibility, notification, and retention:
+
+| Tier | Label | Criteria | Example |
+|------|-------|----------|---------|
+| 1 | Alert | Policy violations, cross-zone lateral movement, WAN targeted probes on sensitive ports | Unauthorized service on management VLAN, SMB lateral movement |
+| 2 | Digest | Behavioral deviations worth tracking but not alerting on immediately | New destination for baselined device, volume spike on IoT VLAN |
+| 3 | Telemetry | Expected firewall drops, routine blocked attempts, informational events | WAN scan on non-sensitive port, expected deny on IoT |
+
+Tier assignment is driven by policy outcome, traffic class, and VLAN sensitivity. The frontend filters by tier — Tier 1 anomalies show a pending count badge in the sidebar.
+
+### Deduplication
+
+Anomalies are deduplicated using a `dedup_key` derived from (mac, anomaly_type, protocol, dst_port, destination). When a new anomaly matches an existing unresolved anomaly's dedup key, the existing anomaly's `occurrence_count` is incremented and `last_occurrence` is updated instead of creating a duplicate. Dedup uses "until resolved" semantics — once an anomaly is resolved (accepted/dismissed/flagged), new occurrences create fresh anomaly records.
+
+### WAN Scan Pressure
+
+Non-sensitive WAN probes (blocked attempts on common scan targets like port 23, 445, 3389) are aggregated into 5-minute buckets in the `wan_scan_pressure` table instead of individual anomalies. Each bucket tracks total probes, unique sources, unique ports, top ports, and top source countries. Sensitive port probes (SSH, management ports, etc.) still generate individual Tier 1 anomalies.
+
+Dashboard card shows 24h probe count, probes/hour average, sparkline trend, and top targeted ports/source countries.
+
+### Policy Sync Worker
+
+Background task (60-minute interval) that pulls authoritative network policy from RouterOS and stores it in the `infrastructure_policy` table:
+
+| Source | Policy Type | Data |
+|--------|------------|------|
+| DHCP networks | `dhcp_network` | Authorized DHCP ranges, gateways, DNS servers |
+| DNS configuration | `dns_config` | Authorized DNS servers |
+| Static routes | `static_route` | Authorized routing targets |
+| Address lists | `address_list` | Named IP groups (e.g. allowed destinations) |
+| Firewall rules | `wan_service` | WAN-exposed services (dst-nat, accept rules) |
+
+Policies are scoped to VLANs (or `__global__` for network-wide). Stale policies are cleaned after each sync cycle.
+
+### ION Firewall Tags
+
+Firewall rules can include `[ION-CRITICAL]`, `[ION-DIGEST]`, or `[ION-IGNORE]` tags in their comments. The policy sync worker parses these and stores them in the `ion_tags` table. Tagged rules influence anomaly tier assignment:
+
+- `[ION-CRITICAL]` — Traffic matching this rule generates Tier 1 anomalies
+- `[ION-DIGEST]` — Traffic matching this rule generates Tier 2 anomalies
+- `[ION-IGNORE]` — Traffic matching this rule is suppressed entirely
+
 ### CSV Export
 
 Export anomalies with full policy context for offline analysis.
@@ -987,8 +1042,9 @@ Output formats: `--format table|json|csv`
 | Connection persister | 30s | Conntrack -> connection_history with GeoIP |
 | Connection pruner | Daily | Prune closed connections > 30 days |
 | Syslog listener | Realtime | UDP 5514, parse firewall logs |
-| Behavior collector | 60s | Device observations, anomaly detection, firewall correlation, suppression matching, priority boost application |
-| Behavior maintenance | Daily | Baseline recompute, observation pruning, port flow baselines, traffic pattern classification |
+| Behavior collector | 60s | Device observations, anomaly detection, firewall correlation, suppression matching, priority boost application, tiered classification, dedup |
+| Behavior maintenance | Daily | Baseline recompute, observation pruning, port flow baselines, traffic pattern classification, device promotion |
+| Policy sync | 60 min | Sync DHCP, DNS, routes, address lists, firewall rules from RouterOS |
 | Behavior auto-classifier | Hourly | Auto-resolve stale anomalies per VLAN timeout |
 | Alert engine | 60s | Evaluate alert rules against anomalies, send notifications |
 | Anomaly correlator | 60s | Cross-reference port flow + device anomalies |
@@ -1012,7 +1068,7 @@ Output formats: `--format table|json|csv`
 | `secrets.db` | `kek_cache`, `encrypted_secrets`, `devices`, `device_credentials` | AES-256-GCM encrypted secrets + device registry |
 | `traffic.db` | `traffic` | Lifetime WAN counters with reset detection |
 | `metrics.db` | `metrics`, `drop_metrics`, `connection_metrics`, `vlan_metrics`, `log_aggregates` | Time-series metrics |
-| `behavior.db` | `device_profiles`, `device_observations`, `device_baselines`, `device_anomalies`, `anomaly_suppressions`, `anomaly_priority_boosts`, `engine_metadata`, `scheduler_watermarks` | Behavioral analysis, pattern suppression, operator feedback |
+| `behavior.db` | `device_profiles`, `device_observations`, `device_baselines`, `device_anomalies`, `anomaly_suppressions`, `anomaly_priority_boosts`, `engine_metadata`, `scheduler_watermarks`, `wan_scan_pressure`, `infrastructure_policy`, `ion_tags`, `investigations` | Behavioral analysis, pattern suppression, operator feedback |
 | `connections.db` | `connection_history`, `port_flow_baseline`, `anomaly_links`, `snapshots` | Connection history, anomaly cross-references, snapshots |
 | `geo.db` | `geo_cache` | ip-api.com lookup cache (7-day TTL) |
 | `switch.db` | `switch_port_metrics`, `switch_mac_table`, `switch_vlan_membership`, `neighbor_discovery`, `switch_port_roles`, `network_identities`, `observed_services`, `topology_positions`, `topology_sector_positions`, `backbone_links`, `vlan_config`, `port_mac_bindings`, `port_violations`, `mac_observations`, `attachment_states`, `port_role_probabilities` | Switch data, correlated identities, topology, backbone links, VLAN config, port security, inference state |
@@ -1037,5 +1093,6 @@ Output formats: `--format table|json|csv`
 | `/network/backbone` | Backbone Links | Manual switch-to-switch interconnect config for non-LLDP devices |
 | `/inference` | Inference Diagnostics | Mode badge, state distribution, divergence analytics, per-MAC drill-down |
 | `/topology` | Network Topology | Auto-generated D3 hierarchical map, VLAN sectors, drag-to-pin |
+| `/policy` | Policy Map | Infrastructure policies synced from router, ION firewall tags |
 | `/switches/$deviceId` | Switch Detail | Per-switch port metrics, MAC table, VLANs, port roles |
 | `/settings` | Settings | Tabbed: Devices, VLANs, Security, Alerts, System |

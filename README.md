@@ -62,22 +62,50 @@ npm run build   # Production build to web/dist/
 ```
 ion-drift/
 ├── crates/
-│   ├── mikrotik-core/      # Shared RouterOS REST API client + SQLite stores
+│   ├── mikrotik-core/      # RouterOS REST + SNMP + SwOS client library
+│   ├── ion-drift-storage/   # SQLite stores (behavior, switch, metrics, traffic)
 │   ├── ion-drift-cli/       # CLI binary (clap)
 │   └── ion-drift-web/       # Axum web server + background tasks
-├── web/                     # React frontend (Vite + TypeScript + TanStack Query + Tailwind)
-├── config/                  # Configuration files
-└── docker/                  # Dockerfile + docker-compose.yml
+├── web/                     # React frontend (Vite + TypeScript + TanStack)
+├── config/                  # Configuration files (TOML)
+├── certs/                   # CA certificate for router/OIDC TLS (gitignored)
+├── data/                    # Bundled data files (IEEE OUI database)
+├── docs/                    # Technical documentation
+└── caps/                    # Screenshots for documentation
 ```
 
 Uses the RouterOS v7 REST API (`/rest/`) with HTTP Basic Auth over HTTPS. Switch management uses both REST API and SwOS web scraping for non-RouterOS switches.
+
+## Docker Deployment
+
+```bash
+# 1. Create config from example
+cp config/server.example.toml config/production.toml
+# Edit production.toml with your router, OIDC, and session settings
+
+# 2. Place your CA certificate (if using private CA)
+cp /path/to/your/ca.crt certs/root_ca.crt
+
+# 3. Set required secrets in environment or production.toml
+export DRIFT_ROUTER_PASSWORD='your-router-password'
+export DRIFT_OIDC_SECRET='your-oidc-client-secret'
+export DRIFT_SESSION_SECRET='random-32-byte-hex-string'
+
+# 4. Build and run
+docker compose up -d
+```
+
+The `docker-compose.yml` bind-mounts:
+- `config/production.toml` → `/app/config/server.toml` (required)
+- `certs/root_ca.crt` → `/app/certs/root_ca.crt` (required if using private CA)
+- `ion-drift-data` volume → `/app/data` (SQLite databases, GeoIP data, certs)
 
 ## Configuration
 
 Configuration is TOML-based. See `config/server.example.toml` for all available options.
 
 Key sections:
-- `[server]` — listen address, port
+- `[server]` — listen address, port, home coordinates for map
 - `[router]` — primary router host, port, TLS, WAN interface name, DNS server
 - `[oidc]` — Keycloak realm, client ID, redirect URI, CA cert
 - `[session]` — cookie name, TTL, SameSite policy
