@@ -53,12 +53,15 @@ Firewall rule viewer with drop statistics and geo-enriched drop country attribut
 ## Quick Start
 
 ```bash
+cp docker-compose.example.yml docker-compose.yml
 docker compose up -d
 ```
 
-Open `https://your-host:3000` in your browser. The setup wizard creates your admin account — no configuration files, environment variables, or external dependencies needed.
+Open `http://your-host:3000` in your browser. The setup wizard creates your admin account — no configuration files, environment variables, or build tools needed.
 
 After setup, add your router connection in the web UI. Ion Drift begins monitoring immediately.
+
+Pre-built images are published to `ghcr.io/cyber-hive-security/ion-drift` on every release.
 
 ## Optional: OIDC Single Sign-On
 
@@ -85,12 +88,13 @@ Uses the RouterOS v7 REST API over HTTPS. Switch management supports RouterOS, S
 ## Docker Deployment
 
 ```bash
+cp docker-compose.example.yml docker-compose.yml
 docker compose up -d
 ```
 
-The `docker-compose.yml` bind-mounts:
-- `config/production.toml` → `/app/config/server.toml` (optional — created via setup wizard if absent)
-- `certs/root_ca.crt` → `/app/certs/root_ca.crt` (only if using a private CA)
+Optional bind-mounts (uncomment in docker-compose.yml as needed):
+- `config/server.toml` → `/app/config/server.toml` (custom config — setup wizard handles first-run without it)
+- `certs/root_ca.crt` → `/app/certs/root_ca.crt` (only if your router or OIDC provider uses a private CA)
 - `ion-drift-data` volume → `/app/data` (SQLite databases, GeoIP data, encryption keys)
 
 ## Configuration
