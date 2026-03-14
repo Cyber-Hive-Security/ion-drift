@@ -761,9 +761,20 @@ pub async fn logout(
         .max_age(cookie::time::Duration::ZERO)
         .build();
 
+    // Build OIDC end-session URL if available (kills the IdP session too)
+    let oidc_logout_url = state.config.oidc.as_ref().map(|oidc| {
+        let base = oidc.issuer_url.trim_end_matches('/');
+        let redirect = oidc.redirect_uri.replace("/auth/callback", "/");
+        let encoded_redirect = redirect.replace(':', "%3A").replace('/', "%2F");
+        format!("{base}/protocol/openid-connect/logout?client_id={}&post_logout_redirect_uri={encoded_redirect}", oidc.client_id)
+    });
+
     (
         jar.remove(removal),
-        Json(serde_json::json!({ "status": "logged_out" })),
+        Json(serde_json::json!({
+            "status": "logged_out",
+            "oidc_logout_url": oidc_logout_url,
+        })),
     )
 }
 

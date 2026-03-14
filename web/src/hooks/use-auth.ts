@@ -8,13 +8,17 @@ export function useAuth() {
 
   const logout = async () => {
     try {
-      await apiFetch("/auth/logout", { method: "POST" });
+      const result = await apiFetch<{ status: string; oidc_logout_url?: string }>("/auth/logout", { method: "POST" });
+      queryClient.setQueryData(["auth", "status"], { authenticated: false });
+      // Redirect to OIDC end-session endpoint to kill the IdP session
+      if (result.oidc_logout_url) {
+        window.location.href = result.oidc_logout_url;
+        return;
+      }
     } catch {
       // Clear local auth state even if server is unreachable
     }
-    queryClient.setQueryData(["auth", "status"], {
-      authenticated: false,
-    });
+    queryClient.setQueryData(["auth", "status"], { authenticated: false });
   };
 
   const login = async (username: string, password: string) => {
