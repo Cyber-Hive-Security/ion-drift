@@ -14,6 +14,9 @@ const LICENSE_PUBLIC_KEY_HEX: &str = "71839e29676e0f2dcad394ac6ea61ac0b1c524e026
 /// Days after first run before the license reminder appears.
 const EVALUATION_DAYS: u32 = 30;
 
+/// Days before license expiry to start showing a renewal warning.
+const EXPIRY_WARNING_DAYS: i64 = 30;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum LicenseTier {
@@ -55,13 +58,25 @@ pub enum LicenseMode {
         tier: LicenseTier,
         expires: NaiveDate,
         device_limit: u32,
+        /// Days until expiry; None if > EXPIRY_WARNING_DAYS away.
+        expiry_warning_days: Option<u32>,
+    },
+    Expired {
+        licensee: String,
+        tier: LicenseTier,
+        expired_on: NaiveDate,
     },
 }
 
 impl LicenseMode {
-    /// Whether the license reminder banner should be shown.
+    /// Whether a banner should be shown (community nag, expiry warning, or expired).
     pub fn should_show_banner(&self) -> bool {
-        matches!(self, LicenseMode::Community { acknowledged: false })
+        match self {
+            LicenseMode::Community { acknowledged: false } => true,
+            LicenseMode::Licensed { expiry_warning_days: Some(_), .. } => true,
+            LicenseMode::Expired { .. } => true,
+            _ => false,
+        }
     }
 }
 
@@ -112,13 +127,15 @@ pub fn validate_license_key(key: &str) -> Result<LicensePayload, String> {
     let payload: LicensePayload = serde_json::from_slice(&payload_bytes)
         .map_err(|e| format!("invalid license key: bad payload: {e}"))?;
 
-    // Check expiration
-    let today = chrono::Utc::now().date_naive();
-    if payload.expires < today {
-        return Err(format!("license expired on {}", payload.expires));
-    }
-
     Ok(payload)
+}
+
+/// Validate a key and check if it's expired. Returns the payload and whether it's expired.
+pub fn validate_license_key_with_expiry(key: &str) -> Result<(LicensePayload, bool), String> {
+    let payload = validate_license_key(key)?;
+    let today = chrono::Utc::now().date_naive();
+    let expired = payload.expires < today;
+    Ok((payload, expired))
 }
 
 /// Determine the current license mode from stored state.
@@ -139,11 +156,27 @@ pub async fn determine_license_mode(
             use secrecy::ExposeSecret;
             match validate_license_key(key.expose_secret()) {
                 Ok(payload) => {
+                    let today = chrono::Utc::now().date_naive();
+                    if payload.expires < today {
+                        // Key is valid but expired — honor system, no lockout
+                        return LicenseMode::Expired {
+                            licensee: payload.licensee,
+                            tier: payload.tier,
+                            expired_on: payload.expires,
+                        };
+                    }
+                    let days_until = (payload.expires - today).num_days();
+                    let expiry_warning_days = if days_until <= EXPIRY_WARNING_DAYS {
+                        Some(days_until as u32)
+                    } else {
+                        None
+                    };
                     return LicenseMode::Licensed {
                         licensee: payload.licensee,
                         tier: payload.tier,
                         expires: payload.expires,
                         device_limit: payload.device_limit,
+                        expiry_warning_days,
                     };
                 }
                 Err(e) => {

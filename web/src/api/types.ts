@@ -1656,13 +1656,15 @@ export interface DeliveryChannelConfig {
 // ── License types (snake_case — custom Rust structs) ──────────
 
 export interface LicenseStatus {
-  mode: "evaluation" | "community" | "licensed";
+  mode: "evaluation" | "community" | "licensed" | "expired";
   days_remaining?: number;
   acknowledged?: boolean;
   licensee?: string;
   tier?: "business" | "education" | "nonprofit" | "government";
   expires?: string;
+  expired_on?: string;
   device_limit?: number;
+  expiry_warning_days?: number;
 }
 
 // ── Investigation Engine ──────────────────────────────────────

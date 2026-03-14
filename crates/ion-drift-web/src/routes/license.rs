@@ -35,7 +35,7 @@ pub async fn submit_license_key(
     State(state): State<AppState>,
     Json(req): Json<SubmitKeyRequest>,
 ) -> Result<Json<license::LicenseMode>, Response> {
-    // Validate the key first
+    // Validate the key (signature + payload parse; expired keys are accepted)
     let payload = license::validate_license_key(&req.key).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
@@ -44,7 +44,7 @@ pub async fn submit_license_key(
             .into_response()
     })?;
 
-    // Store the valid key
+    // Store the key
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -65,12 +65,29 @@ pub async fn submit_license_key(
         "commercial license key activated"
     );
 
-    Ok(Json(license::LicenseMode::Licensed {
-        licensee: payload.licensee,
-        tier: payload.tier,
-        expires: payload.expires,
-        device_limit: payload.device_limit,
-    }))
+    // Return the appropriate mode based on expiry
+    let today = chrono::Utc::now().date_naive();
+    if payload.expires < today {
+        Ok(Json(license::LicenseMode::Expired {
+            licensee: payload.licensee,
+            tier: payload.tier,
+            expired_on: payload.expires,
+        }))
+    } else {
+        let days_until = (payload.expires - today).num_days();
+        let expiry_warning_days = if days_until <= 30 {
+            Some(days_until as u32)
+        } else {
+            None
+        };
+        Ok(Json(license::LicenseMode::Licensed {
+            licensee: payload.licensee,
+            tier: payload.tier,
+            expires: payload.expires,
+            device_limit: payload.device_limit,
+            expiry_warning_days,
+        }))
+    }
 }
 
 /// POST /api/license/acknowledge — Acknowledge personal home use.
