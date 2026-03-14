@@ -188,8 +188,13 @@ impl SessionStore {
                 "loaded active sessions from sqlite"
             );
         }
-        for invalid_id in invalid_ids {
-            self.delete_from_db(&invalid_id);
+        // Delete invalid sessions using the already-held db lock
+        // (calling delete_from_db here would deadlock on self.db)
+        for invalid_id in &invalid_ids {
+            let _ = db.execute(
+                "DELETE FROM sessions WHERE session_id = ?1",
+                params![invalid_id],
+            );
         }
     }
 
