@@ -16,7 +16,7 @@ Only the latest release on the `main` branch receives security updates.
 To report a vulnerability, use one of the following channels:
 
 - **GitHub Security Advisory:** Go to the repository's Security tab and select "Report a vulnerability"
-- **Email:** [security@cyberhivesecurity.com](mailto:security@cyberhivesecurity.com)
+- **Email:** [scott@mycyberhive.com](mailto:scott@mycyberhive.com)
 
 ### What to expect
 
