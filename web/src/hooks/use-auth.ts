@@ -17,10 +17,26 @@ export function useAuth() {
     });
   };
 
+  const login = async (username: string, password: string) => {
+    const res = await fetch("/auth/local-login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: "Login failed" }));
+      throw new Error(data.error || "Login failed");
+    }
+    // Invalidate auth status to trigger re-render
+    queryClient.invalidateQueries({ queryKey: ["auth", "status"] });
+  };
+
   return {
     isAuthenticated: data?.authenticated ?? false,
     user: data?.user ?? null,
     isLoading,
+    login,
     logout,
   };
 }

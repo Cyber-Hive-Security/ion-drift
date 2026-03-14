@@ -87,8 +87,8 @@ async fn main() -> anyhow::Result<()> {
         let db_path = data_dir.join("secrets.db");
         let ca_cert_path = config
             .oidc
-            .ca_cert_path
-            .as_deref()
+            .as_ref()
+            .and_then(|o| o.ca_cert_path.as_deref())
             .ok_or_else(|| anyhow::anyhow!("oidc.ca_cert_path required for mTLS bootstrap"))?;
 
         // Check if cert+key exist on disk
@@ -113,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
             let has_secrets = sm.has_secrets().await?;
             let has_env_vars =
-                !config.router.password.is_empty() && !config.oidc.client_secret.is_empty();
+                !config.router.password.is_empty() && config.oidc.as_ref().map_or(false, |o| !o.client_secret.is_empty());
 
             if has_secrets {
                 // Decrypt from DB and inject into config
@@ -123,8 +123,10 @@ async fn main() -> anyhow::Result<()> {
                 })?;
                 config.router.username = decrypted.router_username;
                 config.router.password = decrypted.router_password.expose_secret().to_string();
-                config.oidc.client_secret =
-                    decrypted.oidc_client_secret.expose_secret().to_string();
+                if let Some(ref mut oidc) = config.oidc {
+                    oidc.client_secret =
+                        decrypted.oidc_client_secret.expose_secret().to_string();
+                }
                 config.session.session_secret =
                     decrypted.session_secret.expose_secret().to_string();
             } else if has_env_vars {
@@ -140,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
                     router_username: config.router.username.clone(),
                     router_password: secrecy::SecretString::from(config.router.password.clone()),
                     oidc_client_secret: secrecy::SecretString::from(
-                        config.oidc.client_secret.clone(),
+                        config.oidc.as_ref().map_or(String::new(), |o| o.client_secret.clone()),
                     ),
                     session_secret: secrecy::SecretString::from(session_secret.clone()),
                     certwarden_cert_api_key: None,
@@ -167,6 +169,36 @@ async fn main() -> anyhow::Result<()> {
             );
             return run_setup_mode(&config, &data_dir).await;
         }
+    } else if !config.has_oidc() {
+        // Local auth mode — no OIDC configured
+        let db_path = data_dir.join("secrets.db");
+        match bootstrap::load_local_kek(&data_dir)? {
+            Some(result) => {
+                let sm = SecretsManager::new(&db_path, result.kek)?;
+                if sm.has_local_users().await? {
+                    tracing::info!("local auth mode: loading from cached KEK");
+                    // Load session secret into config if available
+                    if let Ok(Some(ss)) = sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
+                        config.session.session_secret = ss.expose_secret().to_string();
+                    }
+                    // Load router credentials if available
+                    if let Ok(Some(u)) = sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
+                        config.router.username = u.expose_secret().to_string();
+                    }
+                    if let Ok(Some(p)) = sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
+                        config.router.password = p.expose_secret().to_string();
+                    }
+                    Some(Arc::new(tokio::sync::RwLock::new(sm)))
+                } else {
+                    tracing::info!("local auth mode: no users yet, entering setup");
+                    return run_local_setup_mode(&config, &data_dir).await;
+                }
+            }
+            None => {
+                tracing::info!("local auth mode: no KEK cache, entering setup");
+                return run_local_setup_mode(&config, &data_dir).await;
+            }
+        }
     } else {
         None
     };
@@ -188,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
         router_port = config.router.port,
         router_tls = config.router.tls,
         wan_interface = %config.router.wan_interface,
-        oidc_issuer = %config.oidc.issuer_url,
+        oidc_issuer = %config.oidc.as_ref().map_or("(disabled)", |o| o.issuer_url.as_str()),
         session_max_age = config.session.max_age_seconds,
         syslog_port = config.syslog.port,
         "resolved configuration"
@@ -300,12 +332,19 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("router provisioning available via Setup Wizard (Settings > Setup Wizard)");
 
     // Build HTTP client with Smallstep CA cert (shared for OIDC + router)
-    let http_client = auth::build_oidc_http_client(config.oidc.ca_cert_path.as_deref())?;
+    let http_client = auth::build_oidc_http_client(config.oidc.as_ref().and_then(|o| o.ca_cert_path.as_deref()))?;
 
-    // Discover OIDC provider
-    tracing::info!("discovering OIDC provider at {}", config.oidc.issuer_url);
-    let oidc_client = auth::discover_oidc(&config, &http_client).await?;
-    tracing::info!("OIDC provider discovered successfully");
+    // Discover OIDC provider (only if configured)
+    let oidc_client = if config.has_oidc() {
+        let oidc = config.oidc.as_ref().unwrap();
+        tracing::info!("discovering OIDC provider at {}", oidc.issuer_url);
+        let client = auth::discover_oidc(&config, &http_client).await?;
+        tracing::info!("OIDC provider discovered successfully");
+        Some(client)
+    } else {
+        tracing::info!("OIDC not configured — running without SSO");
+        None
+    };
 
     // Initialize traffic tracker
     let traffic_tracker = Arc::new(
@@ -483,8 +522,8 @@ async fn run_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> an
         db_path,
         router_username: config.router.username.clone(),
         tls_config: config.tls.clone(),
-        oidc_bootstrap: config.oidc.bootstrap.clone(),
-        ca_cert_path: config.oidc.ca_cert_path.clone().unwrap_or_default(),
+        oidc_bootstrap: config.oidc.as_ref().and_then(|o| o.bootstrap.clone()),
+        ca_cert_path: config.oidc.as_ref().and_then(|o| o.ca_cert_path.clone()).unwrap_or_default(),
         certwarden_base_url: config.certwarden.base_url.clone(),
         certwarden_cert_name: config.certwarden.cert_name.clone(),
     };
@@ -508,6 +547,39 @@ async fn run_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> an
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("ion-drift setup server listening on {bind_addr} (localhost only)");
     tracing::info!("navigate to http://{bind_addr}/setup to configure secrets");
+
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// Run the local-auth setup-mode server when no KEK cache or local users exist.
+///
+/// Presents a form to create the initial admin account, derives the KEK from the
+/// password, caches it with a machine key, and exits for Docker/systemd restart.
+async fn run_local_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> anyhow::Result<()> {
+    let state = setup::LocalSetupState {
+        db_path: data_dir.join("secrets.db"),
+    };
+
+    let app = axum::Router::new()
+        .route(
+            "/setup",
+            axum::routing::get(setup::local_setup_page).post(setup::local_setup_submit),
+        )
+        .route(
+            "/health",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({ "status": "setup_required" }))
+            }),
+        )
+        .fallback(|| async { axum::response::Redirect::temporary("/setup") })
+        .with_state(state);
+
+    // Setup mode binds to localhost only — prevents unauthenticated network access
+    let bind_addr = format!("127.0.0.1:{}", config.server.listen_port);
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    tracing::info!("ion-drift local setup server listening on {bind_addr} (localhost only)");
+    tracing::info!("navigate to http://{bind_addr}/setup to create admin account");
 
     axum::serve(listener, app).await?;
     Ok(())

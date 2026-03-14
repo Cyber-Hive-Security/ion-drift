@@ -144,7 +144,7 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
     // Cert rotation (only if CertWarden is configured)
     if let Some(ref sm) = state.secrets_manager {
         if let Some(cw_config) = state.config.certwarden.resolve() {
-            if let Some(ca_path) = state.config.oidc.ca_cert_path.as_deref() {
+            if let Some(ca_path) = state.config.oidc.as_ref().and_then(|o| o.ca_cert_path.as_deref()) {
                 cert::spawn_cert_rotation(
                     sm.clone(),
                     cw_config,

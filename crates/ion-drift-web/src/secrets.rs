@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -57,6 +57,14 @@ pub struct SecretStatus {
     pub auto_generated: bool,
     /// Whether this secret has been stored (false = not yet configured).
     pub stored: bool,
+}
+
+/// A local user account.
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalUser {
+    pub username: String,
+    pub role: String,
+    pub created_at: i64,
 }
 
 /// A device registered in the device registry.
@@ -691,6 +699,79 @@ impl SecretsManager {
             db.query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))?;
         Ok(count > 0)
     }
+
+    // ── Local user management ───────────────────────────────────
+
+    /// Create a local user with argon2id-hashed password.
+    pub async fn create_local_user(&self, username: &str, password: &str, role: &str) -> anyhow::Result<()> {
+        use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
+        use argon2::password_hash::rand_core::OsRng;
+
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        let hash = argon2.hash_password(password.as_bytes(), &salt)
+            .map_err(|e| anyhow::anyhow!("failed to hash password: {e}"))?
+            .to_string();
+
+        let now = now_unix();
+
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO local_users (username, password_hash, role, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![username, hash, role, now, now],
+        )?;
+        Ok(())
+    }
+
+    /// Verify a local user's password. Returns the user's role on success.
+    pub async fn verify_local_user(&self, username: &str, password: &str) -> anyhow::Result<Option<LocalUser>> {
+        use argon2::{Argon2, PasswordVerifier, PasswordHash};
+
+        let db = self.db.lock().await;
+        let result: Option<(String, String, i64)> = db.query_row(
+            "SELECT password_hash, role, created_at FROM local_users WHERE username = ?1",
+            params![username],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+
+        let Some((hash_str, role, created_at)) = result else {
+            return Ok(None);
+        };
+
+        let parsed_hash = PasswordHash::new(&hash_str)
+            .map_err(|e| anyhow::anyhow!("invalid stored hash: {e}"))?;
+
+        if Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok() {
+            Ok(Some(LocalUser {
+                username: username.to_string(),
+                role,
+                created_at,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Check if any local users exist.
+    pub async fn has_local_users(&self) -> anyhow::Result<bool> {
+        let db = self.db.lock().await;
+        let count: i64 = db.query_row("SELECT COUNT(*) FROM local_users", [], |row| row.get(0))?;
+        Ok(count > 0)
+    }
+
+    /// List all local users (without password hashes).
+    pub async fn list_local_users(&self) -> anyhow::Result<Vec<LocalUser>> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare("SELECT username, role, created_at FROM local_users ORDER BY created_at")?;
+        let users = stmt.query_map([], |row| {
+            Ok(LocalUser {
+                username: row.get(0)?,
+                role: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(users)
+    }
 }
 
 /// Compute a fingerprint: first 8 bytes of SHA-256(key) as hex (16 chars).
@@ -709,6 +790,13 @@ fn open_db(db_path: &Path) -> anyhow::Result<rusqlite::Connection> {
             ciphertext BLOB NOT NULL,
             nonce BLOB NOT NULL,
             key_fingerprint TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS local_users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'admin',
+            created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS devices (

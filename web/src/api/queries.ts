@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
+  AuthConfig,
   AuthStatus,
   SystemResource,
   SystemIdentity,
@@ -113,6 +114,15 @@ export function useAuthStatus() {
   return useQuery({
     queryKey: ["auth", "status"],
     queryFn: () => apiFetch<AuthStatus>("/auth/status"),
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+export function useAuthConfig() {
+  return useQuery({
+    queryKey: ["auth", "config"],
+    queryFn: () => apiFetch<AuthConfig>("/auth/config"),
     staleTime: Infinity,
     retry: false,
   });

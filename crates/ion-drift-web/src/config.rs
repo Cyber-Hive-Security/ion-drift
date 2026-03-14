@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct ServerConfig {
     pub server: ServerSection,
     pub router: RouterSection,
-    pub oidc: OidcSection,
+    #[serde(default)]
+    pub oidc: Option<OidcSection>,
     #[serde(default)]
     pub session: SessionSection,
     #[serde(default)]
@@ -37,6 +38,14 @@ pub struct OidcBootstrapSection {
 
 fn default_kek_attribute() -> String {
     "ion_drift_kek".into()
+}
+
+fn default_roles_claim() -> String {
+    "realm_access.roles".into()
+}
+
+fn default_admin_role() -> String {
+    "ion-drift-admin".into()
 }
 
 /// Resolved bootstrap config (all fields validated as present).
@@ -211,6 +220,12 @@ pub struct OidcSection {
     pub client_secret: String,
     pub redirect_uri: String,
     pub ca_cert_path: Option<String>,
+    /// Dot-path to roles array in ID token (e.g. "realm_access.roles", "groups")
+    #[serde(default = "default_roles_claim")]
+    pub roles_claim: String,
+    /// Role/group name that maps to admin privilege
+    #[serde(default = "default_admin_role")]
+    pub admin_role: String,
     /// Nested bootstrap config for mTLS KEK retrieval.
     #[serde(default)]
     pub bootstrap: Option<OidcBootstrapSection>,
@@ -288,11 +303,20 @@ fn default_same_site() -> String {
 // ── Resolve bootstrap ───────────────────────────────────────────
 
 impl ServerConfig {
+    /// Returns true if an `[oidc]` section is present in the config.
+    pub fn has_oidc(&self) -> bool {
+        self.oidc.is_some()
+    }
+
     /// Check if OIDC bootstrap (mTLS KEK) is configured.
     /// Returns a ResolvedBootstrap if oidc.bootstrap has a client_id and
     /// TLS cert/key paths are configured.
     pub fn resolve_bootstrap(&self) -> anyhow::Result<Option<ResolvedBootstrap>> {
-        let bootstrap = match &self.oidc.bootstrap {
+        let oidc = match &self.oidc {
+            Some(o) => o,
+            None => return Ok(None),
+        };
+        let bootstrap = match &oidc.bootstrap {
             Some(b) => b,
             None => return Ok(None),
         };
@@ -331,22 +355,37 @@ impl ServerConfig {
         let mut config: ServerConfig = toml::from_str(&contents)
             .map_err(|e| anyhow::anyhow!("failed to parse config: {e}"))?;
 
-        let has_bootstrap = config.oidc.bootstrap.as_ref()
+        let has_bootstrap = config.oidc.as_ref()
+            .and_then(|o| o.bootstrap.as_ref())
             .and_then(|b| b.client_id.as_ref())
             .is_some();
 
         if has_bootstrap {
             // Secrets-at-rest mode: env vars are optional fallbacks
             config.router.password = std::env::var("DRIFT_ROUTER_PASSWORD").unwrap_or_default();
-            config.oidc.client_secret = std::env::var("DRIFT_OIDC_SECRET").unwrap_or_default();
+            if let Some(ref mut oidc) = config.oidc {
+                oidc.client_secret = std::env::var("DRIFT_OIDC_SECRET").unwrap_or_default();
+            }
             config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET").unwrap_or_default();
-        } else {
-            // Legacy mode: env vars are required
+        } else if config.oidc.is_some() {
+            // Legacy mode with OIDC present: env vars are required
             config.router.password = std::env::var("DRIFT_ROUTER_PASSWORD")
                 .map_err(|_| anyhow::anyhow!("DRIFT_ROUTER_PASSWORD env var is required"))?;
 
-            config.oidc.client_secret = std::env::var("DRIFT_OIDC_SECRET")
-                .map_err(|_| anyhow::anyhow!("DRIFT_OIDC_SECRET env var is required"))?;
+            if let Some(ref mut oidc) = config.oidc {
+                oidc.client_secret = std::env::var("DRIFT_OIDC_SECRET")
+                    .map_err(|_| anyhow::anyhow!("DRIFT_OIDC_SECRET env var is required"))?;
+            }
+
+            config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET")
+                .unwrap_or_else(|_| {
+                    tracing::warn!("DRIFT_SESSION_SECRET not set, generating random secret");
+                    uuid::Uuid::new_v4().to_string()
+                });
+        } else {
+            // No OIDC configured: only router password is needed
+            config.router.password = std::env::var("DRIFT_ROUTER_PASSWORD")
+                .map_err(|_| anyhow::anyhow!("DRIFT_ROUTER_PASSWORD env var is required"))?;
 
             config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET")
                 .unwrap_or_else(|_| {

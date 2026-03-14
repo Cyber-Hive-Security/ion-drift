@@ -458,7 +458,10 @@ pub async fn discover_oidc(
     config: &ServerConfig,
     http_client: &reqwest::Client,
 ) -> anyhow::Result<OidcClient> {
-    let issuer_url = IssuerUrl::new(config.oidc.issuer_url.clone())
+    let oidc = config.oidc.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("OIDC is not configured — cannot discover provider"))?;
+
+    let issuer_url = IssuerUrl::new(oidc.issuer_url.clone())
         .map_err(|e| anyhow::anyhow!("invalid issuer URL: {e}"))?;
 
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, http_client)
@@ -472,15 +475,15 @@ pub async fn discover_oidc(
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("OIDC provider has no token endpoint"))?;
 
-    let redirect_uri = RedirectUrl::new(config.oidc.redirect_uri.clone())
+    let redirect_uri = RedirectUrl::new(oidc.redirect_uri.clone())
         .map_err(|e| anyhow::anyhow!("invalid redirect URI: {e}"))?;
 
     // Build client: from_provider_metadata returns EndpointNotSet for all endpoints,
     // so we chain set_auth_uri + set_token_uri to get the proper type state.
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
-        ClientId::new(config.oidc.client_id.clone()),
-        Some(ClientSecret::new(config.oidc.client_secret.clone())),
+        ClientId::new(oidc.client_id.clone()),
+        Some(ClientSecret::new(oidc.client_secret.clone())),
     )
     .set_auth_uri(auth_url)
     .set_token_uri(token_url)
@@ -504,10 +507,13 @@ fn json_error(status: StatusCode, msg: impl Into<String>) -> Response {
 
 /// `GET /auth/login` — Start the OIDC authorization code flow.
 pub async fn login(State(state): State<AppState>) -> Response {
+    let oidc_client = match &state.oidc_client {
+        Some(c) => c,
+        None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "OIDC is not configured"),
+    };
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-    let (auth_url, csrf_token, nonce) = state
-        .oidc_client
+    let (auth_url, csrf_token, nonce) = oidc_client
         .authorize_url(
             CoreAuthenticationFlow::AuthorizationCode,
             CsrfToken::new_random,
@@ -538,6 +544,19 @@ pub struct CallbackParams {
     state: String,
 }
 
+#[derive(Deserialize)]
+pub struct LocalLoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct AuthConfigResponse {
+    pub local_auth_enabled: bool,
+    pub oidc_enabled: bool,
+    pub oidc_provider_name: Option<String>,
+}
+
 /// `GET /auth/callback` — Handle the OIDC redirect from Keycloak.
 pub async fn callback(
     State(state): State<AppState>,
@@ -553,9 +572,12 @@ pub async fn callback(
         )
     })?;
 
+    let oidc_client = state.oidc_client.as_ref().ok_or_else(|| {
+        json_error(StatusCode::SERVICE_UNAVAILABLE, "OIDC is not configured")
+    })?;
+
     // Exchange authorization code for tokens
-    let token_response = state
-        .oidc_client
+    let token_response = oidc_client
         .exchange_code(AuthorizationCode::new(params.code))
         .set_pkce_verifier(pkce_verifier)
         .request_async(&state.http_client)
@@ -570,7 +592,7 @@ pub async fn callback(
         .id_token()
         .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "no ID token in response"))?;
 
-    let verifier = state.oidc_client.id_token_verifier();
+    let verifier = oidc_client.id_token_verifier();
     let claims = id_token.claims(&verifier, &nonce).map_err(|e| {
         tracing::error!("ID token verification failed: {e}");
         json_error(StatusCode::UNAUTHORIZED, "ID token verification failed")
@@ -584,9 +606,20 @@ pub async fn callback(
         .unwrap_or_else(|| user_id.clone());
     let email = claims.email().map(|e: &EndUserEmail| e.to_string());
 
-    // Extract roles from Keycloak's realm_access claim.
+    // Extract roles from the ID token using the configured claim path.
     // The token is already signature-verified above, so decoding the payload is safe.
-    let roles = extract_keycloak_roles(id_token.to_string().as_str());
+    let roles_claim = state.config.oidc.as_ref()
+        .map(|o| o.roles_claim.as_str())
+        .unwrap_or("realm_access.roles");
+    let admin_role = state.config.oidc.as_ref()
+        .map(|o| o.admin_role.as_str())
+        .unwrap_or("ion-drift-admin");
+    let id_token_str = id_token.to_string();
+    let mut roles = extract_oidc_roles(&id_token_str, roles_claim);
+    // Normalize: if the configured admin role is present, ensure "ion-drift-admin" is in the list
+    if admin_role != "ion-drift-admin" && roles.contains(&admin_role.to_string()) {
+        roles.push("ion-drift-admin".to_string());
+    }
 
     tracing::info!(user_id, username, ?roles, "user authenticated via OIDC");
 
@@ -703,15 +736,119 @@ pub async fn status(State(state): State<AppState>, jar: CookieJar) -> Json<AuthS
     }
 }
 
-// ── Keycloak role extraction ──────────────────────────────────────
+/// `GET /auth/config` — Returns available auth methods (no auth required).
+pub async fn auth_config(State(state): State<AppState>) -> Json<AuthConfigResponse> {
+    let oidc_enabled = state.oidc_client.is_some();
+    let oidc_provider_name = if oidc_enabled {
+        state.config.oidc.as_ref().map(|o| {
+            // Extract hostname from issuer URL as provider name
+            o.issuer_url.split("//").nth(1)
+                .and_then(|s| s.split('/').next())
+                .unwrap_or("SSO Provider")
+                .to_string()
+        })
+    } else {
+        None
+    };
+
+    Json(AuthConfigResponse {
+        local_auth_enabled: state.secrets_manager.is_some(),
+        oidc_enabled,
+        oidc_provider_name,
+    })
+}
+
+/// `POST /auth/local-login` — Authenticate with username/password.
+pub async fn local_login(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<LocalLoginRequest>,
+) -> Result<(CookieJar, Json<serde_json::Value>), Response> {
+    let sm = state.secrets_manager.as_ref().ok_or_else(|| {
+        json_error(StatusCode::SERVICE_UNAVAILABLE, "local auth not available")
+    })?;
+
+    let sm = sm.read().await;
+    let user = sm.verify_local_user(&req.username, &req.password).await
+        .map_err(|e| {
+            tracing::error!("local auth error: {e}");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "authentication error")
+        })?
+        .ok_or_else(|| {
+            // Use the same error for both "user not found" and "wrong password"
+            // to prevent user enumeration
+            tracing::warn!(username = %req.username, "failed local login attempt");
+            json_error(StatusCode::UNAUTHORIZED, "invalid username or password")
+        })?;
+    drop(sm);
+
+    // Map role to internal admin role if it matches
+    let admin_role = state.config.oidc.as_ref()
+        .map(|o| o.admin_role.as_str())
+        .unwrap_or("ion-drift-admin");
+    let roles = if user.role == "admin" || user.role == admin_role {
+        vec!["ion-drift-admin".to_string()]
+    } else {
+        vec![user.role.clone()]
+    };
+
+    let session_id = state.sessions.issue_session_id().await
+        .map_err(|e| {
+            tracing::error!("failed to issue session ID: {e}");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "session error")
+        })?;
+
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let data = SessionData {
+        user_id: format!("local:{}", req.username),
+        username: req.username.clone(),
+        email: None,
+        roles,
+        created_at: now_secs(),
+        last_accessed: now_secs(),
+        created_ip: None,
+        user_agent,
+    };
+
+    state.sessions.insert_session(session_id.clone(), data);
+
+    // Set session cookie — matching the exact pattern from the OIDC callback handler
+    let max_age_secs = state.config.session.max_age_seconds as i64;
+    let same_site = match state.config.session.same_site.to_lowercase().as_str() {
+        "strict" => SameSite::Strict,
+        "none" => SameSite::None,
+        _ => SameSite::Lax,
+    };
+
+    let cookie = Cookie::build((state.config.session.cookie_name.clone(), session_id))
+        .path("/")
+        .http_only(true)
+        .secure(state.config.session.secure)
+        .max_age(cookie::time::Duration::seconds(max_age_secs))
+        .same_site(same_site)
+        .build();
+
+    let jar = CookieJar::new().add(cookie);
+
+    tracing::info!(username = %req.username, "local login successful");
+
+    Ok((jar, Json(serde_json::json!({ "authenticated": true }))))
+}
+
+// ── OIDC role extraction ──────────────────────────────────────────
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-/// Extract realm roles from a Keycloak JWT's `realm_access.roles` claim.
+/// Extract roles from an OIDC JWT using a configurable claim path.
 ///
 /// The token must already be signature-verified before calling this.
-/// Returns an empty vec if the claim is missing or malformed.
-fn extract_keycloak_roles(jwt: &str) -> Vec<String> {
+/// Supports dot-notation traversal (e.g., "realm_access.roles").
+/// Falls back to "roles" then "groups" at root if the configured claim is not found.
+fn extract_oidc_roles(jwt: &str, roles_claim: &str) -> Vec<String> {
     let parts: Vec<&str> = jwt.split('.').collect();
     if parts.len() != 3 {
         return Vec::new();
@@ -727,14 +864,42 @@ fn extract_keycloak_roles(jwt: &str) -> Vec<String> {
         Err(_) => return Vec::new(),
     };
 
-    value
-        .get("realm_access")
-        .and_then(|ra| ra.get("roles"))
-        .and_then(|r| r.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default()
+    // Try configured claim path first (dot-notation)
+    if let Some(roles) = navigate_claim(&value, roles_claim) {
+        return roles;
+    }
+    // Fallback: try "roles" at root
+    if roles_claim != "roles" {
+        if let Some(roles) = extract_string_array(&value, "roles") {
+            return roles;
+        }
+    }
+    // Fallback: try "groups" at root
+    if roles_claim != "groups" {
+        if let Some(roles) = extract_string_array(&value, "groups") {
+            return roles;
+        }
+    }
+    Vec::new()
+}
+
+/// Navigate a dot-separated claim path in a JSON value and extract a string array.
+fn navigate_claim(value: &serde_json::Value, path: &str) -> Option<Vec<String>> {
+    let mut current = value;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    extract_string_array_from_value(current)
+}
+
+/// Extract a string array from a named field in a JSON object.
+fn extract_string_array(value: &serde_json::Value, key: &str) -> Option<Vec<String>> {
+    extract_string_array_from_value(value.get(key)?)
+}
+
+/// Extract a string array from a JSON value.
+fn extract_string_array_from_value(value: &serde_json::Value) -> Option<Vec<String>> {
+    value.as_array().map(|arr| {
+        arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+    })
 }

@@ -394,6 +394,122 @@ fn load_cached_kek(data_dir: &Path, key_path: &str) -> Option<BootstrapResult> {
     })
 }
 
+/// Cache KEK locally using a machine key for startup without password (local auth mode).
+///
+/// Generates a random 32-byte `machine.key` file if it doesn't exist, then encrypts the
+/// KEK with it and writes `kek.local`. On next startup, `load_local_kek()` reverses this
+/// so the server can open the SecretsManager without the admin password.
+pub fn cache_kek_locally(kek: &Key<Aes256Gcm>, data_dir: &Path) -> anyhow::Result<()> {
+    let machine_key_path = data_dir.join("machine.key");
+    let kek_cache_path = data_dir.join("kek.local");
+
+    // Generate machine key if it doesn't exist
+    let machine_key_bytes: [u8; 32] = if machine_key_path.exists() {
+        let bytes = std::fs::read(&machine_key_path)?;
+        bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("corrupt machine.key"))?
+    } else {
+        let key: [u8; 32] = rand::random();
+        std::fs::write(&machine_key_path, &key)?;
+        key
+    };
+
+    let machine_key = Key::<Aes256Gcm>::from_slice(&machine_key_bytes);
+    let cipher = Aes256Gcm::new(machine_key);
+    let nonce_bytes: [u8; 12] = rand::random();
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, kek.as_slice())
+        .map_err(|e| anyhow::anyhow!("failed to encrypt KEK cache: {e}"))?;
+
+    // Write nonce + ciphertext
+    let mut data = Vec::with_capacity(12 + ciphertext.len());
+    data.extend_from_slice(&nonce_bytes);
+    data.extend_from_slice(&ciphertext);
+    std::fs::write(&kek_cache_path, &data)?;
+
+    Ok(())
+}
+
+/// Load cached KEK from machine key (local auth mode).
+///
+/// Returns `None` if `machine.key` or `kek.local` are missing.
+/// Returns `Err` if the files exist but are corrupt or decryption fails.
+pub fn load_local_kek(data_dir: &Path) -> anyhow::Result<Option<BootstrapResult>> {
+    let machine_key_path = data_dir.join("machine.key");
+    let kek_cache_path = data_dir.join("kek.local");
+
+    if !machine_key_path.exists() || !kek_cache_path.exists() {
+        return Ok(None);
+    }
+
+    let machine_key_bytes: [u8; 32] = std::fs::read(&machine_key_path)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("corrupt machine.key"))?;
+
+    let data = std::fs::read(&kek_cache_path)?;
+    if data.len() < 12 {
+        return Err(anyhow::anyhow!("corrupt kek.local"));
+    }
+
+    let machine_key = Key::<Aes256Gcm>::from_slice(&machine_key_bytes);
+    let cipher = Aes256Gcm::new(machine_key);
+    let nonce = Nonce::from_slice(&data[..12]);
+
+    let kek_bytes = cipher
+        .decrypt(nonce, &data[12..])
+        .map_err(|e| anyhow::anyhow!("failed to decrypt KEK cache: {e}"))?;
+
+    if kek_bytes.len() != 32 {
+        return Err(anyhow::anyhow!("invalid KEK length in cache"));
+    }
+
+    let kek = Key::<Aes256Gcm>::from_slice(&kek_bytes).to_owned();
+    let fingerprint = compute_fingerprint(&kek);
+
+    Ok(Some(BootstrapResult {
+        kek,
+        fingerprint,
+        was_generated: false,
+    }))
+}
+
+/// Derive a KEK from a user password using argon2id KDF.
+/// The salt is derived from the db_path to ensure the same password produces
+/// the same KEK on the same installation, but different KEKs on different installations.
+pub fn derive_kek_from_password(password: &str, db_path: &Path) -> anyhow::Result<BootstrapResult> {
+    use argon2::Argon2;
+    use sha2::{Sha256, Digest};
+
+    // Derive a 16-byte salt from the db path
+    let mut hasher = Sha256::new();
+    hasher.update(b"ion-drift-kek-salt:");
+    hasher.update(db_path.to_string_lossy().as_bytes());
+    let salt_hash = hasher.finalize();
+    let salt = &salt_hash[..16];
+
+    // Derive 32-byte KEK using argon2id with moderate parameters
+    // m=65536 (64 MiB), t=3 iterations, p=4 parallelism
+    let params = argon2::Params::new(65536, 3, 4, Some(32))
+        .map_err(|e| anyhow::anyhow!("invalid argon2 params: {e}"))?;
+    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+
+    let mut kek_bytes = [0u8; 32];
+    argon2.hash_password_into(password.as_bytes(), salt, &mut kek_bytes)
+        .map_err(|e| anyhow::anyhow!("argon2id KDF failed: {e}"))?;
+
+    let kek = aes_gcm::Key::<aes_gcm::Aes256Gcm>::from_slice(&kek_bytes).to_owned();
+    let fingerprint = compute_fingerprint(&kek);
+
+    Ok(BootstrapResult {
+        kek,
+        fingerprint,
+        was_generated: true,
+    })
+}
+
 /// Write the KEK attribute to the service account user.
 async fn write_kek_attribute(
     client: &reqwest::Client,

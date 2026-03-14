@@ -25,8 +25,8 @@ use crate::topology::NetworkTopology;
 pub struct AppState {
     /// RouterOS REST API client.
     pub mikrotik: MikrotikClient,
-    /// OpenID Connect client for Keycloak authentication.
-    pub oidc_client: OidcClient,
+    /// OpenID Connect client for Keycloak authentication (None if OIDC not configured).
+    pub oidc_client: Option<OidcClient>,
     /// Shared HTTP client configured with the Smallstep CA cert.
     pub http_client: reqwest::Client,
     /// In-memory session store (DashMap-backed).

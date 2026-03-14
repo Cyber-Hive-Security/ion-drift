@@ -25,7 +25,7 @@ export async function apiFetch<T>(
   });
 
   if (response.status === 401) {
-    window.location.href = "/auth/login";
+    window.location.href = "/";
     throw new ApiError(401, "Session expired");
   }
 

@@ -11,6 +11,12 @@ export interface UserInfo {
   email: string | null;
 }
 
+export interface AuthConfig {
+  local_auth_enabled: boolean;
+  oidc_enabled: boolean;
+  oidc_provider_name: string | null;
+}
+
 // System types (kebab-case from #[serde(rename_all = "kebab-case")])
 
 export interface SystemResource {

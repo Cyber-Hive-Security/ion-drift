@@ -26,13 +26,25 @@ wan_interface = "1-WAN"
 # Override: DRIFT_ROUTER_DNS_SERVER env var
 # dns_server = "192.168.1.1"
 
-[oidc]
-issuer_url = "https://your-keycloak.example.com/realms/YourRealm"
-client_id = "ion-drift"
-# client_secret from DRIFT_OIDC_SECRET env var (legacy mode only)
-redirect_uri = "https://your-ion-drift.example.com/auth/callback"
-# CA cert for verifying your OIDC provider's TLS cert (optional)
-# ca_cert_path = "/path/to/ca.crt"
+# ── Authentication ─────────────────────────────────────────────────
+# By default, ion-drift uses local auth (username/password). The setup wizard
+# creates an admin account on first run. No external IdP is required.
+#
+# To enable OIDC (Keycloak, Authentik, Authelia, etc.), uncomment the [oidc]
+# section below. Both local auth and OIDC can be used simultaneously.
+
+# [oidc]
+# issuer_url = "https://your-idp.example.com/realms/YourRealm"
+# client_id = "ion-drift"
+# # client_secret from DRIFT_OIDC_SECRET env var (legacy mode only)
+# redirect_uri = "https://your-ion-drift.example.com/auth/callback"
+# # CA cert for verifying your OIDC provider's TLS cert (optional)
+# # ca_cert_path = "/path/to/ca.crt"
+# # Claim path for roles in the ID token (dot-notation for nested claims)
+# # Default: "realm_access.roles" (Keycloak). Use "groups" for Authentik/Authelia.
+# # roles_claim = "realm_access.roles"
+# # Role/group name that grants admin access (default: "ion-drift-admin")
+# # admin_role = "ion-drift-admin"
 
 [session]
 # secret from DRIFT_SESSION_SECRET env var (legacy mode; auto-generated in bootstrap mode)

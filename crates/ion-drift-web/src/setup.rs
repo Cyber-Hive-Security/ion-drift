@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use axum::extract::State;
+use axum::extract::{Form, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use secrecy::SecretString;
@@ -469,4 +469,186 @@ fn render_complete_html() -> String {
 </body>
 </html>"##
         .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Local-auth setup (no mTLS / CertWarden required)
+// ---------------------------------------------------------------------------
+
+/// State for local-auth setup mode (no mTLS/CertWarden required).
+#[derive(Clone)]
+pub struct LocalSetupState {
+    pub db_path: PathBuf,
+}
+
+#[derive(serde::Deserialize)]
+pub struct LocalSetupForm {
+    pub admin_username: String,
+    pub admin_password: String,
+    pub admin_password_confirm: String,
+}
+
+/// `GET /setup` — Render the local auth setup form.
+pub async fn local_setup_page() -> Html<String> {
+    Html(render_local_setup_html(None))
+}
+
+/// `POST /setup` — Create the initial local admin account.
+pub async fn local_setup_submit(
+    State(state): State<LocalSetupState>,
+    Form(form): Form<LocalSetupForm>,
+) -> Response {
+    // Validate
+    let username = form.admin_username.trim();
+    if username.is_empty() || username.len() > 64 {
+        return Html(render_local_setup_html(Some("Username must be 1-64 characters"))).into_response();
+    }
+    if form.admin_password.len() < 12 {
+        return Html(render_local_setup_html(Some("Password must be at least 12 characters"))).into_response();
+    }
+    if form.admin_password != form.admin_password_confirm {
+        return Html(render_local_setup_html(Some("Passwords do not match"))).into_response();
+    }
+
+    // Derive KEK from admin password
+    let kek_result = match crate::bootstrap::derive_kek_from_password(&form.admin_password, &state.db_path) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("KEK derivation failed: {e}");
+            return Html(render_local_setup_html(Some("Failed to initialize encryption. Check server logs."))).into_response();
+        }
+    };
+
+    // Cache KEK for startup without password
+    let data_dir = state.db_path.parent().unwrap_or(std::path::Path::new("."));
+    if let Err(e) = crate::bootstrap::cache_kek_locally(&kek_result.kek, data_dir) {
+        tracing::error!("failed to cache KEK: {e}");
+        return Html(render_local_setup_html(Some("Failed to cache encryption key. Check server logs."))).into_response();
+    }
+
+    // Create SecretsManager
+    let sm = match crate::secrets::SecretsManager::new(&state.db_path, kek_result.kek) {
+        Ok(sm) => sm,
+        Err(e) => {
+            tracing::error!("failed to init secrets manager: {e}");
+            return Html(render_local_setup_html(Some("Failed to initialize storage. Check server logs."))).into_response();
+        }
+    };
+
+    // Create the local admin user
+    if let Err(e) = sm.create_local_user(username, &form.admin_password, "admin").await {
+        tracing::error!("failed to create admin user: {e}");
+        return Html(render_local_setup_html(Some("Failed to create admin account. Check server logs."))).into_response();
+    }
+
+    // Generate and store session secret
+    let session_bytes: [u8; 32] = rand::random();
+    let session_secret = hex::encode(session_bytes);
+    if let Err(e) = sm.encrypt_secret(crate::secrets::SECRET_SESSION_SECRET, &session_secret).await {
+        tracing::error!("failed to store session secret: {e}");
+        return Html(render_local_setup_html(Some("Failed to store session secret. Check server logs."))).into_response();
+    }
+
+    // Store the KEK fingerprint so we know this is a local-auth installation
+    if let Err(e) = sm.encrypt_secret("auth_mode", "local").await {
+        tracing::error!("failed to store auth mode: {e}");
+        return Html(render_local_setup_html(Some("Failed to store configuration. Check server logs."))).into_response();
+    }
+
+    tracing::info!(username = %username, "local admin account created, setup complete — restarting");
+
+    // Exit after a short delay so Docker/systemd restarts us into normal mode
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        std::process::exit(0);
+    });
+
+    // Return success page
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        render_local_complete_html(),
+    ).into_response()
+}
+
+fn render_local_setup_html(error: Option<&str>) -> String {
+    let error_html = error
+        .map(|e| {
+            let escaped = e.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+            format!(
+                r#"<div style="background:#fef2f2;border:1px solid #f87171;color:#dc2626;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px">{escaped}</div>"#
+            )
+        })
+        .unwrap_or_default();
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ion-drift setup</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; display: flex; justify-content: center; align-items: center; min-height: 100vh }}
+  .card {{ background: #171717; border: 1px solid #262626; border-radius: 12px; padding: 32px; width: 100%; max-width: 440px }}
+  h1 {{ font-size: 24px; margin-bottom: 8px }}
+  .subtitle {{ color: #a3a3a3; font-size: 14px; margin-bottom: 24px }}
+  label {{ display: block; font-size: 13px; color: #a3a3a3; margin-bottom: 6px; margin-top: 16px }}
+  input {{ width: 100%; padding: 10px 12px; background: #0a0a0a; border: 1px solid #404040; border-radius: 6px; color: #e5e5e5; font-size: 14px }}
+  input:focus {{ outline: none; border-color: #3b82f6 }}
+  button {{ width: 100%; margin-top: 24px; padding: 12px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s }}
+  button:hover {{ background: #2563eb }}
+  .hint {{ color: #737373; font-size: 12px; margin-top: 4px }}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>ion-drift setup</h1>
+  <p class="subtitle">Create your admin account to get started.</p>
+  {error_html}
+  <form method="POST" action="/setup">
+
+    <label for="admin_username">Admin Username</label>
+    <input type="text" id="admin_username" name="admin_username" required autocomplete="username" autofocus>
+
+    <label for="admin_password">Password</label>
+    <input type="password" id="admin_password" name="admin_password" required autocomplete="new-password">
+    <div class="hint">Minimum 12 characters</div>
+
+    <label for="admin_password_confirm">Confirm Password</label>
+    <input type="password" id="admin_password_confirm" name="admin_password_confirm" required autocomplete="new-password">
+
+    <button type="submit">Create Admin Account</button>
+  </form>
+</div>
+</body>
+</html>"#
+    )
+}
+
+fn render_local_complete_html() -> String {
+    r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ion-drift setup complete</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; display: flex; justify-content: center; align-items: center; min-height: 100vh }
+  .card { background: #171717; border: 1px solid #262626; border-radius: 12px; padding: 32px; width: 100%; max-width: 440px; text-align: center }
+  h1 { font-size: 24px; margin-bottom: 12px; color: #22c55e }
+  p { color: #a3a3a3; font-size: 14px; line-height: 1.6 }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Setup Complete</h1>
+  <p>Your admin account has been created.<br>
+  The server will restart automatically.<br>
+  You can then log in with your credentials.</p>
+</div>
+</body>
+</html>"#.to_string()
 }

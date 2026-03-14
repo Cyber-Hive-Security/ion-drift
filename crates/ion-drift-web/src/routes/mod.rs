@@ -311,7 +311,13 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
     let spa = ServeDir::new(&web_dist).not_found_service(ServeFile::new(index_html));
 
     // Derive CORS allowed origin from the OIDC redirect URI
-    let origin = extract_origin(&state.config.oidc.redirect_uri);
+    let origin = state.config.oidc.as_ref()
+        .map(|o| extract_origin(&o.redirect_uri))
+        .unwrap_or_else(|| {
+            let addr = &state.config.server.listen_addr;
+            let port = state.config.server.listen_port;
+            format!("http://{}:{}", addr, port)
+        });
     let cors = CorsLayer::new()
         .allow_origin(origin.parse::<HeaderValue>().map_err(|e| {
             anyhow::anyhow!(
@@ -694,14 +700,24 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         // Limit request body size to 2 MiB
         .layer(DefaultBodyLimit::max(2_097_152));
 
-    Ok(Router::new()
+    let app = Router::new()
         // Health check (no auth)
         .route("/health", get(health))
-        // Auth routes (no RequireAuth)
-        .route("/auth/login", get(auth::login))
-        .route("/auth/callback", get(auth::callback))
+        // Auth routes (no RequireAuth) — always available
+        .route("/auth/config", get(auth::auth_config))
+        .route("/auth/local-login", post(auth::local_login))
         .route("/auth/logout", post(auth::logout))
-        .route("/auth/status", get(auth::status))
+        .route("/auth/status", get(auth::status));
+
+    // OIDC routes — only registered when OIDC is configured
+    let app = if state.oidc_client.is_some() {
+        app.route("/auth/login", get(auth::login))
+            .route("/auth/callback", get(auth::callback))
+    } else {
+        app
+    };
+
+    Ok(app
         // Nest all API routes under /api with global auth layer
         .nest("/api", api_routes)
         // SPA static files (fallback for all non-API routes)
