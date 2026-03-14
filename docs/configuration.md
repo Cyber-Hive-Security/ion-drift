@@ -1,65 +1,343 @@
-# Configuration Reference
+# Ion Drift Configuration Guide
 
-Single source of truth for runtime configuration in `ion-drift-web` and `ion-drift-cli`.
+## Quick Start (Local Auth)
 
-## Web Server (`server.toml`)
+Ion Drift works out of the box with no external dependencies. On first launch, visit the web UI and the setup wizard will guide you through creating an admin account. No OIDC provider, no environment variables, no config file editing required to get started.
 
-| TOML Key | Type | Default | Env Override | Required | Description |
-|---|---|---|---|---|---|
-| `server.listen_addr` | string | `0.0.0.0` | - | No | Web server bind address. |
-| `server.listen_port` | u16 | `3000` | - | No | Web server port. |
-| `server.home_lon` | f64 | - | - | No | Optional map home longitude. |
-| `server.home_lat` | f64 | - | - | No | Optional map home latitude. |
-| `server.home_country` | string | - | - | No | Optional ISO country code for map home. |
-| `router.host` | string | `192.168.88.1` | `DRIFT_ROUTER_HOST` | No | Primary router host/IP. |
-| `router.port` | u16 | `443` | - | No | RouterOS REST API port. |
-| `router.tls` | bool | `true` | - | No | Use TLS for RouterOS client. |
-| `router.ca_cert_path` | string | - | `DRIFT_ROUTER_CA_CERT` | No | CA cert path for router TLS validation. |
-| `router.username` | string | `admin` | `DRIFT_ROUTER_USER` | No | Router username. |
-| `router.password` | string | - | `DRIFT_ROUTER_PASSWORD` | Yes\* | Router password secret. |
-| `router.wan_interface` | string | `1-WAN` | - | No | WAN interface used by traffic tracker. |
-| `router.dns_server` | string | - | `DRIFT_ROUTER_DNS_SERVER` | No | Internal DNS server for PTR lookups. |
-| `oidc.issuer_url` | string | - | - | Yes | OIDC issuer URL. |
-| `oidc.client_id` | string | - | - | Yes | OIDC client ID. |
-| `oidc.client_secret` | string | - | `DRIFT_OIDC_SECRET` | Yes\* | OIDC client secret. |
-| `oidc.redirect_uri` | string | - | - | Yes | OIDC callback URI. |
-| `oidc.ca_cert_path` | string | - | - | No | Optional CA cert for OIDC TLS validation. |
-| `oidc.bootstrap.client_id` | string | - | - | No | Bootstrap client ID for KEK retrieval. |
-| `oidc.bootstrap.token_url` | string | - | - | No | Bootstrap token endpoint URL. |
-| `oidc.bootstrap.admin_url` | string | - | - | No | Bootstrap Keycloak admin URL. |
-| `oidc.bootstrap.kek_attribute` | string | `ion_drift_kek` | - | No | Keycloak user attribute name for KEK. |
-| `session.cookie_name` | string | `ion_drift_session` | - | No | Session cookie name. |
-| `session.max_age_seconds` | u64 | `86400` | - | No | Session max age in seconds. |
-| `session.secure` | bool | `true` | - | No | Session cookie secure flag. |
-| `session.same_site` | string | `lax` | - | No | Session cookie SameSite setting. |
-| `session.session_secret` | string | generated if unset in legacy mode | `DRIFT_SESSION_SECRET` | Yes\* | Session signing secret. |
-| `tls.client_cert` | string | `/app/data/certs/client.crt` | - | No | Bootstrap mTLS client cert path. |
-| `tls.client_key` | string | `/app/data/certs/client.key` | - | No | Bootstrap mTLS client key path. |
-| `certwarden.base_url` | string | - | - | No | CertWarden API base URL. |
-| `certwarden.cert_name` | string | - | - | No | CertWarden certificate name. |
-| `certwarden.renewal_threshold_days` | u32 | `30` | - | No | Renewal threshold in days. |
-| `certwarden.check_interval_hours` | u32 | `1` | - | No | Cert check interval in hours. |
-| `syslog.port` | u16 | `5514` | - | No | Syslog UDP port. |
-| `syslog.bind_address` | string | `0.0.0.0` | - | No | Syslog bind address. |
-| `syslog.target_ip` | string | - | - | No | Optional target IP used during syslog setup. |
+All configuration is optional for a basic setup — you only need to point Ion Drift at your Mikrotik router.
 
-\* In bootstrap-enabled mode (`oidc.bootstrap.client_id` set), these secrets can be migrated to encrypted storage and env vars become optional fallbacks.
+## Configuration File
 
-### Web config path resolution
+**Location:** `config/server.toml` (copy from `config/server.example.toml`)
 
-1. CLI flag: `--config <path>`
-2. Env var: `ION_DRIFT_CONFIG`
+The config file path is resolved in this order:
+1. CLI argument (`--config <path>`)
+2. `ION_DRIFT_CONFIG` environment variable
 3. Default: `./server.toml`
 
-## CLI (`cli.toml`)
+Format: TOML.
 
-| TOML Key | Type | Default | Env Override | Required | Description |
-|---|---|---|---|---|---|
-| `router.host` | string | `192.168.88.1` | `DRIFT_ROUTER_HOST` | No | Router host/IP for CLI commands. |
-| `router.port` | u16 | `443` | - | No | Router API port. |
-| `router.tls` | bool | `true` | - | No | Use TLS for CLI router client. |
-| `router.ca_cert_path` | string | - | `DRIFT_ROUTER_CA_CERT` | No | CA cert path for CLI router TLS. |
-| `router.username` | string | `admin` | `DRIFT_ROUTER_USER` | No | Router username. |
-| `router.password` | string | - | `DRIFT_ROUTER_PASSWORD` | Yes | Router password (or `--password` flag). |
+---
 
-CLI path default: `~/.config/ion-drift/cli.toml`.
+### `[server]`
+
+General server settings.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `listen_addr` | string | `"0.0.0.0"` | IP address to bind the HTTP server to. |
+| `listen_port` | integer | `3000` | Port for the web server. |
+| `home_lon` | float | *(none)* | Home location longitude for the world map (e.g., `-111.97`). If set, arcs originate from here. |
+| `home_lat` | float | *(none)* | Home location latitude for the world map (e.g., `41.22`). |
+| `home_country` | string | *(none)* | Home country ISO 3166-1 alpha-2 code (e.g., `"US"`). Highlighted green on the map. |
+| `warning_countries` | array of strings | `[]` | Country codes flagged for security monitoring. Connections to these countries are highlighted on the map. Configure via Settings > Monitored Regions in the UI. |
+
+```toml
+[server]
+listen_addr = "0.0.0.0"
+listen_port = 3000
+home_lon = -111.97
+home_lat = 41.22
+home_country = "US"
+warning_countries = ["RU", "CN"]
+```
+
+---
+
+### `[router]`
+
+Connection settings for your Mikrotik RouterOS device.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | string | `"192.168.88.1"` | Router IP or hostname. **Required for production.** The default is the Mikrotik factory default and will emit a warning. |
+| `port` | integer | `443` | RouterOS REST API port. |
+| `tls` | boolean | `true` | Whether to use TLS for the router connection. |
+| `ca_cert_path` | string | *(none)* | Path to a PEM-encoded CA certificate if the router uses a private/internal CA. |
+| `username` | string | `"admin"` | RouterOS API username. |
+| `password` | *(env var)* | — | Set via `DRIFT_ROUTER_PASSWORD` environment variable (see [Environment Variables](#environment-variables-legacy-mode)). |
+| `wan_interface` | string | `"1-WAN"` | WAN interface name for traffic tracking. |
+| `dns_server` | string | *(none)* | Internal DNS server IP for PTR lookups. If not set, PTR lookups are skipped. |
+
+```toml
+[router]
+host = "10.20.25.1"
+port = 443
+tls = true
+ca_cert_path = "/path/to/ca.crt"
+username = "admin"
+wan_interface = "1-WAN"
+dns_server = "10.20.25.5"
+```
+
+---
+
+### `[oidc]` *(optional)*
+
+OpenID Connect configuration. Omit this entire section to use local auth only. When present, both local auth and OIDC are available simultaneously — the login page shows a username/password form with a "Sign in with SSO" button.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `issuer_url` | string | *(required)* | OIDC issuer URL (e.g., `https://idp.example.com/realms/MyRealm`). |
+| `client_id` | string | *(required)* | OIDC client ID. |
+| `client_secret` | *(env var)* | — | Set via `DRIFT_OIDC_SECRET` environment variable. |
+| `redirect_uri` | string | *(required)* | Callback URL, typically `https://your-ion-drift.example.com/auth/callback`. |
+| `ca_cert_path` | string | *(none)* | CA cert for verifying the OIDC provider's TLS certificate (optional). |
+| `roles_claim` | string | `"realm_access.roles"` | Dot-notation path to the roles array in the ID token. Use `"groups"` for Authentik/Authelia. |
+| `admin_role` | string | `"ion-drift-admin"` | Role or group name that grants admin access. |
+
+```toml
+[oidc]
+issuer_url = "https://idp.example.com/realms/MyRealm"
+client_id = "ion-drift"
+redirect_uri = "https://ion-drift.example.com/auth/callback"
+roles_claim = "realm_access.roles"
+admin_role = "ion-drift-admin"
+```
+
+---
+
+### `[session]`
+
+Session cookie and expiry settings. All fields have sensible defaults.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cookie_name` | string | `"ion_drift_session"` | Name of the session cookie. |
+| `max_age_seconds` | integer | `86400` (24 hours) | Session lifetime in seconds. |
+| `secure` | boolean | `true` | Set the `Secure` flag on cookies (requires HTTPS). |
+| `same_site` | string | `"lax"` | SameSite cookie attribute (`"lax"`, `"strict"`, or `"none"`). |
+| `session_secret` | *(env var)* | — | Set via `DRIFT_SESSION_SECRET` environment variable. Auto-generated if not set. |
+
+```toml
+[session]
+cookie_name = "ion_drift_session"
+max_age_seconds = 86400
+secure = true
+same_site = "lax"
+```
+
+---
+
+### `[oidc.bootstrap]` *(advanced, Keycloak-only)*
+
+Enables encrypted secrets at rest via mTLS KEK retrieval from Keycloak. When configured, secrets (router password, OIDC client secret, session secret) are encrypted in SQLite using AES-256-GCM rather than stored in environment variables. This section requires the `[tls]` section for client certificate paths.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `client_id` | string | *(required)* | Bootstrap client ID (e.g., `"ion-drift-bootstrap"`). |
+| `token_url` | string | *(required)* | Full Keycloak token endpoint URL. |
+| `admin_url` | string | *(required)* | Full Keycloak Admin API URL (e.g., `.../admin/realms/YourRealm`). |
+| `kek_attribute` | string | `"ion_drift_kek"` | Keycloak user attribute name for storing the KEK. |
+
+```toml
+[oidc.bootstrap]
+client_id = "ion-drift-bootstrap"
+token_url = "https://keycloak.example.com/realms/MyRealm/protocol/openid-connect/token"
+admin_url = "https://keycloak.example.com/admin/realms/MyRealm"
+kek_attribute = "ion_drift_kek"
+```
+
+---
+
+### `[tls]`
+
+Client certificate paths for mTLS authentication (used by `[oidc.bootstrap]`).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `client_cert` | string | `"/app/data/certs/client.crt"` | Path to PEM-encoded mTLS client certificate. |
+| `client_key` | string | `"/app/data/certs/client.key"` | Path to PEM-encoded mTLS client private key. |
+
+```toml
+[tls]
+client_cert = "/app/data/certs/client.crt"
+client_key = "/app/data/certs/client.key"
+```
+
+---
+
+### `[certwarden]`
+
+Automatic TLS certificate renewal via CertWarden. Both `base_url` and `cert_name` must be set to enable this feature.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `base_url` | string | *(none)* | CertWarden API base URL (e.g., `https://certwarden.example.com:4051`). |
+| `cert_name` | string | *(none)* | Certificate name in CertWarden. |
+| `renewal_threshold_days` | integer | `30` | Days before expiry to trigger renewal. |
+| `check_interval_hours` | integer | `1` | Hours between certificate expiry checks. |
+
+```toml
+[certwarden]
+base_url = "https://certwarden.example.com:4051"
+cert_name = "ion-drift"
+renewal_threshold_days = 30
+check_interval_hours = 1
+```
+
+---
+
+### `[syslog]`
+
+Syslog listener for receiving log messages from the router.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `port` | integer | `5514` | UDP port to listen on for syslog messages. |
+| `bind_address` | string | `"0.0.0.0"` | Bind address for the syslog listener. |
+| `target_ip` | string | *(none)* | IP address of this server as seen by the router. If set, Ion Drift will configure RouterOS to forward syslog here automatically. If not set, router syslog setup is skipped. |
+
+```toml
+[syslog]
+port = 5514
+bind_address = "0.0.0.0"
+target_ip = "192.168.1.100"
+```
+
+---
+
+### `[data]`
+
+Data directory settings. Currently a placeholder section with no configurable fields — the data directory defaults to `./data/` relative to the working directory.
+
+---
+
+## OIDC Setup by Provider
+
+### Keycloak
+
+1. In your Keycloak realm, go to **Clients** and create a new client:
+   - **Client ID:** `ion-drift`
+   - **Client Protocol:** OpenID Connect
+   - **Access Type:** Confidential
+   - **Valid Redirect URIs:** `https://your-ion-drift.example.com/auth/callback`
+2. Copy the client secret from the **Credentials** tab.
+3. Go to **Realm Roles** and create a role named `ion-drift-admin`.
+4. Assign the `ion-drift-admin` role to users who should have admin access.
+
+```toml
+[oidc]
+issuer_url = "https://keycloak.example.com/realms/YourRealm"
+client_id = "ion-drift"
+redirect_uri = "https://ion-drift.example.com/auth/callback"
+roles_claim = "realm_access.roles"   # default, can be omitted
+admin_role = "ion-drift-admin"        # default, can be omitted
+```
+
+Set the environment variable:
+```bash
+export DRIFT_OIDC_SECRET="your-client-secret-from-keycloak"
+```
+
+### Authentik
+
+1. In Authentik, go to **Applications > Providers** and create a new **OAuth2/OpenID Provider**:
+   - **Name:** Ion Drift
+   - **Authorization flow:** default-provider-authorization-implicit-consent
+   - **Redirect URIs:** `https://your-ion-drift.example.com/auth/callback`
+2. Create an **Application** and link it to the provider.
+3. Create a **Group** named `ion-drift-admins` and add admin users to it.
+
+```toml
+[oidc]
+issuer_url = "https://authentik.example.com/application/o/ion-drift/"
+client_id = "your-client-id"
+redirect_uri = "https://ion-drift.example.com/auth/callback"
+roles_claim = "groups"
+admin_role = "ion-drift-admins"
+```
+
+Set the environment variable:
+```bash
+export DRIFT_OIDC_SECRET="your-client-secret-from-authentik"
+```
+
+### Authelia
+
+1. Add an OIDC client to your Authelia `configuration.yml`:
+
+```yaml
+identity_providers:
+  oidc:
+    clients:
+      - client_id: ion-drift
+        client_secret: 'your-hashed-secret'
+        authorization_policy: two_factor
+        redirect_uris:
+          - https://ion-drift.example.com/auth/callback
+        scopes:
+          - openid
+          - profile
+          - email
+          - groups
+```
+
+2. Create a group named `ion-drift-admin` in your Authelia user database and add admin users.
+
+```toml
+[oidc]
+issuer_url = "https://authelia.example.com"
+client_id = "ion-drift"
+redirect_uri = "https://ion-drift.example.com/auth/callback"
+roles_claim = "groups"
+admin_role = "ion-drift-admin"
+```
+
+Set the environment variable:
+```bash
+export DRIFT_OIDC_SECRET="your-client-secret"
+```
+
+---
+
+## Environment Variables (Legacy Mode)
+
+When `[oidc.bootstrap]` is **not** configured, secrets are provided via environment variables. When bootstrap **is** configured, these become optional fallbacks — secrets are encrypted at rest in SQLite instead.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DRIFT_ROUTER_PASSWORD` | Yes (always) | RouterOS API password. |
+| `DRIFT_OIDC_SECRET` | Yes (if `[oidc]` is configured) | OIDC client secret. |
+| `DRIFT_SESSION_SECRET` | No | HMAC signing key for session cookies. Auto-generated if not set. |
+| `DRIFT_ROUTER_HOST` | No | Override `router.host` from config. |
+| `DRIFT_ROUTER_USER` | No | Override `router.username` from config. |
+| `DRIFT_ROUTER_CA_CERT` | No | Override `router.ca_cert_path` from config. |
+| `DRIFT_ROUTER_DNS_SERVER` | No | Override `router.dns_server` from config. |
+
+> **Note:** Environment variables are only used when `[oidc.bootstrap]` is not configured. With bootstrap enabled, all secrets are managed via the SecretsManager and encrypted in the SQLite database.
+
+---
+
+## Syslog Setup
+
+Ion Drift can receive syslog messages from your Mikrotik router for real-time log analysis.
+
+### Automatic Setup
+
+If `syslog.target_ip` is set in the config, Ion Drift will configure your RouterOS device to forward syslog messages automatically on startup.
+
+### Manual RouterOS Configuration
+
+If you prefer to configure syslog forwarding manually:
+
+1. In RouterOS, go to **System > Logging > Actions** and create a new action:
+   - **Name:** `ion-drift`
+   - **Type:** Remote
+   - **Remote Address:** IP of your Ion Drift server
+   - **Remote Port:** `5514` (or whatever you set in `syslog.port`)
+   - **Src. Address:** (leave empty or set to router's management IP)
+
+2. Go to **System > Logging > Rules** and add a rule:
+   - **Topics:** Select the log topics you want forwarded
+   - **Action:** `ion-drift`
+   - **Prefix:** `ION` (required — Ion Drift filters for this prefix)
+
+The log prefix `ION` is required for Ion Drift to process incoming syslog messages.
+
+```toml
+[syslog]
+port = 5514
+bind_address = "0.0.0.0"
+target_ip = "192.168.1.100"
+```
