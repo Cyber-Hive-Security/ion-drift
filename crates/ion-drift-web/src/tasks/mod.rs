@@ -5,8 +5,8 @@ mod metrics;
 mod policy_sync;
 mod traffic;
 
-use crate::state::AppState;
 use crate::dns::DnsResolver;
+use crate::state::AppState;
 
 /// Spawn all background tasks using shared application state.
 pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>) {
@@ -16,24 +16,12 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.live_traffic.clone(),
         state.mikrotik.clone(),
     );
-    traffic::spawn_vlan_metrics_poller(
-        state.metrics_store.clone(),
-        state.mikrotik.clone(),
-    );
+    traffic::spawn_vlan_metrics_poller(state.metrics_store.clone(), state.mikrotik.clone());
 
     // System metrics
-    metrics::spawn_metrics_poller(
-        state.metrics_store.clone(),
-        state.mikrotik.clone(),
-    );
-    metrics::spawn_drops_poller(
-        state.metrics_store.clone(),
-        state.mikrotik.clone(),
-    );
-    metrics::spawn_connection_metrics_poller(
-        state.metrics_store.clone(),
-        state.mikrotik.clone(),
-    );
+    metrics::spawn_metrics_poller(state.metrics_store.clone(), state.mikrotik.clone());
+    metrics::spawn_drops_poller(state.metrics_store.clone(), state.mikrotik.clone());
+    metrics::spawn_connection_metrics_poller(state.metrics_store.clone(), state.mikrotik.clone());
     metrics::spawn_log_aggregation(
         state.metrics_store.clone(),
         state.mikrotik.clone(),
@@ -86,12 +74,16 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.vlan_registry.clone(),
     );
     connections::spawn_connection_pruner(state.connection_store.clone());
-    crate::snapshots::spawn_snapshot_generator(&state.task_supervisor, state.connection_store.clone());
+    crate::snapshots::spawn_snapshot_generator(
+        &state.task_supervisor,
+        state.connection_store.clone(),
+    );
 
     // Syslog listener
     crate::syslog::spawn_syslog_listener(
         &state.task_supervisor,
-        5514,
+        state.config.syslog.port,
+        state.config.syslog.bind_address.clone(),
         state.connection_store.clone(),
         state.geo_cache.clone(),
         state.config.router.host.clone(),
@@ -110,7 +102,10 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.device_manager.clone(),
         state.switch_store.clone(),
     );
-    crate::switch_poller::spawn_device_health_check(&state.task_supervisor, state.device_manager.clone());
+    crate::switch_poller::spawn_device_health_check(
+        &state.task_supervisor,
+        state.device_manager.clone(),
+    );
     crate::swos_poller::spawn_swos_pollers(
         state.device_manager.clone(),
         state.switch_store.clone(),

@@ -133,12 +133,7 @@ impl DeviceManager {
                 DeviceClient::Snmp(snmp)
             } else if record.device_type == "swos_switch" {
                 // SwOS devices use HTTP (no TLS)
-                match SwosClient::new(
-                    record.host.clone(),
-                    record.port,
-                    username,
-                    password,
-                ) {
+                match SwosClient::new(record.host.clone(), record.port, username, password) {
                     Ok(swos) => {
                         tracing::info!(
                             id = %record.id,
@@ -336,6 +331,14 @@ impl DeviceManager {
     pub fn update_record(&mut self, id: &str, record: DeviceRecord) {
         if let Some(entry) = self.devices.get_mut(id) {
             entry.record = record;
+        }
+    }
+
+    /// Replace the runtime client and record after a device update.
+    pub fn update_runtime_device(&mut self, id: &str, record: DeviceRecord, client: DeviceClient) {
+        if let Some(entry) = self.devices.get_mut(id) {
+            entry.record = record;
+            entry.client = client;
         }
     }
 

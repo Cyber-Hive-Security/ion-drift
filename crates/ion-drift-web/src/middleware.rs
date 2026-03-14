@@ -59,12 +59,7 @@ where
             .into_response()
     })?;
 
-    let ip = parts
-        .headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
-        .filter(|s| !s.is_empty());
+    let ip = None;
     let ua = parts
         .headers
         .get(axum::http::header::USER_AGENT)

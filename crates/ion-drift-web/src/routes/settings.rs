@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use axum::extract::State;
 use axum::extract::Path;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum_extra::extract::CookieJar;
@@ -61,11 +61,21 @@ pub async fn update_monitored_regions(
     Json(body): Json<MonitoredRegionsRequest>,
 ) -> Result<Json<Vec<String>>, Response> {
     // Normalize to uppercase
-    let codes: Vec<String> = body.regions.iter().map(|c| c.trim().to_uppercase()).filter(|c| c.len() == 2).collect();
+    let codes: Vec<String> = body
+        .regions
+        .iter()
+        .map(|c| c.trim().to_uppercase())
+        .filter(|c| c.len() == 2)
+        .collect();
 
     // Persist to database
-    let json = serde_json::to_string(&codes).map_err(|e| internal_error("serialize monitored regions", e))?;
-    state.switch_store.set_setting("monitored_regions", &json).await.map_err(|e| internal_error("save monitored regions", e))?;
+    let json = serde_json::to_string(&codes)
+        .map_err(|e| internal_error("serialize monitored regions", e))?;
+    state
+        .switch_store
+        .set_setting("monitored_regions", &json)
+        .await
+        .map_err(|e| internal_error("save monitored regions", e))?;
 
     // Update in-memory cache
     state.geo_cache.set_monitored_regions(codes.clone());
@@ -122,6 +132,8 @@ pub struct UpdateSecretsRequest {
 #[derive(Serialize)]
 pub struct UpdateSecretsResponse {
     updated: Vec<String>,
+    restart_required: bool,
+    deferred: Vec<String>,
 }
 
 pub async fn update_secrets(
@@ -137,15 +149,41 @@ pub async fn update_secrets(
             .into_response()
     })?;
 
-    let sm = sm.read().await;
     let mut updated = Vec::new();
+    let mut deferred = Vec::new();
+    let mut restart_required = false;
 
+    if let Some(ref username) = req.router_username {
+        if !username.trim().is_empty() {
+            deferred.push(secrets::SECRET_ROUTER_USERNAME.to_string());
+            restart_required = true;
+        }
+    }
+
+    if let Some(ref password) = req.router_password {
+        if !password.is_empty() {
+            deferred.push(secrets::SECRET_ROUTER_PASSWORD.to_string());
+            restart_required = true;
+        }
+    }
+
+    if let Some(ref secret) = req.oidc_client_secret {
+        if !secret.is_empty() {
+            deferred.push(secrets::SECRET_OIDC_CLIENT_SECRET.to_string());
+            restart_required = true;
+        }
+    }
+
+    let sm = sm.read().await;
+
+    // Router and OIDC secrets are intentionally deferred until restart so the
+    // running clients do not claim to have picked up credentials they still
+    // have cached in memory.
     if let Some(ref username) = req.router_username {
         if !username.trim().is_empty() {
             sm.encrypt_secret(secrets::SECRET_ROUTER_USERNAME, username.trim())
                 .await
                 .map_err(|e| internal_error("encrypt router_username", e))?;
-            updated.push(secrets::SECRET_ROUTER_USERNAME.to_string());
         }
     }
 
@@ -154,7 +192,6 @@ pub async fn update_secrets(
             sm.encrypt_secret(secrets::SECRET_ROUTER_PASSWORD, password)
                 .await
                 .map_err(|e| internal_error("encrypt router_password", e))?;
-            updated.push(secrets::SECRET_ROUTER_PASSWORD.to_string());
         }
     }
 
@@ -163,7 +200,6 @@ pub async fn update_secrets(
             sm.encrypt_secret(secrets::SECRET_OIDC_CLIENT_SECRET, secret)
                 .await
                 .map_err(|e| internal_error("encrypt oidc_client_secret", e))?;
-            updated.push(secrets::SECRET_OIDC_CLIENT_SECRET.to_string());
         }
     }
 
@@ -207,7 +243,11 @@ pub async fn update_secrets(
         tracing::info!(count = updated.len(), "secrets updated via settings API");
     }
 
-    Ok(Json(UpdateSecretsResponse { updated }))
+    Ok(Json(UpdateSecretsResponse {
+        updated,
+        restart_required,
+        deferred,
+    }))
 }
 
 // ── POST /api/settings/secrets/session/regenerate ────────────────
@@ -237,6 +277,7 @@ pub async fn regenerate_session(
     sm.encrypt_secret(secrets::SECRET_SESSION_SECRET, &new_secret)
         .await
         .map_err(|e| internal_error("regenerate session secret", e))?;
+    state.sessions.rotate_signing_secret(&new_secret).await;
 
     // Clear all existing sessions to force re-authentication
     state.sessions.clear_all();
@@ -427,7 +468,10 @@ pub async fn update_geoip_databases(
 
     if !downloaded.is_empty() {
         state.geo_cache.hot_swap_maxmind(&geoip_dir);
-        tracing::info!(count = downloaded.len(), "MaxMind databases updated via settings API");
+        tracing::info!(
+            count = downloaded.len(),
+            "MaxMind databases updated via settings API"
+        );
     }
 
     Ok(Json(UpdateGeoipResponse { downloaded }))

@@ -3,9 +3,9 @@ use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::{api_error, internal_error};
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
-use super::{api_error, internal_error};
 
 #[derive(Serialize)]
 pub struct DropCountryEntry {
@@ -20,6 +20,7 @@ pub struct FirewallDropsSummary {
     pub total_drop_packets: u64,
     pub total_drop_bytes: u64,
     pub top_drop_countries: Vec<DropCountryEntry>,
+    pub logs_unavailable: bool,
 }
 
 /// GET /api/firewall/drops
@@ -42,8 +43,14 @@ pub async fn drops(
 
     // Try to resolve top drop source countries from recent log entries
     // Resolve top drop source countries from recent log entries (cache-only geo)
-    let top_drop_countries = {
-        let logs = state.mikrotik.log_entries().await.unwrap_or_default();
+    let (top_drop_countries, logs_unavailable) = {
+        let (logs, logs_unavailable) = match state.mikrotik.log_entries().await {
+            Ok(logs) => (logs, false),
+            Err(e) => {
+                tracing::warn!("failed to load firewall logs for drop summary: {e}");
+                (Vec::new(), true)
+            }
+        };
         let mut country_counts: HashMap<String, (String, usize)> = HashMap::new();
 
         for entry in &logs {
@@ -51,7 +58,10 @@ pub async fn drops(
                 continue;
             }
             for word in entry.message.split_whitespace() {
-                if let Some(ip_str) = word.strip_prefix("src=").or_else(|| word.strip_prefix("src-address=")) {
+                if let Some(ip_str) = word
+                    .strip_prefix("src=")
+                    .or_else(|| word.strip_prefix("src-address="))
+                {
                     let ip = ip_str.split(':').next().unwrap_or(ip_str);
                     if let Some(geo) = state.geo_cache.lookup_cached(ip) {
                         let entry = country_counts
@@ -74,13 +84,14 @@ pub async fn drops(
             .collect();
         entries.sort_by(|a, b| b.count.cmp(&a.count));
         entries.truncate(5);
-        entries
+        (entries, logs_unavailable)
     };
 
     Ok(Json(FirewallDropsSummary {
         total_drop_packets: total_packets,
         total_drop_bytes: total_bytes,
         top_drop_countries,
+        logs_unavailable,
     }))
 }
 
@@ -104,7 +115,9 @@ pub async fn filter(
         rules.retain(|r| r.chain == *chain);
     }
 
-    Ok(Json(serde_json::to_value(rules).map_err(|e| internal_error("serialize filter rules", e))?))
+    Ok(Json(serde_json::to_value(rules).map_err(|e| {
+        internal_error("serialize filter rules", e)
+    })?))
 }
 
 pub async fn nat(
@@ -122,7 +135,9 @@ pub async fn nat(
         rules.retain(|r| r.chain == *chain);
     }
 
-    Ok(Json(serde_json::to_value(rules).map_err(|e| internal_error("serialize nat rules", e))?))
+    Ok(Json(
+        serde_json::to_value(rules).map_err(|e| internal_error("serialize nat rules", e))?,
+    ))
 }
 
 pub async fn mangle(
@@ -140,5 +155,7 @@ pub async fn mangle(
         rules.retain(|r| r.chain == *chain);
     }
 
-    Ok(Json(serde_json::to_value(rules).map_err(|e| internal_error("serialize mangle rules", e))?))
+    Ok(Json(serde_json::to_value(rules).map_err(|e| {
+        internal_error("serialize mangle rules", e)
+    })?))
 }

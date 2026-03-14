@@ -119,6 +119,7 @@ fn split_addr(s: &str) -> (&str, Option<&str>) {
 pub fn spawn_syslog_listener(
     supervisor: &TaskSupervisor,
     port: u16,
+    bind_address: String,
     store: Arc<ConnectionStore>,
     geo_cache: Arc<GeoCache>,
     router_host: String,
@@ -127,6 +128,7 @@ pub fn spawn_syslog_listener(
     supervisor.spawn("syslog_listener", move || {
         let store = store.clone();
         let geo_cache = geo_cache.clone();
+        let bind_address = bind_address.clone();
         let router_host = router_host.clone();
         let vlan_registry = vlan_registry.clone();
         Box::pin(async move {
@@ -157,7 +159,7 @@ pub fn spawn_syslog_listener(
         };
         tracing::info!("syslog: will only accept packets from {allowed_ip}");
 
-        let addr = format!("0.0.0.0:{port}");
+        let addr = format!("{bind_address}:{port}");
         let socket = match tokio::net::UdpSocket::bind(&addr).await {
             Ok(s) => {
                 tracing::info!("syslog listener started on UDP {addr}");

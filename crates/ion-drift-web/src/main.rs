@@ -8,7 +8,6 @@ mod config;
 mod connection_store;
 mod correlation_engine;
 pub mod demo;
-mod topology_inference;
 mod device_manager;
 mod dns;
 mod geo;
@@ -22,16 +21,17 @@ mod poller_registry;
 mod provision;
 mod routes;
 mod secrets;
-mod snmp_poller;
-pub mod topology;
 mod setup;
 mod snapshots;
+mod snmp_poller;
 mod state;
 mod switch_poller;
 mod swos_poller;
 mod syslog;
 mod task_supervisor;
 mod tasks;
+pub mod topology;
+mod topology_inference;
 
 use std::sync::Arc;
 
@@ -48,11 +48,9 @@ use crate::task_supervisor::TaskSupervisor;
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing (RUST_LOG env filter, default info)
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(
-                "info,tower_http=warn,hyper=warn,mikrotik_core::snmp_client=debug"
-            )),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new("info,tower_http=warn,hyper=warn,mikrotik_core::snmp_client=debug")
+        }))
         .init();
 
     // OpenSSL 3.x: explicitly loading any provider disables auto-loading of the default
@@ -63,7 +61,9 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| tracing::warn!("failed to load OpenSSL default provider: {e}"))
         .ok();
     let _openssl_legacy = openssl::provider::Provider::load(None, "legacy")
-        .map_err(|e| tracing::warn!("failed to load OpenSSL legacy provider (DES may not work): {e}"))
+        .map_err(|e| {
+            tracing::warn!("failed to load OpenSSL legacy provider (DES may not work): {e}")
+        })
         .ok();
 
     // Parse CLI args.
@@ -81,80 +81,104 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&data_dir)?;
 
     // ── Secrets management (Keycloak mTLS bootstrap) ────────────
-    let secrets_manager: Option<Arc<tokio::sync::RwLock<SecretsManager>>> =
-        if let Some(resolved) = config.resolve_bootstrap()? {
-            let db_path = data_dir.join("secrets.db");
-            let ca_cert_path = config.oidc.ca_cert_path.as_deref()
-                .ok_or_else(|| anyhow::anyhow!("oidc.ca_cert_path required for mTLS bootstrap"))?;
+    let secrets_manager: Option<Arc<tokio::sync::RwLock<SecretsManager>>> = if let Some(resolved) =
+        config.resolve_bootstrap()?
+    {
+        let db_path = data_dir.join("secrets.db");
+        let ca_cert_path = config
+            .oidc
+            .ca_cert_path
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("oidc.ca_cert_path required for mTLS bootstrap"))?;
 
-            // Check if cert+key exist on disk
-            let cert_exists = std::path::Path::new(&config.tls.client_cert).exists();
-            let key_exists = std::path::Path::new(&config.tls.client_key).exists();
+        // Check if cert+key exist on disk
+        let cert_exists = std::path::Path::new(&config.tls.client_cert).exists();
+        let key_exists = std::path::Path::new(&config.tls.client_key).exists();
 
-            if cert_exists && key_exists {
-                // Normal startup: cert on disk → build mTLS → fetch KEK → decrypt secrets
-                tracing::info!("mTLS cert found at {}, fetching KEK from Keycloak", config.tls.client_cert);
-                let mtls_client = bootstrap::build_mtls_client(&resolved, ca_cert_path)?;
-                let result = bootstrap::fetch_or_generate_kek(&mtls_client, &resolved, &data_dir, &config.tls.client_key).await?;
-                let sm = SecretsManager::new(&db_path, result.kek)?;
+        if cert_exists && key_exists {
+            // Normal startup: cert on disk → build mTLS → fetch KEK → decrypt secrets
+            tracing::info!(
+                "mTLS cert found at {}, fetching KEK from Keycloak",
+                config.tls.client_cert
+            );
+            let mtls_client = bootstrap::build_mtls_client(&resolved, ca_cert_path)?;
+            let result = bootstrap::fetch_or_generate_kek(
+                &mtls_client,
+                &resolved,
+                &data_dir,
+                &config.tls.client_key,
+            )
+            .await?;
+            let sm = SecretsManager::new(&db_path, result.kek)?;
 
-                let has_secrets = sm.has_secrets().await?;
-                let has_env_vars = !config.router.password.is_empty()
-                    && !config.oidc.client_secret.is_empty();
+            let has_secrets = sm.has_secrets().await?;
+            let has_env_vars =
+                !config.router.password.is_empty() && !config.oidc.client_secret.is_empty();
 
-                if has_secrets {
-                    // Decrypt from DB and inject into config
-                    tracing::info!("loading encrypted secrets from database");
-                    let decrypted = sm
-                        .load_all()
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("secrets DB exists but some secrets are missing"))?;
-                    config.router.username = decrypted.router_username;
-                    config.router.password = decrypted.router_password.expose_secret().to_string();
-                    config.oidc.client_secret = decrypted.oidc_client_secret.expose_secret().to_string();
-                    config.session.session_secret = decrypted.session_secret.expose_secret().to_string();
-                } else if has_env_vars {
-                    // Migrate env vars into encrypted DB
-                    tracing::info!("migrating env var secrets to encrypted storage");
-                    let session_secret = if config.session.session_secret.is_empty() {
-                        let bytes: [u8; 32] = rand::random();
-                        hex::encode(bytes)
-                    } else {
-                        config.session.session_secret.clone()
-                    };
-                    let decrypted = DecryptedSecrets {
-                        router_username: config.router.username.clone(),
-                        router_password: secrecy::SecretString::from(config.router.password.clone()),
-                        oidc_client_secret: secrecy::SecretString::from(config.oidc.client_secret.clone()),
-                        session_secret: secrecy::SecretString::from(session_secret.clone()),
-                        certwarden_cert_api_key: None,
-                        certwarden_key_api_key: None,
-                        maxmind_account_id: None,
-                        maxmind_license_key: None,
-                    };
-                    sm.store_all(&decrypted).await?;
-                    config.session.session_secret = session_secret;
-                    tracing::info!("secrets migrated to encrypted storage");
+            if has_secrets {
+                // Decrypt from DB and inject into config
+                tracing::info!("loading encrypted secrets from database");
+                let decrypted = sm.load_all().await?.ok_or_else(|| {
+                    anyhow::anyhow!("secrets DB exists but some secrets are missing")
+                })?;
+                config.router.username = decrypted.router_username;
+                config.router.password = decrypted.router_password.expose_secret().to_string();
+                config.oidc.client_secret =
+                    decrypted.oidc_client_secret.expose_secret().to_string();
+                config.session.session_secret =
+                    decrypted.session_secret.expose_secret().to_string();
+            } else if has_env_vars {
+                // Migrate env vars into encrypted DB
+                tracing::info!("migrating env var secrets to encrypted storage");
+                let session_secret = if config.session.session_secret.is_empty() {
+                    let bytes: [u8; 32] = rand::random();
+                    hex::encode(bytes)
                 } else {
-                    // Cert on disk but no secrets — shouldn't happen normally,
-                    // but fall through to setup mode
-                    tracing::warn!("cert on disk but no secrets found — starting in setup mode");
-                    return run_setup_mode(&config, &data_dir).await;
-                }
-
-                Some(Arc::new(tokio::sync::RwLock::new(sm)))
+                    config.session.session_secret.clone()
+                };
+                let decrypted = DecryptedSecrets {
+                    router_username: config.router.username.clone(),
+                    router_password: secrecy::SecretString::from(config.router.password.clone()),
+                    oidc_client_secret: secrecy::SecretString::from(
+                        config.oidc.client_secret.clone(),
+                    ),
+                    session_secret: secrecy::SecretString::from(session_secret.clone()),
+                    certwarden_cert_api_key: None,
+                    certwarden_key_api_key: None,
+                    maxmind_account_id: None,
+                    maxmind_license_key: None,
+                };
+                sm.store_all(&decrypted).await?;
+                config.session.session_secret = session_secret;
+                tracing::info!("secrets migrated to encrypted storage");
             } else {
-                // No cert on disk — enter setup mode
-                tracing::warn!("no mTLS cert found at {} — starting in setup mode", config.tls.client_cert);
+                // Cert on disk but no secrets — shouldn't happen normally,
+                // but fall through to setup mode
+                tracing::warn!("cert on disk but no secrets found — starting in setup mode");
                 return run_setup_mode(&config, &data_dir).await;
             }
+
+            Some(Arc::new(tokio::sync::RwLock::new(sm)))
         } else {
-            None
-        };
+            // No cert on disk — enter setup mode
+            tracing::warn!(
+                "no mTLS cert found at {} — starting in setup mode",
+                config.tls.client_cert
+            );
+            return run_setup_mode(&config, &data_dir).await;
+        }
+    } else {
+        None
+    };
 
     // Warn if session cookies will be sent over HTTP on a non-localhost bind
-    if !config.session.secure && config.server.listen_addr != "127.0.0.1" && config.server.listen_addr != "localhost" {
-        tracing::warn!("Session cookie 'secure' flag is disabled on a non-localhost bind address. Cookies will be sent over HTTP.");
+    if !config.session.secure
+        && config.server.listen_addr != "127.0.0.1"
+        && config.server.listen_addr != "localhost"
+    {
+        tracing::warn!(
+            "Session cookie 'secure' flag is disabled on a non-localhost bind address. Cookies will be sent over HTTP."
+        );
     }
 
     tracing::info!(
@@ -254,7 +278,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Test connectivity
-    tracing::info!("connecting to router at {}:{}", config.router.host, config.router.port);
+    tracing::info!(
+        "connecting to router at {}:{}",
+        config.router.host,
+        config.router.port
+    );
     let router_name = mikrotik.test_connection().await?;
     tracing::info!("connected to router: {router_name}");
 
@@ -300,6 +328,7 @@ async fn main() -> anyhow::Result<()> {
     let sessions = auth::SessionStore::new(
         config.session.max_age_seconds,
         &data_dir.join("sessions.db"),
+        &config.session.session_secret,
     )?;
 
     // Load MAC OUI database (bundled)
@@ -320,7 +349,7 @@ async fn main() -> anyhow::Result<()> {
             Some(&geoip_dir),
             config.server.warning_countries.clone(),
         )
-            .map_err(|e| anyhow::anyhow!("failed to init geo cache: {e}"))?,
+        .map_err(|e| anyhow::anyhow!("failed to init geo cache: {e}"))?,
     );
 
     // Load persisted monitored regions from database (overrides TOML default if set)
@@ -393,13 +422,18 @@ async fn main() -> anyhow::Result<()> {
         connection_store: connection_store.clone(),
         network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
         behavior_store: behavior_store.clone(),
-        firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))),
+        firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((
+            Vec::new(),
+            std::time::Instant::now(),
+        ))),
         secrets_manager: secrets_manager.clone(),
         device_manager: device_manager.clone(),
         switch_store: switch_store.clone(),
         topology_cache: Arc::new(tokio::sync::RwLock::new(None)),
         vlan_registry: vlan_registry.clone(),
-        poller_registry: Arc::new(tokio::sync::RwLock::new(poller_registry::PollerRegistry::new())),
+        poller_registry: Arc::new(tokio::sync::RwLock::new(
+            poller_registry::PollerRegistry::new(),
+        )),
         task_supervisor: supervisor,
     };
 
@@ -416,7 +450,10 @@ async fn main() -> anyhow::Result<()> {
     if web_dist.is_dir() {
         tracing::info!("serving SPA from {}", web_dist.display());
     } else {
-        tracing::warn!("SPA directory not found at {}, only API routes available", web_dist.display());
+        tracing::warn!(
+            "SPA directory not found at {}, only API routes available",
+            web_dist.display()
+        );
     }
 
     // Log demo mode status
@@ -426,7 +463,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Build router and start server
     let app = routes::router(app_state, web_dist)?;
-    let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
+    let bind_addr = format!(
+        "{}:{}",
+        config.server.listen_addr, config.server.listen_port
+    );
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("ion-drift web server listening on {bind_addr}");
 
@@ -436,10 +476,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Run the setup-mode server when no cert/secrets are present.
-async fn run_setup_mode(
-    config: &ServerConfig,
-    data_dir: &std::path::Path,
-) -> anyhow::Result<()> {
+async fn run_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> anyhow::Result<()> {
     let db_path = data_dir.join("secrets.db");
 
     let setup_state = setup::SetupState {
@@ -453,10 +490,16 @@ async fn run_setup_mode(
     };
 
     let app = axum::Router::new()
-        .route("/setup", axum::routing::get(setup::setup_page).post(setup::setup_submit))
-        .route("/health", axum::routing::get(|| async {
-            axum::Json(serde_json::json!({ "status": "setup_required" }))
-        }))
+        .route(
+            "/setup",
+            axum::routing::get(setup::setup_page).post(setup::setup_submit),
+        )
+        .route(
+            "/health",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({ "status": "setup_required" }))
+            }),
+        )
         .fallback(|| async { axum::response::Redirect::temporary("/setup") })
         .with_state(setup_state);
 

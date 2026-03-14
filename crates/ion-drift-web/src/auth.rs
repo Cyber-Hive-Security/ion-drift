@@ -1,22 +1,24 @@
-use std::sync::Arc;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Redirect, Response};
-use base64::Engine;
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
+use base64::Engine;
 use dashmap::DashMap;
-use rusqlite::params;
+use hmac::{Hmac, Mac};
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata};
 use openidconnect::{
-    AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet,
-    EndpointSet, EndUserEmail, EndUserUsername, IssuerUrl, Nonce, PkceCodeChallenge,
+    AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndUserEmail, EndUserUsername,
+    EndpointMaybeSet, EndpointNotSet, EndpointSet, IssuerUrl, Nonce, PkceCodeChallenge,
     PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 
 use crate::config::ServerConfig;
 use crate::state::AppState;
@@ -26,12 +28,12 @@ use crate::state::AppState;
 /// `from_provider_metadata` returns all `EndpointNotSet`, so we chain
 /// `.set_auth_uri()` and `.set_token_uri()` to get the correct type state.
 pub type OidcClient = CoreClient<
-    EndpointSet,       // HasAuthUrl
-    EndpointNotSet,    // HasDeviceAuthUrl
-    EndpointNotSet,    // HasIntrospectionUrl
-    EndpointNotSet,    // HasRevocationUrl
-    EndpointSet,       // HasTokenUrl
-    EndpointMaybeSet,  // HasUserInfoUrl (set_redirect_uri transitions this)
+    EndpointSet,      // HasAuthUrl
+    EndpointNotSet,   // HasDeviceAuthUrl
+    EndpointNotSet,   // HasIntrospectionUrl
+    EndpointNotSet,   // HasRevocationUrl
+    EndpointSet,      // HasTokenUrl
+    EndpointMaybeSet, // HasUserInfoUrl (set_redirect_uri transitions this)
 >;
 
 // ── Session store ─────────────────────────────────────────────────
@@ -91,11 +93,12 @@ pub struct SessionStore {
     sessions: Arc<DashMap<String, SessionRecord>>,
     pending_auth: Arc<DashMap<String, PendingAuth>>,
     db: Arc<std::sync::Mutex<rusqlite::Connection>>,
+    signing_key: Arc<tokio::sync::RwLock<Vec<u8>>>,
     max_age: Duration,
 }
 
 impl SessionStore {
-    pub fn new(max_age_seconds: u64, db_path: &Path) -> anyhow::Result<Self> {
+    pub fn new(max_age_seconds: u64, db_path: &Path, session_secret: &str) -> anyhow::Result<Self> {
         let conn = rusqlite::Connection::open(db_path)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -117,6 +120,7 @@ impl SessionStore {
             sessions: Arc::new(DashMap::new()),
             pending_auth: Arc::new(DashMap::new()),
             db: Arc::new(std::sync::Mutex::new(conn)),
+            signing_key: Arc::new(tokio::sync::RwLock::new(session_secret.as_bytes().to_vec())),
             max_age: Duration::from_secs(max_age_seconds),
         };
         store.load_active_from_db();
@@ -163,7 +167,13 @@ impl SessionStore {
                 return;
             }
         };
+        let mut invalid_ids = Vec::new();
         for row in rows.flatten() {
+            if !self.is_valid_session_id(&row.0) {
+                tracing::warn!("dropping persisted session with invalid signature");
+                invalid_ids.push(row.0);
+                continue;
+            }
             self.sessions.insert(
                 row.0,
                 SessionRecord {
@@ -173,12 +183,21 @@ impl SessionStore {
             );
         }
         if !self.sessions.is_empty() {
-            tracing::info!(count = self.sessions.len(), "loaded active sessions from sqlite");
+            tracing::info!(
+                count = self.sessions.len(),
+                "loaded active sessions from sqlite"
+            );
+        }
+        for invalid_id in invalid_ids {
+            self.delete_from_db(&invalid_id);
         }
     }
 
     /// Look up a session by ID, returning None if expired.
     pub fn get(&self, session_id: &str) -> Option<SessionData> {
+        if !self.is_valid_session_id(session_id) {
+            return None;
+        }
         let mut entry = self.sessions.get_mut(session_id)?;
         let now = now_secs();
         if now - entry.data.created_at > self.max_age.as_secs() {
@@ -194,16 +213,14 @@ impl SessionStore {
 
     fn insert_session(&self, session_id: String, data: SessionData) {
         self.upsert_db(&session_id, &data);
-        self.sessions.insert(
-            session_id,
-            SessionRecord {
-                data,
-                dirty: false,
-            },
-        );
+        self.sessions
+            .insert(session_id, SessionRecord { data, dirty: false });
     }
 
     fn remove_session(&self, session_id: &str) {
+        if !self.is_valid_session_id(session_id) {
+            return;
+        }
         self.sessions.remove(session_id);
         self.delete_from_db(session_id);
     }
@@ -223,7 +240,12 @@ impl SessionStore {
 
     /// Insert a pending auth entry. Returns false if the map is at capacity
     /// (prevents memory exhaustion from login endpoint flooding).
-    fn insert_pending(&self, csrf_token: String, nonce: Nonce, pkce_verifier: PkceCodeVerifier) -> bool {
+    fn insert_pending(
+        &self,
+        csrf_token: String,
+        nonce: Nonce,
+        pkce_verifier: PkceCodeVerifier,
+    ) -> bool {
         const MAX_PENDING: usize = 1000;
         if self.pending_auth.len() >= MAX_PENDING {
             return false;
@@ -279,7 +301,10 @@ impl SessionStore {
 
         if let Ok(db) = self.db.lock() {
             let cutoff = (now.saturating_sub(session_max)) as i64;
-            let _ = db.execute("DELETE FROM sessions WHERE created_at < ?1", params![cutoff]);
+            let _ = db.execute(
+                "DELETE FROM sessions WHERE created_at < ?1",
+                params![cutoff],
+            );
         }
     }
 
@@ -311,9 +336,49 @@ impl SessionStore {
     }
 
     pub fn revoke_session(&self, session_id: &str) -> bool {
+        if !self.is_valid_session_id(session_id) {
+            return false;
+        }
         let existed = self.sessions.remove(session_id).is_some();
         self.delete_from_db(session_id);
         existed
+    }
+
+    pub async fn rotate_signing_secret(&self, session_secret: &str) {
+        let mut key = self.signing_key.write().await;
+        *key = session_secret.as_bytes().to_vec();
+    }
+
+    pub async fn issue_session_id(&self) -> anyhow::Result<String> {
+        let token_bytes: [u8; 32] = rand::random();
+        let token = hex::encode(token_bytes);
+        self.sign_session_id(&token).await
+    }
+
+    async fn sign_session_id(&self, token: &str) -> anyhow::Result<String> {
+        let key = self.signing_key.read().await;
+        let mut mac = Hmac::<Sha256>::new_from_slice(&key)
+            .map_err(|e| anyhow::anyhow!("invalid session signing key: {e}"))?;
+        mac.update(token.as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+        Ok(format!("{token}.{signature}"))
+    }
+
+    fn is_valid_session_id(&self, session_id: &str) -> bool {
+        let Some((token, provided_sig)) = session_id.split_once('.') else {
+            return false;
+        };
+        let Ok(provided_sig) = hex::decode(provided_sig) else {
+            return false;
+        };
+        let Ok(key) = self.signing_key.try_read() else {
+            return false;
+        };
+        let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(&key) else {
+            return false;
+        };
+        mac.update(token.as_bytes());
+        mac.verify_slice(&provided_sig).is_ok()
     }
 
     fn upsert_db(&self, session_id: &str, data: &SessionData) {
@@ -355,7 +420,10 @@ impl SessionStore {
 
     fn delete_from_db(&self, session_id: &str) {
         if let Ok(db) = self.db.lock() {
-            let _ = db.execute("DELETE FROM sessions WHERE session_id = ?1", params![session_id]);
+            let _ = db.execute(
+                "DELETE FROM sessions WHERE session_id = ?1",
+                params![session_id],
+            );
         }
     }
 }
@@ -393,10 +461,9 @@ pub async fn discover_oidc(
     let issuer_url = IssuerUrl::new(config.oidc.issuer_url.clone())
         .map_err(|e| anyhow::anyhow!("invalid issuer URL: {e}"))?;
 
-    let provider_metadata =
-        CoreProviderMetadata::discover_async(issuer_url, http_client)
-            .await
-            .map_err(|e| anyhow::anyhow!("OIDC discovery failed: {e}"))?;
+    let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, http_client)
+        .await
+        .map_err(|e| anyhow::anyhow!("OIDC discovery failed: {e}"))?;
 
     // Extract endpoints from provider metadata before consuming it
     let auth_url = provider_metadata.authorization_endpoint().clone();
@@ -452,11 +519,10 @@ pub async fn login(State(state): State<AppState>) -> Response {
         .set_pkce_challenge(pkce_challenge)
         .url();
 
-    if !state.sessions.insert_pending(
-        csrf_token.secret().clone(),
-        nonce,
-        pkce_verifier,
-    ) {
+    if !state
+        .sessions
+        .insert_pending(csrf_token.secret().clone(), nonce, pkce_verifier)
+    {
         return json_error(
             StatusCode::TOO_MANY_REQUESTS,
             "too many pending login attempts, try again later",
@@ -480,15 +546,12 @@ pub async fn callback(
     headers: axum::http::HeaderMap,
 ) -> Result<(CookieJar, Redirect), Response> {
     // Retrieve and consume the pending auth state
-    let (nonce, pkce_verifier) = state
-        .sessions
-        .take_pending(&params.state)
-        .ok_or_else(|| {
-            json_error(
-                StatusCode::BAD_REQUEST,
-                "invalid or expired state parameter",
-            )
-        })?;
+    let (nonce, pkce_verifier) = state.sessions.take_pending(&params.state).ok_or_else(|| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid or expired state parameter",
+        )
+    })?;
 
     // Exchange authorization code for tokens
     let token_response = state
@@ -519,9 +582,7 @@ pub async fn callback(
         .preferred_username()
         .map(|u: &EndUserUsername| u.to_string())
         .unwrap_or_else(|| user_id.clone());
-    let email = claims
-        .email()
-        .map(|e: &EndUserEmail| e.to_string());
+    let email = claims.email().map(|e: &EndUserEmail| e.to_string());
 
     // Extract roles from Keycloak's realm_access claim.
     // The token is already signature-verified above, so decoding the payload is safe.
@@ -529,15 +590,16 @@ pub async fn callback(
 
     tracing::info!(user_id, username, ?roles, "user authenticated via OIDC");
 
-    // Create session with 256-bit cryptographic token
-    let session_bytes: [u8; 32] = rand::random();
-    let session_id = hex::encode(session_bytes);
+    // Create a session id bound to the current session secret.
+    let session_id = state.sessions.issue_session_id().await.map_err(|e| {
+        tracing::error!("failed to issue session id: {e}");
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to create session",
+        )
+    })?;
     let created_at = now_secs();
-    let created_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
-        .filter(|s| !s.is_empty());
+    let created_ip = None;
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|v| v.to_str().ok())

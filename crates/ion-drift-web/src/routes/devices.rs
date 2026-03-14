@@ -1,15 +1,18 @@
 use std::path::PathBuf;
 
+use std::path::PathBuf;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 
 use mikrotik_core::{MikrotikClient, MikrotikConfig, SecretString, SnmpClient, SwosClient};
 
-use crate::device_manager::{DeviceClient, DeviceStatus, DeviceInfo};
+use crate::device_manager::{DeviceClient, DeviceInfo, DeviceStatus};
 use crate::middleware::{RequireAdmin, RequireAuth};
-use crate::secrets::{NewDevice, UpdateDevice};
+use crate::secrets::{NewDevice, SecretsManager, UpdateDevice};
 use crate::state::AppState;
 
 use super::internal_error;
@@ -21,9 +24,12 @@ fn is_blocked_host(host: &str) -> bool {
             let ip = addr.ip();
             match ip {
                 std::net::IpAddr::V4(v4) => {
-                    if v4.is_loopback() || v4.is_link_local() || v4.is_broadcast()
+                    if v4.is_loopback()
+                        || v4.is_link_local()
+                        || v4.is_broadcast()
                         || v4.octets()[0] == 0
-                        || (v4.octets()[0] == 169 && v4.octets()[1] == 254) {
+                        || (v4.octets()[0] == 169 && v4.octets()[1] == 254)
+                    {
                         return true;
                     }
                 }
@@ -47,8 +53,12 @@ fn bad_request(msg: &str) -> Response {
 }
 
 fn validate_ca_cert_path(path: &str) -> Result<(), Response> {
-    if path.contains("..") || (!path.starts_with("/app/data/certs/") && !path.starts_with("/app/certs/")) {
-        return Err(bad_request("ca_cert_path must be within /app/data/certs/ or /app/certs/"));
+    if path.contains("..")
+        || (!path.starts_with("/app/data/certs/") && !path.starts_with("/app/certs/"))
+    {
+        return Err(bad_request(
+            "ca_cert_path must be within /app/data/certs/ or /app/certs/",
+        ));
     }
     Ok(())
 }
@@ -72,6 +82,83 @@ fn validate_device_update(update: &UpdateDevice) -> Result<(), Response> {
         validate_ca_cert_path(path)?;
     }
     Ok(())
+}
+
+fn requires_primary_restart(update: &UpdateDevice) -> bool {
+    update.host.is_some()
+        || update.port.is_some()
+        || update.tls.is_some()
+        || update.ca_cert_path.is_some()
+        || update.username.is_some()
+        || update.password.is_some()
+}
+
+async fn build_runtime_client(
+    state: &AppState,
+    secrets: &SecretsManager,
+    record: &crate::secrets::DeviceRecord,
+) -> Result<DeviceClient, Response> {
+    let creds = secrets
+        .get_device_credentials(&record.id)
+        .await
+        .map_err(|e| internal_error("get device credentials", e))?
+        .ok_or_else(|| bad_request("device credentials are missing"))?;
+    let (username, password) = creds;
+
+    if record.device_type == "snmp_switch" {
+        let (priv_pw, auth_proto, priv_proto) = secrets
+            .get_snmp_v3_params(&record.id)
+            .await
+            .map_err(|e| internal_error("get snmp v3 params", e))?;
+        let client = if priv_pw.is_some() || auth_proto.is_some() {
+            SnmpClient::new_v3(
+                record.host.clone(),
+                record.port,
+                username,
+                password.expose_secret().to_string(),
+                auth_proto.unwrap_or_else(|| "SHA".into()),
+                priv_pw.unwrap_or_default(),
+                priv_proto.unwrap_or_else(|| "DES".into()),
+            )
+        } else {
+            SnmpClient::new_v2c(
+                record.host.clone(),
+                record.port,
+                password.expose_secret().to_string(),
+            )
+        };
+        return Ok(DeviceClient::Snmp(client));
+    }
+
+    if record.device_type == "swos_switch" {
+        let client = SwosClient::new(
+            record.host.clone(),
+            record.port,
+            username,
+            password.expose_secret().to_string(),
+        )
+        .map_err(|e| bad_request(&format!("failed to create SwOS client: {e}")))?;
+        return Ok(DeviceClient::SwOs(client));
+    }
+
+    let ca_cert_path = record
+        .ca_cert_path
+        .as_deref()
+        .or(state.config.router.ca_cert_path.as_deref())
+        .map(PathBuf::from);
+
+    let config = MikrotikConfig {
+        host: record.host.clone(),
+        port: record.port,
+        tls: record.tls,
+        ca_cert_path,
+        username,
+        password,
+    };
+
+    let client = MikrotikClient::new(config)
+        .map_err(|e| bad_request(&format!("failed to create client: {e}")))?;
+    Ok(DeviceClient::RouterOs(client))
 }
 
 // ── GET /api/devices ─────────────────────────────────────────────
@@ -143,7 +230,11 @@ pub async fn create_device(
     }
     if req.device.id.is_empty()
         || req.device.id.len() > 64
-        || !req.device.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        || !req
+            .device
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -169,9 +260,13 @@ pub async fn create_device(
                 req.device.port,
                 req.username.clone(),
                 req.password.clone(),
-                req.snmp_auth_protocol.clone().unwrap_or_else(|| "SHA".into()),
+                req.snmp_auth_protocol
+                    .clone()
+                    .unwrap_or_else(|| "SHA".into()),
                 req.snmp_priv_password.clone().unwrap_or_default(),
-                req.snmp_priv_protocol.clone().unwrap_or_else(|| "AES128".into()),
+                req.snmp_priv_protocol
+                    .clone()
+                    .unwrap_or_else(|| "AES128".into()),
             )
         } else {
             SnmpClient::new_v2c(
@@ -194,7 +289,8 @@ pub async fn create_device(
             req.device.port,
             req.username.clone(),
             req.password.clone(),
-        ).map_err(|e| {
+        )
+        .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": format!("failed to create SwOS client: {e}") })),
@@ -275,7 +371,9 @@ pub async fn create_device(
     dm.add_device(record, client);
     dm.set_status(
         &req.device.id,
-        DeviceStatus::Online { identity: identity.clone() },
+        DeviceStatus::Online {
+            identity: identity.clone(),
+        },
     );
 
     // Start the poller for this device immediately (no server restart needed)
@@ -314,6 +412,21 @@ pub async fn update_device(
     // Validate host (SSRF) and ca_cert_path (path traversal) before persisting
     validate_device_update(&update)?;
 
+    {
+        let dm = state.device_manager.read().await;
+        if let Some(entry) = dm.get_device(&id) {
+            if entry.record.is_primary && requires_primary_restart(&update) {
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "updating the primary router connection settings requires a server restart"
+                    })),
+                )
+                    .into_response());
+            }
+        }
+    }
+
     let sm_read = sm.read().await;
     sm_read
         .update_device(&id, &update)
@@ -332,11 +445,12 @@ pub async fn update_device(
             )
                 .into_response()
         })?;
+    let client = build_runtime_client(&state, &sm_read, &record).await?;
     drop(sm_read);
 
     {
         let mut dm = state.device_manager.write().await;
-        dm.update_record(&id, record);
+        dm.update_runtime_device(&id, record, client);
     }
 
     // Restart the poller with updated configuration if one is running
@@ -344,7 +458,9 @@ pub async fn update_device(
         let dm = state.device_manager.read().await;
         if let Some(entry) = dm.get_device(&id) {
             let mut registry = state.poller_registry.write().await;
-            if registry.has_poller(&id) {
+            if !entry.record.enabled {
+                registry.stop_poller(&id);
+            } else if registry.has_poller(&id) {
                 registry.start_poller(
                     entry,
                     state.device_manager.clone(),
@@ -442,7 +558,12 @@ pub async fn test_device(
     match client.test_connection().await {
         Ok(identity) => {
             let mut dm = state.device_manager.write().await;
-            dm.set_status(&id, DeviceStatus::Online { identity: identity.clone() });
+            dm.set_status(
+                &id,
+                DeviceStatus::Online {
+                    identity: identity.clone(),
+                },
+            );
             Ok(Json(serde_json::json!({
                 "status": "online",
                 "identity": identity
@@ -450,7 +571,12 @@ pub async fn test_device(
         }
         Err(e) => {
             let mut dm = state.device_manager.write().await;
-            dm.set_status(&id, DeviceStatus::Offline { error: e.to_string() });
+            dm.set_status(
+                &id,
+                DeviceStatus::Offline {
+                    error: e.to_string(),
+                },
+            );
             Ok(Json(serde_json::json!({
                 "status": "offline",
                 "error": e.to_string()
@@ -518,18 +644,14 @@ pub async fn test_connection(
             }))),
         }
     } else if device_type == "swos_switch" {
-        let client = SwosClient::new(
-            req.host,
-            req.port.unwrap_or(80),
-            req.username,
-            req.password,
-        ).map_err(|e| {
-            (
+        let client = SwosClient::new(req.host, req.port.unwrap_or(80), req.username, req.password)
+            .map_err(|e| {
+                (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": format!("failed to create SwOS client: {e}") })),
             )
                 .into_response()
-        })?;
+            })?;
         match client.test_connection().await {
             Ok(identity) => Ok(Json(serde_json::json!({
                 "status": "online",

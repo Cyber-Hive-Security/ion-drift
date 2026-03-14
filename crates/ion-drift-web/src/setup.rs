@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use axum::extract::State;
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use secrecy::SecretString;
 
@@ -59,42 +59,56 @@ pub async fn setup_submit(
     // Validate inputs
     if form.router_username.trim().is_empty() {
         return Html(render_setup_html(
-            &form.router_username, cw_url, cw_name,
+            &form.router_username,
+            cw_url,
+            cw_name,
             Some("Router username is required"),
         ))
         .into_response();
     }
     if form.router_password.trim().is_empty() {
         return Html(render_setup_html(
-            &form.router_username, cw_url, cw_name,
+            &form.router_username,
+            cw_url,
+            cw_name,
             Some("Router password is required"),
         ))
         .into_response();
     }
     if form.oidc_client_secret.trim().is_empty() {
         return Html(render_setup_html(
-            &form.router_username, cw_url, cw_name,
+            &form.router_username,
+            cw_url,
+            cw_name,
             Some("OIDC client secret is required"),
         ))
         .into_response();
     }
     if form.certwarden_cert_api_key.trim().is_empty() {
         return Html(render_setup_html(
-            &form.router_username, cw_url, cw_name,
+            &form.router_username,
+            cw_url,
+            cw_name,
             Some("CertWarden Certificate API Key is required"),
         ))
         .into_response();
     }
     if form.certwarden_key_api_key.trim().is_empty() {
         return Html(render_setup_html(
-            &form.router_username, cw_url, cw_name,
+            &form.router_username,
+            cw_url,
+            cw_name,
             Some("CertWarden Private Key API Key is required"),
         ))
         .into_response();
     }
 
     // Step 1: Fetch cert+key from CertWarden
-    let cw_config = match state.certwarden_base_url.as_ref().zip(state.certwarden_cert_name.as_ref()) {
+    let cw_config = match state
+        .certwarden_base_url
+        .as_ref()
+        .zip(state.certwarden_cert_name.as_ref())
+    {
         Some((base_url, cert_name)) => {
             let resolved = crate::config::ResolvedCertWarden {
                 base_url: base_url.clone(),
@@ -111,7 +125,9 @@ pub async fn setup_submit(
         Some(ref cfg) => cfg,
         None => {
             return Html(render_setup_html(
-                &form.router_username, cw_url, cw_name,
+                &form.router_username,
+                cw_url,
+                cw_name,
                 Some("CertWarden base_url and cert_name must be set in config"),
             ))
             .into_response();
@@ -123,8 +139,10 @@ pub async fn setup_submit(
         Err(e) => {
             tracing::error!("failed to create CertWarden client: {e}");
             return Html(render_setup_html(
-                &form.router_username, cw_url, cw_name,
-                Some(&format!("Failed to create CertWarden client: {e}")),
+                &form.router_username,
+                cw_url,
+                cw_name,
+                Some("Failed to create CertWarden client. Check server logs."),
             ))
             .into_response();
         }
@@ -141,8 +159,10 @@ pub async fn setup_submit(
         Err(e) => {
             tracing::error!("CertWarden fetch failed: {e}");
             return Html(render_setup_html(
-                &form.router_username, cw_url, cw_name,
-                Some(&format!("Failed to fetch cert from CertWarden: {e}")),
+                &form.router_username,
+                cw_url,
+                cw_name,
+                Some("Failed to fetch certificate from CertWarden. Check server logs."),
             ))
             .into_response();
         }
@@ -157,8 +177,10 @@ pub async fn setup_submit(
     ) {
         tracing::error!("failed to write cert/key: {e}");
         return Html(render_setup_html(
-            &form.router_username, cw_url, cw_name,
-            Some(&format!("Failed to write cert/key to disk: {e}")),
+            &form.router_username,
+            cw_url,
+            cw_name,
+            Some("Failed to write certificate files. Check server logs."),
         ))
         .into_response();
     }
@@ -170,7 +192,9 @@ pub async fn setup_submit(
                 Some(id) => id.clone(),
                 None => {
                     return Html(render_setup_html(
-                        &form.router_username, cw_url, cw_name,
+                        &form.router_username,
+                        cw_url,
+                        cw_name,
                         Some("oidc.bootstrap.client_id not configured"),
                     ))
                     .into_response();
@@ -180,7 +204,9 @@ pub async fn setup_submit(
                 Some(u) => u.clone(),
                 None => {
                     return Html(render_setup_html(
-                        &form.router_username, cw_url, cw_name,
+                        &form.router_username,
+                        cw_url,
+                        cw_name,
                         Some("oidc.bootstrap.token_url not configured"),
                     ))
                     .into_response();
@@ -190,7 +216,9 @@ pub async fn setup_submit(
                 Some(u) => u.clone(),
                 None => {
                     return Html(render_setup_html(
-                        &form.router_username, cw_url, cw_name,
+                        &form.router_username,
+                        cw_url,
+                        cw_name,
                         Some("oidc.bootstrap.admin_url not configured"),
                     ))
                     .into_response();
@@ -207,7 +235,9 @@ pub async fn setup_submit(
         }
         None => {
             return Html(render_setup_html(
-                &form.router_username, cw_url, cw_name,
+                &form.router_username,
+                cw_url,
+                cw_name,
                 Some("oidc.bootstrap section not configured"),
             ))
             .into_response();
@@ -219,21 +249,32 @@ pub async fn setup_submit(
         Err(e) => {
             tracing::error!("failed to build mTLS client: {e}");
             return Html(render_setup_html(
-                &form.router_username, cw_url, cw_name,
-                Some(&format!("Failed to build mTLS client: {e}")),
+                &form.router_username,
+                cw_url,
+                cw_name,
+                Some("Failed to build mTLS client. Check server logs."),
             ))
             .into_response();
         }
     };
 
     let data_dir = state.db_path.parent().unwrap_or(std::path::Path::new("."));
-    let kek_result = match bootstrap::fetch_or_generate_kek(&mtls_client, &bootstrap_config, data_dir, &state.tls_config.client_key).await {
+    let kek_result = match bootstrap::fetch_or_generate_kek(
+        &mtls_client,
+        &bootstrap_config,
+        data_dir,
+        &state.tls_config.client_key,
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("KEK bootstrap failed: {e}");
             return Html(render_setup_html(
-                &form.router_username, cw_url, cw_name,
-                Some(&format!("Keycloak KEK bootstrap failed: {e}")),
+                &form.router_username,
+                cw_url,
+                cw_name,
+                Some("Keycloak bootstrap failed. Check server logs."),
             ))
             .into_response();
         }
@@ -247,7 +288,9 @@ pub async fn setup_submit(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(render_setup_html(
-                    &form.router_username, cw_url, cw_name,
+                    &form.router_username,
+                    cw_url,
+                    cw_name,
                     Some("Failed to initialize secrets manager. Check server logs."),
                 )),
             )
@@ -275,14 +318,18 @@ pub async fn setup_submit(
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Html(render_setup_html(
-                &secrets.router_username, cw_url, cw_name,
+                &secrets.router_username,
+                cw_url,
+                cw_name,
                 Some("Failed to store secrets. Check server logs."),
             )),
         )
             .into_response();
     }
 
-    tracing::info!("setup complete — cert fetched, KEK bootstrapped, secrets encrypted, restarting...");
+    tracing::info!(
+        "setup complete — cert fetched, KEK bootstrapped, secrets encrypted, restarting..."
+    );
 
     // Step 7: Return success page, then exit after a short delay so Docker restarts us
     tokio::spawn(async {
