@@ -82,6 +82,9 @@ OpenID Connect configuration. Omit this entire section to use local auth only. W
 | `client_id` | string | *(required)* | OIDC client ID. |
 | `client_secret` | *(env var)* | — | Set via `DRIFT_OIDC_SECRET` environment variable. |
 | `redirect_uri` | string | *(required)* | Callback URL, typically `https://your-ion-drift.example.com/auth/callback`. |
+
+> **Important:** The `redirect_uri` must be the externally-accessible URL that users use to reach Ion Drift — typically the reverse proxy hostname (e.g., `https://hiverouter.example.com/auth/callback`), not the internal container IP or Docker-mapped port.
+
 | `ca_cert_path` | string | *(none)* | CA cert for verifying the OIDC provider's TLS certificate (optional). |
 | `roles_claim` | string | `"realm_access.roles"` | Dot-notation path to the roles array in the ID token. Use `"groups"` for Authentik/Authelia. |
 | `admin_role` | string | `"ion-drift-admin"` | Role or group name that grants admin access. |

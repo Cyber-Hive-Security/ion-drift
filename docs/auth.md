@@ -128,6 +128,17 @@ Roles are extracted from the JWT ID token payload (after signature verification 
 
 ---
 
+## OIDC-Only Mode
+
+When no local users exist (typical for mTLS bootstrap deployments), Ion Drift operates in OIDC-only mode:
+
+- The login page shows a "Sign in with SSO" button instead of a username/password form
+- 401 responses redirect to the login page (not directly to the OIDC provider) to avoid redirect loops
+- Logout redirects to the OIDC provider's end-session endpoint to kill both the Ion Drift session and the IdP SSO session
+- The `/auth/config` endpoint reports `local_auth_enabled: false` and `oidc_enabled: true`
+
+---
+
 ## Provider Compatibility Matrix
 
 | Feature | Local | Keycloak | Authentik | Authelia |
