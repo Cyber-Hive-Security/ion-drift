@@ -27,12 +27,6 @@ export function LoginPage() {
   const showOidc = authConfig?.oidc_enabled === true;
   const providerName = authConfig?.oidc_provider_name || "SSO";
 
-  // OIDC-only mode: redirect straight to OIDC login
-  if (authConfig && !showLocalAuth && showOidc) {
-    window.location.href = "/auth/login";
-    return null;
-  }
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
       <div className="w-full max-w-sm space-y-6 rounded-lg border border-border bg-card p-8">
