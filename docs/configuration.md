@@ -61,14 +61,52 @@ Connection settings for your Mikrotik RouterOS device.
 
 ```toml
 [router]
-host = "10.20.25.1"
+host = "192.168.88.1"
 port = 443
 tls = true
 ca_cert_path = "/path/to/ca.crt"
-username = "admin"
-wan_interface = "1-WAN"
-dns_server = "10.20.25.5"
+username = "ion-drift"
+wan_interface = "ether1"
+dns_server = "192.168.88.1"
 ```
+
+#### RouterOS User Permissions
+
+Ion Drift requires a dedicated RouterOS user with specific policies. **Do not use the default `admin` account in production.**
+
+Create a user group and user on your router:
+
+```
+/user/group/add name=ion-drift policy=api,read,write,sensitive,!ftp,!reboot,!policy,!local,!telnet,!ssh,!password,!sniff,!romon,!rest-api
+/user/add name=ion-drift group=ion-drift password=<strong-password>
+```
+
+**Required policies:**
+
+| Policy | Why |
+|--------|-----|
+| `api` | Required for all REST API access |
+| `read` | Read system resources, interfaces, firewall rules, DHCP, ARP, connections, logs |
+| `write` | Setup wizard writes firewall mangle rules, syslog config, and logging actions |
+| `sensitive` | Read connection tracking data and firewall counters |
+
+**API endpoints used (read):**
+
+- `/system/resource`, `/system/identity`, `/system/logging`, `/system/logging/action`
+- `/interface`, `/interface/ethernet`, `/interface/vlan`
+- `/ip/address`, `/ip/route`, `/ip/arp`, `/ip/dns/cache`
+- `/ip/dhcp-server`, `/ip/dhcp-server/lease`, `/ip/pool`
+- `/ip/firewall/filter`, `/ip/firewall/nat`, `/ip/firewall/mangle`, `/ip/firewall/connection`
+- `/log`
+- `/ip/neighbor`
+
+**API endpoints used (write — setup wizard only):**
+
+- `/ip/firewall/mangle` (POST/PUT) — creates traffic accounting rules
+- `/system/logging/action` (POST/PUT/DELETE) — configures syslog forwarding
+- `/system/logging` (POST/PUT) — creates logging rules for firewall topics
+
+> **Note:** If you don't plan to use the setup wizard's automatic router provisioning, the `write` policy can be removed. Ion Drift will function in read-only mode for monitoring.
 
 ---
 
