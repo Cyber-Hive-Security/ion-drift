@@ -29,8 +29,8 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.oui_db.clone(),
     );
 
-    // Session cleanup
-    spawn_session_cleanup(state.sessions.clone());
+    // Session cleanup + login rate limiter cleanup
+    spawn_session_cleanup(state.sessions.clone(), state.login_limiter.clone());
 
     // Behavior analysis + automated investigation
     behavior::spawn_behavior_collector(
@@ -157,14 +157,18 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
 }
 
 /// Clean up expired sessions every 10 minutes.
-fn spawn_session_cleanup(sessions: crate::auth::SessionStore) {
+fn spawn_session_cleanup(
+    sessions: crate::auth::SessionStore,
+    login_limiter: crate::auth::LoginRateLimiter,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         loop {
             interval.tick().await;
             sessions.cleanup();
             sessions.flush_dirty();
-            tracing::debug!("session cleanup complete");
+            login_limiter.cleanup();
+            tracing::debug!("session + rate limiter cleanup complete");
         }
     });
 }
