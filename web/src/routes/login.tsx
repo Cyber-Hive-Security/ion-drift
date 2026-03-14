@@ -23,9 +23,15 @@ export function LoginPage() {
     }
   };
 
-  const showLocalAuth = authConfig?.local_auth_enabled !== false;
+  const showLocalAuth = authConfig?.local_auth_enabled === true;
   const showOidc = authConfig?.oidc_enabled === true;
   const providerName = authConfig?.oidc_provider_name || "SSO";
+
+  // OIDC-only mode: redirect straight to OIDC login
+  if (authConfig && !showLocalAuth && showOidc) {
+    window.location.href = "/auth/login";
+    return null;
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">

@@ -25,7 +25,19 @@ export async function apiFetch<T>(
   });
 
   if (response.status === 401) {
-    window.location.href = "/";
+    // Check auth config to determine redirect target
+    try {
+      const config = await fetch("/auth/config", { credentials: "include" }).then(r => r.json());
+      if (config.oidc_enabled && !config.local_auth_enabled) {
+        // OIDC only — redirect straight to OIDC login
+        window.location.href = "/auth/login";
+      } else {
+        // Local auth available — show login page
+        window.location.href = "/";
+      }
+    } catch {
+      window.location.href = "/";
+    }
     throw new ApiError(401, "Session expired");
   }
 

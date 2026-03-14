@@ -820,8 +820,15 @@ pub async fn auth_config(State(state): State<AppState>) -> Json<AuthConfigRespon
         None
     };
 
+    // Local auth is only enabled if we have a secrets manager AND local users exist
+    let local_auth_enabled = if let Some(ref sm) = state.secrets_manager {
+        sm.read().await.has_local_users().await.unwrap_or(false)
+    } else {
+        false
+    };
+
     Json(AuthConfigResponse {
-        local_auth_enabled: state.secrets_manager.is_some(),
+        local_auth_enabled,
         oidc_enabled,
         oidc_provider_name,
     })
