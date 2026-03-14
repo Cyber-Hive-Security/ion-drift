@@ -540,11 +540,12 @@ export function useResetBehavior() {
   });
 }
 
-export function useBehaviorAlerts() {
+export function useBehaviorAlerts(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["behavior", "alerts"],
     queryFn: () => apiFetch<AlertCount>("/api/behavior/alerts"),
     refetchInterval: 15_000,
+    enabled: options?.enabled ?? true,
   });
 }
 

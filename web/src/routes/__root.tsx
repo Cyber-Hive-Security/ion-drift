@@ -14,7 +14,7 @@ export function RootLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.matchMedia("(min-width: 768px)").matches,
   );
-  const behaviorAlerts = useBehaviorAlerts();
+  const behaviorAlerts = useBehaviorAlerts({ enabled: isAuthenticated });
 
   if (isLoading) {
     return (
