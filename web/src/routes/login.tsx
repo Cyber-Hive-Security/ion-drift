@@ -4,7 +4,7 @@ import { useAuthConfig } from "@/api/queries";
 
 export function LoginPage() {
   const { login } = useAuth();
-  const { data: authConfig, isLoading: configLoading } = useAuthConfig();
+  const { data: authConfig } = useAuthConfig();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
