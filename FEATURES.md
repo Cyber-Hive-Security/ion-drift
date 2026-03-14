@@ -104,7 +104,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 - AES-256-GCM encryption for all secrets at rest (router credentials, OIDC secrets, API keys)
 - Argon2id password hashing for local accounts
-- Key encryption key (KEK) derived from mTLS bootstrap or environment variable
+- Key encryption key (KEK) via local argon2id derivation (default), mTLS Keycloak bootstrap (opt-in), or legacy environment variable
 - Key fingerprint tracking with per-secret currency status
 - Session secret regeneration on demand
 
