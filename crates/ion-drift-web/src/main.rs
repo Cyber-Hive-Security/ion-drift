@@ -474,6 +474,7 @@ async fn main() -> anyhow::Result<()> {
             poller_registry::PollerRegistry::new(),
         )),
         task_supervisor: supervisor,
+        login_limiter: auth::LoginRateLimiter::new(),
     };
 
     // Spawn all background tasks

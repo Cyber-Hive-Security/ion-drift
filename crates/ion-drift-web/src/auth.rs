@@ -435,6 +435,70 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+// ── Login rate limiter ────────────────────────────────────────────
+
+/// Per-key rate limiter for login attempts.
+/// Tracks failed attempts by key (username or IP) and enforces cooldowns.
+#[derive(Clone)]
+pub struct LoginRateLimiter {
+    /// Map of key → (attempt_count, last_attempt_timestamp)
+    attempts: Arc<DashMap<String, (u32, u64)>>,
+}
+
+impl LoginRateLimiter {
+    pub fn new() -> Self {
+        Self {
+            attempts: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Check if a key is rate-limited. Returns Ok(()) if allowed, Err(seconds_until_retry) if blocked.
+    pub fn check(&self, key: &str) -> Result<(), u64> {
+        let now = now_secs();
+        if let Some(entry) = self.attempts.get(key) {
+            let (count, last) = *entry;
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
+            let cooldown = match count {
+                0..=1 => 0,
+                2 => 1,
+                3 => 2,
+                4 => 4,
+                5 => 8,
+                6 => 16,
+                _ => 30,
+            };
+            let elapsed = now.saturating_sub(last);
+            if elapsed < cooldown {
+                return Err(cooldown - elapsed);
+            }
+        }
+        Ok(())
+    }
+
+    /// Record a failed attempt.
+    pub fn record_failure(&self, key: &str) {
+        let now = now_secs();
+        self.attempts
+            .entry(key.to_string())
+            .and_modify(|(count, last)| {
+                *count = count.saturating_add(1);
+                *last = now;
+            })
+            .or_insert((1, now));
+    }
+
+    /// Clear attempts for a key (on successful login).
+    pub fn record_success(&self, key: &str) {
+        self.attempts.remove(key);
+    }
+
+    /// Periodic cleanup of stale entries (call from a background task or inline).
+    pub fn cleanup(&self) {
+        let now = now_secs();
+        self.attempts.retain(|_, (_, last)| now - *last < 300); // 5 min TTL
+    }
+}
+
 // ── OIDC client setup ─────────────────────────────────────────────
 
 /// Build the `reqwest::Client` with the Smallstep CA cert loaded.
@@ -764,6 +828,14 @@ pub async fn local_login(
     headers: axum::http::HeaderMap,
     Json(req): Json<LocalLoginRequest>,
 ) -> Result<(CookieJar, Json<serde_json::Value>), Response> {
+    // Rate limit by username
+    if let Err(retry_after) = state.login_limiter.check(&req.username) {
+        return Err(json_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            &format!("too many login attempts, retry in {retry_after}s"),
+        ));
+    }
+
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
         json_error(StatusCode::SERVICE_UNAVAILABLE, "local auth not available")
     })?;
@@ -777,6 +849,7 @@ pub async fn local_login(
         .ok_or_else(|| {
             // Use the same error for both "user not found" and "wrong password"
             // to prevent user enumeration
+            state.login_limiter.record_failure(&req.username);
             tracing::warn!(username = %req.username, "failed local login attempt");
             json_error(StatusCode::UNAUTHORIZED, "invalid username or password")
         })?;
@@ -834,6 +907,7 @@ pub async fn local_login(
 
     let jar = CookieJar::new().add(cookie);
 
+    state.login_limiter.record_success(&req.username);
     tracing::info!(username = %req.username, "local login successful");
 
     Ok((jar, Json(serde_json::json!({ "authenticated": true }))))

@@ -114,7 +114,7 @@ pub struct MikrotikClient {
     http: Client,
     base_url: String,
     username: String,
-    password: String,
+    password: SecretString,
 }
 
 impl MikrotikClient {
@@ -153,7 +153,7 @@ impl MikrotikClient {
             http,
             base_url,
             username: config.username,
-            password: config.password.expose_secret().to_string(),
+            password: config.password,
         })
     }
 
@@ -177,7 +177,7 @@ impl MikrotikClient {
         let resp = self
             .http
             .get(&url)
-            .basic_auth(&self.username, Some(&self.password))
+            .basic_auth(&self.username, Some(self.password.expose_secret()))
             .send()
             .await?;
 
@@ -196,7 +196,7 @@ impl MikrotikClient {
         let resp = self
             .http
             .post(&url)
-            .basic_auth(&self.username, Some(&self.password))
+            .basic_auth(&self.username, Some(self.password.expose_secret()))
             .json(body)
             .send()
             .await?;
@@ -216,7 +216,7 @@ impl MikrotikClient {
         let resp = self
             .http
             .put(&url)
-            .basic_auth(&self.username, Some(&self.password))
+            .basic_auth(&self.username, Some(self.password.expose_secret()))
             .json(body)
             .send()
             .await?;
@@ -237,7 +237,7 @@ impl MikrotikClient {
         let resp = self
             .http
             .patch(&url)
-            .basic_auth(&self.username, Some(&self.password))
+            .basic_auth(&self.username, Some(self.password.expose_secret()))
             .json(body)
             .send()
             .await?;
@@ -253,7 +253,7 @@ impl MikrotikClient {
         let resp = self
             .http
             .delete(&url)
-            .basic_auth(&self.username, Some(&self.password))
+            .basic_auth(&self.username, Some(self.password.expose_secret()))
             .send()
             .await?;
 

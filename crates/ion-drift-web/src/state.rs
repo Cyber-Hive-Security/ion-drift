@@ -7,7 +7,7 @@ use ion_drift_storage::{BehaviorStore, MetricsStore, SwitchStore};
 use mikrotik_core::TrafficTracker;
 use ion_drift_storage::behavior::VlanRegistry;
 use mikrotik_core::resources::firewall::FilterRule;
-use crate::auth::{OidcClient, SessionStore};
+use crate::auth::{LoginRateLimiter, OidcClient, SessionStore};
 use crate::config::ServerConfig;
 use crate::connection_store::ConnectionStore;
 use crate::device_manager::DeviceManager;
@@ -66,4 +66,6 @@ pub struct AppState {
     pub poller_registry: Arc<RwLock<PollerRegistry>>,
     /// Background task supervisor — tracks health and restarts panicked tasks.
     pub task_supervisor: TaskSupervisor,
+    /// Per-key rate limiter for local login attempts.
+    pub login_limiter: LoginRateLimiter,
 }
