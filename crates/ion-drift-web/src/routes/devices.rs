@@ -116,7 +116,7 @@ async fn build_runtime_client(
                 password.expose_secret().to_string(),
                 auth_proto.unwrap_or_else(|| "SHA".into()),
                 priv_pw.unwrap_or_default(),
-                priv_proto.unwrap_or_else(|| "DES".into()),
+                priv_proto.unwrap_or_else(|| "AES128".into()),
             )
         } else {
             SnmpClient::new_v2c(
@@ -177,17 +177,25 @@ pub async fn get_device(
     Path(id): Path<String>,
 ) -> Result<Json<DeviceInfo>, Response> {
     let dm = state.device_manager.read().await;
-    let entry = dm.get_device(&id).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "device not found" })),
-        )
-            .into_response()
-    })?;
-    Ok(Json(DeviceInfo {
-        record: entry.record.clone(),
-        status: entry.status.clone(),
-    }))
+    if let Some(entry) = dm.get_device(&id) {
+        return Ok(Json(DeviceInfo {
+            record: entry.record.clone(),
+            status: entry.status.clone(),
+        }));
+    }
+    if let Some(record) = dm.get_disabled_device(&id) {
+        return Ok(Json(DeviceInfo {
+            record: record.clone(),
+            status: DeviceStatus::Offline {
+                error: "device disabled".into(),
+            },
+        }));
+    }
+    Err((
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "device not found" })),
+    )
+        .into_response())
 }
 
 // ── POST /api/devices ────────────────────────────────────────────
@@ -345,13 +353,18 @@ pub async fn create_device(
         .await
         .map_err(|e| internal_error("add device", e))?;
 
-    // Store SNMPv3 extras if provided
+    // Store SNMPv3 extras if provided, resolving defaults so they are persisted
+    let resolved_priv_proto = if req.snmp_priv_password.is_some() || req.snmp_auth_protocol.is_some() {
+        Some(req.snmp_priv_protocol.as_deref().unwrap_or("AES128").to_string())
+    } else {
+        req.snmp_priv_protocol.clone()
+    };
     sm_read
         .store_snmp_v3_secrets(
             &req.device.id,
             req.snmp_priv_password.as_deref(),
             req.snmp_auth_protocol.as_deref(),
-            req.snmp_priv_protocol.as_deref(),
+            resolved_priv_proto.as_deref(),
         )
         .await
         .map_err(|e| internal_error("store snmp v3 secrets", e))?;
@@ -376,12 +389,14 @@ pub async fn create_device(
 
     // Start the poller for this device immediately (no server restart needed)
     if let Some(entry) = dm.get_device(&req.device.id) {
-        let mut registry = state.poller_registry.write().await;
-        registry.start_poller(
-            entry,
-            state.device_manager.clone(),
-            state.switch_store.clone(),
-        );
+        if entry.record.enabled {
+            let mut registry = state.poller_registry.write().await;
+            registry.start_poller(
+                entry,
+                state.device_manager.clone(),
+                state.switch_store.clone(),
+            );
+        }
     }
 
     Ok(Json(serde_json::json!({
@@ -451,20 +466,24 @@ pub async fn update_device(
         dm.update_runtime_device(&id, record, client);
     }
 
-    // Restart the poller with updated configuration if one is running
+    // Restart the poller with updated configuration, handling enabled/disabled transitions
     {
         let dm = state.device_manager.read().await;
+        let mut registry = state.poller_registry.write().await;
         if let Some(entry) = dm.get_device(&id) {
-            let mut registry = state.poller_registry.write().await;
             if !entry.record.enabled {
                 registry.stop_poller(&id);
-            } else if registry.has_poller(&id) {
+            } else {
+                // Always (re)start poller for enabled devices — handles disabled→enabled transition
                 registry.start_poller(
                     entry,
                     state.device_manager.clone(),
                     state.switch_store.clone(),
                 );
             }
+        } else {
+            // Device moved to disabled map — stop any existing poller
+            registry.stop_poller(&id);
         }
     }
 

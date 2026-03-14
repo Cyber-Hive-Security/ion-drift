@@ -74,6 +74,9 @@ pub struct DeviceEntry {
 /// Manages all registered Mikrotik devices (router + switches).
 pub struct DeviceManager {
     devices: HashMap<String, DeviceEntry>,
+    /// Disabled devices are tracked separately so they appear in the API but
+    /// are not polled and have no runtime client.
+    disabled_devices: HashMap<String, DeviceRecord>,
 }
 
 impl DeviceManager {
@@ -84,10 +87,12 @@ impl DeviceManager {
     ) -> anyhow::Result<Self> {
         let records = secrets.list_devices().await?;
         let mut devices = HashMap::new();
+        let mut disabled_devices = HashMap::new();
 
         for record in records {
             if !record.enabled {
-                tracing::info!(id = %record.id, name = %record.name, "device disabled, skipping");
+                tracing::info!(id = %record.id, name = %record.name, "device disabled, skipping client creation");
+                disabled_devices.insert(record.id.clone(), record);
                 continue;
             }
 
@@ -116,7 +121,7 @@ impl DeviceManager {
                         password,
                         auth_proto.unwrap_or_else(|| "SHA".into()),
                         priv_pw.unwrap_or_default(),
-                        priv_proto.unwrap_or_else(|| "DES".into()),
+                        priv_proto.unwrap_or_else(|| "AES128".into()),
                     )
                 } else {
                     // SNMPv2c (backward compat)
@@ -204,7 +209,7 @@ impl DeviceManager {
             );
         }
 
-        Ok(Self { devices })
+        Ok(Self { devices, disabled_devices })
     }
 
     /// Build from legacy config (single router, no device registry).
@@ -239,7 +244,7 @@ impl DeviceManager {
             },
         );
 
-        Ok(Self { devices })
+        Ok(Self { devices, disabled_devices: HashMap::new() })
     }
 
     /// Get a device by ID.
@@ -291,14 +296,31 @@ impl DeviceManager {
     }
 
     /// Get all device entries as a list of records with status.
+    ///
+    /// Includes both active and disabled devices. Disabled devices are
+    /// reported with [`DeviceStatus::Offline`].
     pub fn device_list(&self) -> Vec<DeviceInfo> {
-        self.devices
+        let mut list: Vec<DeviceInfo> = self.devices
             .values()
             .map(|d| DeviceInfo {
                 record: d.record.clone(),
                 status: d.status.clone(),
             })
-            .collect()
+            .collect();
+        for record in self.disabled_devices.values() {
+            list.push(DeviceInfo {
+                record: record.clone(),
+                status: DeviceStatus::Offline {
+                    error: "device disabled".into(),
+                },
+            });
+        }
+        list
+    }
+
+    /// Get a disabled device record by ID.
+    pub fn get_disabled_device(&self, id: &str) -> Option<&DeviceRecord> {
+        self.disabled_devices.get(id)
     }
 
     /// Add a device at runtime.
@@ -314,8 +336,9 @@ impl DeviceManager {
         );
     }
 
-    /// Remove a device at runtime.
+    /// Remove a device at runtime (from both active and disabled maps).
     pub fn remove_device(&mut self, id: &str) -> Option<DeviceEntry> {
+        self.disabled_devices.remove(id);
         self.devices.remove(id)
     }
 
@@ -335,10 +358,29 @@ impl DeviceManager {
     }
 
     /// Replace the runtime client and record after a device update.
+    ///
+    /// Handles enabled/disabled transitions: if the device is now disabled it
+    /// moves to the disabled map; if re-enabled it moves back to active.
     pub fn update_runtime_device(&mut self, id: &str, record: DeviceRecord, client: DeviceClient) {
-        if let Some(entry) = self.devices.get_mut(id) {
-            entry.record = record;
-            entry.client = client;
+        if !record.enabled {
+            // Move to disabled map (remove from active if present)
+            self.devices.remove(id);
+            self.disabled_devices.insert(id.to_string(), record);
+        } else {
+            // Ensure it's not in the disabled map
+            self.disabled_devices.remove(id);
+            if let Some(entry) = self.devices.get_mut(id) {
+                entry.record = record;
+                entry.client = client;
+            } else {
+                // Was disabled, now re-enabled — insert fresh
+                self.devices.insert(id.to_string(), DeviceEntry {
+                    client,
+                    record,
+                    status: DeviceStatus::Unknown,
+                    last_poll: None,
+                });
+            }
         }
     }
 

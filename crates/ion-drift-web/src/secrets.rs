@@ -554,8 +554,68 @@ impl SecretsManager {
     /// Update a device's configuration.
     pub async fn update_device(&self, id: &str, update: &UpdateDevice) -> anyhow::Result<()> {
         let now = now_unix();
+
+        // Pre-encrypt any credential updates before taking the DB lock for the transaction
+        let cipher = Aes256Gcm::new(&self.kek);
+
+        let encrypted_username = if let Some(ref username) = update.username {
+            let secret_name = format!("device:{id}:username");
+            let nonce_bytes: [u8; 12] = rand::random();
+            let nonce = Nonce::from_slice(&nonce_bytes);
+            let ciphertext = cipher
+                .encrypt(nonce, Payload { msg: username.as_bytes(), aad: secret_name.as_bytes() })
+                .map_err(|e| anyhow::anyhow!("encryption failed for username: {e}"))?;
+            Some((secret_name, ciphertext, nonce_bytes))
+        } else {
+            None
+        };
+
+        let encrypted_password = if let Some(ref password) = update.password {
+            let secret_name = format!("device:{id}:password");
+            let nonce_bytes: [u8; 12] = rand::random();
+            let nonce = Nonce::from_slice(&nonce_bytes);
+            let ciphertext = cipher
+                .encrypt(nonce, Payload { msg: password.as_bytes(), aad: secret_name.as_bytes() })
+                .map_err(|e| anyhow::anyhow!("encryption failed for password: {e}"))?;
+            Some((secret_name, ciphertext, nonce_bytes))
+        } else {
+            None
+        };
+
+        let encrypted_snmp: Vec<(String, Vec<u8>, [u8; 12])> = {
+            let mut v = Vec::new();
+            if let Some(ref pp) = update.snmp_priv_password {
+                let name = format!("device:{id}:snmp_priv_password");
+                let nonce_bytes: [u8; 12] = rand::random();
+                let nonce = Nonce::from_slice(&nonce_bytes);
+                let ct = cipher.encrypt(nonce, Payload { msg: pp.as_bytes(), aad: name.as_bytes() })
+                    .map_err(|e| anyhow::anyhow!("encryption failed for snmp_priv_password: {e}"))?;
+                v.push((name, ct, nonce_bytes));
+            }
+            if let Some(ref ap) = update.snmp_auth_protocol {
+                let name = format!("device:{id}:snmp_auth_proto");
+                let nonce_bytes: [u8; 12] = rand::random();
+                let nonce = Nonce::from_slice(&nonce_bytes);
+                let ct = cipher.encrypt(nonce, Payload { msg: ap.as_bytes(), aad: name.as_bytes() })
+                    .map_err(|e| anyhow::anyhow!("encryption failed for snmp_auth_proto: {e}"))?;
+                v.push((name, ct, nonce_bytes));
+            }
+            if let Some(ref pp) = update.snmp_priv_protocol {
+                let name = format!("device:{id}:snmp_priv_proto");
+                let nonce_bytes: [u8; 12] = rand::random();
+                let nonce = Nonce::from_slice(&nonce_bytes);
+                let ct = cipher.encrypt(nonce, Payload { msg: pp.as_bytes(), aad: name.as_bytes() })
+                    .map_err(|e| anyhow::anyhow!("encryption failed for snmp_priv_proto: {e}"))?;
+                v.push((name, ct, nonce_bytes));
+            }
+            v
+        };
+
+        // Single transaction: update device row + all credential secrets
         let db = self.db.lock().await;
-        db.execute(
+        let tx = db.unchecked_transaction()?;
+
+        let rows = tx.execute(
             "UPDATE devices SET
                 name = COALESCE(?2, name),
                 host = COALESCE(?3, host),
@@ -580,25 +640,23 @@ impl SecretsManager {
                 id,
             ],
         )?;
-        drop(db);
+        if rows == 0 {
+            return Err(anyhow::anyhow!("device not found: {id}"));
+        }
 
-        // Update credentials if provided
-        if let Some(ref username) = update.username {
-            self.encrypt_secret(&format!("device:{id}:username"), username)
-                .await?;
+        // Store encrypted credentials within the same transaction
+        let insert_sql = "INSERT OR REPLACE INTO encrypted_secrets (name, ciphertext, nonce, key_fingerprint, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)";
+        if let Some((ref name, ref ct, ref nonce)) = encrypted_username {
+            tx.execute(insert_sql, params![name, ct, nonce.as_slice(), self.key_fingerprint, now])?;
         }
-        if let Some(ref password) = update.password {
-            self.encrypt_secret(&format!("device:{id}:password"), password)
-                .await?;
+        if let Some((ref name, ref ct, ref nonce)) = encrypted_password {
+            tx.execute(insert_sql, params![name, ct, nonce.as_slice(), self.key_fingerprint, now])?;
         }
-        // Update SNMPv3 extras if provided
-        self.store_snmp_v3_secrets(
-            id,
-            update.snmp_priv_password.as_deref(),
-            update.snmp_auth_protocol.as_deref(),
-            update.snmp_priv_protocol.as_deref(),
-        )
-        .await?;
+        for (name, ct, nonce) in &encrypted_snmp {
+            tx.execute(insert_sql, params![name, ct, nonce.as_slice(), self.key_fingerprint, now])?;
+        }
+
+        tx.commit()?;
         Ok(())
     }
 

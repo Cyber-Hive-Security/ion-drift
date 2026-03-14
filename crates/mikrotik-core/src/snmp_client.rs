@@ -732,7 +732,12 @@ fn walk_string_column(
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("SNMP walk error: {e}");
+                // If we've collected some data, the walk likely ended at a table boundary
+                // rather than a true error. Log and return what we have.
+                if map.is_empty() {
+                    return Err(MikrotikError::Snmp(format!("SNMP walk failed: {e}")));
+                }
+                tracing::warn!("SNMP walk ended with error after collecting {} entries: {e}", map.len());
                 break;
             }
         };
@@ -772,7 +777,12 @@ fn walk_u64_column(
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("SNMP walk error: {e}");
+                // If we've collected some data, the walk likely ended at a table boundary
+                // rather than a true error. Log and return what we have.
+                if map.is_empty() {
+                    return Err(MikrotikError::Snmp(format!("SNMP walk failed: {e}")));
+                }
+                tracing::warn!("SNMP walk ended with error after collecting {} entries: {e}", map.len());
                 break;
             }
         };
@@ -812,7 +822,12 @@ fn walk_raw_column(
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("SNMP walk error: {e}");
+                // If we've collected some data, the walk likely ended at a table boundary
+                // rather than a true error. Log and return what we have.
+                if map.is_empty() {
+                    return Err(MikrotikError::Snmp(format!("SNMP walk failed: {e}")));
+                }
+                tracing::warn!("SNMP walk ended with error after collecting {} entries: {e}", map.len());
                 break;
             }
         };
@@ -936,12 +951,18 @@ fn walk_indexed_fn(
 ) -> Result<(), MikrotikError> {
     let base_len = oid_components(base).len();
     let mut current = base.clone();
+    let mut count = 0u32;
 
     loop {
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("SNMP walk error: {e}");
+                // If we've processed some entries, the walk likely ended at a table boundary
+                // rather than a true error. Log and return success.
+                if count == 0 {
+                    return Err(MikrotikError::Snmp(format!("SNMP walk failed: {e}")));
+                }
+                tracing::warn!("SNMP walk ended with error after processing {count} entries: {e}");
                 break;
             }
         };
@@ -955,6 +976,7 @@ fn walk_indexed_fn(
             handler(&suffix, val);
             current = oid.to_owned();
             advanced = true;
+            count += 1;
         }
 
         if !advanced {
