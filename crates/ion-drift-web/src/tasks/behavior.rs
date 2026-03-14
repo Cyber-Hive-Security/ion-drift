@@ -60,7 +60,7 @@ pub fn spawn_behavior_collector(
 
             // Detect anomalies (with firewall rule correlation)
             let fw_rules = firewall_cache.read().await.0.clone();
-            match behavior_engine::detect_anomalies(&store, &spike_candidates, &registry, &fw_rules).await {
+            match behavior_engine::detect_anomalies(&store, &spike_candidates, &registry, &fw_rules, &geo_cache).await {
                 Ok(count) => {
                     if count > 0 {
                         tracing::info!("behavior: detected {count} anomalies");

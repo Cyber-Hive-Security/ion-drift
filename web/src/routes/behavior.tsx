@@ -643,6 +643,10 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
       const dstIp = d.dst_ip ?? d.dst_subnet ?? "";
       const dstPort = d.dst_port != null ? `:${d.dst_port}` : "";
       const proto = d.protocol ? ` ${(d.protocol as string).toUpperCase()}` : "";
+      const dstCountry = d.dst_country as { country?: string; org?: string; isp?: string; country_code?: string } | null;
+      const geoTag = dstCountry
+        ? ` ${dstCountry.country_code ?? dstCountry.country ?? ""}${dstCountry.org ? ` / ${dstCountry.org}` : dstCountry.isp ? ` / ${dstCountry.isp}` : ""}`
+        : "";
       const occBadge = r.occurrence_count > 1 ? (
         <span className="ml-1 rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
           ×{r.occurrence_count}
@@ -651,7 +655,9 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
       if (srcIp || dstIp) {
         return (
           <span className="max-w-xs truncate font-mono text-xs" title={r.description}>
-            {srcIp} &rarr; {dstIp}{dstPort}{proto}{occBadge}
+            {srcIp} &rarr; {dstIp}{dstPort}{proto}
+            {geoTag && <span className="ml-1 text-muted-foreground">{geoTag}</span>}
+            {occBadge}
           </span>
         );
       }
@@ -741,7 +747,7 @@ export function BehaviorPage() {
   const macFilter = search.mac ?? null;
   const [tab, setTab] = useState<TabMode>(macFilter ? "anomalies" : "overview");
   const [anomalyFilter, setAnomalyFilter] = useState<AnomalyFilter>("pending");
-  const [tierFilter, setTierFilter] = useState<number | null>(1);
+  const [tierFilter, setTierFilter] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const vlan = useVlanLookup();
 

@@ -41,7 +41,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const connectionSummary = useConnectionSummary();
   const hasFlagged = (connectionSummary.data?.flagged_count ?? 0) > 0;
   const behaviorAlerts = useBehaviorAlerts();
-  const pendingAnomalies = behaviorAlerts.data?.pending_count ?? 0;
+  const pendingAnomalies = behaviorAlerts.data?.tier1_pending ?? 0;
   const { data: devices = [] } = useDevices();
   const sidebarDevices = devices.filter((d) => d.device_type !== "router");
 

@@ -280,6 +280,7 @@ pub async fn detect_anomalies(
     spike_candidates: &SpikeCandidates,
     registry: &VlanRegistry,
     firewall_rules: &[FilterRule],
+    geo_cache: &GeoCache,
 ) -> Result<usize, String> {
     let profiles = store.get_all_profiles().await?;
     let mut anomaly_count = 0;
@@ -432,6 +433,13 @@ pub async fn detect_anomalies(
                             );
                             let confidence = (confidence + (priority_boost as f64 * 0.05)).min(1.0);
                             let severity = escalate_severity(base_severity, priority_boost);
+                            // GeoIP enrichment for external destinations
+                            let dst_ip_bare = obs.dst_subnet.split('/').next().unwrap_or(&obs.dst_subnet);
+                            let dst_geo = if !ion_drift_storage::behavior::is_internal_ip(dst_ip_bare) {
+                                geo_cache.lookup_cached(dst_ip_bare)
+                            } else {
+                                None
+                            };
                             let details_json = serde_json::json!({
                                 "src_ip": profile.current_ip,
                                 "src_hostname": profile.hostname,
@@ -450,6 +458,7 @@ pub async fn detect_anomalies(
                                 "baseline_max": baseline.max_bytes_per_hour,
                                 "baseline_avg": baseline.avg_bytes_per_hour,
                                 "elevated_observation_count": elevated_count,
+                                "dst_country": dst_geo,
                             });
                             let anomaly_id = store.record_anomaly(&NewAnomaly {
                                     mac: profile.mac.clone(),
@@ -569,6 +578,22 @@ pub async fn detect_anomalies(
                     );
                     let confidence = (confidence + (priority_boost as f64 * 0.05)).min(1.0);
                     let severity = escalate_severity(base_severity, priority_boost);
+                    // GeoIP enrichment for external destinations
+                    let dst_ip_bare = obs.dst_subnet.split('/').next().unwrap_or(&obs.dst_subnet);
+                    let dst_geo = if !ion_drift_storage::behavior::is_internal_ip(dst_ip_bare) {
+                        geo_cache.lookup_cached(dst_ip_bare)
+                    } else {
+                        None
+                    };
+                    let geo_label = dst_geo.as_ref().map(|g| {
+                        let mut parts = vec![g.country.clone()];
+                        if let Some(ref org) = g.org {
+                            parts.push(org.clone());
+                        } else if let Some(ref isp) = g.isp {
+                            parts.push(isp.clone());
+                        }
+                        format!(" ({})", parts.join(", "))
+                    }).unwrap_or_default();
                     let details_json = serde_json::json!({
                         "src_ip": profile.current_ip,
                         "src_hostname": profile.hostname,
@@ -583,6 +608,7 @@ pub async fn detect_anomalies(
                         "traffic_class": traffic_class,
                         "source_zone": source_zone,
                         "destination_zone": destination_zone,
+                        "dst_country": dst_geo,
                     });
                     let anomaly_id = store
                         .record_anomaly(&NewAnomaly {
@@ -591,12 +617,13 @@ pub async fn detect_anomalies(
                             severity,
                             confidence,
                             description: format!(
-                                "{} from {}: {} {} to {}",
+                                "{} from {}: {} {} to {}{}",
                                 anomaly_type.replace('_', " "),
                                 hostname,
                                 obs.protocol,
                                 obs.dst_port.map(|p| p.to_string()).unwrap_or_default(),
                                 obs.dst_subnet,
+                                geo_label,
                             ),
                             details: Some(details_json.to_string()),
                             vlan,
