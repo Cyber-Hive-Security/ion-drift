@@ -1,127 +1,89 @@
 # ion-drift
 
-Network monitoring and management platform for Mikrotik RouterOS environments. CLI + web dashboard with Keycloak OIDC authentication.
+Network monitoring, security analytics, and device management for MikroTik RouterOS networks. Built in Rust with a React frontend.
 
-## Features
+## What It Does
 
-- **Multi-device management** — manage a primary router and multiple Mikrotik switches from one dashboard
-- **CLI tool** — query system resources, interfaces, firewall rules, DHCP leases, routes, and logs from the terminal
-- **Web dashboard** — React SPA with real-time polling, served by an Axum backend
-- **OIDC authentication** — Keycloak integration with PKCE, server-side sessions, role-based access (admin/viewer)
-- **Private CA support** — trusts certificates from a Smallstep CA; supports CertWarden auto-renewal
-- **Behavior engine** — learns per-device baselines, detects anomalies (volume spikes, new destinations, port scans, protocol anomalies), confidence scoring
-- **Alerting engine** — configurable alert rules with webhook and email channels, DHCP pool exhaustion and firewall drop spike detection
-- **Sankey investigation** — multi-level drill-down from network overview → VLAN detail → device trace → conversation detail with CSV export
-- **Link saturation monitor** — live per-port utilization with heat overlay on switch port grids, rate columns, and summary cards
-- **Network topology** — auto-discovered topology map with interactive node positioning
-- **Identity management** — passive device discovery, MAC-port bindings, port violation detection, manufacturer lookup
-- **Connection tracking** — syslog-based connection capture, geo-enrichment (MaxMind), historical analysis, weekly snapshots
-- **Switch port grid** — visual port status with VLAN coloring, traffic metrics, and role badges
+Ion Drift connects to your MikroTik router's REST API, monitors your network in real time, learns what's normal, and alerts you when something changes. It tracks every connection, fingerprints every device, maps your topology, and gives you Sankey flow diagrams to investigate traffic patterns.
+
+See [FEATURES.md](FEATURES.md) for the full feature list.
 
 ## Quick Start
 
-### CLI
-
 ```bash
-cargo build --release --bin ion-drift
-cp config/cli.example.toml ~/.config/ion-drift/cli.toml
-# Edit config with your router details
-
-export DRIFT_ROUTER_PASSWORD='your-router-password'
-ion-drift system resources
-ion-drift interfaces list
-ion-drift firewall filter list
+docker compose up -d
 ```
 
-### Web Server
+Open `https://your-host:3000` in your browser. The setup wizard creates your admin account — no configuration files, environment variables, or external dependencies needed.
 
-```bash
-cargo build --release --bin ion-drift-web
-cp config/server.example.toml config/server.toml
-# Edit config with your settings
+After setup, add your router connection in the web UI. Ion Drift begins monitoring immediately.
 
-# Required environment variables:
-# DRIFT_ROUTER_PASSWORD      — RouterOS API password
-# DRIFT_OIDC_SECRET   — Keycloak OIDC client secret
-# DRIFT_SESSION_SECRET — Session encryption key
+## Optional: OIDC Single Sign-On
 
-cargo run --release --bin ion-drift-web -- --config config/server.toml
-```
-
-### Frontend Development
-
-```bash
-cd web
-npm install
-npm run dev     # Vite dev server with HMR
-npm run build   # Production build to web/dist/
-```
+Ion Drift works with any OpenID Connect provider (Keycloak, Authentik, Authelia). To enable SSO, add an `[oidc]` section to your config file. See [docs/configuration.md](docs/configuration.md) for provider-specific setup guides.
 
 ## Architecture
 
 ```
 ion-drift/
 ├── crates/
-│   ├── mikrotik-core/      # RouterOS REST + SNMP + SwOS client library
+│   ├── mikrotik-core/       # RouterOS REST + SNMP + SwOS client library
 │   ├── ion-drift-storage/   # SQLite stores (behavior, switch, metrics, traffic)
 │   ├── ion-drift-cli/       # CLI binary (clap)
 │   └── ion-drift-web/       # Axum web server + background tasks
 ├── web/                     # React frontend (Vite + TypeScript + TanStack)
-├── config/                  # Configuration files (TOML)
-├── certs/                   # CA certificate for router/OIDC TLS (gitignored)
-├── data/                    # Bundled data files (IEEE OUI database)
-├── docs/                    # Technical documentation
-└── caps/                    # Screenshots for documentation
+├── config/                  # Configuration templates (TOML)
+└── docs/                    # Technical documentation and engine whitepapers
 ```
 
-Uses the RouterOS v7 REST API (`/rest/`) with HTTP Basic Auth over HTTPS. Switch management uses both REST API and SwOS web scraping for non-RouterOS switches.
+**Tech stack:** Rust (Axum, Tokio, SQLite), React 19 (Vite, TypeScript, TanStack Router + Query, Recharts, D3.js, Tailwind CSS 4)
+
+Uses the RouterOS v7 REST API over HTTPS. Switch management supports RouterOS, SwOS, and SNMP v2c/v3.
 
 ## Docker Deployment
 
 ```bash
-# 1. Create config from example
-cp config/server.example.toml config/production.toml
-# Edit production.toml with your router, OIDC, and session settings
-
-# 2. Place your CA certificate (if using private CA)
-cp /path/to/your/ca.crt certs/root_ca.crt
-
-# 3. Set required secrets in environment or production.toml
-export DRIFT_ROUTER_PASSWORD='your-router-password'
-export DRIFT_OIDC_SECRET='your-oidc-client-secret'
-export DRIFT_SESSION_SECRET='random-32-byte-hex-string'
-
-# 4. Build and run
 docker compose up -d
 ```
 
 The `docker-compose.yml` bind-mounts:
-- `config/production.toml` → `/app/config/server.toml` (required)
-- `certs/root_ca.crt` → `/app/certs/root_ca.crt` (required if using private CA)
-- `ion-drift-data` volume → `/app/data` (SQLite databases, GeoIP data, certs)
+- `config/production.toml` → `/app/config/server.toml` (optional — created via setup wizard if absent)
+- `certs/root_ca.crt` → `/app/certs/root_ca.crt` (only if using a private CA)
+- `ion-drift-data` volume → `/app/data` (SQLite databases, GeoIP data, encryption keys)
 
 ## Configuration
 
-Configuration is TOML-based. See `config/server.example.toml` for all available options.
+Configuration is optional for getting started. The setup wizard handles initial setup.
 
-Key sections:
-- `[server]` — listen address, port, home coordinates for map
-- `[router]` — primary router host, port, TLS, WAN interface name, DNS server
-- `[oidc]` — Keycloak realm, client ID, redirect URI, CA cert
-- `[session]` — cookie name, TTL, SameSite policy
-- `[tls]` — mTLS client cert/key for router API
-- `[syslog]` — syslog listener port for connection tracking
-- `[certwarden]` — optional CertWarden integration for cert auto-renewal
+For advanced configuration (OIDC, syslog, CertWarden, custom bind address), see [docs/configuration.md](docs/configuration.md).
+
+## Documentation
+
+- [FEATURES.md](FEATURES.md) — Complete feature list
+- [CHANGELOG.md](CHANGELOG.md) — Release history
+- [SECURITY.md](SECURITY.md) — Vulnerability reporting policy
+- [docs/configuration.md](docs/configuration.md) — Configuration reference with OIDC provider guides
+- [docs/auth.md](docs/auth.md) — Authentication architecture
+- [docs/behavior-engine-whitepaper.md](docs/behavior-engine-whitepaper.md) — Anomaly detection engine
+- [docs/topology-engine-whitepaper.md](docs/topology-engine-whitepaper.md) — Network topology inference
+- [docs/investigation-engine-whitepaper.md](docs/investigation-engine-whitepaper.md) — Automated investigation engine
+- [docs/correlation-engine-whitepaper.md](docs/correlation-engine-whitepaper.md) — Identity correlation engine
+- [docs/connection-store-whitepaper.md](docs/connection-store-whitepaper.md) — Connection tracking and GeoIP
 
 ## Security
 
-- All API routes require OIDC authentication
-- Admin-only routes use `RequireAdmin` extractor (role-based)
-- CSRF protection via Content-Type enforcement on mutating requests
-- SameSite=Lax session cookies with CORS origin restriction
-- Security headers: X-Frame-Options, CSP, X-Content-Type-Options
-- Sensitive errors sanitized before API responses
+- Secrets encrypted at rest (AES-256-GCM)
+- Local auth with argon2id password hashing, or OIDC with any provider
+- HMAC-SHA256 signed sessions with HttpOnly/Secure cookies
+- CSRF protection, rate limiting, security headers
+- No telemetry, no phone-home — runs fully air-gapped
+
+See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## License
 
-PolyForm Shield 1.0.0
+[PolyForm Shield License 1.0.0](LICENSE) with the [Cyber Hive Security Use Agreement](USE-AGREEMENT).
+
+**Personal home use is free.** Commercial use requires a license from [Cyber Hive Security](https://cyberhivesecurity.com/license).
+
+Copyright (c) 2026 Cyber Hive Security LLC
