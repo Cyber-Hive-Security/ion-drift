@@ -148,6 +148,6 @@ This project demonstrates that AI coding agents can produce production-grade, se
 
 [PolyForm Shield License 1.0.0](LICENSE) with the [Cyber Hive Security Use Agreement](USE-AGREEMENT).
 
-**Personal home use is free.** Commercial use requires a license from [Cyber Hive Security](https://cyberhivesecurity.com/license).
+**Personal home use is free.** Commercial use requires a license from [Cyber Hive Security](https://www.mycyberhive.com/license).
 
 Copyright (c) 2026 Cyber Hive Security LLC

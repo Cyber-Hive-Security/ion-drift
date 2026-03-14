@@ -43,7 +43,7 @@ export function LicenseBanner() {
           </p>
           <div className="flex flex-shrink-0 items-center gap-2">
             <a
-              href="https://cyberhivesecurity.com/license"
+              href="https://www.mycyberhive.com/license"
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-md border border-red-600/50 bg-red-800/50 px-3 py-1.5 text-xs font-medium text-red-100 hover:bg-red-700/50 transition-colors"
@@ -75,7 +75,7 @@ export function LicenseBanner() {
           </p>
           <div className="flex flex-shrink-0 items-center gap-2">
             <a
-              href="https://cyberhivesecurity.com/license"
+              href="https://www.mycyberhive.com/license"
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-md border border-yellow-600/50 bg-yellow-800/50 px-3 py-1.5 text-xs font-medium text-yellow-100 hover:bg-yellow-700/50 transition-colors"
@@ -100,7 +100,7 @@ export function LicenseBanner() {
         </p>
         <div className="flex flex-shrink-0 items-center gap-2">
           <a
-            href="https://cyberhivesecurity.com/license"
+            href="https://www.mycyberhive.com/license"
             target="_blank"
             rel="noopener noreferrer"
             className="rounded-md border border-amber-600/50 bg-amber-800/50 px-3 py-1.5 text-xs font-medium text-amber-100 hover:bg-amber-700/50 transition-colors"
