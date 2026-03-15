@@ -8,7 +8,26 @@ All configuration is optional for a basic setup — you only need to point Ion D
 
 ## Configuration File
 
-**Location:** `config/server.toml` (copy from `config/server.example.toml`)
+Two example configs are provided:
+
+| File | Purpose |
+|------|---------|
+| `config/server.example.toml` | Local development (`cargo run`). Uses host filesystem paths. |
+| `config/production.example.toml` | Docker deployment. Uses container paths (`/app/...`). Includes OIDC, mTLS bootstrap, and CertWarden sections. |
+
+**For Docker deployment:**
+```bash
+cp config/production.example.toml config/production.toml
+# Edit production.toml with your environment-specific values
+```
+
+The `docker-compose.yml` bind-mounts `production.toml` into the container as `/app/config/server.toml`.
+
+**For local development:**
+```bash
+cp config/server.example.toml config/server.toml
+cargo run --bin ion-drift-web -- --config config/server.toml
+```
 
 The config file path is resolved in this order:
 1. CLI argument (`--config <path>`)
@@ -17,7 +36,7 @@ The config file path is resolved in this order:
 
 Format: TOML.
 
-> **Important:** Your production config file (`production.toml` or `server.toml`) is gitignored and not tracked in version control. **Back it up separately.** If the file is lost or emptied, Ion Drift will fail to start with `missing field 'server'`. Keep a copy outside the repository or in your secrets manager.
+> **Important:** Your production config (`production.toml`) is gitignored and not tracked in version control. **Back it up separately.** If the file is lost or emptied, Ion Drift will fail to start with `missing field 'server'`. Keep a copy outside the repository or in your secrets manager.
 
 ---
 

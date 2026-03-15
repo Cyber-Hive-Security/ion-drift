@@ -1,0 +1,75 @@
+# Ion Drift — Production Configuration (Docker)
+#
+# Copy this file to config/production.toml and edit for your environment.
+# All paths use container paths (/app/...), not host paths.
+#
+# For local auth (no OIDC), only [server] is required — the setup wizard
+# handles everything else on first launch.
+#
+# For OIDC with encrypted secrets, uncomment the [oidc], [oidc.bootstrap],
+# [tls], and [certwarden] sections.
+
+[server]
+listen_addr = "0.0.0.0"
+listen_port = 3000
+# Home location for world map — required for connection arc lines to render.
+home_lon = -111.97
+home_lat = 41.22
+home_country = "US"
+
+[router]
+host = "192.168.88.1"
+port = 443
+tls = true
+# Container path — bind-mounted via docker-compose.yml
+ca_cert_path = "/app/certs/root_ca.crt"
+username = "ion-drift"
+wan_interface = "ether1"
+# dns_server = "192.168.88.1"
+
+# ── OIDC (optional) ──────────────────────────────────────────────
+# Uncomment to enable SSO. Works with Keycloak, Authentik, Authelia.
+# Without this section, Ion Drift uses local auth only.
+
+# [oidc]
+# issuer_url = "https://your-idp.example.com/realms/YourRealm"
+# client_id = "ion-drift"
+# # IMPORTANT: redirect_uri must be the externally-accessible URL
+# # (reverse proxy hostname), not the internal container IP.
+# redirect_uri = "https://your-ion-drift.example.com/auth/callback"
+# # Container path — same cert used by the router if same CA
+# ca_cert_path = "/app/certs/root_ca.crt"
+# # Role claim path (default: "realm_access.roles" for Keycloak)
+# # Use "groups" for Authentik or Authelia
+# # roles_claim = "realm_access.roles"
+# # admin_role = "ion-drift-admin"
+
+# ── mTLS Bootstrap (Keycloak only, optional) ─────────────────────
+# Enables encrypted secrets at rest via KEK stored in Keycloak.
+# Requires [oidc] and [tls] sections. Setup wizard fetches certs
+# from CertWarden and bootstraps the KEK automatically.
+
+# [oidc.bootstrap]
+# client_id = "ion-drift-bootstrap"
+# token_url = "https://your-keycloak.example.com/realms/YourRealm/protocol/openid-connect/token"
+# admin_url = "https://your-keycloak.example.com/admin/realms/YourRealm"
+# kek_attribute = "ion_drift_kek"
+
+# [tls]
+# client_cert = "/app/data/certs/client.crt"
+# client_key = "/app/data/certs/client.key"
+
+# [certwarden]
+# base_url = "https://your-certwarden.example.com:4051"
+# cert_name = "your-cert-name"
+
+[session]
+cookie_name = "ion_drift_session"
+max_age_seconds = 86400
+# Set to true if serving over HTTPS (recommended for production)
+secure = false
+same_site = "lax"
+
+[syslog]
+port = 5514
+bind_address = "0.0.0.0"
