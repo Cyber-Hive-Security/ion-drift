@@ -75,6 +75,20 @@ export interface VlanInterface {
   "mac-address"?: string;
 }
 
+// Router interface utilization (snake_case — custom Rust structs)
+
+export interface RouterInterfaceUtilization {
+  name: string;
+  running: boolean;
+  rx_rate_bps: number;
+  tx_rate_bps: number;
+  rx_utilization: number;
+  tx_utilization: number;
+  utilization: number;
+  rated_speed_mbps: number;
+  speed_source: string;
+}
+
 // IP types (kebab-case)
 
 export interface IpAddress {

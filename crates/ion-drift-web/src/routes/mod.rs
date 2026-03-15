@@ -347,6 +347,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         // Interfaces
         .route("/interfaces", get(interfaces::list))
         .route("/interfaces/vlans", get(interfaces::vlans))
+        .route("/interfaces/utilization", get(interfaces::interface_utilization))
         // IP
         .route("/ip/addresses", get(ip::addresses))
         .route("/ip/routes", get(ip::routes))

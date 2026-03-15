@@ -6,6 +6,7 @@ import type {
   SystemResource,
   SystemIdentity,
   RouterInterface,
+  RouterInterfaceUtilization,
   VlanInterface,
   IpAddress,
   Route,
@@ -162,6 +163,14 @@ export function useVlans(options?: { enabled?: boolean }) {
     queryKey: ["interfaces", "vlans"],
     queryFn: () => apiFetch<VlanInterface[]>("/api/interfaces/vlans"),
     enabled: options?.enabled ?? true,
+  });
+}
+
+export function useRouterInterfaceUtilization() {
+  return useQuery({
+    queryKey: ["interfaces", "utilization"],
+    queryFn: () => apiFetch<RouterInterfaceUtilization[]>("/api/interfaces/utilization"),
+    refetchInterval: 10_000,
   });
 }
 
