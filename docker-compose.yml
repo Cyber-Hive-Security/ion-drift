@@ -11,9 +11,14 @@ services:
       - "3100:3000"
       - "5514:5514/udp"
     environment:
-      - RUST_LOG=info,tower_http=warn,hyper=warn,mikrotik_core::snmp_client=debug,ion_drift_web::topology_inference=debug,ion_drift_web::correlation_engine=debug
+      - RUST_LOG=info,tower_http=warn,hyper=warn,maxminddb=warn,reqwest=warn,rustls=warn,hyper_util=warn
       - XDG_DATA_HOME=/app/data
       - TOPOLOGY_INFERENCE_MODE=active
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
