@@ -137,6 +137,14 @@ async fn poll_snmp_switch(
         .cloned()
         .collect();
 
+    // On first cycle, purge any stale port metrics/MAC entries with non-canonical
+    // names (e.g., from before the profile was applied or after a name change)
+    if cycle == 0 && !physical_port_names.is_empty() {
+        if let Err(e) = store.purge_non_canonical_ports(device_id, &physical_port_names).await {
+            tracing::warn!(device = %device_id, "purge non-canonical ports: {e}");
+        }
+    }
+
     // Collect interface MACs for is_local detection
     let local_macs: Vec<String> = interfaces
         .iter()

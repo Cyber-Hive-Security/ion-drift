@@ -942,6 +942,46 @@ impl SwitchStore {
         Ok(rows)
     }
 
+    /// Purge port metrics and MAC entries for a device that use non-canonical
+    /// port names. Called when an SNMP profile renames ports (e.g., switching
+    /// from raw ifDescr to short ifName). This prevents stale entries from
+    /// cluttering the port traffic table and MAC table.
+    pub async fn purge_non_canonical_ports(
+        &self,
+        device_id: &str,
+        canonical_names: &std::collections::HashSet<String>,
+    ) -> Result<(), rusqlite::Error> {
+        if canonical_names.is_empty() {
+            return Ok(());
+        }
+        let db = self.db.lock().await;
+
+        // Build a comma-separated list of quoted canonical names for the IN clause
+        let placeholders: Vec<String> = canonical_names.iter().map(|n| format!("'{}'", n.replace('\'', "''"))).collect();
+        let in_clause = placeholders.join(",");
+
+        let metrics_sql = format!(
+            "DELETE FROM switch_port_metrics WHERE device_id = ?1 AND port_name NOT IN ({in_clause})"
+        );
+        let metrics_deleted = db.execute(&metrics_sql, params![device_id])?;
+
+        let mac_sql = format!(
+            "DELETE FROM switch_mac_table WHERE device_id = ?1 AND port_name NOT IN ({in_clause})"
+        );
+        let mac_deleted = db.execute(&mac_sql, params![device_id])?;
+
+        if metrics_deleted > 0 || mac_deleted > 0 {
+            tracing::info!(
+                device = device_id,
+                metrics_deleted,
+                mac_deleted,
+                "purged non-canonical port data"
+            );
+        }
+
+        Ok(())
+    }
+
     // ── MAC table ───────────────────────────────────────────────
 
     /// Upsert a MAC address table entry.
