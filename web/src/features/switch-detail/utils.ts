@@ -47,14 +47,29 @@ function extractPortNumber(portName: string): number | null {
   return null;
 }
 
-/** Map a port name to its physical grid position on the switch face. */
+/** Map a port to its physical grid position on the switch face.
+ *  When portIndex is provided (from the API), it is the source of truth. */
 export function portToGridPosition(
   portName: string,
+  portIndex?: number | null,
 ): { row: "top" | "bottom"; col: number } | null {
   // SFP/SFP+ ports get their own slot
   if (portName === "sfp-sfpplus1") return { row: "top", col: -1 };
   if (portName === "sfp-sfpplus2") return { row: "bottom", col: -1 };
+  if (/sfp/i.test(portName)) return { row: "top", col: -1 };
 
+  // Prefer the hardware port index from the API (0-based)
+  if (portIndex != null && portIndex >= 0) {
+    const num = portIndex + 1; // convert to 1-based
+    if (num >= 1 && num <= 48) {
+      return {
+        row: num % 2 === 1 ? "top" : "bottom",
+        col: Math.ceil(num / 2) - 1,
+      };
+    }
+  }
+
+  // Fall back to parsing the port name
   const num = extractPortNumber(portName);
   if (num == null || num < 1 || num > 48) return null;
 
@@ -75,6 +90,11 @@ export function portFamily(portName: string): string {
   // Standard prefix+number: g1, ether5, GigabitEthernet0/1, Gi1/0/1
   const m = portName.match(/^([a-zA-Z][a-zA-Z\-]*?)[\d/]+$/);
   if (m) return m[1].toLowerCase();
+  // SwOS custom names with embedded port number: 106-O-P1-Trunk → extract prefix before P\d
+  const swosFamily = portName.match(/^(.+?)[- ]P\d+/i);
+  if (swosFamily) return swosFamily[1].toLowerCase();
+  // SwOS SFP ports: group with the above if they share a prefix
+  if (/sfp/i.test(portName)) return "sfp";
   // Slash-delimited numeric only: 0/1 → "slot0", 1/0/1 → "slot1/0"
   if (/^[\d/]+$/.test(portName)) {
     const parts = portName.split("/");
@@ -106,6 +126,9 @@ export function portShortName(portName: string): string {
     const parts = portName.split("/");
     return parts[parts.length - 1];
   }
+  // SwOS custom names: 106-O-P1-Trunk → P1, 106-O-SFP → SFP
+  const swosShort = portName.match(/[- ](P\d+|SFP\d*)/i);
+  if (swosShort) return swosShort[1].toUpperCase();
   // Anything with a trailing number: extract prefix initial + number
   const trailingMatch = portName.match(/^([a-zA-Z])[a-zA-Z\-]*?(\d+)$/);
   if (trailingMatch) return `${trailingMatch[1].toLowerCase()}${trailingMatch[2]}`;

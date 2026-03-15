@@ -42,6 +42,7 @@ interface PortCellData {
   shortName: string;
   running: boolean;
   speed: string | null;
+  portIndex: number | null;
   rxBytes: number;
   txBytes: number;
   primaryVlanId: number | null;
@@ -169,6 +170,7 @@ export function PortGrid({
         shortName: portShortName(portName),
         running: metrics ? metrics[5] : false,
         speed: metrics ? metrics[4] : null,
+        portIndex: metrics ? metrics[6] : null,
         rxBytes: metrics ? metrics[1] : 0,
         txBytes: metrics ? metrics[2] : 0,
         primaryVlanId: getPortPrimaryVlan(portName, vlans),
@@ -219,7 +221,7 @@ export function PortGrid({
     const gridded: { cell: PortCellData; col: number; row: "top" | "bottom" }[] = [];
 
     for (const cell of portCells) {
-      const pos = portToGridPosition(cell.portName);
+      const pos = portToGridPosition(cell.portName, cell.portIndex);
       if (!pos) {
         if (cell.portName !== "bridge") {
           other.push(cell);

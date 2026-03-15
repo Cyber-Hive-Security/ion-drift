@@ -1010,8 +1010,8 @@ export interface TestConnectionResponse {
 // ── Switch data types (from switch_store.rs) ─────────────────
 
 /** Port metrics from GET /api/devices/{id}/ports.
- *  Rust tuple: (port_name, rx_bytes, tx_bytes, timestamp, speed?, running) */
-export type PortMetricsTuple = [string, number, number, number, string | null, boolean];
+ *  Rust tuple: (port_name, rx_bytes, tx_bytes, timestamp, speed?, running, port_index) */
+export type PortMetricsTuple = [string, number, number, number, string | null, boolean, number];
 
 export interface MacTableEntry {
   device_id: string;

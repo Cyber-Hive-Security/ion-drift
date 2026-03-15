@@ -340,7 +340,7 @@ pub async fn device_port_utilization(
     // Group by port_name, keep only 2 most recent samples per port
     // Rows are already ordered timestamp DESC
     let mut by_port: HashMap<String, Vec<(i64, i64, i64, Option<String>, bool)>> = HashMap::new();
-    for (port_name, rx_bytes, tx_bytes, ts, speed, running) in rows {
+    for (port_name, rx_bytes, tx_bytes, ts, speed, running, _port_index) in rows {
         let samples = by_port.entry(port_name).or_default();
         if samples.len() < 2 {
             samples.push((ts, rx_bytes, tx_bytes, speed, running));

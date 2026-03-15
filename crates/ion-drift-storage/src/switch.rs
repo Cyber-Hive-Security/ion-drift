@@ -27,6 +27,7 @@ pub fn is_valid_mac(mac: &str) -> bool {
 #[derive(Debug, Clone, Serialize)]
 pub struct PortMetricEntry {
     pub port_name: String,
+    pub port_index: u16,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
     pub rx_packets: u64,
@@ -349,6 +350,7 @@ impl SwitchStore {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_id TEXT NOT NULL,
                 port_name TEXT NOT NULL,
+                port_index INTEGER NOT NULL DEFAULT 0,
                 timestamp INTEGER NOT NULL,
                 rx_bytes INTEGER NOT NULL DEFAULT 0,
                 tx_bytes INTEGER NOT NULL DEFAULT 0,
@@ -743,6 +745,12 @@ impl SwitchStore {
             [],
         );
 
+        // Migration: add port_index column to switch_port_metrics
+        let _ = conn.execute(
+            "ALTER TABLE switch_port_metrics ADD COLUMN port_index INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
         })
@@ -760,13 +768,14 @@ impl SwitchStore {
         let db = self.db.lock().await;
         let mut stmt = db.prepare_cached(
             "INSERT INTO switch_port_metrics
-             (device_id, port_name, timestamp, rx_bytes, tx_bytes, rx_packets, tx_packets, speed, running)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (device_id, port_name, port_index, timestamp, rx_bytes, tx_bytes, rx_packets, tx_packets, speed, running)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )?;
         for e in entries {
             stmt.execute(params![
                 device_id,
                 e.port_name,
+                e.port_index as i32,
                 ts,
                 e.rx_bytes as i64,
                 e.tx_bytes as i64,
@@ -909,10 +918,10 @@ impl SwitchStore {
         &self,
         device_id: &str,
         since: i64,
-    ) -> Result<Vec<(String, i64, i64, i64, Option<String>, bool)>, rusqlite::Error> {
+    ) -> Result<Vec<(String, i64, i64, i64, Option<String>, bool, i32)>, rusqlite::Error> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT port_name, rx_bytes, tx_bytes, timestamp, speed, running
+            "SELECT port_name, rx_bytes, tx_bytes, timestamp, speed, running, port_index
              FROM switch_port_metrics
              WHERE device_id = ?1 AND timestamp >= ?2
              ORDER BY timestamp DESC",
@@ -926,6 +935,7 @@ impl SwitchStore {
                     row.get::<_, i64>(3)?,
                     row.get(4)?,
                     row.get::<_, i32>(5)? != 0,
+                    row.get::<_, i32>(6).unwrap_or(0),
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;

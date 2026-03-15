@@ -159,6 +159,7 @@ async fn poll_snmp_switch(
                 };
                 PortMetricEntry {
                     port_name: iface.name.clone(),
+                    port_index: iface.index as u16,
                     rx_bytes: iface.rx_bytes,
                     tx_bytes: iface.tx_bytes,
                     rx_packets: iface.rx_packets,
