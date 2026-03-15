@@ -2,6 +2,7 @@ pub mod client;
 pub mod error;
 pub mod resources;
 pub mod snmp_client;
+pub mod snmp_profile;
 pub mod swos_client;
 pub mod tracker;
 pub mod vlan_flows;
