@@ -942,40 +942,46 @@ impl SwitchStore {
         Ok(rows)
     }
 
-    /// Purge port metrics and MAC entries for a device that use non-canonical
-    /// port names. Called when an SNMP profile renames ports (e.g., switching
-    /// from raw ifDescr to short ifName). This prevents stale entries from
-    /// cluttering the port traffic table and MAC table.
-    pub async fn purge_non_canonical_ports(
+    /// Purge stale port data for a device on SNMP profile startup.
+    ///
+    /// Deletes ALL existing port metrics (to avoid rate miscalculation from
+    /// old counter values) and removes MAC entries with non-canonical port
+    /// names. Fresh metrics repopulate within 2 poll cycles.
+    pub async fn purge_stale_port_data(
         &self,
         device_id: &str,
         canonical_names: &std::collections::HashSet<String>,
     ) -> Result<(), rusqlite::Error> {
-        if canonical_names.is_empty() {
-            return Ok(());
-        }
         let db = self.db.lock().await;
 
-        // Build a comma-separated list of quoted canonical names for the IN clause
-        let placeholders: Vec<String> = canonical_names.iter().map(|n| format!("'{}'", n.replace('\'', "''"))).collect();
-        let in_clause = placeholders.join(",");
+        // Delete ALL port metrics for this device — old samples with stale
+        // counter values cause wildly incorrect rate calculations
+        let metrics_deleted = db.execute(
+            "DELETE FROM switch_port_metrics WHERE device_id = ?1",
+            params![device_id],
+        )?;
 
-        let metrics_sql = format!(
-            "DELETE FROM switch_port_metrics WHERE device_id = ?1 AND port_name NOT IN ({in_clause})"
-        );
-        let metrics_deleted = db.execute(&metrics_sql, params![device_id])?;
-
-        let mac_sql = format!(
-            "DELETE FROM switch_mac_table WHERE device_id = ?1 AND port_name NOT IN ({in_clause})"
-        );
-        let mac_deleted = db.execute(&mac_sql, params![device_id])?;
+        // Delete MAC entries with non-canonical port names only
+        let mac_deleted = if !canonical_names.is_empty() {
+            let placeholders: Vec<String> = canonical_names
+                .iter()
+                .map(|n| format!("'{}'", n.replace('\'', "''")))
+                .collect();
+            let in_clause = placeholders.join(",");
+            let mac_sql = format!(
+                "DELETE FROM switch_mac_table WHERE device_id = ?1 AND port_name NOT IN ({in_clause})"
+            );
+            db.execute(&mac_sql, params![device_id])?
+        } else {
+            0
+        };
 
         if metrics_deleted > 0 || mac_deleted > 0 {
             tracing::info!(
                 device = device_id,
                 metrics_deleted,
                 mac_deleted,
-                "purged non-canonical port data"
+                "purged stale port data on profile startup"
             );
         }
 

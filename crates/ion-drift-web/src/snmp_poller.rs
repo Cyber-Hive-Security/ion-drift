@@ -137,11 +137,13 @@ async fn poll_snmp_switch(
         .cloned()
         .collect();
 
-    // On first cycle, purge any stale port metrics/MAC entries with non-canonical
-    // names (e.g., from before the profile was applied or after a name change)
+    // On first cycle, purge all stale port metrics and non-canonical MAC entries.
+    // This prevents rate miscalculation from old counter values and cleans up
+    // port names from before the profile was applied. Fresh data repopulates
+    // within 2 poll cycles.
     if cycle == 0 && !physical_port_names.is_empty() {
-        if let Err(e) = store.purge_non_canonical_ports(device_id, &physical_port_names).await {
-            tracing::warn!(device = %device_id, "purge non-canonical ports: {e}");
+        if let Err(e) = store.purge_stale_port_data(device_id, &physical_port_names).await {
+            tracing::warn!(device = %device_id, "purge stale port data: {e}");
         }
     }
 
