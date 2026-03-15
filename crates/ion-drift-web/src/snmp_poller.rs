@@ -137,13 +137,18 @@ async fn poll_snmp_switch(
         .cloned()
         .collect();
 
-    // Purge port metrics and MAC entries with non-canonical names every cycle.
-    // SNMP walks can intermittently fail to return ifName, causing the classifier
-    // to fall back to ifDescr (long names). Continuous purging prevents stale
-    // entries from accumulating between successful walks.
+    // Cycle 0: full wipe of all port metrics and MAC entries for this device.
+    // Clears stale counter baselines that cause wildly incorrect rate calculations.
+    // Subsequent cycles: purge only non-canonical names (handles ifName walk flapping).
     if !physical_port_names.is_empty() {
-        if let Err(e) = store.purge_stale_port_data(device_id, &physical_port_names).await {
-            tracing::warn!(device = %device_id, "purge stale port data: {e}");
+        if cycle == 0 {
+            if let Err(e) = store.wipe_device_port_data(device_id).await {
+                tracing::warn!(device = %device_id, "wipe device port data: {e}");
+            }
+        } else {
+            if let Err(e) = store.purge_stale_port_data(device_id, &physical_port_names).await {
+                tracing::warn!(device = %device_id, "purge stale port data: {e}");
+            }
         }
     }
 
