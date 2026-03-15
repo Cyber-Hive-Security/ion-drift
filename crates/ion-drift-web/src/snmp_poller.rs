@@ -118,6 +118,27 @@ async fn poll_snmp_switch(
 
     let classified = snmp_profile::classify_interfaces(&interfaces, profile);
 
+    // Detect ifName walk failure: when ifName is missing, SnmpInterface.name
+    // falls back to ifDescr, so canonical_name == descr for all interfaces.
+    // In that case, skip data writes to prevent polluting the DB with long names
+    // that would conflict with the correct short names from successful walks.
+    let physical_classified: Vec<_> = classified
+        .iter()
+        .filter(|i| i.class == InterfaceClass::Physical)
+        .collect();
+    let ifname_failed = !physical_classified.is_empty()
+        && physical_classified
+            .iter()
+            .all(|i| i.canonical_name == i.descr);
+
+    if ifname_failed {
+        tracing::warn!(
+            device = %device_id,
+            "SNMP ifName walk failed (all names = ifDescr), skipping data writes this cycle"
+        );
+        return;
+    }
+
     // Build ifIndex -> ifName map for resolving bridge port numbers (includes ALL interfaces)
     let if_name_map: HashMap<u32, String> = interfaces
         .iter()
@@ -125,9 +146,8 @@ async fn poll_snmp_switch(
         .collect();
 
     // Build ifIndex -> canonical name map for port metric/MAC name resolution
-    let canonical_name_map: HashMap<u32, String> = classified
+    let canonical_name_map: HashMap<u32, String> = physical_classified
         .iter()
-        .filter(|i| i.class == InterfaceClass::Physical)
         .map(|i| (i.index, i.canonical_name.clone()))
         .collect();
 
@@ -237,12 +257,24 @@ async fn poll_snmp_switch(
     }
 
     for entry in &mac_entries {
-        // Resolve bridge port -> ifIndex -> canonical name (or raw ifName fallback)
-        let if_idx = bridge_port_map.get(&entry.port_index).copied();
+        // Resolve bridge port -> ifIndex -> canonical name.
+        // Fallback chain: bridge_port_map → canonical_name_map → if_name_map.
+        // If bridge_port_map is empty (walk failed), try port_index directly
+        // as ifIndex (common on many switches where bridge port == ifIndex).
+        let if_idx = bridge_port_map
+            .get(&entry.port_index)
+            .copied()
+            .or(Some(entry.port_index)); // fallback: assume port_index == ifIndex
         let port_name = if_idx
             .and_then(|idx| canonical_name_map.get(&idx).cloned())
-            .or_else(|| if_idx.and_then(|idx| if_name_map.get(&idx).cloned()))
-            .unwrap_or_else(|| format!("port{}", entry.port_index));
+            .or_else(|| if_idx.and_then(|idx| if_name_map.get(&idx).cloned()));
+
+        // Skip MAC entries we can't resolve to a known physical port
+        let port_name = match port_name {
+            Some(name) if physical_port_names.contains(&name) => name,
+            Some(name) => name, // non-physical but resolved — keep for now
+            None => continue,   // unresolvable — skip instead of writing "portN"
+        };
 
         let is_local = local_macs
             .iter()
@@ -265,12 +297,15 @@ async fn poll_snmp_switch(
     // ── LLDP neighbors ──────────────────────────────────────────────
     if let Ok(neighbors) = lldp_res {
         for nb in &neighbors {
-            // Resolve local port index to canonical name (or raw ifName fallback)
-            let interface = canonical_name_map
+            // Resolve local port index to canonical name
+            let interface = match canonical_name_map
                 .get(&nb.local_port_index)
                 .or_else(|| if_name_map.get(&nb.local_port_index))
                 .cloned()
-                .unwrap_or_else(|| format!("port{}", nb.local_port_index));
+            {
+                Some(name) => name,
+                None => continue, // skip unresolvable ports
+            };
 
             if let Err(e) = store
                 .upsert_neighbor(
@@ -312,12 +347,19 @@ async fn poll_snmp_switch(
                         vlan.untagged_ports.iter().copied().collect();
 
                     for &port_idx in &vlan.egress_ports {
-                        // Resolve port index -> canonical name (or raw ifName fallback)
-                        let if_idx = bridge_port_map.get(&port_idx).copied();
-                        let port_name = if_idx
+                        // Resolve port index -> canonical name.
+                        // Try bridge_port_map first, then direct port_idx as ifIndex.
+                        let if_idx = bridge_port_map
+                            .get(&port_idx)
+                            .copied()
+                            .or(Some(port_idx));
+                        let port_name = match if_idx
                             .and_then(|idx| canonical_name_map.get(&idx).cloned())
                             .or_else(|| if_idx.and_then(|idx| if_name_map.get(&idx).cloned()))
-                            .unwrap_or_else(|| format!("port{}", port_idx));
+                        {
+                            Some(name) => name,
+                            None => continue, // skip unresolvable ports
+                        };
 
                         // Skip non-physical ports (VLANs, tunnels, loopback, etc.)
                         if !physical_port_names.contains(&port_name) {
