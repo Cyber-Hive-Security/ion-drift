@@ -181,6 +181,7 @@ pub async fn get_device(
         return Ok(Json(DeviceInfo {
             record: entry.record.clone(),
             status: entry.status.clone(),
+            limitations: entry.limitations.clone(),
         }));
     }
     if let Some(record) = dm.get_disabled_device(&id) {
@@ -189,6 +190,7 @@ pub async fn get_device(
             status: DeviceStatus::Offline {
                 error: "device disabled".into(),
             },
+            limitations: Vec::new(),
         }));
     }
     Err((

@@ -69,6 +69,8 @@ pub struct DeviceEntry {
     pub record: DeviceRecord,
     pub status: DeviceStatus,
     pub last_poll: Option<Instant>,
+    /// Hardware or firmware limitations discovered during polling.
+    pub limitations: Vec<String>,
 }
 
 /// Manages all registered Mikrotik devices (router + switches).
@@ -205,6 +207,7 @@ impl DeviceManager {
                     record,
                     status: DeviceStatus::Unknown,
                     last_poll: None,
+                    limitations: Vec::new(),
                 },
             );
         }
@@ -241,6 +244,7 @@ impl DeviceManager {
                 record,
                 status: DeviceStatus::Unknown,
                 last_poll: None,
+                limitations: Vec::new(),
             },
         );
 
@@ -305,6 +309,7 @@ impl DeviceManager {
             .map(|d| DeviceInfo {
                 record: d.record.clone(),
                 status: d.status.clone(),
+                limitations: d.limitations.clone(),
             })
             .collect();
         for record in self.disabled_devices.values() {
@@ -313,6 +318,7 @@ impl DeviceManager {
                 status: DeviceStatus::Offline {
                     error: "device disabled".into(),
                 },
+                limitations: Vec::new(),
             });
         }
         list
@@ -332,6 +338,7 @@ impl DeviceManager {
                 record,
                 status: DeviceStatus::Unknown,
                 last_poll: None,
+                limitations: Vec::new(),
             },
         );
     }
@@ -347,6 +354,16 @@ impl DeviceManager {
         if let Some(entry) = self.devices.get_mut(id) {
             entry.status = status;
             entry.last_poll = Some(Instant::now());
+        }
+    }
+
+    /// Record a hardware/firmware limitation discovered during polling.
+    /// Deduplicates — the same limitation string won't be added twice.
+    pub fn add_limitation(&mut self, id: &str, limitation: String) {
+        if let Some(entry) = self.devices.get_mut(id) {
+            if !entry.limitations.contains(&limitation) {
+                entry.limitations.push(limitation);
+            }
         }
     }
 
@@ -379,6 +396,7 @@ impl DeviceManager {
                     record,
                     status: DeviceStatus::Unknown,
                     last_poll: None,
+                    limitations: Vec::new(),
                 });
             }
         }
@@ -397,4 +415,7 @@ pub struct DeviceInfo {
     pub record: DeviceRecord,
     #[serde(flatten)]
     pub status: DeviceStatus,
+    /// Hardware or firmware limitations discovered during polling.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
 }

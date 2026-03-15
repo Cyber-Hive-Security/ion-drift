@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
+import { AlertTriangle } from "lucide-react";
 import {
   useDevices,
   useDeviceResources,
@@ -60,6 +61,21 @@ function SwitchDetailPage({ deviceId }: { deviceId: string }) {
       {/* System Info Bar */}
       {resources.data && (
         <SystemInfoBar resource={resources.data} device={device} />
+      )}
+
+      {/* Hardware Limitations Banner */}
+      {device?.limitations && device.limitations.length > 0 && (
+        <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-amber-500">Hardware Limitation</p>
+              {device.limitations.map((msg, i) => (
+                <p key={i} className="text-sm text-muted-foreground">{msg}</p>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Saturated Links Summary */}

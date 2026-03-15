@@ -949,6 +949,8 @@ export interface NetworkDevice {
   identity?: string;
   /** Error message when offline */
   error?: string;
+  /** Hardware/firmware limitations discovered during polling */
+  limitations?: string[];
 }
 
 export interface CreateDeviceRequest {

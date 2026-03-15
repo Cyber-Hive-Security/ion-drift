@@ -145,6 +145,13 @@ async fn poll_swos_switch(
             // stats.b returned empty (e.g. CSS106) — fall back to link.b
             // so the port grid still renders with link status
             tracing::debug!(device = %device_id, "stats.b empty, using link.b for port grid");
+            {
+                let mut dm_w = dm.write().await;
+                dm_w.add_limitation(
+                    device_id,
+                    "This device does not expose per-port traffic counters. Bandwidth utilization, byte counters, and rate calculations are unavailable.".to_string(),
+                );
+            }
             links
                 .iter()
                 .map(|l| PortMetricEntry {
