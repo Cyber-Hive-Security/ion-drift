@@ -17,6 +17,8 @@ The config file path is resolved in this order:
 
 Format: TOML.
 
+> **Important:** Your production config file (`production.toml` or `server.toml`) is gitignored and not tracked in version control. **Back it up separately.** If the file is lost or emptied, Ion Drift will fail to start with `missing field 'server'`. Keep a copy outside the repository or in your secrets manager.
+
 ---
 
 ### `[server]`
@@ -27,8 +29,8 @@ General server settings.
 |-------|------|---------|-------------|
 | `listen_addr` | string | `"0.0.0.0"` | IP address to bind the HTTP server to. |
 | `listen_port` | integer | `3000` | Port for the web server. |
-| `home_lon` | float | *(none)* | Home location longitude for the world map (e.g., `-111.97`). If set, arcs originate from here. |
-| `home_lat` | float | *(none)* | Home location latitude for the world map (e.g., `41.22`). |
+| `home_lon` | float | *(none)* | Home location longitude for the world map (e.g., `-111.97`). **Required for connection arc lines on the world map.** |
+| `home_lat` | float | *(none)* | Home location latitude for the world map (e.g., `41.22`). **Required for connection arc lines on the world map.** |
 | `home_country` | string | *(none)* | Home country ISO 3166-1 alpha-2 code (e.g., `"US"`). Highlighted green on the map. |
 | `warning_countries` | array of strings | `[]` | Country codes flagged for security monitoring. Connections to these countries are highlighted on the map. Configure via Settings > Monitored Regions in the UI. |
 
