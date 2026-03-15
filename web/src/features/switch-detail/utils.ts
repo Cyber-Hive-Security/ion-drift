@@ -58,19 +58,23 @@ export function portToGridPosition(
   if (portName === "sfp-sfpplus2") return { row: "bottom", col: -1 };
   if (/sfp/i.test(portName)) return { row: "top", col: -1 };
 
-  // Prefer the hardware port index from the API (0-based)
-  if (portIndex != null && portIndex >= 0) {
-    const num = portIndex + 1; // convert to 1-based
-    if (num >= 1 && num <= 48) {
+  // Try parsing the port name first (works for standard names: ether1, g1, mg5, etc.)
+  const num = extractPortNumber(portName);
+
+  // Fall back to hardware port index (for SwOS custom names like "106-O-P1-Trunk").
+  // portIndex is 0-based for SwOS, 1-based for SNMP (ifIndex). Only use it when
+  // name parsing fails — name-derived numbers are always correct.
+  if (num == null && portIndex != null && portIndex >= 0) {
+    // Assume 0-based (SwOS); SNMP names always parse, so this path is SwOS-only
+    const fallbackNum = portIndex + 1;
+    if (fallbackNum >= 1 && fallbackNum <= 48) {
       return {
-        row: num % 2 === 1 ? "top" : "bottom",
-        col: Math.ceil(num / 2) - 1,
+        row: fallbackNum % 2 === 1 ? "top" : "bottom",
+        col: Math.ceil(fallbackNum / 2) - 1,
       };
     }
   }
 
-  // Fall back to parsing the port name
-  const num = extractPortNumber(portName);
   if (num == null || num < 1 || num > 48) return null;
 
   // Odd ports on top row, even on bottom — pairs in columns
