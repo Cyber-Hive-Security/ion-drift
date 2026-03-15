@@ -48,6 +48,12 @@ pub fn spawn_switch_pollers(
         }
         drop(registry);
         drop(dm_read);
+
+        // Keep the task alive — individual pollers run in their own tasks,
+        // but the supervisor expects this task to stay running.
+        loop {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
     })});
 }
 
