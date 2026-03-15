@@ -118,32 +118,56 @@ async fn poll_swos_switch(
     let stats_res = client.get_stats().await;
 
     // ── Port metrics (from stats + link status) ─────────────────────
-    if let Ok(stats) = stats_res {
-        let entries: Vec<PortMetricEntry> = stats
-            .iter()
-            .map(|s| {
-                let port_name = port_name_from_links(&links, s.port_index);
-                let link = links.iter().find(|l| l.port_index == s.port_index);
-                let running = link.map(|l| l.link_up).unwrap_or(false);
-                let speed = link.and_then(|l| l.speed.clone());
+    let entries: Vec<PortMetricEntry> = match stats_res {
+        Ok(stats) if !stats.is_empty() => {
+            stats
+                .iter()
+                .map(|s| {
+                    let port_name = port_name_from_links(&links, s.port_index);
+                    let link = links.iter().find(|l| l.port_index == s.port_index);
+                    let running = link.map(|l| l.link_up).unwrap_or(false);
+                    let speed = link.and_then(|l| l.speed.clone());
 
-                PortMetricEntry {
-                    port_name,
-                    rx_bytes: s.rx_bytes,
-                    tx_bytes: s.tx_bytes,
-                    rx_packets: s.rx_packets,
-                    tx_packets: s.tx_packets,
-                    speed,
-                    running,
-                }
-            })
-            .collect();
+                    PortMetricEntry {
+                        port_name,
+                        rx_bytes: s.rx_bytes,
+                        tx_bytes: s.tx_bytes,
+                        rx_packets: s.rx_packets,
+                        tx_packets: s.tx_packets,
+                        speed,
+                        running,
+                    }
+                })
+                .collect()
+        }
+        Ok(_) if !links.is_empty() => {
+            // stats.b returned empty (e.g. CSS106) — fall back to link.b
+            // so the port grid still renders with link status
+            tracing::debug!(device = %device_id, "stats.b empty, using link.b for port grid");
+            links
+                .iter()
+                .map(|l| PortMetricEntry {
+                    port_name: l.port_name.clone(),
+                    rx_bytes: 0,
+                    tx_bytes: 0,
+                    rx_packets: 0,
+                    tx_packets: 0,
+                    speed: l.speed.clone(),
+                    running: l.link_up,
+                })
+                .collect()
+        }
+        Ok(_) => Vec::new(),
+        Err(e) => {
+            tracing::warn!(device = %device_id, "SwOS stats.b: {e}");
+            Vec::new()
+        }
+    };
 
+    if !entries.is_empty() {
         if let Err(e) = store.record_port_metrics(device_id, &entries).await {
             tracing::warn!(device = %device_id, "SwOS port metrics: {e}");
         }
-    } else if let Err(e) = stats_res {
-        tracing::warn!(device = %device_id, "SwOS stats.b: {e}");
     }
 
     // ── Dynamic host (MAC) table ────────────────────────────────────

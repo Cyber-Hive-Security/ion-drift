@@ -28,13 +28,13 @@ pub struct EthernetInterface {
     #[serde(default, deserialize_with = "ros_bool_opt")]
     pub auto_negotiation: Option<bool>,
     #[serde(default, deserialize_with = "ros_u64_opt")]
-    pub rx_byte: Option<u64>,
+    pub rx_bytes: Option<u64>,
     #[serde(default, deserialize_with = "ros_u64_opt")]
-    pub tx_byte: Option<u64>,
+    pub tx_bytes: Option<u64>,
     #[serde(default, deserialize_with = "ros_u64_opt")]
-    pub rx_packet: Option<u64>,
+    pub rx_packets: Option<u64>,
     #[serde(default, deserialize_with = "ros_u64_opt")]
-    pub tx_packet: Option<u64>,
+    pub tx_packets: Option<u64>,
     #[serde(default)]
     pub poe_out: Option<String>,
     #[serde(default)]
