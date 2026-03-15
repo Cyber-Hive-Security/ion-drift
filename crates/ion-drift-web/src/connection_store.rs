@@ -3,6 +3,7 @@
 //! Stores every observed connection (from polling or syslog) with GeoIP enrichment,
 //! deduplication by conntrack ID, and configurable retention.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -1894,6 +1895,34 @@ impl ConnectionStore {
             .unwrap_or(0);
 
         Ok((today, week))
+    }
+
+    /// Get total bytes transferred per source MAC in the given time window.
+    /// Returns a map of MAC address → (bytes_tx, bytes_rx, connection_count).
+    pub fn bandwidth_by_mac(&self, since_secs: i64) -> Result<HashMap<String, (i64, i64, i64)>, String> {
+        let db = self.db.lock().map_err(|e| e.to_string())?;
+        let cutoff = chrono::Utc::now().timestamp() - since_secs;
+        let mut stmt = db.prepare(
+            "SELECT src_mac, SUM(bytes_tx), SUM(bytes_rx), COUNT(*)
+             FROM connection_history
+             WHERE src_mac IS NOT NULL AND last_seen >= ?1
+             GROUP BY src_mac"
+        ).map_err(|e| e.to_string())?;
+
+        let mut map = HashMap::new();
+        let rows = stmt.query_map(rusqlite::params![cutoff], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        }).map_err(|e| e.to_string())?;
+
+        for row in rows.flatten() {
+            map.insert(row.0, (row.1, row.2, row.3));
+        }
+        Ok(map)
     }
 }
 

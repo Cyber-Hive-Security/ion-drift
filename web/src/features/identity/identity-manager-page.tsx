@@ -27,8 +27,9 @@ import {
   useBulkDisposition,
   usePortViolations,
   useDevices,
+  useClientBandwidth,
 } from "@/api/queries";
-import type { NetworkIdentity, ObservedService, DeviceDisposition } from "@/api/types";
+import type { NetworkIdentity, ObservedService, DeviceDisposition, ClientBandwidth } from "@/api/types";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 
 // ── Device type options ─────────────────────────────────────────
@@ -105,6 +106,14 @@ function formatTimeAgo(unixSecs: number): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${(bytes / 1073741824).toFixed(1)} GB`;
 }
 
 function statusDot(identity: NetworkIdentity): string {
@@ -420,6 +429,16 @@ export default function IdentityManagerPage() {
   const bulkDisposition = useBulkDisposition();
   const { data: violations = [] } = usePortViolations();
   const { data: devices = [] } = useDevices();
+  const { data: bandwidthData = [] } = useClientBandwidth();
+
+  // Build MAC → bandwidth lookup
+  const bandwidthByMac = useMemo(() => {
+    const map = new Map<string, ClientBandwidth>();
+    for (const bw of bandwidthData) {
+      map.set(bw.mac, bw);
+    }
+    return map;
+  }, [bandwidthData]);
 
   // Build IP → services lookup for showing ports per identity
   const servicesByIp = useMemo(() => {
@@ -739,6 +758,49 @@ export default function IdentityManagerPage() {
         );
       },
       sortValue: (row) => row.link_speed_mbps ?? 1000,
+    },
+    {
+      key: "traffic_1h",
+      header: "Traffic (1h)",
+      render: (row) => {
+        const bw = bandwidthByMac.get(row.mac_address);
+        if (!bw || bw.bytes_1h === 0) return <span className="text-xs text-muted-foreground">—</span>;
+        return (
+          <span className="text-xs font-mono" title={`${bw.connections_1h} connection${bw.connections_1h !== 1 ? "s" : ""}`}>
+            {formatBytes(bw.bytes_1h)}
+            <span className="ml-1 text-[10px] text-muted-foreground">({bw.connections_1h})</span>
+          </span>
+        );
+      },
+      sortValue: (row) => bandwidthByMac.get(row.mac_address)?.bytes_1h ?? 0,
+    },
+    {
+      key: "baseline",
+      header: "Baseline",
+      render: (row) => {
+        const bw = bandwidthByMac.get(row.mac_address);
+        if (!bw || bw.baseline_bytes_per_hour === 0) {
+          return <span className="text-xs text-muted-foreground">—</span>;
+        }
+        const ratio = bw.bytes_1h / bw.baseline_bytes_per_hour;
+        const color = ratio > 3
+          ? "text-destructive"
+          : ratio > 1.5
+            ? "text-warning"
+            : "text-muted-foreground";
+        const indicator = ratio > 3
+          ? "!!!"
+          : ratio > 1.5
+            ? "!"
+            : "";
+        return (
+          <span className={cn("text-xs font-mono", color)} title={`Baseline: ${formatBytes(bw.baseline_bytes_per_hour)}/hr — Current: ${ratio.toFixed(1)}x`}>
+            {formatBytes(bw.baseline_bytes_per_hour)}/h
+            {indicator && <span className="ml-0.5 font-bold">{indicator}</span>}
+          </span>
+        );
+      },
+      sortValue: (row) => bandwidthByMac.get(row.mac_address)?.baseline_bytes_per_hour ?? 0,
     },
     {
       key: "infra",

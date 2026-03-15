@@ -1064,6 +1064,14 @@ export interface NetworkIdentity {
 
 export type DeviceDisposition = "unknown" | "my_device" | "external" | "ignored" | "flagged";
 
+export interface ClientBandwidth {
+  mac: string;
+  bytes_1h: number;
+  bytes_24h: number;
+  connections_1h: number;
+  baseline_bytes_per_hour: number;
+}
+
 export interface VlanMembershipEntry {
   port_name: string;
   vlan_id: number;

@@ -71,6 +71,7 @@ import type {
   PortRoleEntry,
   DevicePort,
   IdentityStats,
+  ClientBandwidth,
   NmapScan,
   NmapResult,
   ScanExclusion,
@@ -1023,6 +1024,14 @@ export function useIdentityStats() {
   return useQuery({
     queryKey: ["network", "identities", "stats"],
     queryFn: () => apiFetch<IdentityStats>("/api/network/identities/stats"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useClientBandwidth() {
+  return useQuery({
+    queryKey: ["network", "identities", "bandwidth"],
+    queryFn: () => apiFetch<ClientBandwidth[]>("/api/network/identities/bandwidth"),
     refetchInterval: 30_000,
   });
 }

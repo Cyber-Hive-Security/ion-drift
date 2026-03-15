@@ -3,7 +3,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
@@ -393,5 +393,58 @@ pub async fn resolve_port_violation(
         .await
         .map_err(|e| internal_error("resolve port violation", e))?;
     Ok(Json(serde_json::json!({ "resolved": resolved })))
+}
+
+// ── Client bandwidth ─────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct ClientBandwidth {
+    pub mac: String,
+    /// Total bytes (tx + rx) in the last hour
+    pub bytes_1h: i64,
+    /// Total bytes (tx + rx) in the last 24 hours
+    pub bytes_24h: i64,
+    /// Connection count in the last hour
+    pub connections_1h: i64,
+    /// Sum of avg_bytes_per_hour from all baselines (expected hourly traffic)
+    pub baseline_bytes_per_hour: f64,
+}
+
+/// GET /api/network/identities/bandwidth
+pub async fn client_bandwidth(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ClientBandwidth>>, Response> {
+    // Get recent bandwidth from connection history
+    let bw_1h = state.connection_store.bandwidth_by_mac(3600)
+        .map_err(|e| internal_error("bandwidth_by_mac 1h", e))?;
+    let bw_24h = state.connection_store.bandwidth_by_mac(86400)
+        .map_err(|e| internal_error("bandwidth_by_mac 24h", e))?;
+
+    // Get all MACs from both sets
+    let mut all_macs: std::collections::HashSet<String> = bw_1h.keys().cloned().collect();
+    all_macs.extend(bw_24h.keys().cloned());
+
+    let mut results = Vec::new();
+    for mac in all_macs {
+        let (tx_1h, rx_1h, conn_1h) = bw_1h.get(&mac).copied().unwrap_or((0, 0, 0));
+        let (tx_24h, rx_24h, _) = bw_24h.get(&mac).copied().unwrap_or((0, 0, 0));
+
+        // Get baseline from behavior store
+        let baseline_total = match state.behavior_store.get_baselines(&mac).await {
+            Ok(baselines) => baselines.iter().map(|b| b.avg_bytes_per_hour).sum::<f64>(),
+            Err(_) => 0.0,
+        };
+
+        results.push(ClientBandwidth {
+            mac,
+            bytes_1h: tx_1h + rx_1h,
+            bytes_24h: tx_24h + rx_24h,
+            connections_1h: conn_1h,
+            baseline_bytes_per_hour: baseline_total,
+        });
+    }
+
+    Ok(Json(results))
 }
 

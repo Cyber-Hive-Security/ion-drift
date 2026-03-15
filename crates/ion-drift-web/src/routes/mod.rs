@@ -548,6 +548,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             get(identity::list_infrastructure_identities),
         )
         .route("/network/identities/stats", get(identity::identity_stats))
+        .route("/network/identities/bandwidth", get(identity::client_bandwidth))
         .route(
             "/network/identities/review-queue",
             get(identity::review_queue),
