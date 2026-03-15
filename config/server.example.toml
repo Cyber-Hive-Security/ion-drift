@@ -68,7 +68,7 @@ same_site = "lax"
 # client_key = "/app/data/certs/client.key"
 
 # [certwarden]
-# base_url = "https://your-certwarden.example.com:4051"
+# base_url = "https://your-certwarden.example.com:4051/certwarden"
 # cert_name = "your-cert-name"
 # renewal_threshold_days = 30
 # check_interval_hours = 1

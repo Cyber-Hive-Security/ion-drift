@@ -225,14 +225,14 @@ Automatic TLS certificate renewal via CertWarden. Both `base_url` and `cert_name
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `base_url` | string | *(none)* | CertWarden API base URL (e.g., `https://certwarden.example.com:4051`). |
+| `base_url` | string | *(none)* | CertWarden API base URL (e.g., `https://certwarden.example.com:4051/certwarden`). Include the `/certwarden` path prefix. |
 | `cert_name` | string | *(none)* | Certificate name in CertWarden. |
 | `renewal_threshold_days` | integer | `30` | Days before expiry to trigger renewal. |
 | `check_interval_hours` | integer | `1` | Hours between certificate expiry checks. |
 
 ```toml
 [certwarden]
-base_url = "https://certwarden.example.com:4051"
+base_url = "https://certwarden.example.com:4051/certwarden"
 cert_name = "ion-drift"
 renewal_threshold_days = 30
 check_interval_hours = 1
