@@ -102,7 +102,7 @@ async fn poll_swos_switch(
     };
 
     // Fetch link status first — we need port names for MAC table entries
-    let links = match client.get_links().await {
+    let links = match client.get_links(sys.speed_class).await {
         Ok(links) => links,
         Err(e) => {
             tracing::warn!(device = %device_id, "SwOS link.b: {e}");

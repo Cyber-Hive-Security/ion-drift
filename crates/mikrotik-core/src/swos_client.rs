@@ -23,6 +23,24 @@ use crate::error::MikrotikError;
 
 // ─── Data Types ──────────────────────────────────────────────────
 
+/// PHY speed class determines how the `spd` field in `link.b` is decoded.
+///
+/// Different SwOS boards use different PHY chips with different speed
+/// encodings, even on the same firmware version. The encoding is
+/// determined by the maximum speed the PHY supports:
+///
+/// - **Gigabit** (CSS106, CSS326, etc.): compact 3-value encoding
+///   because the PHY only supports 10M/100M/1G.
+/// - **MultiGig** (CRS310, CRS312, CRS318, etc.): wider encoding
+///   to accommodate 2.5G/5G/10G speeds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SwosSpeedClass {
+    /// GbE-only PHY: 0=10M, 1=100M, 2=1G
+    Gigabit,
+    /// Multi-gig PHY: 0=10M, 1=100M, 3=1G, 5=2.5G, 6=5G, 7=10G
+    MultiGig,
+}
+
 /// System information from `/sys.b`.
 #[derive(Debug, Clone)]
 pub struct SwosSystem {
@@ -31,6 +49,7 @@ pub struct SwosSystem {
     pub firmware_version: String,
     pub board_name: String,
     pub uptime_secs: u64,
+    pub speed_class: SwosSpeedClass,
 }
 
 /// Per-port link status from `/link.b`.
@@ -287,17 +306,22 @@ impl SwosClient {
         let uptime_cs = val.get("upt").and_then(|v| v.as_u64()).unwrap_or(0);
         let uptime_secs = uptime_cs / 100;
 
+        let speed_class = classify_speed(&board_name);
+        tracing::debug!(host = %self.host, board = %board_name, ?speed_class, "SwOS board speed class");
+
         Ok(SwosSystem {
             identity,
             mac_address,
             firmware_version,
             board_name,
             uptime_secs,
+            speed_class,
         })
     }
 
     /// Fetch port link status from `/link.b`.
-    pub async fn get_links(&self) -> Result<Vec<SwosLink>, MikrotikError> {
+    /// Pass the speed class from `sys.b` to correctly decode per-port speeds.
+    pub async fn get_links(&self, speed_class: SwosSpeedClass) -> Result<Vec<SwosLink>, MikrotikError> {
         let raw = self.fetch("/link.b").await?;
         debug!(host = %self.host, "link.b: {} bytes", raw.len());
 
@@ -345,7 +369,7 @@ impl SwosClient {
             let speed = speeds
                 .and_then(|arr| arr.get(i as usize))
                 .and_then(|v| v.as_u64())
-                .and_then(decode_speed);
+                .and_then(|code| decode_speed(code, speed_class));
 
             links.push(SwosLink {
                 port_index: i,
@@ -590,18 +614,53 @@ fn decode_bitmask(val: u64) -> Vec<u8> {
     ports
 }
 
-/// Decode speed code to human-readable string.
-fn decode_speed(code: u64) -> Option<String> {
-    match code {
-        0x00 => Some("10M".to_string()),
-        0x01 => Some("100M".to_string()),
-        0x02 => Some("100M".to_string()),
-        0x03 => Some("1G".to_string()),
-        0x04 => Some("2.5G".to_string()),
-        0x05 => Some("2.5G".to_string()),
-        0x06 => Some("5G".to_string()),
-        0x07 => Some("10G".to_string()),
-        _ => None,
+/// Classify a board into its speed encoding class based on the board name.
+///
+/// Multi-gig boards (CRS3xx with +2S+, CRS318, CRS312, etc.) use a wider
+/// PHY speed encoding. Everything else (CSS106, CSS326, CSS610, CRS1xx,
+/// CRS2xx) uses the compact gigabit encoding.
+fn classify_speed(board_name: &str) -> SwosSpeedClass {
+    let upper = board_name.to_uppercase();
+
+    // CRS3xx models with multi-gig or SFP+ ports
+    if upper.starts_with("CRS3") {
+        return SwosSpeedClass::MultiGig;
+    }
+
+    // Default: gigabit-only PHY encoding
+    SwosSpeedClass::Gigabit
+}
+
+/// Decode speed code to human-readable string based on the board's PHY class.
+///
+/// GbE-only boards (CSS106, CSS326, etc.) use a compact 3-value encoding
+/// because their PHY only supports 10M/100M/1G.
+///
+/// Multi-gig boards (CRS310, CRS312, etc.) use a wider encoding to
+/// represent speeds up to 10G.
+fn decode_speed(code: u64, class: SwosSpeedClass) -> Option<String> {
+    match class {
+        SwosSpeedClass::Gigabit => match code {
+            0x00 => Some("10M".to_string()),
+            0x01 => Some("100M".to_string()),
+            0x02 => Some("1G".to_string()),
+            _ => {
+                tracing::debug!(code, "unknown Gigabit speed code");
+                None
+            }
+        },
+        SwosSpeedClass::MultiGig => match code {
+            0x00 => Some("10M".to_string()),
+            0x01 => Some("100M".to_string()),
+            0x03 => Some("1G".to_string()),
+            0x05 => Some("2.5G".to_string()),
+            0x06 => Some("5G".to_string()),
+            0x07 => Some("10G".to_string()),
+            _ => {
+                tracing::debug!(code, "unknown MultiGig speed code");
+                None
+            }
+        },
     }
 }
 
