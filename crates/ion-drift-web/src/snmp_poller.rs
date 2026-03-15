@@ -137,11 +137,11 @@ async fn poll_snmp_switch(
         .cloned()
         .collect();
 
-    // On first cycle, purge all stale port metrics and non-canonical MAC entries.
-    // This prevents rate miscalculation from old counter values and cleans up
-    // port names from before the profile was applied. Fresh data repopulates
-    // within 2 poll cycles.
-    if cycle == 0 && !physical_port_names.is_empty() {
+    // Purge port metrics and MAC entries with non-canonical names every cycle.
+    // SNMP walks can intermittently fail to return ifName, causing the classifier
+    // to fall back to ifDescr (long names). Continuous purging prevents stale
+    // entries from accumulating between successful walks.
+    if !physical_port_names.is_empty() {
         if let Err(e) = store.purge_stale_port_data(device_id, &physical_port_names).await {
             tracing::warn!(device = %device_id, "purge stale port data: {e}");
         }
@@ -175,6 +175,10 @@ async fn poll_snmp_switch(
         .collect();
 
     if !physical.is_empty() {
+        if cycle % 10 == 0 {
+            let names: Vec<_> = physical.iter().map(|i| format!("{}(idx={},spd={})", i.canonical_name, i.index, i.speed_mbps)).collect();
+            tracing::debug!(device = %device_id, ports = ?names, "SNMP physical ports writing metrics");
+        }
         let entries: Vec<PortMetricEntry> = physical
             .iter()
             .map(|iface| {
