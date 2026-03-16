@@ -36,6 +36,18 @@ pub struct PortMetricEntry {
     pub running: bool,
 }
 
+/// A per-port rate baseline for a specific hour of the week.
+#[derive(Debug, Clone, Serialize)]
+pub struct PortRateBaseline {
+    pub port_name: String,
+    pub hour_of_week: u32,
+    pub avg_rx_bps: f64,
+    pub avg_tx_bps: f64,
+    pub peak_rx_bps: f64,
+    pub peak_tx_bps: f64,
+    pub sample_count: u32,
+}
+
 /// A MAC address table entry.
 #[derive(Debug, Clone, Serialize)]
 pub struct MacTableEntry {
@@ -751,6 +763,22 @@ impl SwitchStore {
             [],
         );
 
+        // Port rate baselines for utilization comparison
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS port_rate_baselines (
+                device_id TEXT NOT NULL,
+                port_name TEXT NOT NULL,
+                hour_of_week INTEGER NOT NULL,
+                avg_rx_bps REAL NOT NULL DEFAULT 0,
+                avg_tx_bps REAL NOT NULL DEFAULT 0,
+                peak_rx_bps REAL NOT NULL DEFAULT 0,
+                peak_tx_bps REAL NOT NULL DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (device_id, port_name, hour_of_week)
+            );",
+        )?;
+
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
         })
@@ -1003,6 +1031,64 @@ impl SwitchStore {
         }
 
         Ok(())
+    }
+
+    // ── Port rate baselines ────────────────────────────────────
+
+    /// Update a port rate baseline using exponential moving average.
+    /// Called by the background baseline task every 5 minutes.
+    pub async fn update_port_baseline(
+        &self,
+        device_id: &str,
+        port_name: &str,
+        hour_of_week: u32,
+        rx_bps: f64,
+        tx_bps: f64,
+    ) -> Result<(), rusqlite::Error> {
+        let now = now_unix();
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO port_rate_baselines
+             (device_id, port_name, hour_of_week, avg_rx_bps, avg_tx_bps, peak_rx_bps, peak_tx_bps, sample_count, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?5, 1, ?6)
+             ON CONFLICT(device_id, port_name, hour_of_week) DO UPDATE SET
+               avg_rx_bps = avg_rx_bps + (?4 - avg_rx_bps) / (sample_count + 1),
+               avg_tx_bps = avg_tx_bps + (?5 - avg_tx_bps) / (sample_count + 1),
+               peak_rx_bps = MAX(peak_rx_bps, ?4),
+               peak_tx_bps = MAX(peak_tx_bps, ?5),
+               sample_count = sample_count + 1,
+               updated_at = ?6",
+            params![device_id, port_name, hour_of_week, rx_bps, tx_bps, now],
+        )?;
+        Ok(())
+    }
+
+    /// Get port rate baselines for a device at a specific hour of the week.
+    pub async fn get_port_baselines(
+        &self,
+        device_id: &str,
+        hour_of_week: u32,
+    ) -> Result<Vec<PortRateBaseline>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT port_name, hour_of_week, avg_rx_bps, avg_tx_bps, peak_rx_bps, peak_tx_bps, sample_count
+             FROM port_rate_baselines
+             WHERE device_id = ?1 AND hour_of_week = ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![device_id, hour_of_week], |row| {
+                Ok(PortRateBaseline {
+                    port_name: row.get(0)?,
+                    hour_of_week: row.get(1)?,
+                    avg_rx_bps: row.get(2)?,
+                    avg_tx_bps: row.get(3)?,
+                    peak_rx_bps: row.get(4)?,
+                    peak_tx_bps: row.get(5)?,
+                    sample_count: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     // ── MAC table ───────────────────────────────────────────────

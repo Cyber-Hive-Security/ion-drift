@@ -1584,6 +1584,14 @@ export interface PortUtilization {
   rated_speed_mbps: number;
   speed_source: string;
   sample_age_secs: number;
+  /** Baseline avg bps for current hour-of-week (undefined if learning) */
+  baseline_avg_bps?: number;
+  /** Baseline peak bps for current hour-of-week */
+  baseline_peak_bps?: number;
+  /** Current rate / baseline avg (1.0 = normal, 2.0 = 2x normal) */
+  baseline_ratio?: number;
+  /** Number of samples in the baseline (maturity indicator) */
+  baseline_sample_count?: number;
 }
 
 // ── Alerting ─────────────────────────────────────────────────

@@ -13,7 +13,7 @@ import type {
   PortUtilization,
 } from "@/api/types";
 import { portSortKey, getPortPrimaryVlan } from "./utils";
-import { utilizationColor, utilizationLabel, formatBitrate } from "@/lib/utilization";
+import { utilizationColor, utilizationLabel, baselineColor, baselineLabel, formatBitrate } from "@/lib/utilization";
 
 interface PortRow {
   portName: string;
@@ -28,6 +28,8 @@ interface PortRow {
   utilization: number;
   rxRateBps: number;
   txRateBps: number;
+  baselineRatio: number | undefined;
+  baselineSampleCount: number | undefined;
 }
 
 interface PortTrafficTableProps {
@@ -128,6 +130,8 @@ export function PortTrafficTable({
         utilization: util?.utilization ?? 0,
         rxRateBps: util?.rx_rate_bps ?? 0,
         txRateBps: util?.tx_rate_bps ?? 0,
+        baselineRatio: util?.baseline_ratio,
+        baselineSampleCount: util?.baseline_sample_count,
       });
     }
 
@@ -243,6 +247,21 @@ export function PortTrafficTable({
               {utilizationLabel(util)}
             </span>
           </div>
+        );
+      },
+    },
+    {
+      key: "baseline",
+      header: "vs Baseline",
+      sortValue: (r) => r.baselineRatio ?? -1,
+      render: (r) => {
+        if (!r.running) return <span className="text-xs text-muted-foreground">—</span>;
+        const label = baselineLabel(r.baselineRatio, r.baselineSampleCount);
+        const color = baselineColor(r.baselineRatio);
+        return (
+          <span className="text-[10px] font-medium whitespace-nowrap" style={{ color }}>
+            {label}
+          </span>
         );
       },
     },
