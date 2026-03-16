@@ -136,7 +136,8 @@ async fn poll_switch(
     if let Ok(interfaces) = ethernet_res {
         let entries: Vec<PortMetricEntry> = interfaces
             .iter()
-            .map(|iface| {
+            .enumerate()
+            .map(|(idx, iface)| {
                 // Prefer actual negotiated speed from monitor, fall back to static
                 let speed = monitor_speeds
                     .get(&iface.name)
@@ -144,10 +145,11 @@ async fn poll_switch(
                     .or_else(|| iface.speed.clone());
                 PortMetricEntry {
                     port_name: iface.name.clone(),
-                    rx_bytes: iface.rx_byte.unwrap_or(0),
-                    tx_bytes: iface.tx_byte.unwrap_or(0),
-                    rx_packets: iface.rx_packet.unwrap_or(0),
-                    tx_packets: iface.tx_packet.unwrap_or(0),
+                    port_index: idx as u32,
+                    rx_bytes: iface.rx_bytes.unwrap_or(0),
+                    tx_bytes: iface.tx_bytes.unwrap_or(0),
+                    rx_packets: iface.rx_packets.unwrap_or(0),
+                    tx_packets: iface.tx_packets.unwrap_or(0),
                     speed,
                     running: iface.running,
                 }

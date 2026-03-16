@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use axum::extract::{Path, Query, State};
+use chrono::{Datelike, Timelike};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde::{Deserialize, Serialize};
@@ -318,6 +319,18 @@ pub struct PortUtilization {
     pub rated_speed_mbps: f64,
     pub speed_source: String,
     pub sample_age_secs: i64,
+    /// Baseline average bps for the current hour-of-week (None if learning)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_avg_bps: Option<f64>,
+    /// Baseline peak bps for the current hour-of-week (None if learning)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_peak_bps: Option<f64>,
+    /// Current rate / baseline average (1.0 = normal, 2.0 = 2x normal)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_ratio: Option<f64>,
+    /// How many samples contributed to the baseline (maturity indicator)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_sample_count: Option<u32>,
 }
 
 pub async fn device_port_utilization(
@@ -337,10 +350,25 @@ pub async fn device_port_utilization(
         .await
         .map_err(|e| internal_error("port metrics", e))?;
 
+    // Query baselines for the current hour-of-week
+    let now_utc = chrono::Utc::now();
+    let hour_of_week = now_utc.weekday().num_days_from_monday() * 24 + now_utc.hour();
+    let baselines = match state.switch_store.get_port_baselines(&id, hour_of_week).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(device = %id, "port baselines query failed: {e}");
+            Vec::new()
+        }
+    };
+    let baseline_map: HashMap<String, _> = baselines
+        .into_iter()
+        .map(|b| (b.port_name.clone(), b))
+        .collect();
+
     // Group by port_name, keep only 2 most recent samples per port
     // Rows are already ordered timestamp DESC
     let mut by_port: HashMap<String, Vec<(i64, i64, i64, Option<String>, bool)>> = HashMap::new();
-    for (port_name, rx_bytes, tx_bytes, ts, speed, running) in rows {
+    for (port_name, rx_bytes, tx_bytes, ts, speed, running, _port_index) in rows {
         let samples = by_port.entry(port_name).or_default();
         if samples.len() < 2 {
             samples.push((ts, rx_bytes, tx_bytes, speed, running));
@@ -360,8 +388,14 @@ pub async fn device_port_utilization(
             continue;
         }
 
-        let rx_delta = (rx_new - rx_old).max(0) as f64;
-        let tx_delta = (tx_new - tx_old).max(0) as f64;
+        let rx_delta = rx_new - rx_old;
+        let tx_delta = tx_new - tx_old;
+        if rx_delta < 0 || tx_delta < 0 {
+            tracing::debug!(port = %port_name, "counter reset detected (rx_delta={rx_delta}, tx_delta={tx_delta}), skipping");
+            continue;
+        }
+        let rx_delta = rx_delta as f64;
+        let tx_delta = tx_delta as f64;
         let elapsed_f = elapsed as f64;
 
         let rx_rate_bps = (rx_delta * 8.0) / elapsed_f;
@@ -375,6 +409,24 @@ pub async fn device_port_utilization(
         let tx_util = if rated_speed_bps > 0.0 { (tx_rate_bps / rated_speed_bps).clamp(0.0, 1.0) } else { 0.0 };
         let utilization = rx_util.max(tx_util);
 
+        // Baseline comparison: current max rate vs baseline average
+        let current_max_bps = rx_rate_bps.max(tx_rate_bps);
+        let baseline = baseline_map.get(port_name);
+        let (baseline_avg_bps, baseline_peak_bps, baseline_ratio, baseline_sample_count) =
+            match baseline {
+                Some(b) if b.sample_count >= 3 => {
+                    let avg = b.avg_rx_bps.max(b.avg_tx_bps);
+                    let peak = b.peak_rx_bps.max(b.peak_tx_bps);
+                    let ratio = if avg > 0.0 {
+                        Some(current_max_bps / avg)
+                    } else {
+                        None
+                    };
+                    (Some(avg), Some(peak), ratio, Some(b.sample_count))
+                }
+                _ => (None, None, None, baseline.map(|b| b.sample_count)),
+            };
+
         result.push(PortUtilization {
             port_name: port_name.clone(),
             running: *running,
@@ -386,6 +438,10 @@ pub async fn device_port_utilization(
             rated_speed_mbps,
             speed_source,
             sample_age_secs: now - ts_new,
+            baseline_avg_bps,
+            baseline_peak_bps,
+            baseline_ratio,
+            baseline_sample_count,
         });
     }
 

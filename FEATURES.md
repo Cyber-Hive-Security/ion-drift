@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-14
+> **Last updated:** 2026-03-16
 
 ## Overview
 
@@ -18,7 +18,9 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Real-time system resource monitoring (CPU, memory, disk, uptime) via RouterOS REST API
 - Multi-device management with CRUD operations, connection testing, and per-device polling intervals
 - SNMP v3 polling for managed switches (port metrics, MAC tables, VLAN membership)
-- SwOS support for MikroTik budget switches
+- Per-manufacturer SNMP profiles for vendor-specific interface classification (Netgear, Generic)
+- SwOS support for MikroTik budget switches with board-specific PHY speed decoding
+- Hardware limitations banner for devices that don't expose full capabilities
 - Live traffic rates per interface with historical time-series
 - Per-VLAN traffic activity tracking and inter-VLAN flow analysis
 - Firewall rule viewer (filter, NAT, mangle) with drop statistics and geo-enriched drop summaries
@@ -89,6 +91,8 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Real-time interface traffic charts
 - Historical time-series charts for CPU, memory, firewall drops, connections, and VLAN traffic
 - Port utilization display with speed detection and rate calculation
+- Per-port rate baselines with hour-of-week EMA and "vs Baseline" column
+- Per-client IPv4 bandwidth monitoring with RX/TX breakdown on Identities page
 
 ## Authentication
 

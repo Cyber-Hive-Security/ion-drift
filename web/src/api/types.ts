@@ -949,6 +949,8 @@ export interface NetworkDevice {
   identity?: string;
   /** Error message when offline */
   error?: string;
+  /** Hardware/firmware limitations discovered during polling */
+  limitations?: string[];
 }
 
 export interface CreateDeviceRequest {
@@ -1010,8 +1012,8 @@ export interface TestConnectionResponse {
 // ── Switch data types (from switch_store.rs) ─────────────────
 
 /** Port metrics from GET /api/devices/{id}/ports.
- *  Rust tuple: (port_name, rx_bytes, tx_bytes, timestamp, speed?, running) */
-export type PortMetricsTuple = [string, number, number, number, string | null, boolean];
+ *  Rust tuple: (port_name, rx_bytes, tx_bytes, timestamp, speed?, running, port_index) */
+export type PortMetricsTuple = [string, number, number, number, string | null, boolean, number];
 
 export interface MacTableEntry {
   device_id: string;
@@ -1066,7 +1068,11 @@ export type DeviceDisposition = "unknown" | "my_device" | "external" | "ignored"
 
 export interface ClientBandwidth {
   mac: string;
+  rx_bytes_1h: number;
+  tx_bytes_1h: number;
   bytes_1h: number;
+  rx_bytes_24h: number;
+  tx_bytes_24h: number;
   bytes_24h: number;
   connections_1h: number;
   baseline_bytes_per_hour: number;
@@ -1582,6 +1588,14 @@ export interface PortUtilization {
   rated_speed_mbps: number;
   speed_source: string;
   sample_age_secs: number;
+  /** Baseline avg bps for current hour-of-week (undefined if learning) */
+  baseline_avg_bps?: number;
+  /** Baseline peak bps for current hour-of-week */
+  baseline_peak_bps?: number;
+  /** Current rate / baseline avg (1.0 = normal, 2.0 = 2x normal) */
+  baseline_ratio?: number;
+  /** Number of samples in the baseline (maturity indicator) */
+  baseline_sample_count?: number;
 }
 
 // ── Alerting ─────────────────────────────────────────────────

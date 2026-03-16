@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use ion_drift_storage::SwitchStore;
 use mikrotik_core::snmp_client::SnmpClient;
+use mikrotik_core::snmp_profile::{self, InterfaceClass};
 use ion_drift_storage::switch::{PortMetricEntry, VlanMembershipEntry};
 use tokio::sync::{watch, RwLock};
 
@@ -111,19 +112,70 @@ async fn poll_snmp_switch(
         }
     };
 
+    // Detect vendor profile from sysDescr and classify interfaces
+    let profile = snmp_profile::detect_profile(&sys.sys_descr);
+    tracing::debug!(device = %device_id, vendor = %profile.vendor, "SNMP profile detected");
+
+    let classified = snmp_profile::classify_interfaces(&interfaces, profile);
+
+    // Filter out interfaces where ifName walk failed (canonical_name == descr).
+    // A partial ifName walk failure returns short names for some ports and
+    // ifDescr for others — we reject individual bad entries rather than
+    // requiring all-or-nothing, preventing mixed name sets in the DB.
+    let physical_classified: Vec<_> = classified
+        .iter()
+        .filter(|i| i.class == InterfaceClass::Physical)
+        .filter(|i| {
+            if i.canonical_name == i.descr && !i.descr.is_empty() {
+                // canonical_name == descr means ifName was missing for this interface
+                tracing::debug!(
+                    device = %device_id,
+                    port = %i.descr,
+                    idx = i.index,
+                    "dropping interface with missing ifName (canonical = ifDescr)"
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    if physical_classified.is_empty() {
+        tracing::warn!(
+            device = %device_id,
+            "no physical interfaces with valid ifName, skipping data writes this cycle"
+        );
+        return;
+    }
+
     // Build ifIndex -> ifName map for resolving bridge port numbers (includes ALL interfaces)
     let if_name_map: HashMap<u32, String> = interfaces
         .iter()
         .map(|i| (i.index, i.name.clone()))
         .collect();
 
-    // Physical port names: ifType 6 (ethernetCsmacd) + 136/161 (ieee8023adLag)
-    // Used to filter metrics and VLAN membership to real ports only
-    let physical_port_names: std::collections::HashSet<String> = interfaces
+    // Build ifIndex -> canonical name map for port metric/MAC name resolution
+    let canonical_name_map: HashMap<u32, String> = physical_classified
         .iter()
-        .filter(|i| matches!(i.if_type, 6 | 136 | 161))
-        .map(|i| i.name.clone())
+        .map(|i| (i.index, i.canonical_name.clone()))
         .collect();
+
+    // Physical port names for VLAN membership filtering
+    let physical_port_names: std::collections::HashSet<String> = canonical_name_map
+        .values()
+        .cloned()
+        .collect();
+
+    // Purge non-canonical port names every cycle. Does NOT wipe all data —
+    // only removes entries whose port_name isn't in the canonical set.
+    // This preserves valid metric history needed for rate calculations while
+    // cleaning up entries from partial ifName walk failures.
+    if !physical_port_names.is_empty() {
+        if let Err(e) = store.purge_stale_port_data(device_id, &physical_port_names).await {
+            tracing::warn!(device = %device_id, "purge stale port data: {e}");
+        }
+    }
 
     // Collect interface MACs for is_local detection
     let local_macs: Vec<String> = interfaces
@@ -146,11 +198,19 @@ async fn poll_snmp_switch(
     let mac_res = client.get_mac_table().await;
     let lldp_res = client.get_lldp_neighbors().await;
 
-    // ── Port metrics (physical ports only) ──────────────────────────
-    if !interfaces.is_empty() {
-        let entries: Vec<PortMetricEntry> = interfaces
+    // ── Port metrics (physical ports only, from classified interfaces) ──
+    let physical: Vec<_> = classified
+        .iter()
+        .filter(|i| i.class == InterfaceClass::Physical)
+        .collect();
+
+    if !physical.is_empty() {
+        if cycle % 10 == 0 {
+            let names: Vec<_> = physical.iter().map(|i| format!("{}(idx={},spd={})", i.canonical_name, i.index, i.speed_mbps)).collect();
+            tracing::debug!(device = %device_id, ports = ?names, "SNMP physical ports writing metrics");
+        }
+        let entries: Vec<PortMetricEntry> = physical
             .iter()
-            .filter(|iface| physical_port_names.contains(&iface.name))
             .map(|iface| {
                 let speed = if iface.speed_mbps > 0 {
                     Some(format!("{}Mbps", iface.speed_mbps))
@@ -158,7 +218,8 @@ async fn poll_snmp_switch(
                     None
                 };
                 PortMetricEntry {
-                    port_name: iface.name.clone(),
+                    port_name: iface.canonical_name.clone(),
+                    port_index: iface.index,
                     rx_bytes: iface.rx_bytes,
                     tx_bytes: iface.tx_bytes,
                     rx_packets: iface.rx_packets,
@@ -201,12 +262,24 @@ async fn poll_snmp_switch(
     }
 
     for entry in &mac_entries {
-        // Resolve bridge port -> ifIndex -> ifName
-        let port_name = bridge_port_map
+        // Resolve bridge port -> ifIndex -> canonical name.
+        // Fallback chain: bridge_port_map → canonical_name_map → if_name_map.
+        // If bridge_port_map is empty (walk failed), try port_index directly
+        // as ifIndex (common on many switches where bridge port == ifIndex).
+        let if_idx = bridge_port_map
             .get(&entry.port_index)
-            .and_then(|&if_idx| if_name_map.get(&if_idx))
-            .cloned()
-            .unwrap_or_else(|| format!("port{}", entry.port_index));
+            .copied()
+            .or(Some(entry.port_index)); // fallback: assume port_index == ifIndex
+        let port_name = if_idx
+            .and_then(|idx| canonical_name_map.get(&idx).cloned())
+            .or_else(|| if_idx.and_then(|idx| if_name_map.get(&idx).cloned()));
+
+        // Skip MAC entries we can't resolve to a known physical port
+        let port_name = match port_name {
+            Some(name) if physical_port_names.contains(&name) => name,
+            Some(name) => name, // non-physical but resolved — keep for now
+            None => continue,   // unresolvable — skip instead of writing "portN"
+        };
 
         let is_local = local_macs
             .iter()
@@ -229,11 +302,15 @@ async fn poll_snmp_switch(
     // ── LLDP neighbors ──────────────────────────────────────────────
     if let Ok(neighbors) = lldp_res {
         for nb in &neighbors {
-            // Resolve local port index to interface name
-            let interface = if_name_map
+            // Resolve local port index to canonical name
+            let interface = match canonical_name_map
                 .get(&nb.local_port_index)
+                .or_else(|| if_name_map.get(&nb.local_port_index))
                 .cloned()
-                .unwrap_or_else(|| format!("port{}", nb.local_port_index));
+            {
+                Some(name) => name,
+                None => continue, // skip unresolvable ports
+            };
 
             if let Err(e) = store
                 .upsert_neighbor(
@@ -275,12 +352,19 @@ async fn poll_snmp_switch(
                         vlan.untagged_ports.iter().copied().collect();
 
                     for &port_idx in &vlan.egress_ports {
-                        // Resolve port index -> ifName via bridge port map
-                        let port_name = bridge_port_map
+                        // Resolve port index -> canonical name.
+                        // Try bridge_port_map first, then direct port_idx as ifIndex.
+                        let if_idx = bridge_port_map
                             .get(&port_idx)
-                            .and_then(|&if_idx| if_name_map.get(&if_idx))
-                            .cloned()
-                            .unwrap_or_else(|| format!("port{}", port_idx));
+                            .copied()
+                            .or(Some(port_idx));
+                        let port_name = match if_idx
+                            .and_then(|idx| canonical_name_map.get(&idx).cloned())
+                            .or_else(|| if_idx.and_then(|idx| if_name_map.get(&idx).cloned()))
+                        {
+                            Some(name) => name,
+                            None => continue, // skip unresolvable ports
+                        };
 
                         // Skip non-physical ports (VLANs, tunnels, loopback, etc.)
                         if !physical_port_names.contains(&port_name) {

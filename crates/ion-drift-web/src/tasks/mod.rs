@@ -3,6 +3,7 @@ mod cert;
 mod connections;
 mod metrics;
 mod policy_sync;
+pub(crate) mod port_baselines;
 mod traffic;
 
 use crate::dns::DnsResolver;
@@ -136,6 +137,12 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         &state.task_supervisor,
         state.switch_store.clone(),
         state.mikrotik.clone(),
+    );
+
+    // Port rate baselines
+    port_baselines::spawn_port_baselines(
+        state.switch_store.clone(),
+        state.device_manager.clone(),
     );
 
     // Alert engine

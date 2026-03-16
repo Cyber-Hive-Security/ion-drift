@@ -766,13 +766,36 @@ export default function IdentityManagerPage() {
         const bw = bandwidthByMac.get(row.mac_address);
         if (!bw || bw.bytes_1h === 0) return <span className="text-xs text-muted-foreground">—</span>;
         return (
-          <span className="text-xs font-mono" title={`${bw.connections_1h} connection${bw.connections_1h !== 1 ? "s" : ""}`}>
-            {formatBytes(bw.bytes_1h)}
-            <span className="ml-1 text-[10px] text-muted-foreground">({bw.connections_1h})</span>
-          </span>
+          <div className="text-xs font-mono leading-tight" title={`${bw.connections_1h} connection${bw.connections_1h !== 1 ? "s" : ""}`}>
+            <div>{formatBytes(bw.bytes_1h)} <span className="text-[10px] text-muted-foreground">({bw.connections_1h})</span></div>
+            <div className="text-[10px] text-muted-foreground">
+              <span title="Download (RX)">↓{formatBytes(bw.rx_bytes_1h)}</span>
+              {" "}
+              <span title="Upload (TX)">↑{formatBytes(bw.tx_bytes_1h)}</span>
+            </div>
+          </div>
         );
       },
       sortValue: (row) => bandwidthByMac.get(row.mac_address)?.bytes_1h ?? 0,
+    },
+    {
+      key: "traffic_24h",
+      header: "Traffic (24h)",
+      render: (row) => {
+        const bw = bandwidthByMac.get(row.mac_address);
+        if (!bw || bw.bytes_24h === 0) return <span className="text-xs text-muted-foreground">—</span>;
+        return (
+          <div className="text-xs font-mono leading-tight">
+            <div>{formatBytes(bw.bytes_24h)}</div>
+            <div className="text-[10px] text-muted-foreground">
+              <span title="Download (RX)">↓{formatBytes(bw.rx_bytes_24h)}</span>
+              {" "}
+              <span title="Upload (TX)">↑{formatBytes(bw.tx_bytes_24h)}</span>
+            </div>
+          </div>
+        );
+      },
+      sortValue: (row) => bandwidthByMac.get(row.mac_address)?.bytes_24h ?? 0,
     },
     {
       key: "baseline",

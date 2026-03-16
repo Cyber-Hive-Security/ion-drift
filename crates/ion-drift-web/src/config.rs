@@ -177,9 +177,9 @@ pub struct ServerSection {
     pub listen_addr: String,
     #[serde(default = "default_listen_port")]
     pub listen_port: u16,
-    /// Home location longitude for the world map (e.g. -111.97). Optional.
+    /// Home location longitude for the world map (e.g. 142.20). Optional.
     pub home_lon: Option<f64>,
-    /// Home location latitude for the world map (e.g. 41.22). Optional.
+    /// Home location latitude for the world map (e.g. 11.35). Optional.
     pub home_lat: Option<f64>,
     /// Home country ISO 3166-1 alpha-2 code (e.g. "US"). Optional.
     pub home_country: Option<String>,

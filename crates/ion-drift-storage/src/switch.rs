@@ -27,12 +27,25 @@ pub fn is_valid_mac(mac: &str) -> bool {
 #[derive(Debug, Clone, Serialize)]
 pub struct PortMetricEntry {
     pub port_name: String,
+    pub port_index: u32,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
     pub rx_packets: u64,
     pub tx_packets: u64,
     pub speed: Option<String>,
     pub running: bool,
+}
+
+/// A per-port rate baseline for a specific hour of the week.
+#[derive(Debug, Clone, Serialize)]
+pub struct PortRateBaseline {
+    pub port_name: String,
+    pub hour_of_week: u32,
+    pub avg_rx_bps: f64,
+    pub avg_tx_bps: f64,
+    pub peak_rx_bps: f64,
+    pub peak_tx_bps: f64,
+    pub sample_count: u32,
 }
 
 /// A MAC address table entry.
@@ -349,6 +362,7 @@ impl SwitchStore {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_id TEXT NOT NULL,
                 port_name TEXT NOT NULL,
+                port_index INTEGER NOT NULL DEFAULT 0,
                 timestamp INTEGER NOT NULL,
                 rx_bytes INTEGER NOT NULL DEFAULT 0,
                 tx_bytes INTEGER NOT NULL DEFAULT 0,
@@ -743,6 +757,28 @@ impl SwitchStore {
             [],
         );
 
+        // Migration: add port_index column to switch_port_metrics
+        let _ = conn.execute(
+            "ALTER TABLE switch_port_metrics ADD COLUMN port_index INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+
+        // Port rate baselines for utilization comparison
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS port_rate_baselines (
+                device_id TEXT NOT NULL,
+                port_name TEXT NOT NULL,
+                hour_of_week INTEGER NOT NULL,
+                avg_rx_bps REAL NOT NULL DEFAULT 0,
+                avg_tx_bps REAL NOT NULL DEFAULT 0,
+                peak_rx_bps REAL NOT NULL DEFAULT 0,
+                peak_tx_bps REAL NOT NULL DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (device_id, port_name, hour_of_week)
+            );",
+        )?;
+
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
         })
@@ -760,13 +796,14 @@ impl SwitchStore {
         let db = self.db.lock().await;
         let mut stmt = db.prepare_cached(
             "INSERT INTO switch_port_metrics
-             (device_id, port_name, timestamp, rx_bytes, tx_bytes, rx_packets, tx_packets, speed, running)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (device_id, port_name, port_index, timestamp, rx_bytes, tx_bytes, rx_packets, tx_packets, speed, running)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )?;
         for e in entries {
             stmt.execute(params![
                 device_id,
                 e.port_name,
+                e.port_index as i32,
                 ts,
                 e.rx_bytes as i64,
                 e.tx_bytes as i64,
@@ -909,10 +946,10 @@ impl SwitchStore {
         &self,
         device_id: &str,
         since: i64,
-    ) -> Result<Vec<(String, i64, i64, i64, Option<String>, bool)>, rusqlite::Error> {
+    ) -> Result<Vec<(String, i64, i64, i64, Option<String>, bool, i32)>, rusqlite::Error> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT port_name, rx_bytes, tx_bytes, timestamp, speed, running
+            "SELECT port_name, rx_bytes, tx_bytes, timestamp, speed, running, port_index
              FROM switch_port_metrics
              WHERE device_id = ?1 AND timestamp >= ?2
              ORDER BY timestamp DESC",
@@ -926,7 +963,144 @@ impl SwitchStore {
                     row.get::<_, i64>(3)?,
                     row.get(4)?,
                     row.get::<_, i32>(5)? != 0,
+                    row.get::<_, i32>(6).unwrap_or(0),
                 ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Wipe ALL port metrics and MAC entries for a device.
+    /// Called on first SNMP poll cycle to clear stale counter baselines.
+    pub async fn wipe_device_port_data(
+        &self,
+        device_id: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let db = self.db.lock().await;
+        let metrics = db.execute(
+            "DELETE FROM switch_port_metrics WHERE device_id = ?1",
+            params![device_id],
+        )?;
+        let macs = db.execute(
+            "DELETE FROM switch_mac_table WHERE device_id = ?1",
+            params![device_id],
+        )?;
+        let baselines = db.execute(
+            "DELETE FROM port_rate_baselines WHERE device_id = ?1",
+            params![device_id],
+        )?;
+        tracing::info!(device = device_id, metrics, macs, baselines, "wiped all port data for clean start");
+        Ok(())
+    }
+
+    /// Purge port metrics and MAC entries with non-canonical port names.
+    ///
+    /// Called every SNMP poll cycle to clean up entries written when an
+    /// intermittent SNMP walk failure caused fallback to ifDescr names.
+    /// Only deletes entries whose port_name is NOT in the canonical set —
+    /// preserves valid samples needed for rate calculation.
+    pub async fn purge_stale_port_data(
+        &self,
+        device_id: &str,
+        canonical_names: &std::collections::HashSet<String>,
+    ) -> Result<(), rusqlite::Error> {
+        if canonical_names.is_empty() {
+            return Ok(());
+        }
+        let db = self.db.lock().await;
+
+        // Build parameterized NOT IN clause: ?1 = device_id, ?2..?N+1 = canonical names
+        let names: Vec<&str> = canonical_names.iter().map(|s| s.as_str()).collect();
+        let placeholders: String = (2..=names.len() + 1)
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let metrics_sql = format!(
+            "DELETE FROM switch_port_metrics WHERE device_id = ?1 AND port_name NOT IN ({placeholders})"
+        );
+        let mac_sql = format!(
+            "DELETE FROM switch_mac_table WHERE device_id = ?1 AND port_name NOT IN ({placeholders})"
+        );
+
+        // Build params: [device_id, name1, name2, ...]
+        let mut param_values: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(names.len() + 1);
+        param_values.push(&device_id);
+        for name in &names {
+            param_values.push(name);
+        }
+
+        let metrics_deleted = db.execute(&metrics_sql, param_values.as_slice())?;
+        let mac_deleted = db.execute(&mac_sql, param_values.as_slice())?;
+
+        if metrics_deleted > 0 || mac_deleted > 0 {
+            tracing::info!(
+                device = device_id,
+                metrics_deleted,
+                mac_deleted,
+                "purged non-canonical port data"
+            );
+        }
+
+        Ok(())
+    }
+
+    // ── Port rate baselines ────────────────────────────────────
+
+    /// Update a port rate baseline using exponential moving average.
+    /// Called by the background baseline task every 5 minutes.
+    pub async fn update_port_baseline(
+        &self,
+        device_id: &str,
+        port_name: &str,
+        hour_of_week: u32,
+        rx_bps: f64,
+        tx_bps: f64,
+    ) -> Result<(), rusqlite::Error> {
+        let now = now_unix();
+        let db = self.db.lock().await;
+        db.execute(
+            // EMA with fixed alpha=0.05 (~20-sample half-life).
+            // First insert seeds the baseline; updates blend new value in gradually.
+            // Peak tracks the all-time max for the bucket.
+            "INSERT INTO port_rate_baselines
+             (device_id, port_name, hour_of_week, avg_rx_bps, avg_tx_bps, peak_rx_bps, peak_tx_bps, sample_count, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?5, 1, ?6)
+             ON CONFLICT(device_id, port_name, hour_of_week) DO UPDATE SET
+               avg_rx_bps = avg_rx_bps * 0.95 + ?4 * 0.05,
+               avg_tx_bps = avg_tx_bps * 0.95 + ?5 * 0.05,
+               peak_rx_bps = MAX(peak_rx_bps, ?4),
+               peak_tx_bps = MAX(peak_tx_bps, ?5),
+               sample_count = MIN(sample_count + 1, 10000),
+               updated_at = ?6",
+            params![device_id, port_name, hour_of_week, rx_bps, tx_bps, now],
+        )?;
+        Ok(())
+    }
+
+    /// Get port rate baselines for a device at a specific hour of the week.
+    pub async fn get_port_baselines(
+        &self,
+        device_id: &str,
+        hour_of_week: u32,
+    ) -> Result<Vec<PortRateBaseline>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT port_name, hour_of_week, avg_rx_bps, avg_tx_bps, peak_rx_bps, peak_tx_bps, sample_count
+             FROM port_rate_baselines
+             WHERE device_id = ?1 AND hour_of_week = ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![device_id, hour_of_week], |row| {
+                Ok(PortRateBaseline {
+                    port_name: row.get(0)?,
+                    hour_of_week: row.get(1)?,
+                    avg_rx_bps: row.get(2)?,
+                    avg_tx_bps: row.get(3)?,
+                    peak_rx_bps: row.get(4)?,
+                    peak_tx_bps: row.get(5)?,
+                    sample_count: row.get(6)?,
+                })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)

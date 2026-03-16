@@ -400,8 +400,16 @@ pub async fn resolve_port_violation(
 #[derive(Serialize)]
 pub struct ClientBandwidth {
     pub mac: String,
+    /// Receive bytes in the last hour
+    pub rx_bytes_1h: i64,
+    /// Transmit bytes in the last hour
+    pub tx_bytes_1h: i64,
     /// Total bytes (tx + rx) in the last hour
     pub bytes_1h: i64,
+    /// Receive bytes in the last 24 hours
+    pub rx_bytes_24h: i64,
+    /// Transmit bytes in the last 24 hours
+    pub tx_bytes_24h: i64,
     /// Total bytes (tx + rx) in the last 24 hours
     pub bytes_24h: i64,
     /// Connection count in the last hour
@@ -433,12 +441,19 @@ pub async fn client_bandwidth(
         // Get baseline from behavior store
         let baseline_total = match state.behavior_store.get_baselines(&mac).await {
             Ok(baselines) => baselines.iter().map(|b| b.avg_bytes_per_hour).sum::<f64>(),
-            Err(_) => 0.0,
+            Err(e) => {
+                tracing::debug!(mac = %mac, "baseline query failed: {e}");
+                0.0
+            }
         };
 
         results.push(ClientBandwidth {
             mac,
+            rx_bytes_1h: rx_1h,
+            tx_bytes_1h: tx_1h,
             bytes_1h: tx_1h + rx_1h,
+            rx_bytes_24h: rx_24h,
+            tx_bytes_24h: tx_24h,
             bytes_24h: tx_24h + rx_24h,
             connections_1h: conn_1h,
             baseline_bytes_per_hour: baseline_total,
