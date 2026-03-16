@@ -353,11 +353,13 @@ pub async fn device_port_utilization(
     // Query baselines for the current hour-of-week
     let now_utc = chrono::Utc::now();
     let hour_of_week = now_utc.weekday().num_days_from_monday() * 24 + now_utc.hour();
-    let baselines = state
-        .switch_store
-        .get_port_baselines(&id, hour_of_week)
-        .await
-        .unwrap_or_default();
+    let baselines = match state.switch_store.get_port_baselines(&id, hour_of_week).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(device = %id, "port baselines query failed: {e}");
+            Vec::new()
+        }
+    };
     let baseline_map: HashMap<String, _> = baselines
         .into_iter()
         .map(|b| (b.port_name.clone(), b))
@@ -386,8 +388,14 @@ pub async fn device_port_utilization(
             continue;
         }
 
-        let rx_delta = (rx_new - rx_old).max(0) as f64;
-        let tx_delta = (tx_new - tx_old).max(0) as f64;
+        let rx_delta = rx_new - rx_old;
+        let tx_delta = tx_new - tx_old;
+        if rx_delta < 0 || tx_delta < 0 {
+            tracing::debug!(port = %port_name, "counter reset detected (rx_delta={rx_delta}, tx_delta={tx_delta}), skipping");
+            continue;
+        }
+        let rx_delta = rx_delta as f64;
+        let tx_delta = tx_delta as f64;
         let elapsed_f = elapsed as f64;
 
         let rx_rate_bps = (rx_delta * 8.0) / elapsed_f;

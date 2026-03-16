@@ -118,23 +118,33 @@ async fn poll_snmp_switch(
 
     let classified = snmp_profile::classify_interfaces(&interfaces, profile);
 
-    // Detect ifName walk failure: when ifName is missing, SnmpInterface.name
-    // falls back to ifDescr, so canonical_name == descr for all interfaces.
-    // In that case, skip data writes to prevent polluting the DB with long names
-    // that would conflict with the correct short names from successful walks.
+    // Filter out interfaces where ifName walk failed (canonical_name == descr).
+    // A partial ifName walk failure returns short names for some ports and
+    // ifDescr for others — we reject individual bad entries rather than
+    // requiring all-or-nothing, preventing mixed name sets in the DB.
     let physical_classified: Vec<_> = classified
         .iter()
         .filter(|i| i.class == InterfaceClass::Physical)
+        .filter(|i| {
+            if i.canonical_name == i.descr && !i.descr.is_empty() {
+                // canonical_name == descr means ifName was missing for this interface
+                tracing::debug!(
+                    device = %device_id,
+                    port = %i.descr,
+                    idx = i.index,
+                    "dropping interface with missing ifName (canonical = ifDescr)"
+                );
+                false
+            } else {
+                true
+            }
+        })
         .collect();
-    let ifname_failed = !physical_classified.is_empty()
-        && physical_classified
-            .iter()
-            .all(|i| i.canonical_name == i.descr);
 
-    if ifname_failed {
+    if physical_classified.is_empty() {
         tracing::warn!(
             device = %device_id,
-            "SNMP ifName walk failed (all names = ifDescr), skipping data writes this cycle"
+            "no physical interfaces with valid ifName, skipping data writes this cycle"
         );
         return;
     }
@@ -157,18 +167,13 @@ async fn poll_snmp_switch(
         .cloned()
         .collect();
 
-    // Cycle 0: full wipe of all port metrics and MAC entries for this device.
-    // Clears stale counter baselines that cause wildly incorrect rate calculations.
-    // Subsequent cycles: purge only non-canonical names (handles ifName walk flapping).
+    // Purge non-canonical port names every cycle. Does NOT wipe all data —
+    // only removes entries whose port_name isn't in the canonical set.
+    // This preserves valid metric history needed for rate calculations while
+    // cleaning up entries from partial ifName walk failures.
     if !physical_port_names.is_empty() {
-        if cycle == 0 {
-            if let Err(e) = store.wipe_device_port_data(device_id).await {
-                tracing::warn!(device = %device_id, "wipe device port data: {e}");
-            }
-        } else {
-            if let Err(e) = store.purge_stale_port_data(device_id, &physical_port_names).await {
-                tracing::warn!(device = %device_id, "purge stale port data: {e}");
-            }
+        if let Err(e) = store.purge_stale_port_data(device_id, &physical_port_names).await {
+            tracing::warn!(device = %device_id, "purge stale port data: {e}");
         }
     }
 

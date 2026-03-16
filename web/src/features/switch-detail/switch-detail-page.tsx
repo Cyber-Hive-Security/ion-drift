@@ -111,11 +111,9 @@ function SwitchDetailPage({ deviceId }: { deviceId: string }) {
           ports={ports.data ?? []}
           interfaces={interfaces.data ?? []}
           portRoles={portRoles.data ?? []}
-          macTable={macTable.data ?? []}
           identities={identities.data ?? []}
           vlans={vlans.data ?? []}
           selectedPort={selectedPort}
-          onSelectPort={setSelectedPort}
           deviceId={deviceId}
           utilization={portUtilization.data}
         />

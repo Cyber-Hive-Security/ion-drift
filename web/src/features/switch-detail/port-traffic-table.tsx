@@ -7,7 +7,6 @@ import type {
   PortMetricsTuple,
   RouterInterface,
   PortRoleEntry,
-  MacTableEntry,
   NetworkIdentity,
   VlanMembershipEntry,
   PortUtilization,
@@ -36,11 +35,9 @@ interface PortTrafficTableProps {
   ports: PortMetricsTuple[];
   interfaces: RouterInterface[];
   portRoles: PortRoleEntry[];
-  macTable: MacTableEntry[];
   identities: NetworkIdentity[];
   vlans?: VlanMembershipEntry[];
   selectedPort: string | null;
-  onSelectPort: (port: string | null) => void;
   deviceId?: string;
   utilization?: PortUtilization[];
 }

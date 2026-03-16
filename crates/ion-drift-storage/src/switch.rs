@@ -1009,21 +1009,29 @@ impl SwitchStore {
         }
         let db = self.db.lock().await;
 
-        let placeholders: Vec<String> = canonical_names
-            .iter()
-            .map(|n| format!("'{}'", n.replace('\'', "''")))
-            .collect();
-        let in_clause = placeholders.join(",");
+        // Build parameterized NOT IN clause: ?1 = device_id, ?2..?N+1 = canonical names
+        let names: Vec<&str> = canonical_names.iter().map(|s| s.as_str()).collect();
+        let placeholders: String = (2..=names.len() + 1)
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
 
         let metrics_sql = format!(
-            "DELETE FROM switch_port_metrics WHERE device_id = ?1 AND port_name NOT IN ({in_clause})"
+            "DELETE FROM switch_port_metrics WHERE device_id = ?1 AND port_name NOT IN ({placeholders})"
         );
-        let metrics_deleted = db.execute(&metrics_sql, params![device_id])?;
-
         let mac_sql = format!(
-            "DELETE FROM switch_mac_table WHERE device_id = ?1 AND port_name NOT IN ({in_clause})"
+            "DELETE FROM switch_mac_table WHERE device_id = ?1 AND port_name NOT IN ({placeholders})"
         );
-        let mac_deleted = db.execute(&mac_sql, params![device_id])?;
+
+        // Build params: [device_id, name1, name2, ...]
+        let mut param_values: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(names.len() + 1);
+        param_values.push(&device_id);
+        for name in &names {
+            param_values.push(name);
+        }
+
+        let metrics_deleted = db.execute(&metrics_sql, param_values.as_slice())?;
+        let mac_deleted = db.execute(&mac_sql, param_values.as_slice())?;
 
         if metrics_deleted > 0 || mac_deleted > 0 {
             tracing::info!(
@@ -1052,15 +1060,18 @@ impl SwitchStore {
         let now = now_unix();
         let db = self.db.lock().await;
         db.execute(
+            // EMA with fixed alpha=0.05 (~20-sample half-life).
+            // First insert seeds the baseline; updates blend new value in gradually.
+            // Peak tracks the all-time max for the bucket.
             "INSERT INTO port_rate_baselines
              (device_id, port_name, hour_of_week, avg_rx_bps, avg_tx_bps, peak_rx_bps, peak_tx_bps, sample_count, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?5, 1, ?6)
              ON CONFLICT(device_id, port_name, hour_of_week) DO UPDATE SET
-               avg_rx_bps = avg_rx_bps + (?4 - avg_rx_bps) / (sample_count + 1.0),
-               avg_tx_bps = avg_tx_bps + (?5 - avg_tx_bps) / (sample_count + 1.0),
+               avg_rx_bps = avg_rx_bps * 0.95 + ?4 * 0.05,
+               avg_tx_bps = avg_tx_bps * 0.95 + ?5 * 0.05,
                peak_rx_bps = MAX(peak_rx_bps, ?4),
                peak_tx_bps = MAX(peak_tx_bps, ?5),
-               sample_count = sample_count + 1,
+               sample_count = MIN(sample_count + 1, 10000),
                updated_at = ?6",
             params![device_id, port_name, hour_of_week, rx_bps, tx_bps, now],
         )?;

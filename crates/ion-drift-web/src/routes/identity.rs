@@ -441,7 +441,10 @@ pub async fn client_bandwidth(
         // Get baseline from behavior store
         let baseline_total = match state.behavior_store.get_baselines(&mac).await {
             Ok(baselines) => baselines.iter().map(|b| b.avg_bytes_per_hour).sum::<f64>(),
-            Err(_) => 0.0,
+            Err(e) => {
+                tracing::debug!(mac = %mac, "baseline query failed: {e}");
+                0.0
+            }
         };
 
         results.push(ClientBandwidth {
