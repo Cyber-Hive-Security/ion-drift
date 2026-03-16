@@ -1068,7 +1068,11 @@ export type DeviceDisposition = "unknown" | "my_device" | "external" | "ignored"
 
 export interface ClientBandwidth {
   mac: string;
+  rx_bytes_1h: number;
+  tx_bytes_1h: number;
   bytes_1h: number;
+  rx_bytes_24h: number;
+  tx_bytes_24h: number;
   bytes_24h: number;
   connections_1h: number;
   baseline_bytes_per_hour: number;
