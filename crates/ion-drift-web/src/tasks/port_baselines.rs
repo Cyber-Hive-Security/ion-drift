@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Timelike, Utc};
 use ion_drift_storage::SwitchStore;
 use tokio::sync::RwLock;
 
@@ -42,10 +42,10 @@ async fn compute_baselines(
         .as_secs() as i64;
     let since = now - 300; // last 5 minutes of port metrics
 
-    // Current hour-of-week: 0-167 (Monday 00:00 = 0, Sunday 23:00 = 167)
-    let local = Local::now();
-    let day_of_week = local.weekday().num_days_from_monday(); // 0=Mon, 6=Sun
-    let hour_of_week = day_of_week * 24 + local.hour();
+    // Current hour-of-week: 0-167 (Monday 00:00 UTC = 0, Sunday 23:00 UTC = 167)
+    let now_utc = Utc::now();
+    let day_of_week = now_utc.weekday().num_days_from_monday(); // 0=Mon, 6=Sun
+    let hour_of_week = day_of_week * 24 + now_utc.hour();
 
     // Get all device IDs
     let device_ids: Vec<String> = {

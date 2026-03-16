@@ -27,7 +27,7 @@ pub fn is_valid_mac(mac: &str) -> bool {
 #[derive(Debug, Clone, Serialize)]
 pub struct PortMetricEntry {
     pub port_name: String,
-    pub port_index: u16,
+    pub port_index: u32,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
     pub rx_packets: u64,
@@ -985,7 +985,11 @@ impl SwitchStore {
             "DELETE FROM switch_mac_table WHERE device_id = ?1",
             params![device_id],
         )?;
-        tracing::info!(device = device_id, metrics, macs, "wiped all port data for clean start");
+        let baselines = db.execute(
+            "DELETE FROM port_rate_baselines WHERE device_id = ?1",
+            params![device_id],
+        )?;
+        tracing::info!(device = device_id, metrics, macs, baselines, "wiped all port data for clean start");
         Ok(())
     }
 
@@ -1052,8 +1056,8 @@ impl SwitchStore {
              (device_id, port_name, hour_of_week, avg_rx_bps, avg_tx_bps, peak_rx_bps, peak_tx_bps, sample_count, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?5, 1, ?6)
              ON CONFLICT(device_id, port_name, hour_of_week) DO UPDATE SET
-               avg_rx_bps = avg_rx_bps + (?4 - avg_rx_bps) / (sample_count + 1),
-               avg_tx_bps = avg_tx_bps + (?5 - avg_tx_bps) / (sample_count + 1),
+               avg_rx_bps = avg_rx_bps + (?4 - avg_rx_bps) / (sample_count + 1.0),
+               avg_tx_bps = avg_tx_bps + (?5 - avg_tx_bps) / (sample_count + 1.0),
                peak_rx_bps = MAX(peak_rx_bps, ?4),
                peak_tx_bps = MAX(peak_tx_bps, ?5),
                sample_count = sample_count + 1,

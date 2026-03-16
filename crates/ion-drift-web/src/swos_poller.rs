@@ -130,7 +130,7 @@ async fn poll_swos_switch(
 
                     PortMetricEntry {
                         port_name,
-                        port_index: s.port_index as u16,
+                        port_index: s.port_index as u32,
                         rx_bytes: s.rx_bytes,
                         tx_bytes: s.tx_bytes,
                         rx_packets: s.rx_packets,
@@ -156,7 +156,7 @@ async fn poll_swos_switch(
                 .iter()
                 .map(|l| PortMetricEntry {
                     port_name: l.port_name.clone(),
-                    port_index: l.port_index as u16,
+                    port_index: l.port_index as u32,
                     rx_bytes: 0,
                     tx_bytes: 0,
                     rx_packets: 0,

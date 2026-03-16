@@ -145,7 +145,7 @@ async fn poll_switch(
                     .or_else(|| iface.speed.clone());
                 PortMetricEntry {
                     port_name: iface.name.clone(),
-                    port_index: idx as u16,
+                    port_index: idx as u32,
                     rx_bytes: iface.rx_bytes.unwrap_or(0),
                     tx_bytes: iface.tx_bytes.unwrap_or(0),
                     rx_packets: iface.rx_packets.unwrap_or(0),

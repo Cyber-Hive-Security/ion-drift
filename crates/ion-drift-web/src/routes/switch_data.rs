@@ -351,8 +351,8 @@ pub async fn device_port_utilization(
         .map_err(|e| internal_error("port metrics", e))?;
 
     // Query baselines for the current hour-of-week
-    let local = chrono::Local::now();
-    let hour_of_week = local.weekday().num_days_from_monday() * 24 + local.hour();
+    let now_utc = chrono::Utc::now();
+    let hour_of_week = now_utc.weekday().num_days_from_monday() * 24 + now_utc.hour();
     let baselines = state
         .switch_store
         .get_port_baselines(&id, hour_of_week)
