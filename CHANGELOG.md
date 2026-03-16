@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-03-16
+
+### Added
+
+- Per-manufacturer SNMP profile system for vendor-specific interface classification and naming
+  - Netgear profile: filters port-channels, tunnels, and internal interfaces; uses short ifName values
+  - Generic fallback profile preserves existing behavior for unknown vendors
+- Per-port rate baselines using 168 hour-of-week buckets with exponential moving average (alpha=0.05)
+- "vs Baseline" column in port traffic table showing current rate relative to learned baseline
+- Per-client IPv4 bandwidth monitoring with RX/TX breakdown on Identities page
+- Traffic (24h) column on Identities page
+- Hardware limitations banner on switch detail page for devices with missing capabilities (e.g., CSS106 stats.b)
+- SwOS board-specific PHY speed decoding (SwosSpeedClass: Gigabit vs MultiGig)
+- port_index field threaded through storage, API, and frontend for reliable port grid positioning
+
+### Fixed
+
+- CRS326 byte counters: EthernetInterface serde fields renamed to match RouterOS API (rx-bytes/tx-bytes plural)
+- CSS106 port grid: SwOS poller falls back to link.b when stats.b returns empty
+- CSS106 speed: 1G ports no longer incorrectly shown as 100M (board-specific speed encoding)
+- SNMP ifName walk flapping: partial failures now drop individual bad interfaces instead of corrupting the entire dataset
+- SNMP port grid positioning: name parsing takes priority over portIndex (fixes 0-based vs 1-based mismatch)
+- Utilization miscalculation from stale counter baselines after data purge
+- port_index truncation: changed from u16 to u32 to handle SNMP ifIndex values above 65535
+- Counter reset detection: log and skip ports with negative counter deltas instead of silent clamping
+- Baseline EMA: fixed alpha=0.05 replaces cumulative average that froze over time
+- Baseline hour-of-week uses UTC instead of local time (avoids DST bucket skipping)
+- SQL parameterized queries for port name purge (replaces string interpolation)
+- Baseline query errors now logged instead of silently returning empty results
+- Removed dead props (macTable, onSelectPort) from PortTrafficTable component
+
+### Security
+
+- Replaced example coordinates in documentation and config files to prevent PII leak
+
 ## [0.1.0] - 2026-03-14
 
 ### Added
