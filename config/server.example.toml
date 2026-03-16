@@ -4,8 +4,8 @@ listen_port = 3000
 # Optional: home location for the world map. If set, arcs originate from here
 # and the home country is highlighted green. If omitted, no home marker is shown
 # and all data points are displayed without suppression.
-# home_lon = -111.97
-# home_lat = 41.22
+# home_lon = 142.20
+# home_lat = 11.35
 # home_country = "US"
 # Monitored regions — country codes highlighted on the world map (ISO 3166-1 alpha-2).
 # Default: [] (none). Configure via Settings > Monitored Regions in the UI.

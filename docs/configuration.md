@@ -48,8 +48,8 @@ General server settings.
 |-------|------|---------|-------------|
 | `listen_addr` | string | `"0.0.0.0"` | IP address to bind the HTTP server to. |
 | `listen_port` | integer | `3000` | Port for the web server. |
-| `home_lon` | float | *(none)* | Home location longitude for the world map (e.g., `-111.97`). **Required for connection arc lines on the world map.** |
-| `home_lat` | float | *(none)* | Home location latitude for the world map (e.g., `41.22`). **Required for connection arc lines on the world map.** |
+| `home_lon` | float | *(none)* | Home location longitude for the world map (e.g., `142.20`). **Required for connection arc lines on the world map.** |
+| `home_lat` | float | *(none)* | Home location latitude for the world map (e.g., `11.35`). **Required for connection arc lines on the world map.** |
 | `home_country` | string | *(none)* | Home country ISO 3166-1 alpha-2 code (e.g., `"US"`). Highlighted green on the map. |
 | `warning_countries` | array of strings | `[]` | Country codes flagged for security monitoring. Connections to these countries are highlighted on the map. Configure via Settings > Monitored Regions in the UI. |
 
@@ -57,8 +57,8 @@ General server settings.
 [server]
 listen_addr = "0.0.0.0"
 listen_port = 3000
-home_lon = -111.97
-home_lat = 41.22
+home_lon = 142.20
+home_lat = 11.35
 home_country = "US"
 warning_countries = ["RU", "CN"]
 ```
