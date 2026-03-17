@@ -432,16 +432,17 @@ impl ConnectionStore {
             .ok();
 
         if let Some(id) = existing_id {
-            // Update existing row
+            // Update existing row — also backfill src_mac if it was missing
             db.execute(
                 "UPDATE connection_history SET
                     last_seen = ?1,
                     bytes_tx = ?2,
                     bytes_rx = ?3,
                     last_state = ?4,
+                    src_mac = COALESCE(src_mac, ?5),
                     poll_count = poll_count + 1
-                 WHERE id = ?5",
-                params![now, conn.bytes_tx, conn.bytes_rx, conn.tcp_state, id],
+                 WHERE id = ?6",
+                params![now, conn.bytes_tx, conn.bytes_rx, conn.tcp_state, conn.src_mac, id],
             )?;
             Ok(false)
         } else {
