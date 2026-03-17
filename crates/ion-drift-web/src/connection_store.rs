@@ -1901,7 +1901,7 @@ impl ConnectionStore {
     /// Returns a map of MAC address → (bytes_tx, bytes_rx, connection_count).
     pub fn bandwidth_by_mac(&self, since_secs: i64) -> Result<HashMap<String, (i64, i64, i64)>, String> {
         let db = self.db.lock().map_err(|e| e.to_string())?;
-        let cutoff = chrono::Utc::now().timestamp() - since_secs;
+        let cutoff = now_iso_minus_secs(since_secs);
         let mut stmt = db.prepare(
             "SELECT src_mac, SUM(bytes_tx), SUM(bytes_rx), COUNT(*)
              FROM connection_history
