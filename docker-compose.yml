@@ -1,19 +1,29 @@
+# Ion Drift — Docker Compose
+#
+# Quick start:
+#   docker compose up -d
+#
+# The setup wizard runs on first launch — no config needed.
+# For OIDC or advanced config, see docs/configuration.md.
+#
+# To build from source instead, use docker-compose.build.yml:
+#   docker compose -f docker-compose.build.yml up -d
+# (Requires 4+ vCPU and 4+ GB RAM — see README for details)
+
 services:
   ion-drift:
-    build: .
+    image: ghcr.io/cyber-hive-security/ion-drift:latest
     container_name: ion-drift
-    hostname: ion-drift
     restart: unless-stopped
     cap_add:
       - NET_RAW
       - NET_ADMIN
     ports:
-      - "3100:3000"
+      - "3000:3000"
       - "5514:5514/udp"
     environment:
       - RUST_LOG=info,tower_http=warn,hyper=warn,maxminddb=warn,reqwest=warn,rustls=warn,hyper_util=warn
       - XDG_DATA_HOME=/app/data
-      - TOPOLOGY_INFERENCE_MODE=active
     logging:
       driver: json-file
       options:
@@ -27,8 +37,10 @@ services:
       start_period: 30s
     volumes:
       - ion-drift-data:/app/data
-      - ./config/production.toml:/app/config/server.toml:ro
-      - ./certs/root_ca.crt:/app/certs/root_ca.crt:ro
+      # Uncomment for custom config (optional — setup wizard handles first-run):
+      # - ./config/server.toml:/app/config/server.toml:ro
+      # Uncomment if your router/OIDC provider uses a private CA:
+      # - ./certs/root_ca.crt:/app/certs/root_ca.crt:ro
 
 volumes:
   ion-drift-data:

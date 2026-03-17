@@ -1,15 +1,14 @@
-# Ion Drift — Docker Compose (pre-built image)
+# Ion Drift — Build from Source
 #
-# Quick start:
-#   cp docker-compose.example.yml docker-compose.yml
-#   docker compose up -d
+# Builds the Docker image locally instead of pulling the pre-built image.
+# Requires 4+ vCPU and 4+ GB RAM. See README for full requirements.
 #
-# The setup wizard runs on first launch — no config needed.
-# For OIDC or advanced config, see docs/configuration.md.
+# Usage:
+#   docker compose -f docker-compose.build.yml up -d
 
 services:
   ion-drift:
-    image: ghcr.io/cyber-hive-security/ion-drift:latest
+    build: .
     container_name: ion-drift
     restart: unless-stopped
     cap_add:

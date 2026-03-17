@@ -50,10 +50,34 @@ Firewall rule viewer with drop statistics and geo-enriched drop country attribut
 
 ![Firewall](caps/ion-drift-firewall.png)
 
+## System Requirements
+
+### Pre-built Docker Image (recommended)
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| CPU | 1 vCPU | 2+ vCPU |
+| RAM | 512 MB | 1 GB |
+| Disk | 500 MB | 2 GB (grows with connection history) |
+| Docker | 20.10+ | Latest stable |
+
+### Building from Source
+
+Compiling Rust in release mode is resource-intensive. Do not attempt to build on low-spec VMs.
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| CPU | 4 vCPU | 8+ vCPU |
+| RAM | 4 GB | 8 GB |
+| Disk | 10 GB free | 20 GB free |
+| Rust | 1.75+ (via [rustup](https://rustup.rs)) | Latest stable |
+| Node.js | 20+ | 22 LTS |
+
+The release build can take 10-30 minutes depending on hardware. With less than 4GB of RAM, the Rust compiler will likely be killed by the OOM killer.
+
 ## Quick Start
 
 ```bash
-cp docker-compose.example.yml docker-compose.yml
 docker compose up -d
 ```
 
@@ -88,7 +112,6 @@ Uses the RouterOS v7 REST API over HTTPS. Switch management supports RouterOS, S
 ## Docker Deployment
 
 ```bash
-cp docker-compose.example.yml docker-compose.yml
 docker compose up -d
 ```
 
@@ -96,6 +119,44 @@ Optional bind-mounts (uncomment in docker-compose.yml as needed):
 - `config/server.toml` → `/app/config/server.toml` (custom config — setup wizard handles first-run without it)
 - `certs/root_ca.crt` → `/app/certs/root_ca.crt` (only if your router or OIDC provider uses a private CA)
 - `ion-drift-data` volume → `/app/data` (SQLite databases, GeoIP data, encryption keys)
+
+## Building from Source
+
+If you need to build from source instead of using the pre-built image:
+
+```bash
+# Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# Install Node.js 22 (if not already installed)
+# See https://nodejs.org/ or use your package manager
+
+# Clone and build
+git clone https://github.com/Cyber-Hive-Security/ion-drift.git
+cd ion-drift
+
+# Build the Rust backend (release mode — requires 8GB+ RAM)
+cargo build --release --bin ion-drift-web
+
+# Build the frontend
+cd web
+npm ci
+npm run build
+cd ..
+
+# Run
+./target/release/ion-drift-web --config config/server.toml
+```
+
+To build as a Docker image from source:
+
+```bash
+# Requires 4+ vCPU and 4+ GB RAM available to Docker
+docker compose -f docker-compose.build.yml up -d
+```
+
+> **Note:** If building fails or the process is killed, your host likely doesn't have enough resources. Use the pre-built image instead — just run `docker compose up -d`. See [Quick Start](#quick-start).
 
 ## Configuration
 

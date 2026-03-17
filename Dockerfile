@@ -1,3 +1,8 @@
+# BUILD REQUIREMENTS: 8GB+ RAM, 4+ vCPU recommended.
+# Rust release builds are memory-intensive — the compiler will be OOM-killed
+# on hosts with less than 8GB of RAM. Use the pre-built image instead:
+#   image: ghcr.io/cyber-hive-security/ion-drift:latest
+
 # Stage 1: Build Rust binary
 FROM rust:1-bookworm AS rust-builder
 WORKDIR /build
