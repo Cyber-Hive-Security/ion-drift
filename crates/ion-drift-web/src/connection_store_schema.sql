@@ -180,3 +180,20 @@ CREATE INDEX IF NOT EXISTS idx_al_behavior
     ON anomaly_links(behavior_anomaly_id) WHERE behavior_anomaly_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_al_unresolved
     ON anomaly_links(resolved_at) WHERE resolved_at IS NULL;
+
+-- Per-poll bandwidth deltas for windowed traffic queries
+
+CREATE TABLE IF NOT EXISTS bandwidth_deltas (
+    id INTEGER PRIMARY KEY,
+    conntrack_id TEXT NOT NULL,
+    src_mac TEXT,
+    delta_tx INTEGER NOT NULL,
+    delta_rx INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_bd_mac_time
+    ON bandwidth_deltas(src_mac, recorded_at) WHERE src_mac IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_bd_prune
+    ON bandwidth_deltas(recorded_at);
