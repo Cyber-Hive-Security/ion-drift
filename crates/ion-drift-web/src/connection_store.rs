@@ -1925,6 +1925,33 @@ impl ConnectionStore {
         }
         Ok(map)
     }
+
+    /// Get total lifetime bytes transferred per source MAC (no time filter).
+    /// Returns a map of MAC address → (bytes_tx, bytes_rx, connection_count).
+    pub fn bandwidth_by_mac_lifetime(&self) -> Result<HashMap<String, (i64, i64, i64)>, String> {
+        let db = self.db.lock().map_err(|e| e.to_string())?;
+        let mut stmt = db.prepare(
+            "SELECT src_mac, SUM(bytes_tx), SUM(bytes_rx), COUNT(*)
+             FROM connection_history
+             WHERE src_mac IS NOT NULL
+             GROUP BY src_mac"
+        ).map_err(|e| e.to_string())?;
+
+        let mut map = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        }).map_err(|e| e.to_string())?;
+
+        for row in rows.flatten() {
+            map.insert(row.0, (row.1, row.2, row.3));
+        }
+        Ok(map)
+    }
 }
 
 // ── Helper functions ──────────────────────────────────────────

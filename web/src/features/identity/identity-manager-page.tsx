@@ -760,18 +760,32 @@ export default function IdentityManagerPage() {
       sortValue: (row) => row.link_speed_mbps ?? 1000,
     },
     {
+      key: "traffic_lifetime",
+      header: "Lifetime Traffic",
+      render: (row) => {
+        const bw = bandwidthByMac.get(row.mac_address);
+        if (!bw || bw.bytes_lifetime === 0) return <span className="text-xs text-muted-foreground">—</span>;
+        return (
+          <div className="text-xs font-mono leading-tight" title={`${bw.connections_lifetime.toLocaleString()} lifetime connections\n↓ Download (RX): ${formatBytes(bw.rx_bytes_lifetime)}\n↑ Upload (TX): ${formatBytes(bw.tx_bytes_lifetime)}`}>
+            <div className="font-medium">{formatBytes(bw.bytes_lifetime)}</div>
+            <div className="text-[10px] text-muted-foreground">
+              ↓{formatBytes(bw.rx_bytes_lifetime)} ↑{formatBytes(bw.tx_bytes_lifetime)}
+            </div>
+          </div>
+        );
+      },
+      sortValue: (row) => bandwidthByMac.get(row.mac_address)?.bytes_lifetime ?? 0,
+    },
+    {
       key: "traffic_1h",
       header: "Traffic (1h)",
       render: (row) => {
         const bw = bandwidthByMac.get(row.mac_address);
         if (!bw || bw.bytes_1h === 0) return <span className="text-xs text-muted-foreground">—</span>;
         return (
-          <div className="text-xs font-mono leading-tight" title={`${bw.connections_1h} connection${bw.connections_1h !== 1 ? "s" : ""}`}>
-            <div>{formatBytes(bw.bytes_1h)} <span className="text-[10px] text-muted-foreground">({bw.connections_1h})</span></div>
+          <div className="text-xs font-mono leading-tight" title={`${bw.connections_1h} connection${bw.connections_1h !== 1 ? "s" : ""}\n↓ Download (RX): ${formatBytes(bw.rx_bytes_1h)}\n↑ Upload (TX): ${formatBytes(bw.tx_bytes_1h)}`}>
             <div className="text-[10px] text-muted-foreground">
-              <span title="Download (RX)">↓{formatBytes(bw.rx_bytes_1h)}</span>
-              {" "}
-              <span title="Upload (TX)">↑{formatBytes(bw.tx_bytes_1h)}</span>
+              ↓{formatBytes(bw.rx_bytes_1h)} ↑{formatBytes(bw.tx_bytes_1h)}
             </div>
           </div>
         );
@@ -785,12 +799,9 @@ export default function IdentityManagerPage() {
         const bw = bandwidthByMac.get(row.mac_address);
         if (!bw || bw.bytes_24h === 0) return <span className="text-xs text-muted-foreground">—</span>;
         return (
-          <div className="text-xs font-mono leading-tight">
-            <div>{formatBytes(bw.bytes_24h)}</div>
+          <div className="text-xs font-mono leading-tight" title={`↓ Download (RX): ${formatBytes(bw.rx_bytes_24h)}\n↑ Upload (TX): ${formatBytes(bw.tx_bytes_24h)}`}>
             <div className="text-[10px] text-muted-foreground">
-              <span title="Download (RX)">↓{formatBytes(bw.rx_bytes_24h)}</span>
-              {" "}
-              <span title="Upload (TX)">↑{formatBytes(bw.tx_bytes_24h)}</span>
+              ↓{formatBytes(bw.rx_bytes_24h)} ↑{formatBytes(bw.tx_bytes_24h)}
             </div>
           </div>
         );

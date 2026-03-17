@@ -1076,6 +1076,10 @@ export interface ClientBandwidth {
   bytes_24h: number;
   connections_1h: number;
   baseline_bytes_per_hour: number;
+  rx_bytes_lifetime: number;
+  tx_bytes_lifetime: number;
+  bytes_lifetime: number;
+  connections_lifetime: number;
 }
 
 export interface VlanMembershipEntry {
