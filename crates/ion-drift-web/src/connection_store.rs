@@ -432,16 +432,17 @@ impl ConnectionStore {
             .ok();
 
         if let Some(id) = existing_id {
-            // Update existing row
+            // Update existing row — also backfill src_mac if it was missing
             db.execute(
                 "UPDATE connection_history SET
                     last_seen = ?1,
                     bytes_tx = ?2,
                     bytes_rx = ?3,
                     last_state = ?4,
+                    src_mac = COALESCE(src_mac, ?5),
                     poll_count = poll_count + 1
-                 WHERE id = ?5",
-                params![now, conn.bytes_tx, conn.bytes_rx, conn.tcp_state, id],
+                 WHERE id = ?6",
+                params![now, conn.bytes_tx, conn.bytes_rx, conn.tcp_state, conn.src_mac, id],
             )?;
             Ok(false)
         } else {
@@ -1897,20 +1898,45 @@ impl ConnectionStore {
         Ok((today, week))
     }
 
-    /// Get total bytes transferred per source MAC in the given time window.
+    /// Record bandwidth deltas for a batch of connections in a single transaction.
+    pub fn record_bandwidth_deltas(
+        &self,
+        deltas: &[(String, Option<String>, i64, i64)], // (conntrack_id, src_mac, delta_tx, delta_rx)
+    ) -> Result<(), String> {
+        if deltas.is_empty() {
+            return Ok(());
+        }
+        let db = self.db.lock().map_err(|e| e.to_string())?;
+        let now = now_iso_pub();
+        db.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+        {
+            let mut stmt = db.prepare(
+                "INSERT INTO bandwidth_deltas (conntrack_id, src_mac, delta_tx, delta_rx, recorded_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)"
+            ).map_err(|e| e.to_string())?;
+            for (cid, mac, dtx, drx) in deltas {
+                stmt.execute(params![cid, mac.as_deref(), dtx, drx, now])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        db.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Get bytes transferred per source MAC in the given time window (from deltas).
     /// Returns a map of MAC address → (bytes_tx, bytes_rx, connection_count).
     pub fn bandwidth_by_mac(&self, since_secs: i64) -> Result<HashMap<String, (i64, i64, i64)>, String> {
         let db = self.db.lock().map_err(|e| e.to_string())?;
-        let cutoff = chrono::Utc::now().timestamp() - since_secs;
+        let cutoff = now_iso_minus_secs(since_secs);
         let mut stmt = db.prepare(
-            "SELECT src_mac, SUM(bytes_tx), SUM(bytes_rx), COUNT(*)
-             FROM connection_history
-             WHERE src_mac IS NOT NULL AND last_seen >= ?1
+            "SELECT src_mac, SUM(delta_tx), SUM(delta_rx), COUNT(DISTINCT conntrack_id)
+             FROM bandwidth_deltas
+             WHERE src_mac IS NOT NULL AND recorded_at >= ?1
              GROUP BY src_mac"
         ).map_err(|e| e.to_string())?;
 
         let mut map = HashMap::new();
-        let rows = stmt.query_map(rusqlite::params![cutoff], |row| {
+        let rows = stmt.query_map(params![cutoff], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)?,
@@ -1921,6 +1947,68 @@ impl ConnectionStore {
 
         for row in rows.flatten() {
             map.insert(row.0, (row.1, row.2, row.3));
+        }
+        Ok(map)
+    }
+
+    /// Get total lifetime bytes transferred per source MAC (cumulative from connection_history).
+    /// Returns a map of MAC address → (bytes_tx, bytes_rx, connection_count).
+    pub fn bandwidth_by_mac_lifetime(&self) -> Result<HashMap<String, (i64, i64, i64)>, String> {
+        let db = self.db.lock().map_err(|e| e.to_string())?;
+        let mut stmt = db.prepare(
+            "SELECT src_mac, SUM(bytes_tx), SUM(bytes_rx), COUNT(*)
+             FROM connection_history
+             WHERE src_mac IS NOT NULL
+             GROUP BY src_mac"
+        ).map_err(|e| e.to_string())?;
+
+        let mut map = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        }).map_err(|e| e.to_string())?;
+
+        for row in rows.flatten() {
+            map.insert(row.0, (row.1, row.2, row.3));
+        }
+        Ok(map)
+    }
+
+    /// Prune bandwidth deltas older than the given number of hours.
+    pub fn prune_bandwidth_deltas(&self, retention_hours: i64) -> Result<usize, String> {
+        let db = self.db.lock().map_err(|e| e.to_string())?;
+        let cutoff = now_iso_minus_secs(retention_hours * 3600);
+        let count = db.execute(
+            "DELETE FROM bandwidth_deltas WHERE recorded_at < ?1",
+            params![cutoff],
+        ).map_err(|e| e.to_string())?;
+        Ok(count)
+    }
+
+    /// Get current bytes for all open connections (for seeding the delta tracker on startup).
+    pub fn get_open_connection_bytes(&self) -> Result<HashMap<String, (i64, i64)>, String> {
+        let db = self.db.lock().map_err(|e| e.to_string())?;
+        let mut stmt = db.prepare(
+            "SELECT conntrack_id, bytes_tx, bytes_rx
+             FROM connection_history
+             WHERE closed = 0 AND conntrack_id IS NOT NULL"
+        ).map_err(|e| e.to_string())?;
+
+        let mut map = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        }).map_err(|e| e.to_string())?;
+
+        for row in rows.flatten() {
+            map.insert(row.0, (row.1, row.2));
         }
         Ok(map)
     }

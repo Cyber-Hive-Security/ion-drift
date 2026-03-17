@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,6 +37,9 @@ pub fn spawn_behavior_collector(
         ));
         let mut cycle_count: u64 = 0;
 
+        // Persistent byte tracker for computing deltas across observation cycles
+        let mut prev_bytes: HashMap<String, (i64, i64)> = HashMap::new();
+
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
@@ -47,8 +51,8 @@ pub fn spawn_behavior_collector(
             // Refresh firewall rules cache
             behavior_engine::refresh_firewall_cache(&client, &firewall_cache).await;
 
-            // Collect observations
-            match behavior_engine::collect_observations(&client, &store, &oui_db, &registry).await {
+            // Collect observations (with delta-based byte tracking)
+            match behavior_engine::collect_observations(&client, &store, &oui_db, &registry, &mut prev_bytes).await {
                 Ok(count) => {
                     tracing::debug!("behavior: collected {count} observations");
                 }

@@ -416,6 +416,14 @@ pub struct ClientBandwidth {
     pub connections_1h: i64,
     /// Sum of avg_bytes_per_hour from all baselines (expected hourly traffic)
     pub baseline_bytes_per_hour: f64,
+    /// Lifetime receive bytes (all time)
+    pub rx_bytes_lifetime: i64,
+    /// Lifetime transmit bytes (all time)
+    pub tx_bytes_lifetime: i64,
+    /// Total lifetime bytes (tx + rx, all time)
+    pub bytes_lifetime: i64,
+    /// Lifetime connection count (all time)
+    pub connections_lifetime: i64,
 }
 
 /// GET /api/network/identities/bandwidth
@@ -428,15 +436,19 @@ pub async fn client_bandwidth(
         .map_err(|e| internal_error("bandwidth_by_mac 1h", e))?;
     let bw_24h = state.connection_store.bandwidth_by_mac(86400)
         .map_err(|e| internal_error("bandwidth_by_mac 24h", e))?;
+    let bw_lifetime = state.connection_store.bandwidth_by_mac_lifetime()
+        .map_err(|e| internal_error("bandwidth_by_mac lifetime", e))?;
 
-    // Get all MACs from both sets
+    // Get all MACs from all sets
     let mut all_macs: std::collections::HashSet<String> = bw_1h.keys().cloned().collect();
     all_macs.extend(bw_24h.keys().cloned());
+    all_macs.extend(bw_lifetime.keys().cloned());
 
     let mut results = Vec::new();
     for mac in all_macs {
         let (tx_1h, rx_1h, conn_1h) = bw_1h.get(&mac).copied().unwrap_or((0, 0, 0));
         let (tx_24h, rx_24h, _) = bw_24h.get(&mac).copied().unwrap_or((0, 0, 0));
+        let (tx_lt, rx_lt, conn_lt) = bw_lifetime.get(&mac).copied().unwrap_or((0, 0, 0));
 
         // Get baseline from behavior store
         let baseline_total = match state.behavior_store.get_baselines(&mac).await {
@@ -457,6 +469,10 @@ pub async fn client_bandwidth(
             bytes_24h: tx_24h + rx_24h,
             connections_1h: conn_1h,
             baseline_bytes_per_hour: baseline_total,
+            rx_bytes_lifetime: rx_lt,
+            tx_bytes_lifetime: tx_lt,
+            bytes_lifetime: tx_lt + rx_lt,
+            connections_lifetime: conn_lt,
         });
     }
 

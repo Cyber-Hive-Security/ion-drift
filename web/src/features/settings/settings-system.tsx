@@ -429,18 +429,19 @@ function BehaviorResetSection() {
     <div className="rounded-lg border bg-card p-6">
       <div className="flex items-center gap-3 mb-4">
         <Brain className="h-5 w-5 text-destructive" />
-        <h2 className="text-lg font-semibold">Behavior Engine</h2>
+        <h2 className="text-lg font-semibold">Anomaly Detection &amp; Baselines</h2>
       </div>
       <p className="text-sm text-muted-foreground mb-4">
-        Full reset of the behavior engine. Deletes all anomalies, device profiles, baselines,
-        observations, priority boosts, and scheduler watermarks. Suppression rules are kept.
-        The engine will restart learning from scratch.
+        Full reset of anomaly detection, device traffic baselines, and learned behavior profiles.
+        Deletes all anomalies, baselines, observations, device profiles, priority boosts, and
+        scheduler watermarks. Suppression rules are kept. The engine will restart its learning
+        period and rebuild baselines from scratch.
       </p>
       <div className="flex items-center gap-4">
         <button
           className="inline-flex items-center gap-2 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground shadow hover:bg-destructive/90 transition-colors"
           onClick={async () => {
-            if (!window.confirm("Reset the entire behavior engine? All anomalies, baselines, and device profiles will be permanently deleted. This cannot be undone.")) {
+            if (!window.confirm("Reset all baselines and anomaly data? All anomalies, traffic baselines, device profiles, and observations will be permanently deleted. The engine will restart learning from scratch. This cannot be undone.")) {
               return;
             }
             try {
@@ -453,7 +454,7 @@ function BehaviorResetSection() {
           disabled={resetMutation.isPending}
         >
           <Trash2 className="h-4 w-4" />
-          {resetMutation.isPending ? "Resetting..." : "Reset Behavior Engine"}
+          {resetMutation.isPending ? "Resetting..." : "Reset Baselines & Anomalies"}
         </button>
         {result && (
           <span className="text-sm text-muted-foreground">

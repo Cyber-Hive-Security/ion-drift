@@ -134,12 +134,14 @@ fn classify_vlan(registry: &VlanRegistry, ip: &str) -> i64 {
 // ── Observation Collection ───────────────────────────────────
 
 /// Collect device observations from ARP + DHCP + connection tracking.
-/// Called every 60 seconds.
+/// Called every 60 seconds. The `prev_bytes` map tracks cumulative byte counts
+/// per conntrack ID across calls so we can record deltas instead of lifetime totals.
 pub async fn collect_observations(
     client: &MikrotikClient,
     store: &BehaviorStore,
     oui_db: &OuiDb,
     registry: &VlanRegistry,
+    prev_bytes: &mut HashMap<String, (i64, i64)>,
 ) -> Result<usize, String> {
     // Fetch ARP + DHCP concurrently
     let (arp_result, dhcp_result) = tokio::join!(client.arp_table(), client.dhcp_leases(),);
@@ -193,6 +195,9 @@ pub async fn collect_observations(
         HashMap<(String, Option<i64>, String, String), (i64, i64, i64)>,
     > = HashMap::new();
 
+    // Track which conntrack IDs are still active this cycle
+    let mut active_ids: Vec<String> = Vec::with_capacity(connections.len());
+
     for conn in &connections {
         let src_addr = match conn.src_address.as_deref() {
             Some(a) => a,
@@ -224,16 +229,34 @@ pub async fn collect_observations(
         let direction = registry.classify_direction(src_ip, dst_ip).to_string();
         let dst_port_val = dst_port.map(|p| p as i64);
 
+        let conntrack_id = conn.id.clone();
+        active_ids.push(conntrack_id.clone());
+
+        let cur_tx = conn.orig_bytes.unwrap_or(0) as i64;
+        let cur_rx = conn.repl_bytes.unwrap_or(0) as i64;
+
+        // Compute delta from previous observation
+        let (delta_tx, delta_rx) = if let Some(&(prev_tx, prev_rx)) = prev_bytes.get(&conntrack_id) {
+            ((cur_tx - prev_tx).max(0), (cur_rx - prev_rx).max(0))
+        } else {
+            // First observation for this connection — record full value
+            (cur_tx, cur_rx)
+        };
+        prev_bytes.insert(conntrack_id, (cur_tx, cur_rx));
+
         let key = (protocol, dst_port_val, dst_subnet, direction);
         let entry = observations
             .entry(mac)
             .or_default()
             .entry(key)
             .or_insert((0, 0, 0));
-        entry.0 += conn.orig_bytes.unwrap_or(0) as i64;
-        entry.1 += conn.repl_bytes.unwrap_or(0) as i64;
+        entry.0 += delta_tx;
+        entry.1 += delta_rx;
         entry.2 += 1;
     }
+
+    // Clean up prev_bytes for connections that are no longer active
+    prev_bytes.retain(|id, _| active_ids.contains(id));
 
     // Convert to DeviceObservation records
     let mut obs_records: Vec<DeviceObservation> = Vec::new();
