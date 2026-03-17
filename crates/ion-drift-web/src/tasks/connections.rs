@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,12 +87,12 @@ pub fn spawn_connection_persister(
             let conn_registry = vlan_registry.read().await.clone();
             let mut inserted = 0usize;
             let mut updated = 0usize;
-            let mut active_ids: Vec<String> = Vec::with_capacity(connections.len());
+            let mut active_ids: HashSet<String> = HashSet::with_capacity(connections.len());
             let mut deltas: Vec<(String, Option<String>, i64, i64)> = Vec::new();
 
             for c in &connections {
                 let conntrack_id = c.id.clone();
-                active_ids.push(conntrack_id.clone());
+                active_ids.insert(conntrack_id.clone());
 
                 let protocol = c
                     .protocol
@@ -159,7 +159,8 @@ pub fn spawn_connection_persister(
             }
 
             // Close connections that disappeared from the poll
-            match store.close_stale(&active_ids, 60) {
+            let active_ids_vec: Vec<String> = active_ids.iter().cloned().collect();
+            match store.close_stale(&active_ids_vec, 60) {
                 Ok(closed) => {
                     // Clean up prev_bytes for closed connections
                     if closed > 0 {
