@@ -11,6 +11,8 @@
 
 [server]
 listen_addr = "0.0.0.0"
+# When running in Docker, keep this at 3000. Use Docker port mapping
+# (e.g. "3100:3000" in docker-compose.yml) to change the external port.
 listen_port = 3000
 # Home location for world map — required for connection arc lines to render.
 home_lon = 142.20
