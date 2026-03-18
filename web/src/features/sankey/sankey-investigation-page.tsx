@@ -639,17 +639,48 @@ const VERDICT_CLASSES: Record<string, string> = {
   inconclusive: "bg-zinc-500/15 text-zinc-400",
 };
 
+const DISPOSITION_CLASSES: Record<string, string> = {
+  my_device: "bg-green-500/15 text-green-400 border-green-500/30",
+  unknown: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  flagged: "bg-red-500/15 text-red-400 border-red-500/30",
+  ignored: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30",
+  external: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+};
+
+function formatTimeAgoUnix(unixSecs: number): string {
+  const diff = Date.now() / 1000 - unixSecs;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
 function DeviceInvestigationsPanel({ mac }: { mac: string }) {
   const { data: investigations } = useDeviceInvestigations(mac);
   const [expanded, setExpanded] = useState<number | null>(null);
 
   if (!investigations || investigations.length === 0) return null;
 
+  // Verdict summary counts
+  const verdictCounts = investigations.reduce<Record<string, number>>((acc, inv) => {
+    acc[inv.verdict] = (acc[inv.verdict] || 0) + 1;
+    return acc;
+  }, {});
+
   return (
     <div className="rounded-lg border border-border bg-card">
       <div className="flex items-center gap-2 border-b border-border p-3">
         <Microscope className="h-4 w-4 text-primary" />
         <h3 className="text-sm font-semibold">Investigations ({investigations.length})</h3>
+        <div className="flex gap-1.5 ml-auto">
+          {(["threat", "suspicious", "inconclusive", "routine", "benign"] as const).map((v) =>
+            verdictCounts[v] ? (
+              <span key={v} className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", VERDICT_CLASSES[v])}>
+                {verdictCounts[v]} {v}
+              </span>
+            ) : null
+          )}
+        </div>
       </div>
       <div className="divide-y divide-border max-h-72 overflow-y-auto">
         {investigations.map((inv: Investigation) => (
@@ -736,14 +767,106 @@ function DeviceTrace({
       </button>
 
       {/* Device info */}
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="text-sm font-semibold">
-          {data.hostname || data.mac}
+      <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+        {/* Row 1: Identity header */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-semibold">{data.hostname || data.mac}</span>
+          {data.device_context && (
+            <>
+              <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", DISPOSITION_CLASSES[data.device_context.disposition] || DISPOSITION_CLASSES.unknown)}>
+                {data.device_context.disposition.replace("_", " ")}
+              </span>
+              {data.baseline_status && (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                  {data.baseline_status}
+                </span>
+              )}
+              {data.device_context.is_infrastructure && (
+                <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">infra</span>
+              )}
+            </>
+          )}
+          {!data.device_context && data.baseline_status && (
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+              {data.baseline_status}
+            </span>
+          )}
         </div>
-        <div className="text-xs text-muted-foreground">
-          {data.ip || data.mac}
-          {data.baseline_status && ` · ${data.baseline_status}`}
-        </div>
+
+        {/* Row 2: Identity details grid */}
+        {data.device_context ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1 text-xs">
+            <div>
+              <span className="text-muted-foreground">IP: </span>
+              <span className="font-mono">{data.ip || "—"}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">MAC: </span>
+              <span className="font-mono">{data.mac}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Manufacturer: </span>
+              <span>{data.device_context.manufacturer || "—"}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Type: </span>
+              <span>{data.device_context.device_type || "—"}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">VLAN: </span>
+              <span>{data.device_context.vlan_id != null ? `${data.device_context.vlan_id}${data.device_context.vlan_name ? ` — ${data.device_context.vlan_name}` : ""}` : "—"}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Port: </span>
+              <span>{data.device_context.switch_port || "—"}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Speed: </span>
+              <span>{data.device_context.link_speed_mbps != null ? (data.device_context.link_speed_mbps >= 1000 ? `${data.device_context.link_speed_mbps / 1000}G` : `${data.device_context.link_speed_mbps}M`) : "—"}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">First seen: </span>
+              <span>{formatTimeAgoUnix(data.device_context.first_seen)}</span>
+            </div>
+            {data.device_context.human_label && (
+              <div className="col-span-2">
+                <span className="text-muted-foreground">Label: </span>
+                <span className="text-primary">{data.device_context.human_label}</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground">
+            {data.ip || data.mac}
+          </div>
+        )}
+
+        {/* Row 3: Traffic context */}
+        {data.device_context && (data.device_context.bytes_1h > 0 || data.device_context.bytes_24h > 0) && (
+          <div className="flex items-center gap-4 text-xs border-t border-border pt-2">
+            <div>
+              <span className="text-muted-foreground">1h: </span>
+              <span className="font-mono">{formatBytes(data.device_context.bytes_1h)}</span>
+              <span className="text-muted-foreground ml-1">({data.device_context.connections_1h} conn)</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">24h: </span>
+              <span className="font-mono">{formatBytes(data.device_context.bytes_24h)}</span>
+            </div>
+            {data.device_context.baseline_bytes_per_hour > 0 && (
+              <div>
+                <span className="text-muted-foreground">Baseline: </span>
+                <span className="font-mono">{formatBytes(data.device_context.baseline_bytes_per_hour)}/h</span>
+                {data.device_context.bytes_1h > 0 && (() => {
+                  const ratio = data.device_context!.bytes_1h / data.device_context!.baseline_bytes_per_hour;
+                  if (ratio > 3) return <span className="ml-1 text-red-400 font-medium">{ratio.toFixed(1)}x !!!</span>;
+                  if (ratio > 1.5) return <span className="ml-1 text-yellow-400 font-medium">{ratio.toFixed(1)}x</span>;
+                  return null;
+                })()}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <DeviceInvestigationsPanel mac={mac} />
@@ -779,24 +902,32 @@ function DeviceTrace({
             {data.destinations.map((d, i) => (
               <button
                 key={i}
-                className="w-full flex items-center gap-3 px-4 py-2 text-left hover:bg-accent/50"
+                className="w-full flex items-start gap-3 px-4 py-2 text-left hover:bg-accent/50"
                 onClick={() => setSelectedDst(selectedDst === d.dst_ip ? null : d.dst_ip)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setCtxMenu({ x: e.clientX, y: e.clientY, ip: d.dst_ip, hostname: d.dst_hostname ?? undefined });
                 }}
               >
-                <span className="text-xs font-mono flex-1 truncate">
-                  {d.dst_hostname || d.dst_ip}
-                  {d.is_external && (
-                    <span className="ml-1 text-[10px] text-amber-500">ext</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-mono truncate">
+                    {d.dst_hostname || d.dst_ip}
+                    {d.is_external && (
+                      <span className="ml-1 text-[10px] text-amber-500">ext</span>
+                    )}
+                  </div>
+                  {d.is_external && d.geo_country_code && (
+                    <div className="text-[10px] text-muted-foreground truncate">
+                      {countryFlag(d.geo_country_code)} {d.geo_country_code}
+                      {d.geo_org && ` · ${d.geo_org}`}
+                    </div>
                   )}
-                </span>
-                <span className="text-xs text-muted-foreground">
+                </div>
+                <span className="text-xs text-muted-foreground whitespace-nowrap">
                   {formatBytes(d.bytes)} · {d.connections} conn
                 </span>
                 <button
-                  className="text-[10px] text-primary hover:underline ml-1"
+                  className="text-[10px] text-primary hover:underline ml-1 whitespace-nowrap"
                   onClick={(e) => {
                     e.stopPropagation();
                     onSelectConversation(mac, d.dst_ip);

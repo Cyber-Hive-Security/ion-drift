@@ -1543,6 +1543,10 @@ export interface SankeyDeviceDestination {
   is_external: boolean;
   bytes: number;
   connections: number;
+  geo_country_code: string | null;
+  geo_org: string | null;
+  geo_asn: number | null;
+  geo_city: string | null;
 }
 
 export interface SankeyDeviceFlow {
@@ -1554,11 +1558,31 @@ export interface SankeyDeviceFlow {
   flagged: boolean;
 }
 
+export interface SankeyDeviceContext {
+  manufacturer: string | null;
+  device_type: string | null;
+  device_type_confidence: number;
+  disposition: string;
+  human_label: string | null;
+  vlan_id: number | null;
+  vlan_name: string | null;
+  switch_port: string | null;
+  link_speed_mbps: number | null;
+  is_infrastructure: boolean | null;
+  first_seen: number;
+  last_seen: number;
+  bytes_1h: number;
+  bytes_24h: number;
+  baseline_bytes_per_hour: number;
+  connections_1h: number;
+}
+
 export interface SankeyDeviceResponse {
   mac: string;
   hostname: string | null;
   ip: string | null;
   baseline_status: string | null;
+  device_context: SankeyDeviceContext | null;
   protocols: SankeyDeviceProtocol[];
   destinations: SankeyDeviceDestination[];
   flows: SankeyDeviceFlow[];
