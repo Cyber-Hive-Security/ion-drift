@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-16
+> **Last updated:** 2026-03-18
 
 ## Overview
 
@@ -44,7 +44,8 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 ## Connection Tracking
 
-- Real-time conntrack polling with protocol, state, and byte counter tracking
+- Real-time conntrack polling with protocol, state, and delta-based byte counter tracking
+- MAC address enrichment on poll connections from router ARP/DHCP tables
 - Syslog event capture for firewall drops with structured parsing
 - Connection history with configurable retention and paginated queries
 - GeoIP enrichment for external connections (country, city, ASN, organization)
@@ -55,7 +56,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 ## Security Analytics
 
-- Behavioral anomaly detection with per-device learned baselines
+- Behavioral anomaly detection with per-device learned baselines (delta-based byte tracking)
 - Five anomaly types: new destination, new port, new protocol, volume spike, blocked attempt
 - Three-stage volume spike validation (absolute floor, baseline comparison, multi-window persistence)
 - Tiered anomaly architecture: Tier 1 (alerts), Tier 2 (digests), Tier 3 (telemetry)
@@ -93,6 +94,8 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Port utilization display with speed detection and rate calculation
 - Per-port rate baselines with hour-of-week EMA and "vs Baseline" column
 - Per-client IPv4 bandwidth monitoring with RX/TX breakdown on Identities page
+- Lifetime traffic column showing all-time cumulative bytes per device
+- Delta-based bandwidth tracking for accurate 1h/24h windowed traffic
 
 ## Authentication
 

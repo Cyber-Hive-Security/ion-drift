@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-03-17
+
+### Added
+
+- Lifetime Traffic column on Identities page showing all-time cumulative bytes per device
+- Delta-based bandwidth tracking for accurate 1h/24h windowed traffic measurements
+- MAC address enrichment on poll-sourced connections from router ARP/DHCP tables
+- Bandwidth delta table with automatic 48-hour retention pruning
+- Startup seeding of connection byte tracker to avoid inflation after restart
+- System requirements section in README (pre-built image vs building from source)
+- Building from source instructions (Rust, Node.js, cargo, npm)
+- `docker-compose.build.yml` for source builds (separate from default pre-built image)
+
+### Fixed
+
+- Empty bandwidth columns on Identities page: ISO 8601 vs Unix timestamp comparison in SQL query
+- 1h/24h traffic columns showed lifetime totals instead of windowed values (cumulative RouterOS counters were summed directly instead of computing deltas between polls)
+- Behavior engine baselines trained on cumulative byte counts instead of deltas, producing absurd baselines (e.g. 326 TB/hr for a Plex server)
+- Poll-sourced connections missing MAC addresses (RouterOS conntrack doesn't include MAC; now enriched from ARP/DHCP)
+- Existing open connections now get MAC backfilled via COALESCE on update
+- Investigate (Sankey) page showed no data when navigating from Identities — same root cause as missing MACs
+- Default `docker-compose.yml` built from source instead of using pre-built image, causing OOM kills on low-spec VMs
+
+### Changed
+
+- "Reset Behavior Engine" button renamed to "Reset Baselines & Anomalies" with clearer description
+- `docker-compose.yml` now pulls pre-built image from `ghcr.io/cyber-hive-security/ion-drift:latest`
+- `docker-compose.example.yml` removed (replaced by `docker-compose.yml` + `docker-compose.build.yml`)
+- Download/upload breakdown added to traffic column tooltips
+- Connection poll loop uses HashSet for active ID tracking (O(1) vs O(n) lookups)
+
 ## [0.2.0] - 2026-03-16
 
 ### Added
