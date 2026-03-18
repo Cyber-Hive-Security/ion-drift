@@ -3,13 +3,17 @@
 # Builds the Docker image locally instead of pulling the pre-built image.
 # Requires 4+ vCPU and 4+ GB RAM. See README for full requirements.
 #
-# Usage:
+# Usage (standalone):
 #   docker compose -f docker-compose.build.yml up -d
+#
+# Usage (with overrides for custom ports/volumes):
+#   docker compose -f docker-compose.build.yml -f docker-compose.override.yml up -d
 
 services:
   ion-drift:
     build: .
     container_name: ion-drift
+    hostname: ion-drift
     restart: unless-stopped
     cap_add:
       - NET_RAW
@@ -33,10 +37,6 @@ services:
       start_period: 30s
     volumes:
       - ion-drift-data:/app/data
-      # Uncomment for custom config (optional — setup wizard handles first-run):
-      # - ./config/server.toml:/app/config/server.toml:ro
-      # Uncomment if your router/OIDC provider uses a private CA:
-      # - ./certs/root_ca.crt:/app/certs/root_ca.crt:ro
 
 volumes:
   ion-drift-data:
