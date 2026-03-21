@@ -1,13 +1,13 @@
 //! Passive service discovery via router connection tracking.
 //!
-//! Instead of active nmap scanning (which requires raw sockets and elevated
+//! Instead of active scanning (which requires raw sockets and elevated
 //! privileges), this module passively analyzes the Mikrotik router's connection
 //! tracking table (`/ip/firewall/connection`). Since the router is the gateway
 //! for all VLANs, every inter-VLAN connection passes through it.
 //!
 //! When we see a connection where `dst_address` is an internal IP with
 //! `seen_reply=true`, the `dst_port` is a listening (open) port on that device.
-//! This gives us the same information as nmap's port scan, but:
+//! This gives us the same information as an active port scan, but:
 //! - No raw sockets or elevated privileges needed
 //! - Continuous monitoring (not point-in-time snapshots)
 //! - Zero additional network traffic

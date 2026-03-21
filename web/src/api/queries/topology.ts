@@ -14,11 +14,6 @@ import type {
   VlanMembershipEntry,
   PortRoleEntry,
   DevicePort,
-  NmapScan,
-  NmapResult,
-  ScanExclusion,
-  ScanStatus,
-  StartScanRequest,
   NetworkTopologyResponse,
   TopologyPosition,
   SectorPosition,
@@ -198,92 +193,6 @@ export function useDevicePortList(deviceId: string | undefined) {
       ),
     refetchInterval: 60_000,
     enabled: !!deviceId,
-  });
-}
-
-// ── Nmap scans ──────────────────────────────────────────────────
-
-export function useScanStatus() {
-  return useQuery({
-    queryKey: ["scans", "status"],
-    queryFn: () => apiFetch<ScanStatus>("/api/scans/status"),
-    refetchInterval: 10_000,
-  });
-}
-
-export function useScans(limit = 20) {
-  return useQuery({
-    queryKey: ["scans", "list", limit],
-    queryFn: () => apiFetch<NmapScan[]>(`/api/scans?limit=${limit}`),
-    refetchInterval: 10_000,
-  });
-}
-
-export function useScanDetail(scanId?: string) {
-  return useQuery({
-    queryKey: ["scans", "detail", scanId],
-    queryFn: () => apiFetch<NmapScan | null>(`/api/scans/${encodeURIComponent(scanId!)}`),
-    enabled: !!scanId,
-    refetchInterval: 5_000,
-  });
-}
-
-export function useScanResults(scanId?: string) {
-  return useQuery({
-    queryKey: ["scans", "results", scanId],
-    queryFn: () =>
-      apiFetch<NmapResult[]>(`/api/scans/${encodeURIComponent(scanId!)}/results`),
-    enabled: !!scanId,
-  });
-}
-
-export function useStartScan() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: StartScanRequest) =>
-      apiFetch<{ scan_id: string; status: string }>("/api/scans", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["scans"] });
-    },
-  });
-}
-
-export function useScanExclusions() {
-  return useQuery({
-    queryKey: ["scans", "exclusions"],
-    queryFn: () => apiFetch<ScanExclusion[]>("/api/scans/exclusions"),
-    refetchInterval: 60_000,
-  });
-}
-
-export function useAddExclusion() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { ip: string; reason: string }) =>
-      apiFetch<{ ok: boolean }>("/api/scans/exclusions", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["scans", "exclusions"] });
-    },
-  });
-}
-
-export function useRemoveExclusion() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (ip: string) =>
-      apiFetch<{ removed: boolean }>(
-        `/api/scans/exclusions/${encodeURIComponent(ip)}`,
-        { method: "DELETE" }
-      ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["scans", "exclusions"] });
-    },
   });
 }
 
