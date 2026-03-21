@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use snmp2::{v3, Oid, SyncSession, Value};
 
+use secrecy::{ExposeSecret, SecretString};
+
 use crate::error::MikrotikError;
 
 // ─── GETNEXT with AuthUpdated retry ─────────────────────────────
@@ -141,9 +143,9 @@ pub struct SnmpClient {
     pub community: Option<String>,
     // v3
     pub v3_username: Option<String>,
-    pub v3_auth_password: Option<String>,
+    pub v3_auth_password: Option<SecretString>,
     pub v3_auth_protocol: Option<String>,
-    pub v3_priv_password: Option<String>,
+    pub v3_priv_password: Option<SecretString>,
     pub v3_priv_protocol: Option<String>,
 }
 
@@ -154,9 +156,9 @@ impl std::fmt::Debug for SnmpClient {
             .field("port", &self.port)
             .field("community", &self.community.as_ref().map(|_| "[REDACTED]"))
             .field("v3_username", &self.v3_username)
-            .field("v3_auth_password", &self.v3_auth_password.as_ref().map(|_| "[REDACTED]"))
+            .field("v3_auth_password", &self.v3_auth_password.as_ref().map(|_| "[REDACTED]").unwrap_or("[none]"))
             .field("v3_auth_protocol", &self.v3_auth_protocol)
-            .field("v3_priv_password", &self.v3_priv_password.as_ref().map(|_| "[REDACTED]"))
+            .field("v3_priv_password", &self.v3_priv_password.as_ref().map(|_| "[REDACTED]").unwrap_or("[none]"))
             .field("v3_priv_protocol", &self.v3_priv_protocol)
             .finish()
     }
@@ -192,9 +194,9 @@ impl SnmpClient {
             port,
             community: None,
             v3_username: Some(username),
-            v3_auth_password: Some(auth_password),
+            v3_auth_password: Some(SecretString::from(auth_password)),
             v3_auth_protocol: Some(auth_protocol),
-            v3_priv_password: Some(priv_password),
+            v3_priv_password: Some(SecretString::from(priv_password)),
             v3_priv_protocol: Some(priv_protocol),
         }
     }
@@ -222,8 +224,13 @@ impl SnmpClient {
                 _ => v3::Cipher::Aes128,
             };
 
-            let auth_pw = self.v3_auth_password.as_deref().unwrap_or("");
-            let priv_pw = self.v3_priv_password.clone().unwrap_or_default();
+            let auth_pw_owned = self.v3_auth_password.as_ref()
+                .map(|s| s.expose_secret().to_owned())
+                .unwrap_or_default();
+            let auth_pw: &str = &auth_pw_owned;
+            let priv_pw = self.v3_priv_password.as_ref()
+                .map(|s| s.expose_secret().to_owned())
+                .unwrap_or_default();
 
             // Use AuthNoPriv when no privacy password is provided, AuthPriv otherwise.
             let has_priv = !priv_pw.is_empty();
@@ -243,7 +250,7 @@ impl SnmpClient {
             let auth = if has_priv {
                 v3::Auth::AuthPriv {
                     cipher,
-                    privacy_password: priv_pw.into_bytes(),
+                    privacy_password: priv_pw.as_bytes().to_vec(),
                 }
             } else {
                 v3::Auth::AuthNoPriv

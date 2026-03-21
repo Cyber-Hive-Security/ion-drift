@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect, type ReactElement } from "react";
 import { Sankey, Rectangle, Layer } from "recharts";
 import { formatBytes } from "@/lib/format";
 import { portLabel } from "@/lib/services";
@@ -473,9 +473,9 @@ export function PortSankey({ summary, title, onFlowClick }: PortSankeyProps) {
           node={
             ((props: SankeyNodePayload) => (
               <CustomNode {...props} containerWidth={containerWidth} />
-            )) as any
+            )) as (props: Record<string, unknown>) => ReactElement<SVGElement>
           }
-          link={LinkWithTooltip as any}
+          link={LinkWithTooltip as (props: Record<string, unknown>) => ReactElement<SVGElement>}
         />
       </div>
       <div

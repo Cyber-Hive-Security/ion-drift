@@ -138,7 +138,7 @@ pub async fn get_sectors(
         .get_sector_positions()
         .await
         .map_err(|e| internal_error("sector positions", e))?;
-    Ok(Json(serde_json::to_value(sectors).unwrap()))
+    Ok(Json(serde_json::to_value(sectors).unwrap_or_default()))
 }
 
 #[derive(Deserialize)]

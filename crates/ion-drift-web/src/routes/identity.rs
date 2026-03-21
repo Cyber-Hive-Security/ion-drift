@@ -22,7 +22,7 @@ pub async fn list_infrastructure_identities(
         .get_infrastructure_identities()
         .await
         .map_err(|e| internal_error("infrastructure identities", e))?;
-    Ok(Json(serde_json::to_value(identities).unwrap()))
+    Ok(Json(serde_json::to_value(identities).unwrap_or_default()))
 }
 
 /// GET /api/network/identities/stats
