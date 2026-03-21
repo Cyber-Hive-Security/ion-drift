@@ -24,15 +24,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-function _formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
 function formatNumber(n: number | null | undefined): string {
   return (n ?? 0).toLocaleString();
 }
@@ -334,14 +325,6 @@ function ScaleCards({ report }: { report: DiagnosticReport }) {
     </div>
   );
 }
-
-const STATE_COLORS: Record<string, string> = {
-  confirmed: "bg-success text-background",
-  tentative: "bg-warning text-background",
-  learning: "bg-blue-500/20 text-blue-400",
-  unknown: "bg-muted text-muted-foreground",
-  conflicted: "bg-destructive/20 text-destructive",
-};
 
 function EngineHealthCards({ report }: { report: DiagnosticReport }) {
   const beh = report.engine_health.behavior;
