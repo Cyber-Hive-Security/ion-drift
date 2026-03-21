@@ -309,20 +309,32 @@ impl MetricsStore {
     ) -> Result<Vec<VlanMetricsPoint>, String> {
         let cutoff = now_unix() - since_secs_ago;
         let db = self.db.lock().await;
+
+        // Downsample: bucket size scales with time range to keep response under ~300 points per VLAN.
+        // 24h = 5min buckets (288 points), 7d = 30min buckets (336 points), 30d = 2h buckets (360 points).
+        let bucket_secs = if since_secs_ago <= 86_400 {
+            300 // 5 minutes
+        } else if since_secs_ago <= 7 * 86_400 {
+            1800 // 30 minutes
+        } else {
+            7200 // 2 hours
+        };
+
         let mut stmt = db
             .prepare(
-                "SELECT timestamp, vlan_name, rx_bps, tx_bps
-                 FROM vlan_metrics WHERE timestamp >= ?1 ORDER BY timestamp ASC",
+                "SELECT (timestamp / ?1) * ?1 AS bucket, vlan_name, AVG(rx_bps), AVG(tx_bps)
+                 FROM vlan_metrics WHERE timestamp >= ?2
+                 GROUP BY bucket, vlan_name ORDER BY bucket ASC",
             )
             .map_err(|e| format!("vlan_metrics query prepare: {e}"))?;
 
         let rows = stmt
-            .query_map([cutoff], |row| {
+            .query_map(rusqlite::params![bucket_secs, cutoff], |row| {
                 Ok(VlanMetricsPoint {
                     timestamp: row.get(0)?,
                     vlan_name: row.get(1)?,
-                    rx_bps: row.get(2)?,
-                    tx_bps: row.get(3)?,
+                    rx_bps: row.get::<_, f64>(2)? as u64,
+                    tx_bps: row.get::<_, f64>(3)? as u64,
                 })
             })
             .map_err(|e| format!("vlan_metrics query: {e}"))?;
