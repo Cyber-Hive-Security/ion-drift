@@ -1685,7 +1685,7 @@ export interface LicenseStatus {
   tier?: "business" | "education" | "nonprofit" | "government";
   expires?: string;
   expired_on?: string;
-  device_limit?: number;
+  router_limit?: number;
   expiry_warning_days?: number;
 }
 
