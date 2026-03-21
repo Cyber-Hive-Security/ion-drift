@@ -1758,50 +1758,52 @@ export interface DiagnosticReport {
   generated_at: string;
   version: string;
   environment: {
-    uptime_seconds: number;
+    version: string;
+    data_directory: string;
     data_dir_size_bytes: number;
-    router_model?: string;
-    routeros_version?: string;
+    oidc_configured: boolean;
+    tls_enabled: boolean;
   };
   scale: {
-    total_identities: number;
-    confirmed_identities: number;
+    network_identity_count: number;
     connection_history_rows: number;
-    bandwidth_delta_rows: number;
-    vlans_configured: number;
-    syslog_events_24h: number;
-    active_dhcp_leases: number;
+    connection_db_size_bytes: number;
+    vlan_config_count: number;
+    syslog_events_today: number;
+    syslog_events_week: number;
   };
   feature_adoption: {
-    auth_mode: string;
-    bootstrap_enabled: boolean;
-    alert_rules_enabled: number;
-    alert_delivery_channels: string[];
-    backbone_links: number;
-    human_confirmed_identities: number;
-    geoip_status: string;
-    syslog_enabled: boolean;
-    vlan_configs_customized: number;
+    oidc_enabled: boolean;
+    alert_rule_count: number;
+    backbone_link_count: number;
+    confirmed_identity_count: number;
+    geoip_enabled: boolean;
   };
   engine_health: {
-    inference_states: Record<string, number>;
-    inference_avg_confidence: number;
-    inference_divergences: number;
-    behavior_baselined: number;
-    behavior_learning: number;
-    behavior_sparse: number;
-    anomalies_pending: number;
-    anomalies_accepted_7d: number;
-    anomalies_dismissed_7d: number;
-    anomalies_flagged_7d: number;
-    investigations_benign_7d: number;
-    investigations_suspicious_7d: number;
-    investigations_routine_7d: number;
+    behavior: {
+      total_devices: number;
+      baselined: number;
+      learning: number;
+      sparse: number;
+      pending_anomalies: number;
+      critical_anomalies: number;
+      warning_anomalies: number;
+    };
+    investigations: {
+      total: number;
+      benign: number;
+      routine: number;
+      suspicious: number;
+      threat: number;
+      inconclusive: number;
+    };
+  };
+  error_summary: {
+    placeholder: string;
   };
   page_views: {
-    period_days: number;
+    days_covered: number;
     total_views: number;
-    by_page: Record<string, number>;
-    top_contexts: Array<{ page: string; context: string; views: number }>;
+    by_page: Array<{ page: string; total_views: number }>;
   };
 }

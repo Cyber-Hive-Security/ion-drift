@@ -24,7 +24,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-function formatUptime(seconds: number): string {
+function _formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -33,8 +33,8 @@ function formatUptime(seconds: number): string {
   return `${m}m`;
 }
 
-function formatNumber(n: number): string {
-  return n.toLocaleString();
+function formatNumber(n: number | null | undefined): string {
+  return (n ?? 0).toLocaleString();
 }
 
 const PAGE_LABELS: Record<string, string> = {
@@ -223,74 +223,58 @@ function ReportModal({
           <ReportSection title="General">
             <ReportRow label="Generated" value={new Date(report.generated_at).toLocaleString()} />
             <ReportRow label="Version" value={report.version} />
-            <ReportRow label="Uptime" value={formatUptime(env.uptime_seconds)} />
+            <ReportRow label="Data Directory" value={env.data_directory} />
             <ReportRow label="Data Dir Size" value={formatBytes(env.data_dir_size_bytes)} />
-            {env.router_model && <ReportRow label="Router Model" value={env.router_model} />}
-            {env.routeros_version && <ReportRow label="RouterOS" value={env.routeros_version} />}
+            <ReportRow label="OIDC Configured" value={env.oidc_configured ? "Yes" : "No"} />
+            <ReportRow label="TLS Enabled" value={env.tls_enabled ? "Yes" : "No"} />
           </ReportSection>
 
           <ReportSection title="Scale">
-            <ReportRow label="Total Identities" value={formatNumber(scale.total_identities)} />
-            <ReportRow label="Confirmed Identities" value={formatNumber(scale.confirmed_identities)} />
+            <ReportRow label="Network Identities" value={formatNumber(scale.network_identity_count)} />
             <ReportRow label="Connection History Rows" value={formatNumber(scale.connection_history_rows)} />
-            <ReportRow label="Bandwidth Delta Rows" value={formatNumber(scale.bandwidth_delta_rows)} />
-            <ReportRow label="VLANs Configured" value={scale.vlans_configured} />
-            <ReportRow label="Syslog Events (24h)" value={formatNumber(scale.syslog_events_24h)} />
-            <ReportRow label="Active DHCP Leases" value={scale.active_dhcp_leases} />
+            <ReportRow label="Connection DB Size" value={formatBytes(scale.connection_db_size_bytes)} />
+            <ReportRow label="VLANs Configured" value={formatNumber(scale.vlan_config_count)} />
+            <ReportRow label="Syslog Events (Today)" value={formatNumber(scale.syslog_events_today)} />
+            <ReportRow label="Syslog Events (Week)" value={formatNumber(scale.syslog_events_week)} />
           </ReportSection>
 
           <ReportSection title="Feature Adoption">
-            <ReportRow label="Auth Mode" value={feat.auth_mode} />
-            <ReportRow label="Bootstrap" value={feat.bootstrap_enabled ? "Enabled" : "Disabled"} />
-            <ReportRow label="Alert Rules Enabled" value={feat.alert_rules_enabled} />
-            <ReportRow label="Delivery Channels" value={feat.alert_delivery_channels.join(", ") || "None"} />
-            <ReportRow label="Backbone Links" value={feat.backbone_links} />
-            <ReportRow label="Human-Confirmed IDs" value={feat.human_confirmed_identities} />
-            <ReportRow label="GeoIP Status" value={feat.geoip_status} />
-            <ReportRow label="Syslog" value={feat.syslog_enabled ? "Enabled" : "Disabled"} />
-            <ReportRow label="VLAN Configs Customized" value={feat.vlan_configs_customized} />
+            <ReportRow label="OIDC" value={feat.oidc_enabled ? "Enabled" : "Disabled"} />
+            <ReportRow label="Alert Rules" value={formatNumber(feat.alert_rule_count)} />
+            <ReportRow label="Backbone Links" value={formatNumber(feat.backbone_link_count)} />
+            <ReportRow label="Human-Confirmed IDs" value={formatNumber(feat.confirmed_identity_count)} />
+            <ReportRow label="GeoIP" value={feat.geoip_enabled ? "Enabled" : "Disabled"} />
           </ReportSection>
 
-          <ReportSection title="Engine Health">
-            <div className="mb-2">
-              <span className="text-xs text-muted-foreground">Inference States</span>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                {Object.entries(eng.inference_states).map(([state, count]) => (
-                  <span
-                    key={state}
-                    className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium"
-                  >
-                    {state}: {count}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <ReportRow label="Avg Confidence" value={`${(eng.inference_avg_confidence * 100).toFixed(1)}%`} />
-            <ReportRow label="Divergences" value={eng.inference_divergences} />
-            <ReportRow label="Behavior Baselined" value={eng.behavior_baselined} />
-            <ReportRow label="Behavior Learning" value={eng.behavior_learning} />
-            <ReportRow label="Behavior Sparse" value={eng.behavior_sparse} />
-            <ReportRow label="Anomalies Pending" value={eng.anomalies_pending} />
-            <ReportRow label="Anomalies Accepted (7d)" value={eng.anomalies_accepted_7d} />
-            <ReportRow label="Anomalies Dismissed (7d)" value={eng.anomalies_dismissed_7d} />
-            <ReportRow label="Anomalies Flagged (7d)" value={eng.anomalies_flagged_7d} />
-            <ReportRow label="Investigations Benign (7d)" value={eng.investigations_benign_7d} />
-            <ReportRow label="Investigations Suspicious (7d)" value={eng.investigations_suspicious_7d} />
-            <ReportRow label="Investigations Routine (7d)" value={eng.investigations_routine_7d} />
+          <ReportSection title="Behavior Engine">
+            <ReportRow label="Total Devices" value={formatNumber(eng.behavior.total_devices)} />
+            <ReportRow label="Baselined" value={formatNumber(eng.behavior.baselined)} />
+            <ReportRow label="Learning" value={formatNumber(eng.behavior.learning)} />
+            <ReportRow label="Sparse" value={formatNumber(eng.behavior.sparse)} />
+            <ReportRow label="Pending Anomalies" value={formatNumber(eng.behavior.pending_anomalies)} />
+            <ReportRow label="Critical Anomalies" value={formatNumber(eng.behavior.critical_anomalies)} />
+            <ReportRow label="Warning Anomalies" value={formatNumber(eng.behavior.warning_anomalies)} />
+          </ReportSection>
+
+          <ReportSection title="Investigations (30d)">
+            <ReportRow label="Total" value={formatNumber(eng.investigations.total)} />
+            <ReportRow label="Benign" value={formatNumber(eng.investigations.benign)} />
+            <ReportRow label="Routine" value={formatNumber(eng.investigations.routine)} />
+            <ReportRow label="Suspicious" value={formatNumber(eng.investigations.suspicious)} />
+            <ReportRow label="Threat" value={formatNumber(eng.investigations.threat)} />
+            <ReportRow label="Inconclusive" value={formatNumber(eng.investigations.inconclusive)} />
           </ReportSection>
 
           <ReportSection title="Page Views">
-            <ReportRow label="Period" value={`${pv.period_days} days`} />
+            <ReportRow label="Period" value={`${pv.days_covered} days`} />
             <ReportRow label="Total Views" value={formatNumber(pv.total_views)} />
-            {Object.entries(pv.by_page)
-              .sort(([, a], [, b]) => b - a)
-              .map(([page, views]) => (
-                <ReportRow
-                  key={page}
-                  label={PAGE_LABELS[page] ?? page}
-                  value={formatNumber(views)}
-                />
-              ))}
+            {pv.by_page.map(({ page, total_views }) => (
+              <ReportRow
+                key={page}
+                label={PAGE_LABELS[page] ?? page}
+                value={formatNumber(total_views)}
+              />
+            ))}
           </ReportSection>
         </div>
 
@@ -328,10 +312,10 @@ function ReportModal({
 function ScaleCards({ report }: { report: DiagnosticReport }) {
   const s = report.scale;
   const cards = [
-    { label: "Total Devices", value: formatNumber(s.total_identities) },
+    { label: "Network Identities", value: formatNumber(s.network_identity_count) },
     { label: "Connections Tracked", value: formatNumber(s.connection_history_rows) },
-    { label: "VLANs", value: s.vlans_configured },
-    { label: "Syslog Events/24h", value: formatNumber(s.syslog_events_24h) },
+    { label: "VLANs", value: formatNumber(s.vlan_config_count) },
+    { label: "Syslog Events (Today)", value: formatNumber(s.syslog_events_today) },
   ];
   return (
     <div>
@@ -360,72 +344,73 @@ const STATE_COLORS: Record<string, string> = {
 };
 
 function EngineHealthCards({ report }: { report: DiagnosticReport }) {
-  const eng = report.engine_health;
+  const beh = report.engine_health.behavior;
+  const inv = report.engine_health.investigations;
   return (
     <div>
       <h2 className="mb-3 text-lg font-semibold">Engine Health</h2>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {/* Inference */}
-        <div className="rounded-lg border border-border bg-card p-4">
-          <h3 className="mb-2 text-sm font-medium text-muted-foreground">Inference States</h3>
-          <div className="flex flex-wrap gap-1.5">
-            {Object.entries(eng.inference_states).map(([state, count]) => (
-              <span
-                key={state}
-                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${STATE_COLORS[state] ?? "bg-muted text-muted-foreground"}`}
-              >
-                {state}: {count}
-              </span>
-            ))}
-          </div>
-          <div className="mt-2 text-xs text-muted-foreground">
-            Avg confidence: {(eng.inference_avg_confidence * 100).toFixed(1)}%
-            {eng.inference_divergences > 0 && (
-              <span className="ml-2 text-warning">
-                {eng.inference_divergences} divergence{eng.inference_divergences !== 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
-        </div>
-
         {/* Behavior */}
         <div className="rounded-lg border border-border bg-card p-4">
           <h3 className="mb-2 text-sm font-medium text-muted-foreground">Behavior Baselines</h3>
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-sm">
+              <span>Total Devices</span>
+              <span className="font-mono font-bold">{formatNumber(beh.total_devices)}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
               <span>Baselined</span>
-              <span className="font-mono font-bold text-success">{eng.behavior_baselined}</span>
+              <span className="font-mono font-bold text-success">{formatNumber(beh.baselined)}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span>Learning</span>
-              <span className="font-mono font-bold text-blue-400">{eng.behavior_learning}</span>
+              <span className="font-mono font-bold text-blue-400">{formatNumber(beh.learning)}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span>Sparse</span>
-              <span className="font-mono font-bold text-muted-foreground">{eng.behavior_sparse}</span>
+              <span className="font-mono font-bold text-muted-foreground">{formatNumber(beh.sparse)}</span>
             </div>
           </div>
         </div>
 
         {/* Anomalies */}
         <div className="rounded-lg border border-border bg-card p-4">
-          <h3 className="mb-2 text-sm font-medium text-muted-foreground">Anomalies (7d)</h3>
+          <h3 className="mb-2 text-sm font-medium text-muted-foreground">Anomalies</h3>
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-sm">
               <span>Pending</span>
-              <span className="font-mono font-bold text-warning">{eng.anomalies_pending}</span>
+              <span className="font-mono font-bold text-warning">{formatNumber(beh.pending_anomalies)}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span>Accepted</span>
-              <span className="font-mono font-bold text-success">{eng.anomalies_accepted_7d}</span>
+              <span>Critical</span>
+              <span className="font-mono font-bold text-destructive">{formatNumber(beh.critical_anomalies)}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span>Dismissed</span>
-              <span className="font-mono font-bold text-muted-foreground">{eng.anomalies_dismissed_7d}</span>
+              <span>Warning</span>
+              <span className="font-mono font-bold text-warning">{formatNumber(beh.warning_anomalies)}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Investigations */}
+        <div className="rounded-lg border border-border bg-card p-4">
+          <h3 className="mb-2 text-sm font-medium text-muted-foreground">Investigations (30d)</h3>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-sm">
+              <span>Total</span>
+              <span className="font-mono font-bold">{formatNumber(inv.total)}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span>Flagged</span>
-              <span className="font-mono font-bold text-destructive">{eng.anomalies_flagged_7d}</span>
+              <span>Benign</span>
+              <span className="font-mono font-bold text-success">{formatNumber(inv.benign)}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span>Suspicious</span>
+              <span className="font-mono font-bold text-warning">{formatNumber(inv.suspicious)}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span>Threat</span>
+              <span className="font-mono font-bold text-destructive">{formatNumber(inv.threat)}</span>
             </div>
           </div>
         </div>
