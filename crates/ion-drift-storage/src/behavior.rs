@@ -2250,6 +2250,33 @@ impl BehaviorStore {
         Ok(stats)
     }
 
+    /// Count anomaly dispositions (accepted/dismissed/flagged) in the last 7 days.
+    pub async fn get_anomaly_disposition_counts_7d(&self) -> Result<(i64, i64, i64), String> {
+        let db = self.db.lock().await;
+        let cutoff = now_unix() - (7 * 24 * 3600);
+        let mut accepted = 0i64;
+        let mut dismissed = 0i64;
+        let mut flagged = 0i64;
+        let mut stmt = db
+            .prepare("SELECT status, COUNT(*) FROM device_anomalies WHERE resolved_at >= ?1 AND status IN ('accepted', 'dismissed', 'flagged') GROUP BY status")
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map(params![cutoff], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| format!("query failed: {e}"))?;
+        for row in rows {
+            let (status, count) = row.map_err(|e| format!("row failed: {e}"))?;
+            match status.as_str() {
+                "accepted" => accepted = count,
+                "dismissed" => dismissed = count,
+                "flagged" => flagged = count,
+                _ => {}
+            }
+        }
+        Ok((accepted, dismissed, flagged))
+    }
+
     pub async fn get_investigations(
         &self,
         verdict: Option<&str>,

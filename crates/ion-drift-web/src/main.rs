@@ -48,6 +48,9 @@ use crate::task_supervisor::TaskSupervisor;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Record process start time for uptime reporting
+    crate::routes::stats::init_start_time();
+
     // Initialize tracing (RUST_LOG env filter, default info)
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {

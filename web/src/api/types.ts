@@ -1761,14 +1761,24 @@ export interface DiagnosticReport {
     version: string;
     data_directory: string;
     data_dir_size_bytes: number;
+    uptime_seconds: number;
     oidc_configured: boolean;
     tls_enabled: boolean;
+    router_model: string | null;
+    routeros_version: string | null;
+    build_type: string;
   };
   scale: {
     network_identity_count: number;
     connection_history_rows: number;
     connection_db_size_bytes: number;
     vlan_config_count: number;
+    managed_switch_count: {
+      total: number;
+      routeros: number;
+      swos: number;
+      snmp: number;
+    };
     syslog_events_today: number;
     syslog_events_week: number;
   };
@@ -1796,6 +1806,17 @@ export interface DiagnosticReport {
       suspicious: number;
       threat: number;
       inconclusive: number;
+    };
+    inference: {
+      tracked_macs: number;
+      avg_confidence: number;
+      divergences: number;
+      state_distribution: Record<string, number>;
+    };
+    anomaly_dispositions_7d: {
+      accepted: number;
+      dismissed: number;
+      flagged: number;
     };
   };
   error_summary: {

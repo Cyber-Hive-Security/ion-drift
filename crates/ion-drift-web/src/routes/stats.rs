@@ -3,11 +3,19 @@
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 use super::internal_error;
+
+/// Process start time for uptime calculation.
+static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+pub fn init_start_time() {
+    START_TIME.get_or_init(std::time::Instant::now);
+}
 
 // ── Known pages (validated on POST) ─────────────────────────────────
 
@@ -167,8 +175,12 @@ pub struct EnvironmentInfo {
     pub version: String,
     pub data_directory: String,
     pub data_dir_size_bytes: u64,
+    pub uptime_seconds: u64,
     pub oidc_configured: bool,
     pub tls_enabled: bool,
+    pub router_model: Option<String>,
+    pub routeros_version: Option<String>,
+    pub build_type: String,
 }
 
 #[derive(Serialize)]
@@ -177,8 +189,17 @@ pub struct ScaleMetrics {
     pub connection_history_rows: i64,
     pub connection_db_size_bytes: i64,
     pub vlan_config_count: usize,
+    pub managed_switch_count: ManagedSwitchBreakdown,
     pub syslog_events_today: i64,
     pub syslog_events_week: i64,
+}
+
+#[derive(Serialize)]
+pub struct ManagedSwitchBreakdown {
+    pub total: usize,
+    pub routeros: usize,
+    pub swos: usize,
+    pub snmp: usize,
 }
 
 #[derive(Serialize)]
@@ -194,6 +215,23 @@ pub struct FeatureAdoption {
 pub struct EngineHealth {
     pub behavior: BehaviorHealth,
     pub investigations: InvestigationHealth,
+    pub inference: InferenceHealth,
+    pub anomaly_dispositions_7d: AnomalyDispositions,
+}
+
+#[derive(Serialize)]
+pub struct InferenceHealth {
+    pub tracked_macs: usize,
+    pub avg_confidence: f64,
+    pub divergences: usize,
+    pub state_distribution: std::collections::HashMap<String, usize>,
+}
+
+#[derive(Serialize)]
+pub struct AnomalyDispositions {
+    pub accepted: i64,
+    pub dismissed: i64,
+    pub flagged: i64,
 }
 
 #[derive(Serialize)]
@@ -250,12 +288,43 @@ pub async fn diagnostic_report(
         .join("ion-drift");
     let data_dir_size = dir_size_bytes(&data_dir);
 
+    // Uptime
+    let uptime_seconds = START_TIME
+        .get()
+        .map(|t| t.elapsed().as_secs())
+        .unwrap_or(0);
+
+    // Router model + version from primary device
+    // Router model + version from live RouterOS query (best-effort)
+    let (router_model, routeros_version) = match state.mikrotik.system_resources().await {
+        Ok(res) => (Some(res.board_name), Some(res.version)),
+        Err(_) => {
+            // Fallback to device record name
+            let dm = state.device_manager.read().await;
+            let model = dm.all_devices().into_iter()
+                .find(|d| d.record.is_primary)
+                .and_then(|e| e.record.model.clone().or_else(|| Some(e.record.name.clone())));
+            (model, None)
+        }
+    };
+
+    // Build type: Docker if /app exists, otherwise source
+    let build_type = if std::path::Path::new("/app/data").exists() {
+        "docker"
+    } else {
+        "source"
+    };
+
     let environment = EnvironmentInfo {
         version: version.clone(),
         data_directory: data_dir.display().to_string(),
         data_dir_size_bytes: data_dir_size,
+        uptime_seconds,
         oidc_configured: state.config.has_oidc(),
         tls_enabled: !state.config.tls.client_cert.is_empty(),
+        router_model,
+        routeros_version,
+        build_type: build_type.to_string(),
     };
 
     // ── Scale metrics ────────────────────────────────────────────
@@ -281,11 +350,27 @@ pub async fn diagnostic_report(
         .syslog_event_counts()
         .unwrap_or((0, 0));
 
+    // Managed switch breakdown
+    let managed_switches = {
+        let dm = state.device_manager.read().await;
+        let all = dm.all_devices();
+        let routeros = all.iter().filter(|d| d.record.device_type == "router" && !d.record.is_primary).count();
+        let swos = all.iter().filter(|d| d.record.device_type == "swos_switch").count();
+        let snmp = all.iter().filter(|d| d.record.device_type == "snmp_switch").count();
+        ManagedSwitchBreakdown {
+            total: routeros + swos + snmp,
+            routeros,
+            swos,
+            snmp,
+        }
+    };
+
     let scale = ScaleMetrics {
         network_identity_count: identity_stats.total,
         connection_history_rows: conn_stats.row_count,
         connection_db_size_bytes: conn_stats.db_size_bytes,
         vlan_config_count: vlan_configs.len(),
+        managed_switch_count: managed_switches,
         syslog_events_today: syslog_today,
         syslog_events_week: syslog_week,
     };
@@ -322,6 +407,52 @@ pub async fn diagnostic_report(
         .await
         .map_err(|e| internal_error("investigation stats", e))?;
 
+    // Inference stats
+    let inference_health = {
+        let all_states = state.switch_store
+            .get_all_attachment_states()
+            .await
+            .unwrap_or_default();
+        let tracked_macs = all_states.len();
+        let avg_confidence = if tracked_macs > 0 {
+            all_states.iter().map(|s| s.confidence).sum::<f64>() / tracked_macs as f64
+        } else {
+            0.0
+        };
+        let mut state_distribution: HashMap<String, usize> = HashMap::new();
+        let mut divergences = 0usize;
+        let identities = state.switch_store.get_network_identities().await.unwrap_or_default();
+        let identity_map: HashMap<String, _> = identities.iter()
+            .map(|i| (i.mac_address.to_uppercase(), i))
+            .collect();
+        for s in &all_states {
+            *state_distribution.entry(s.state.clone()).or_default() += 1;
+            if let (Some(inf_dev), Some(_inf_port)) = (&s.current_device_id, &s.current_port_name) {
+                if let Some(ident) = identity_map.get(&s.mac_address.to_uppercase()) {
+                    if let Some(ref id_dev) = ident.switch_device_id {
+                        if id_dev != inf_dev {
+                            divergences += 1;
+                        }
+                    }
+                }
+            }
+        }
+        InferenceHealth { tracked_macs, avg_confidence, divergences, state_distribution }
+    };
+
+    // Anomaly dispositions (7d) — count accepted/dismissed/flagged in last 7 days
+    let anomaly_dispositions = {
+        let counts = state.behavior_store
+            .get_anomaly_disposition_counts_7d()
+            .await
+            .unwrap_or_default();
+        AnomalyDispositions {
+            accepted: counts.0,
+            dismissed: counts.1,
+            flagged: counts.2,
+        }
+    };
+
     let engine_health = EngineHealth {
         behavior: BehaviorHealth {
             total_devices: behavior_overview.total_devices,
@@ -340,6 +471,8 @@ pub async fn diagnostic_report(
             threat: investigation_stats.threat,
             inconclusive: investigation_stats.inconclusive,
         },
+        inference: inference_health,
+        anomaly_dispositions_7d: anomaly_dispositions,
     };
 
     // ── Page views ───────────────────────────────────────────────

@@ -211,10 +211,13 @@ function ReportModal({
 
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          <ReportSection title="General">
+          <ReportSection title="Environment">
             <ReportRow label="Generated" value={new Date(report.generated_at).toLocaleString()} />
-            <ReportRow label="Version" value={report.version} />
-            <ReportRow label="Data Directory" value={env.data_directory} />
+            <ReportRow label="Ion Drift Version" value={report.version} />
+            <ReportRow label="Build Type" value={env.build_type} />
+            <ReportRow label="Uptime" value={`${Math.floor(env.uptime_seconds / 86400)}d ${Math.floor((env.uptime_seconds % 86400) / 3600)}h ${Math.floor((env.uptime_seconds % 3600) / 60)}m`} />
+            {env.router_model && <ReportRow label="Router Model" value={env.router_model} />}
+            {env.routeros_version && <ReportRow label="RouterOS Version" value={env.routeros_version} />}
             <ReportRow label="Data Dir Size" value={formatBytes(env.data_dir_size_bytes)} />
             <ReportRow label="OIDC Configured" value={env.oidc_configured ? "Yes" : "No"} />
             <ReportRow label="TLS Enabled" value={env.tls_enabled ? "Yes" : "No"} />
@@ -225,6 +228,7 @@ function ReportModal({
             <ReportRow label="Connection History Rows" value={formatNumber(scale.connection_history_rows)} />
             <ReportRow label="Connection DB Size" value={formatBytes(scale.connection_db_size_bytes)} />
             <ReportRow label="VLANs Configured" value={formatNumber(scale.vlan_config_count)} />
+            <ReportRow label="Managed Switches" value={`${scale.managed_switch_count.total} (${scale.managed_switch_count.routeros} RouterOS, ${scale.managed_switch_count.swos} SwOS, ${scale.managed_switch_count.snmp} SNMP)`} />
             <ReportRow label="Syslog Events (Today)" value={formatNumber(scale.syslog_events_today)} />
             <ReportRow label="Syslog Events (Week)" value={formatNumber(scale.syslog_events_week)} />
           </ReportSection>
@@ -245,6 +249,25 @@ function ReportModal({
             <ReportRow label="Pending Anomalies" value={formatNumber(eng.behavior.pending_anomalies)} />
             <ReportRow label="Critical Anomalies" value={formatNumber(eng.behavior.critical_anomalies)} />
             <ReportRow label="Warning Anomalies" value={formatNumber(eng.behavior.warning_anomalies)} />
+          </ReportSection>
+
+          <ReportSection title="Anomaly Dispositions (7d)">
+            <ReportRow label="Accepted" value={formatNumber(eng.anomaly_dispositions_7d.accepted)} />
+            <ReportRow label="Dismissed" value={formatNumber(eng.anomaly_dispositions_7d.dismissed)} />
+            <ReportRow label="Flagged" value={formatNumber(eng.anomaly_dispositions_7d.flagged)} />
+          </ReportSection>
+
+          <ReportSection title="Inference Engine">
+            <ReportRow label="Tracked MACs" value={formatNumber(eng.inference.tracked_macs)} />
+            <ReportRow label="Avg Confidence" value={`${(eng.inference.avg_confidence * 100).toFixed(1)}%`} />
+            <ReportRow label="Divergences" value={formatNumber(eng.inference.divergences)} />
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {Object.entries(eng.inference.state_distribution).map(([state, count]) => (
+                <span key={state} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">
+                  {state}: {count}
+                </span>
+              ))}
+            </div>
           </ReportSection>
 
           <ReportSection title="Investigations (30d)">
