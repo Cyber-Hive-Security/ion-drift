@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback } from "react";
 import * as d3 from "d3";
-import type { GeoPermissibleObjects, GeoPath } from "d3-geo";
+import type { GeoPermissibleObjects } from "d3-geo";
 import * as topojson from "topojson-client";
 import type { Topology, GeometryCollection } from "topojson-specification";
 import type { GeoSummaryEntry, CitySummaryEntry } from "@/api/types";
@@ -370,15 +370,15 @@ export function WorldMap({
         .data(countries.features)
         .join("path")
         .attr("class", "country")
-        .attr("d", path as unknown as d3.ValueFn<SVGPathElement, GeoJSON.Feature<GeoJSON.GeometryObject>, string | null>)
-        .attr("fill", (d: GeoJSON.Feature<GeoJSON.GeometryObject> & { id?: string }) => {
+        .attr("d", path as any)
+        .attr("fill", (d: any) => {
           const alpha2 = numericToAlpha2[d.id ?? ""] || "";
           return countryColor(alpha2, countryIndex.get(alpha2));
         })
         .attr("stroke", "#343840")
         .attr("stroke-width", 0.5)
         .attr("cursor", "pointer")
-        .on("mouseenter", function (_event: MouseEvent, d: GeoJSON.Feature<GeoJSON.GeometryObject> & { id?: string }) {
+        .on("mouseenter", function (_event: MouseEvent, d: any) {
           d3.select(this).attr("stroke", "#00E5FF").attr("stroke-width", 1.5);
           const alpha2 = numericToAlpha2[d.id ?? ""] || "";
           const entry = countryIndex.get(alpha2);
@@ -401,7 +401,7 @@ export function WorldMap({
           d3.select(this).attr("stroke", "#343840").attr("stroke-width", 0.5);
           hideTooltip();
         })
-        .on("click", (_event: MouseEvent, d: GeoJSON.Feature<GeoJSON.GeometryObject> & { id?: string }) => {
+        .on("click", (_event: MouseEvent, d: any) => {
           const alpha2 = numericToAlpha2[d.id ?? ""] || "";
           onCountryClick?.(alpha2);
         });
