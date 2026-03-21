@@ -19,6 +19,7 @@ pub mod policy;
 pub mod provision;
 pub mod sankey;
 pub mod settings;
+pub mod stats;
 pub mod switch_data;
 pub mod system;
 pub mod topology;
@@ -695,6 +696,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/license", get(license::get_license))
         .route("/license/key", post(license::submit_license_key))
         .route("/license/acknowledge", post(license::acknowledge_license))
+        // Statistics / Diagnostic Report
+        .route("/stats/page-view", post(stats::record_page_view))
+        .route("/stats/page-views", get(stats::get_page_views))
+        .route("/stats/report", get(stats::diagnostic_report))
         // Demo mode sanitization (outermost — runs after response is built)
         .layer(middleware::from_fn(demo_sanitize_layer))
         // Global auth middleware for all API routes

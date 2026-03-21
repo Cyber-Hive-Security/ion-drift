@@ -17,6 +17,7 @@ use crate::oui::OuiDb;
 use crate::poller_registry::PollerRegistry;
 use crate::routes::network_map_status::NetworkMapStatusCache;
 use crate::secrets::SecretsManager;
+use crate::stats_store::StatsStore;
 use crate::task_supervisor::TaskSupervisor;
 use crate::topology::NetworkTopology;
 
@@ -64,6 +65,8 @@ pub struct AppState {
     pub vlan_registry: Arc<RwLock<VlanRegistry>>,
     /// Registry of running per-device poller tasks for dynamic start/stop.
     pub poller_registry: Arc<RwLock<PollerRegistry>>,
+    /// Page view statistics store (SQLite).
+    pub stats_store: Arc<StatsStore>,
     /// Background task supervisor — tracks health and restarts panicked tasks.
     pub task_supervisor: TaskSupervisor,
     /// Per-key rate limiter for local login attempts.

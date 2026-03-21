@@ -26,6 +26,7 @@ mod setup;
 mod snapshots;
 mod snmp_poller;
 mod state;
+mod stats_store;
 mod switch_poller;
 mod swos_poller;
 mod syslog;
@@ -360,6 +361,10 @@ async fn main() -> anyhow::Result<()> {
         ion_drift_storage::BehaviorStore::new(&data_dir.join("behavior.db"))
             .map_err(|e| anyhow::anyhow!("failed to init behavior store: {e}"))?,
     );
+    let stats_store = Arc::new(
+        stats_store::StatsStore::new(&data_dir.join("stats.db"))
+            .map_err(|e| anyhow::anyhow!("failed to init stats store: {e}"))?,
+    );
 
     // Live traffic buffer (300 entries = 5 min at 1 sample per second, but we poll every 10s so ~50 min)
     let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
@@ -474,6 +479,7 @@ async fn main() -> anyhow::Result<()> {
         poller_registry: Arc::new(tokio::sync::RwLock::new(
             poller_registry::PollerRegistry::new(),
         )),
+        stats_store: stats_store.clone(),
         task_supervisor: supervisor,
         login_limiter: auth::LoginRateLimiter::new(),
     };

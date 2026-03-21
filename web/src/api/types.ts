@@ -1744,3 +1744,64 @@ export interface InvestigationStats {
   inconclusive: number;
   total: number;
 }
+
+// ── Statistics / Diagnostic Report ────────────────────────────
+
+export interface PageViewEntry {
+  page: string;
+  context: string;
+  view_date: string;
+  view_count: number;
+}
+
+export interface DiagnosticReport {
+  generated_at: string;
+  version: string;
+  environment: {
+    uptime_seconds: number;
+    data_dir_size_bytes: number;
+    router_model?: string;
+    routeros_version?: string;
+  };
+  scale: {
+    total_identities: number;
+    confirmed_identities: number;
+    connection_history_rows: number;
+    bandwidth_delta_rows: number;
+    vlans_configured: number;
+    syslog_events_24h: number;
+    active_dhcp_leases: number;
+  };
+  feature_adoption: {
+    auth_mode: string;
+    bootstrap_enabled: boolean;
+    alert_rules_enabled: number;
+    alert_delivery_channels: string[];
+    backbone_links: number;
+    human_confirmed_identities: number;
+    geoip_status: string;
+    syslog_enabled: boolean;
+    vlan_configs_customized: number;
+  };
+  engine_health: {
+    inference_states: Record<string, number>;
+    inference_avg_confidence: number;
+    inference_divergences: number;
+    behavior_baselined: number;
+    behavior_learning: number;
+    behavior_sparse: number;
+    anomalies_pending: number;
+    anomalies_accepted_7d: number;
+    anomalies_dismissed_7d: number;
+    anomalies_flagged_7d: number;
+    investigations_benign_7d: number;
+    investigations_suspicious_7d: number;
+    investigations_routine_7d: number;
+  };
+  page_views: {
+    period_days: number;
+    total_views: number;
+    by_page: Record<string, number>;
+    top_contexts: Array<{ page: string; context: string; views: number }>;
+  };
+}

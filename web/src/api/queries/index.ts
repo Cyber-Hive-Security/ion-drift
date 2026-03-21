@@ -7,3 +7,4 @@ export * from './identity';
 export * from './topology';
 export * from './sankey';
 export * from './settings';
+export * from './stats';
