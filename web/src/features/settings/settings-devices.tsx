@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
+import { ApiError } from "@/api/client";
 import {
   useDevices,
   useCreateDevice,
@@ -23,6 +24,7 @@ export function SettingsDevices() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ status: string; identity?: string; error?: string } | null>(null);
+  const [showPrimaryConflict, setShowPrimaryConflict] = useState(false);
 
   const createDevice = useCreateDevice();
   const updateDevice = useUpdateDevice();
@@ -86,7 +88,7 @@ export function SettingsDevices() {
     setTestResult(result);
   };
 
-  const handleAdd = async () => {
+  const buildPayload = (overrides?: Partial<CreateDeviceRequest>): CreateDeviceRequest => {
     const defaultPort = form.device_type === "snmp_switch" ? 161 : form.device_type === "swos_switch" ? 80 : 443;
     const payload: CreateDeviceRequest = {
       id: form.id,
@@ -99,13 +101,17 @@ export function SettingsDevices() {
       poll_interval_secs: parseInt(form.poll_interval_secs) || 60,
       username: form.username,
       password: form.password,
+      ...overrides,
     };
     if (form.device_type === "snmp_switch" && form.snmp_version === "v3") {
       payload.snmp_auth_protocol = form.snmp_auth_protocol;
       payload.snmp_priv_password = form.snmp_priv_password;
       payload.snmp_priv_protocol = form.snmp_priv_protocol;
     }
-    await createDevice.mutateAsync(payload);
+    return payload;
+  };
+
+  const resetAddForm = () => {
     setShowAddForm(false);
     setForm({
       id: "",
@@ -124,6 +130,29 @@ export function SettingsDevices() {
       snmp_priv_protocol: "DES",
     });
     setTestResult(null);
+    setShowPrimaryConflict(false);
+  };
+
+  const handleAdd = async () => {
+    try {
+      await createDevice.mutateAsync(buildPayload());
+      resetAddForm();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.code === "primary_exists") {
+        setShowPrimaryConflict(true);
+      }
+      // Other errors are shown by the existing createDevice.error display
+    }
+  };
+
+  const handleAddAsInfrastructure = async () => {
+    setShowPrimaryConflict(false);
+    try {
+      await createDevice.mutateAsync(buildPayload({ is_primary: false }));
+      resetAddForm();
+    } catch {
+      // Errors shown by createDevice.error display
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -574,7 +603,34 @@ export function SettingsDevices() {
             </div>
           )}
 
-          {createDevice.error && (
+          {showPrimaryConflict && (
+            <div className="rounded border border-amber-500/30 bg-amber-500/10 px-4 py-3 space-y-3">
+              <p className="text-sm text-foreground">
+                A primary router is already configured for full NDR monitoring.
+                Would you like to add this device as a managed infrastructure
+                device instead? It will receive switch-level monitoring (port
+                metrics, MAC table, topology) but not full NDR treatment
+                (connection tracking, syslog, firewall, DHCP).
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleAddAsInfrastructure}
+                  disabled={createDevice.isPending}
+                  className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                >
+                  {createDevice.isPending ? "Adding..." : "Add as Infrastructure"}
+                </button>
+                <button
+                  onClick={() => setShowPrimaryConflict(false)}
+                  className="rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {createDevice.error && !showPrimaryConflict && (
             <div className="rounded bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {createDevice.error instanceof Error
                 ? createDevice.error.message

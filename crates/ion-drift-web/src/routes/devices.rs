@@ -227,6 +227,26 @@ pub async fn create_device(
             .into_response()
     })?;
 
+    // Enforce single primary router
+    if req.device.device_type == "router" && req.device.is_primary {
+        let dm = state.device_manager.read().await;
+        let primary_exists = dm
+            .all_devices()
+            .iter()
+            .any(|d| d.record.is_primary && d.record.device_type == "router");
+        drop(dm);
+        if primary_exists {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "a primary router is already configured",
+                    "code": "primary_exists"
+                })),
+            )
+                .into_response());
+        }
+    }
+
     // Input validation
     const VALID_DEVICE_TYPES: &[&str] = &["router", "switch", "snmp_switch", "swos_switch"];
     if !VALID_DEVICE_TYPES.contains(&req.device.device_type.as_str()) {
