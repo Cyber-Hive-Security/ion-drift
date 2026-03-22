@@ -1,5 +1,6 @@
 mod alerting;
 mod anomaly_correlator;
+mod attack_techniques;
 mod auth;
 mod behavior_engine;
 mod bootstrap;
@@ -452,6 +453,13 @@ async fn main() -> anyhow::Result<()> {
         ))
     };
 
+    // Load ATT&CK technique database
+    let attack_techniques = Arc::new(attack_techniques::AttackTechniqueDb::load());
+    tracing::info!("loaded {} ATT&CK techniques, {} deviation mappings",
+        attack_techniques.techniques.len(),
+        attack_techniques.deviation_mappings.len(),
+    );
+
     // Create task supervisor
     let supervisor = TaskSupervisor::new();
 
@@ -485,6 +493,7 @@ async fn main() -> anyhow::Result<()> {
         stats_store: stats_store.clone(),
         task_supervisor: supervisor,
         login_limiter: auth::LoginRateLimiter::new(),
+        attack_techniques: attack_techniques.clone(),
     };
 
     // Spawn all background tasks

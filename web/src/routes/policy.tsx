@@ -1,9 +1,12 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { PageShell } from "@/components/layout/page-shell";
 import { DataTable, type Column } from "@/components/data-table";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
+import { usePolicyDeviations, useResolvePolicyDeviation, useAttackTechniques } from "@/api/queries";
+import type { PolicyDeviation } from "@/api/types";
 
 interface PolicyEntry {
   id: number;
@@ -232,6 +235,178 @@ export function PolicyPage() {
           />
         </>
       )}
+      <PolicyDeviationsSection />
     </PageShell>
+  );
+}
+
+// ── Policy Deviations Section ─────────────────────────────────
+
+const statusColor: Record<string, string> = {
+  new: "bg-warning/15 text-warning",
+  acknowledged: "bg-sky-400/15 text-sky-400",
+  resolved: "bg-emerald-400/15 text-emerald-400",
+};
+
+const severityColor: Record<string, string> = {
+  informational: "text-muted-foreground",
+  warning: "text-warning",
+  critical: "text-destructive",
+};
+
+function deviationColumns(
+  attackDb: Record<string, { name: string; url: string }> | undefined,
+  onResolve: (id: number, action: string) => void,
+): Column<PolicyDeviation>[] {
+  return [
+    {
+      key: "type",
+      header: "Type",
+      width: "110px",
+      render: (r) => (
+        <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary">
+          {r.deviation_type.replace("_", " ")}
+        </span>
+      ),
+      sortValue: (r) => r.deviation_type,
+    },
+    {
+      key: "device",
+      header: "Device",
+      width: "140px",
+      render: (r) => (
+        <div className="text-xs">
+          <div className="font-mono">{r.mac_address}</div>
+          <div className="text-muted-foreground">{r.ip_address}</div>
+        </div>
+      ),
+      sortValue: (r) => r.mac_address,
+    },
+    {
+      key: "expected",
+      header: "Expected",
+      render: (r) => <span className="font-mono text-xs text-emerald-400">{r.expected}</span>,
+    },
+    {
+      key: "actual",
+      header: "Actual",
+      render: (r) => <span className="font-mono text-xs text-destructive">{r.actual}</span>,
+    },
+    {
+      key: "attack",
+      header: "ATT&CK",
+      render: (r) => (
+        <div className="flex flex-wrap gap-1">
+          {r.attack_techniques.map((t) => {
+            const tech = attackDb?.[t];
+            return (
+              <a
+                key={t}
+                href={tech?.url ?? `https://attack.mitre.org/techniques/${t.replace(".", "/")}/`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400 hover:bg-amber-400/20"
+                title={tech?.name ?? t}
+              >
+                {t}
+              </a>
+            );
+          })}
+        </div>
+      ),
+    },
+    {
+      key: "severity",
+      header: "Severity",
+      width: "90px",
+      render: (r) => (
+        <span className={`text-xs font-medium ${severityColor[r.severity] ?? ""}`}>
+          {r.severity}
+        </span>
+      ),
+    },
+    {
+      key: "count",
+      header: "Count",
+      width: "65px",
+      render: (r) => <span className="font-mono text-xs">{r.occurrence_count}</span>,
+      sortValue: (r) => r.occurrence_count,
+    },
+    {
+      key: "status",
+      header: "Status",
+      width: "100px",
+      render: (r) => (
+        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${statusColor[r.status] ?? ""}`}>
+          {r.status}
+        </span>
+      ),
+      sortValue: (r) => {
+        const order: Record<string, number> = { new: 0, acknowledged: 1, resolved: 2 };
+        return order[r.status] ?? 3;
+      },
+    },
+    {
+      key: "last_seen",
+      header: "Last Seen",
+      width: "100px",
+      render: (r) => <span className="text-xs text-muted-foreground">{formatTimeAgo(r.last_seen)}</span>,
+      sortValue: (r) => -r.last_seen,
+    },
+    {
+      key: "actions",
+      header: "",
+      width: "90px",
+      render: (r) => {
+        if (r.status === "resolved") return null;
+        return (
+          <select
+            className="rounded border border-border bg-background px-1.5 py-0.5 text-[10px]"
+            defaultValue=""
+            onChange={(e) => {
+              if (e.target.value) {
+                onResolve(r.id, e.target.value);
+                e.target.value = "";
+              }
+            }}
+          >
+            <option value="" disabled>Resolve...</option>
+            <option value="acknowledge">Acknowledge</option>
+            <option value="authorize">Authorize</option>
+            <option value="deny_all">Deny All</option>
+            <option value="dismiss">Dismiss</option>
+          </select>
+        );
+      },
+    },
+  ];
+}
+
+function PolicyDeviationsSection() {
+  const { data: deviations, isLoading } = usePolicyDeviations({ limit: 200 });
+  const { data: attackDb } = useAttackTechniques();
+  const resolveMutation = useResolvePolicyDeviation();
+
+  const techniques = attackDb?.techniques;
+
+  const handleResolve = (id: number, action: string) => {
+    resolveMutation.mutate({ id, action });
+  };
+
+  if (isLoading || !deviations || deviations.length === 0) return null;
+
+  return (
+    <>
+      <h2 className="mb-2 mt-6 text-lg font-semibold">Policy Deviations</h2>
+      <DataTable
+        columns={deviationColumns(techniques, handleResolve)}
+        data={deviations}
+        rowKey={(r) => String(r.id)}
+        emptyMessage="No policy deviations detected"
+        searchable
+        searchPlaceholder="Search deviations..."
+        defaultSort={{ key: "last_seen", asc: true }}
+      />
+    </>
   );
 }

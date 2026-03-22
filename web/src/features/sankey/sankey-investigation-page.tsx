@@ -22,7 +22,9 @@ import type {
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { countryFlag } from "@/lib/country";
-import { ChevronRight, ArrowLeft, Download, Flag, Copy, Search, Network, Microscope, ChevronDown } from "lucide-react";
+import { ChevronRight, ArrowLeft, Download, Flag, Copy, Search, Network, Microscope, ChevronDown, ShieldAlert } from "lucide-react";
+import { useAttackTechniques } from "@/api/queries";
+import type { PolicyDeviation } from "@/api/types";
 
 const RANGES = ["1h", "6h", "24h", "7d", "30d"] as const;
 
@@ -724,6 +726,71 @@ function DeviceInvestigationsPanel({ mac }: { mac: string }) {
   );
 }
 
+function PolicyDeviationCards({ deviations }: { deviations: PolicyDeviation[] }) {
+  const { data: attackDb } = useAttackTechniques();
+  const techniques = attackDb?.techniques;
+
+  return (
+    <div className="rounded-lg border border-warning/30 bg-card">
+      <div className="flex items-center gap-2 border-b border-border p-3">
+        <ShieldAlert className="h-4 w-4 text-warning" />
+        <h3 className="text-sm font-semibold">Policy Deviations ({deviations.length})</h3>
+      </div>
+      <div className="divide-y divide-border">
+        {deviations.map((d) => (
+          <div key={d.id} className="px-4 py-3 space-y-1.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary">
+                {d.deviation_type.replace("_", " ")}
+              </span>
+              <span className={`text-[10px] font-medium ${
+                d.severity === "warning" ? "text-warning" : "text-muted-foreground"
+              }`}>
+                {d.severity}
+              </span>
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                d.status === "new" ? "bg-warning/15 text-warning" :
+                d.status === "acknowledged" ? "bg-sky-400/15 text-sky-400" :
+                "bg-emerald-400/15 text-emerald-400"
+              }`}>
+                {d.status}
+              </span>
+              {d.occurrence_count > 1 && (
+                <span className="text-[10px] text-muted-foreground">{d.occurrence_count}x</span>
+              )}
+            </div>
+            <div className="text-xs">
+              <span className="text-muted-foreground">Expected: </span>
+              <span className="font-mono text-emerald-400">{d.expected}</span>
+              <span className="text-muted-foreground ml-3">Actual: </span>
+              <span className="font-mono text-destructive">{d.actual}</span>
+            </div>
+            {d.attack_techniques.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {d.attack_techniques.map((t) => {
+                  const tech = techniques?.[t];
+                  return (
+                    <a
+                      key={t}
+                      href={tech?.url ?? `https://attack.mitre.org/techniques/${t.replace(".", "/")}/`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400 hover:bg-amber-400/20"
+                      title={tech ? `${tech.name} (${tech.tactic})` : t}
+                    >
+                      {t}
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DeviceTrace({
   mac,
   range,
@@ -870,6 +937,10 @@ function DeviceTrace({
       </div>
 
       <DeviceInvestigationsPanel mac={mac} />
+
+      {data.policy_deviations && data.policy_deviations.length > 0 && (
+        <PolicyDeviationCards deviations={data.policy_deviations} />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Protocols */}

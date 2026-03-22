@@ -431,6 +431,47 @@ pub struct InfrastructurePolicy {
     pub router_entity_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PolicyDeviation {
+    pub id: i64,
+    pub mac_address: String,
+    pub ip_address: String,
+    pub vlan: Option<i64>,
+    pub deviation_type: String,
+    pub expected: String,
+    pub actual: String,
+    pub policy_source: Option<String>,
+    pub attack_techniques: Vec<String>,
+    pub severity: String,
+    pub status: String,
+    pub first_seen: i64,
+    pub last_seen: i64,
+    pub occurrence_count: i64,
+    pub resolved_at: Option<i64>,
+    pub resolved_by: Option<String>,
+}
+
+pub struct NewPolicyDeviation {
+    pub mac_address: String,
+    pub ip_address: String,
+    pub vlan: Option<i64>,
+    pub deviation_type: String,
+    pub expected: String,
+    pub actual: String,
+    pub policy_source: Option<String>,
+    pub attack_techniques: Vec<String>,
+    pub severity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct PolicyDeviationCounts {
+    pub total: i64,
+    pub new: i64,
+    pub acknowledged: i64,
+    pub resolved: i64,
+    pub dns: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct FirewallIonTag {
     pub rule_id: String,
@@ -922,6 +963,33 @@ impl BehaviorStore {
                 last_synced INTEGER NOT NULL
             );",
         ).map_err(|e| format!("Phase 2 tables creation failed: {e}"))?;
+
+        // Migration: policy deviations table (Phase 2 — DNS deviation detection)
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS policy_deviations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mac_address TEXT NOT NULL,
+                ip_address TEXT NOT NULL,
+                vlan INTEGER,
+                deviation_type TEXT NOT NULL,
+                expected TEXT NOT NULL,
+                actual TEXT NOT NULL,
+                policy_source TEXT,
+                attack_techniques TEXT NOT NULL DEFAULT '[]',
+                severity TEXT NOT NULL DEFAULT 'informational',
+                status TEXT NOT NULL DEFAULT 'new',
+                first_seen INTEGER NOT NULL,
+                last_seen INTEGER NOT NULL,
+                occurrence_count INTEGER NOT NULL DEFAULT 1,
+                resolved_at INTEGER,
+                resolved_by TEXT,
+                UNIQUE(mac_address, deviation_type, actual)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deviations_status ON policy_deviations(status);
+            CREATE INDEX IF NOT EXISTS idx_deviations_mac ON policy_deviations(mac_address);
+            CREATE INDEX IF NOT EXISTS idx_deviations_type ON policy_deviations(deviation_type);",
+        ).map_err(|e| format!("Policy deviations table creation failed: {e}"))?;
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -2754,6 +2822,168 @@ impl BehaviorStore {
             params![sync_cutoff],
         ).map_err(|e| format!("remove_stale_ion_tags failed: {e}"))?;
         Ok(deleted)
+    }
+
+    // ── Policy Deviation Methods ──
+
+    /// Record a policy deviation. Upserts: if the same (mac, type, actual) exists, increment count + update last_seen.
+    pub async fn record_policy_deviation(&self, dev: &NewPolicyDeviation) -> Result<i64, String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        let techniques_json = serde_json::to_string(&dev.attack_techniques).unwrap_or_else(|_| "[]".to_string());
+
+        // Try insert; on conflict update count and last_seen
+        let changed = db.execute(
+            "INSERT INTO policy_deviations
+                (mac_address, ip_address, vlan, deviation_type, expected, actual, policy_source, attack_techniques, severity, status, first_seen, last_seen, occurrence_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'new', ?10, ?10, 1)
+             ON CONFLICT(mac_address, deviation_type, actual) DO UPDATE SET
+                last_seen = ?10,
+                occurrence_count = occurrence_count + 1,
+                ip_address = ?2,
+                expected = ?5,
+                severity = CASE WHEN ?9 = 'warning' AND severity = 'informational' THEN 'warning' ELSE severity END",
+            params![
+                dev.mac_address, dev.ip_address, dev.vlan, dev.deviation_type,
+                dev.expected, dev.actual, dev.policy_source, techniques_json,
+                dev.severity, now
+            ],
+        ).map_err(|e| format!("record_policy_deviation failed: {e}"))?;
+
+        if changed > 0 {
+            let id: i64 = db.query_row(
+                "SELECT id FROM policy_deviations WHERE mac_address = ?1 AND deviation_type = ?2 AND actual = ?3",
+                params![dev.mac_address, dev.deviation_type, dev.actual],
+                |row| row.get(0),
+            ).map_err(|e| format!("get deviation id: {e}"))?;
+            Ok(id)
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Get policy deviations with optional filters.
+    pub async fn get_policy_deviations(
+        &self,
+        status: Option<&str>,
+        mac: Option<&str>,
+        deviation_type: Option<&str>,
+        limit: Option<i64>,
+    ) -> Result<Vec<PolicyDeviation>, String> {
+        let db = self.db.lock().await;
+        let mut sql = String::from(
+            "SELECT id, mac_address, ip_address, vlan, deviation_type, expected, actual,
+                    policy_source, attack_techniques, severity, status,
+                    first_seen, last_seen, occurrence_count, resolved_at, resolved_by
+             FROM policy_deviations WHERE 1=1",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(s) = status {
+            param_values.push(Box::new(s.to_string()));
+            sql.push_str(&format!(" AND status = ?{}", param_values.len()));
+        }
+        if let Some(m) = mac {
+            param_values.push(Box::new(m.to_string()));
+            sql.push_str(&format!(" AND mac_address = ?{}", param_values.len()));
+        }
+        if let Some(dt) = deviation_type {
+            param_values.push(Box::new(dt.to_string()));
+            sql.push_str(&format!(" AND deviation_type = ?{}", param_values.len()));
+        }
+
+        sql.push_str(" ORDER BY last_seen DESC");
+
+        if let Some(lim) = limit {
+            param_values.push(Box::new(lim));
+            sql.push_str(&format!(" LIMIT ?{}", param_values.len()));
+        }
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = db.prepare(&sql).map_err(|e| format!("prepare deviations: {e}"))?;
+        let rows = stmt.query_map(params_ref.as_slice(), Self::map_deviation_row)
+            .map_err(|e| format!("query deviations: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("collect deviations: {e}"))
+    }
+
+    /// Get deviations for a specific device MAC.
+    pub async fn get_device_policy_deviations(&self, mac: &str) -> Result<Vec<PolicyDeviation>, String> {
+        self.get_policy_deviations(None, Some(mac), None, None).await
+    }
+
+    /// Resolve a deviation by ID with a status and optional resolver name.
+    pub async fn resolve_policy_deviation(
+        &self,
+        id: i64,
+        status: &str,
+        resolved_by: Option<&str>,
+    ) -> Result<bool, String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        let changed = db.execute(
+            "UPDATE policy_deviations SET status = ?1, resolved_at = ?2, resolved_by = ?3 WHERE id = ?4",
+            params![status, now, resolved_by, id],
+        ).map_err(|e| format!("resolve_policy_deviation: {e}"))?;
+        Ok(changed > 0)
+    }
+
+    /// Get summary counts of deviations by status.
+    pub async fn policy_deviation_counts(&self) -> Result<PolicyDeviationCounts, String> {
+        let db = self.db.lock().await;
+        let mut counts = PolicyDeviationCounts::default();
+
+        counts.total = db.query_row(
+            "SELECT COUNT(*) FROM policy_deviations", [], |row| row.get(0),
+        ).unwrap_or(0);
+        counts.new = db.query_row(
+            "SELECT COUNT(*) FROM policy_deviations WHERE status = 'new'", [], |row| row.get(0),
+        ).unwrap_or(0);
+        counts.acknowledged = db.query_row(
+            "SELECT COUNT(*) FROM policy_deviations WHERE status = 'acknowledged'", [], |row| row.get(0),
+        ).unwrap_or(0);
+        counts.resolved = db.query_row(
+            "SELECT COUNT(*) FROM policy_deviations WHERE status = 'resolved'", [], |row| row.get(0),
+        ).unwrap_or(0);
+        counts.dns = db.query_row(
+            "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'dns%'", [], |row| row.get(0),
+        ).unwrap_or(0);
+
+        Ok(counts)
+    }
+
+    /// Get a single policy deviation by ID.
+    pub async fn get_policy_deviation(&self, id: i64) -> Result<Option<PolicyDeviation>, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT id, mac_address, ip_address, vlan, deviation_type, expected, actual,
+                    policy_source, attack_techniques, severity, status,
+                    first_seen, last_seen, occurrence_count, resolved_at, resolved_by
+             FROM policy_deviations WHERE id = ?1",
+            params![id],
+            Self::map_deviation_row,
+        ).optional().map_err(|e| format!("get_policy_deviation: {e}"))
+    }
+
+    fn map_deviation_row(row: &rusqlite::Row) -> rusqlite::Result<PolicyDeviation> {
+        let techniques_str: String = row.get(8)?;
+        Ok(PolicyDeviation {
+            id: row.get(0)?,
+            mac_address: row.get(1)?,
+            ip_address: row.get(2)?,
+            vlan: row.get(3)?,
+            deviation_type: row.get(4)?,
+            expected: row.get(5)?,
+            actual: row.get(6)?,
+            policy_source: row.get(7)?,
+            attack_techniques: serde_json::from_str(&techniques_str).unwrap_or_default(),
+            severity: row.get(9)?,
+            status: row.get(10)?,
+            first_seen: row.get(11)?,
+            last_seen: row.get(12)?,
+            occurrence_count: row.get(13)?,
+            resolved_at: row.get(14)?,
+            resolved_by: row.get(15)?,
+        })
     }
 
     /// Update the tier of an anomaly (called after investigation determines the tier).

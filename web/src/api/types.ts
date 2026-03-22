@@ -1544,6 +1544,7 @@ export interface SankeyDeviceResponse {
   protocols: SankeyDeviceProtocol[];
   destinations: SankeyDeviceDestination[];
   flows: SankeyDeviceFlow[];
+  policy_deviations: PolicyDeviation[];
   range: string;
 }
 
@@ -1819,6 +1820,7 @@ export interface DiagnosticReport {
       flagged: number;
     };
   };
+  policy_deviations: PolicyDeviationCounts;
   error_summary: {
     placeholder: string;
   };
@@ -1827,4 +1829,46 @@ export interface DiagnosticReport {
     total_views: number;
     by_page: Array<{ page: string; total_views: number }>;
   };
+}
+
+// ── Policy Deviation types ────────────────────────────────────
+
+export interface PolicyDeviation {
+  id: number;
+  mac_address: string;
+  ip_address: string;
+  vlan: number | null;
+  deviation_type: string;
+  expected: string;
+  actual: string;
+  policy_source: string | null;
+  attack_techniques: string[];
+  severity: string;
+  status: string;
+  first_seen: number;
+  last_seen: number;
+  occurrence_count: number;
+  resolved_at: number | null;
+  resolved_by: string | null;
+}
+
+export interface PolicyDeviationCounts {
+  total: number;
+  new: number;
+  acknowledged: number;
+  resolved: number;
+  dns: number;
+}
+
+export interface AttackTechnique {
+  id: string;
+  name: string;
+  tactic: string;
+  description: string;
+  url: string;
+}
+
+export interface AttackTechniqueDb {
+  techniques: Record<string, AttackTechnique>;
+  deviation_mappings: Record<string, string[]>;
 }

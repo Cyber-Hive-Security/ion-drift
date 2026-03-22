@@ -20,6 +20,7 @@ import { NetworkDevicesCard } from "@/components/dashboard/network-devices-card"
 import { IdentityOverviewCard } from "@/components/dashboard/identity-overview-card";
 import { InvestigationCard } from "@/components/dashboard/investigation-card";
 import { ScanPressureCard } from "@/components/dashboard/scan-pressure-card";
+import { PolicyDeviationsCard } from "@/components/dashboard/policy-deviations-card";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { PageShell } from "@/components/layout/page-shell";
@@ -246,6 +247,9 @@ export function DashboardPage() {
         </CardErrorBoundary>
         <CardErrorBoundary name="WAN Scan Pressure">
           <ScanPressureCard />
+        </CardErrorBoundary>
+        <CardErrorBoundary name="Policy Deviations">
+          <PolicyDeviationsCard />
         </CardErrorBoundary>
       </div>
 
