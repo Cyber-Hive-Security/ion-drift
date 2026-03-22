@@ -84,7 +84,7 @@ pub async fn submit_license_key(
             licensee: payload.licensee,
             tier: payload.tier,
             expires: payload.expires,
-            device_limit: payload.device_limit,
+            router_limit: payload.router_limit,
             expiry_warning_days,
         }))
     }

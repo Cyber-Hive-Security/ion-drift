@@ -85,7 +85,10 @@ pub async fn inference_status(
     let last_cycle_ts = all_states.iter().map(|s| s.updated_at).max().unwrap_or(0);
 
     // Divergence count: MACs where inference binding differs from identity binding
-    let identities = store.get_network_identities().await.unwrap_or_default();
+    let identities = store.get_network_identities().await.unwrap_or_else(|e| {
+        tracing::warn!("inference: failed to load network identities: {e}");
+        Vec::new()
+    });
     let identity_map: HashMap<String, _> = identities
         .iter()
         .map(|i| (i.mac_address.to_uppercase(), i))
@@ -102,7 +105,10 @@ pub async fn inference_status(
     drop(dm);
 
     // Build WAP identifier set for divergence categorization
-    let infra_identities = store.get_infrastructure_identities().await.unwrap_or_default();
+    let infra_identities = store.get_infrastructure_identities().await.unwrap_or_else(|e| {
+        tracing::warn!("inference: failed to load infrastructure identities: {e}");
+        Vec::new()
+    });
     let wap_identifiers = crate::topology_inference::build_wap_identifier_set(&infra_identities);
 
     let mut divergence_count = 0usize;
@@ -183,7 +189,10 @@ pub async fn inference_mac_detail(
     };
 
     // Load current identity binding for comparison
-    let identities = store.get_network_identities().await.unwrap_or_default();
+    let identities = store.get_network_identities().await.unwrap_or_else(|e| {
+        tracing::warn!("inference detail: failed to load network identities: {e}");
+        Vec::new()
+    });
     let current_binding = identities
         .iter()
         .find(|i| i.mac_address.eq_ignore_ascii_case(&mac_upper))
@@ -214,21 +223,30 @@ pub async fn inference_mac_detail(
     let all_obs = store
         .get_all_recent_observations(window_start)
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            tracing::warn!("inference detail: failed to load observations: {e}");
+            Vec::new()
+        });
     let mac_obs: Vec<_> = all_obs
         .into_iter()
         .filter(|o| o.mac_address.eq_ignore_ascii_case(&mac_upper))
         .collect();
 
     // Build graph and role probs for scoring
-    let role_prob_vec = store.get_port_role_probabilities(None).await.unwrap_or_default();
+    let role_prob_vec = store.get_port_role_probabilities(None).await.unwrap_or_else(|e| {
+        tracing::warn!("inference detail: failed to load port role probabilities: {e}");
+        Vec::new()
+    });
     let role_probs: HashMap<_, _> = role_prob_vec
         .into_iter()
         .map(|p| ((p.device_id.clone(), p.port_name.clone()), p))
         .collect();
 
     // Build infrastructure graph
-    let vlan_configs = store.get_vlan_configs().await.unwrap_or_default();
+    let vlan_configs = store.get_vlan_configs().await.unwrap_or_else(|e| {
+        tracing::warn!("inference detail: failed to load vlan configs: {e}");
+        Vec::new()
+    });
     let wireless_vlans: std::collections::HashSet<u32> = vlan_configs
         .iter()
         .filter(|v| v.media_type == "wireless" || v.media_type == "mixed")
@@ -264,9 +282,18 @@ pub async fn inference_mac_detail(
     };
     drop(dm);
 
-    let neighbors = store.get_neighbors(None).await.unwrap_or_default();
-    let backbone_links = store.get_backbone_links().await.unwrap_or_default();
-    let port_roles = store.get_port_roles(None).await.unwrap_or_default();
+    let neighbors = store.get_neighbors(None).await.unwrap_or_else(|e| {
+        tracing::warn!("inference detail: failed to load neighbors: {e}");
+        Vec::new()
+    });
+    let backbone_links = store.get_backbone_links().await.unwrap_or_else(|e| {
+        tracing::warn!("inference detail: failed to load backbone links: {e}");
+        Vec::new()
+    });
+    let port_roles = store.get_port_roles(None).await.unwrap_or_else(|e| {
+        tracing::warn!("inference detail: failed to load port roles: {e}");
+        Vec::new()
+    });
     let port_role_tuples: Vec<(String, String, String)> = port_roles
         .iter()
         .map(|r| (r.device_id.clone(), r.port_name.clone(), r.role.clone()))

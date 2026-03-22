@@ -114,12 +114,19 @@ impl TaskSupervisor {
                     }
 
                     let start = Instant::now();
-                    let fut = (task_fn)();
 
-                    // Run the task, catching panics
-                    let result = {
-                        use futures::FutureExt;
-                        std::panic::AssertUnwindSafe(fut).catch_unwind().await
+                    // Catch panics in both the factory call (synchronous) and
+                    // the future execution (async). A factory panic would
+                    // otherwise unwind through the supervisor loop.
+                    let factory_result = std::panic::catch_unwind(
+                        std::panic::AssertUnwindSafe(|| (task_fn)())
+                    );
+                    let result = match factory_result {
+                        Ok(fut) => {
+                            use futures::FutureExt;
+                            std::panic::AssertUnwindSafe(fut).catch_unwind().await
+                        }
+                        Err(payload) => Err(payload),
                     };
 
                     let elapsed = start.elapsed();

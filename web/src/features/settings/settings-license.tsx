@@ -92,12 +92,10 @@ export function SettingsLicense() {
             <span className="text-sm font-medium text-muted-foreground w-20 flex-shrink-0">Status:</span>
             <span className="text-sm text-foreground">{statusLabel}</span>
           </div>
-          {license.device_limit != null && (
-            <div className="flex items-baseline gap-3">
-              <span className="text-sm font-medium text-muted-foreground w-20 flex-shrink-0">Devices:</span>
-              <span className="text-sm text-foreground">{license.device_limit} device limit</span>
-            </div>
-          )}
+          <div className="flex items-baseline gap-3">
+            <span className="text-sm font-medium text-muted-foreground w-20 flex-shrink-0">Devices:</span>
+            <span className="text-sm text-foreground">1 Router (full NDR) &middot; Unlimited infrastructure devices</span>
+          </div>
         </div>
       </div>
 

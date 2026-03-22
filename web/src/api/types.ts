@@ -1115,54 +1115,12 @@ export interface IdentityStats {
   by_disposition: Record<string, number>;
 }
 
-export interface NmapScan {
-  id: string;
-  vlan_id: number;
-  profile: string;
-  status: string;
-  target_count: number;
-  discovered_count: number;
-  started_at: string | null;
-  completed_at: string | null;
-  error: string | null;
-  created_at: string;
-}
-
-export interface NmapResult {
-  id: number;
-  scan_id: string;
-  ip_address: string;
-  mac_address: string | null;
-  hostname: string | null;
-  os_guess: string | null;
-  os_accuracy: number | null;
-  open_ports: string | null;
-  device_type: string | null;
-  created_at: string;
-}
-
-export interface ScanExclusion {
-  ip_address: string;
-  reason: string | null;
-  created_at: string;
-}
-
-export interface ScanStatus {
-  scanning: boolean;
-  nmap_available: boolean;
-}
-
 export interface UpdateIdentityRequest {
   device_type?: string;
   human_label?: string;
   switch_device_id?: string;
   switch_port?: string;
   is_infrastructure?: boolean | null;
-}
-
-export interface StartScanRequest {
-  vlan_id: number;
-  profile: "quick" | "standard" | "deep";
 }
 
 // ── Observed Services (Passive Discovery) ─────────────────────
@@ -1543,6 +1501,10 @@ export interface SankeyDeviceDestination {
   is_external: boolean;
   bytes: number;
   connections: number;
+  geo_country_code: string | null;
+  geo_org: string | null;
+  geo_asn: number | null;
+  geo_city: string | null;
 }
 
 export interface SankeyDeviceFlow {
@@ -1554,11 +1516,31 @@ export interface SankeyDeviceFlow {
   flagged: boolean;
 }
 
+export interface SankeyDeviceContext {
+  manufacturer: string | null;
+  device_type: string | null;
+  device_type_confidence: number;
+  disposition: string;
+  human_label: string | null;
+  vlan_id: number | null;
+  vlan_name: string | null;
+  switch_port: string | null;
+  link_speed_mbps: number | null;
+  is_infrastructure: boolean | null;
+  first_seen: number;
+  last_seen: number;
+  bytes_1h: number;
+  bytes_24h: number;
+  baseline_bytes_per_hour: number;
+  connections_1h: number;
+}
+
 export interface SankeyDeviceResponse {
   mac: string;
   hostname: string | null;
   ip: string | null;
   baseline_status: string | null;
+  device_context: SankeyDeviceContext | null;
   protocols: SankeyDeviceProtocol[];
   destinations: SankeyDeviceDestination[];
   flows: SankeyDeviceFlow[];
@@ -1703,7 +1685,7 @@ export interface LicenseStatus {
   tier?: "business" | "education" | "nonprofit" | "government";
   expires?: string;
   expired_on?: string;
-  device_limit?: number;
+  router_limit?: number;
   expiry_warning_days?: number;
 }
 
@@ -1761,4 +1743,88 @@ export interface InvestigationStats {
   threat: number;
   inconclusive: number;
   total: number;
+}
+
+// ── Statistics / Diagnostic Report ────────────────────────────
+
+export interface PageViewEntry {
+  page: string;
+  context: string;
+  view_date: string;
+  view_count: number;
+}
+
+export interface DiagnosticReport {
+  generated_at: string;
+  version: string;
+  environment: {
+    version: string;
+    data_directory: string;
+    data_dir_size_bytes: number;
+    uptime_seconds: number;
+    oidc_configured: boolean;
+    tls_enabled: boolean;
+    router_model: string | null;
+    routeros_version: string | null;
+    build_type: string;
+  };
+  scale: {
+    network_identity_count: number;
+    connection_history_rows: number;
+    connection_db_size_bytes: number;
+    vlan_config_count: number;
+    managed_switch_count: {
+      total: number;
+      routeros: number;
+      swos: number;
+      snmp: number;
+    };
+    syslog_events_today: number;
+    syslog_events_week: number;
+  };
+  feature_adoption: {
+    oidc_enabled: boolean;
+    alert_rule_count: number;
+    backbone_link_count: number;
+    confirmed_identity_count: number;
+    geoip_enabled: boolean;
+  };
+  engine_health: {
+    behavior: {
+      total_devices: number;
+      baselined: number;
+      learning: number;
+      sparse: number;
+      pending_anomalies: number;
+      critical_anomalies: number;
+      warning_anomalies: number;
+    };
+    investigations: {
+      total: number;
+      benign: number;
+      routine: number;
+      suspicious: number;
+      threat: number;
+      inconclusive: number;
+    };
+    inference: {
+      tracked_macs: number;
+      avg_confidence: number;
+      divergences: number;
+      state_distribution: Record<string, number>;
+    };
+    anomaly_dispositions_7d: {
+      accepted: number;
+      dismissed: number;
+      flagged: number;
+    };
+  };
+  error_summary: {
+    placeholder: string;
+  };
+  page_views: {
+    days_covered: number;
+    total_views: number;
+    by_page: Array<{ page: string; total_views: number }>;
+  };
 }

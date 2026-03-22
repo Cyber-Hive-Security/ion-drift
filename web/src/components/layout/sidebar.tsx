@@ -16,6 +16,7 @@ import {
   Cable,
   Search,
   FileCheck,
+  BarChart3,
 } from "lucide-react";
 
 const navItems = [
@@ -157,19 +158,28 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
       )}
       <div className="border-t border-border p-3 space-y-0.5">
-        <Link
-          to="/settings"
-          onClick={onClose}
-          className={cn(
-            "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-            currentPath.startsWith("/settings")
-              ? "bg-primary/10 text-primary"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground",
-          )}
-        >
-          <Settings className="h-4 w-4" />
-          Settings
-        </Link>
+        {[
+          { to: "/statistics", label: "Statistics", icon: BarChart3 },
+          { to: "/settings", label: "Settings", icon: Settings },
+        ].map(({ to, label, icon: Icon }) => {
+          const active = currentPath.startsWith(to);
+          return (
+            <Link
+              key={to}
+              to={to as "/"}
+              onClick={onClose}
+              className={cn(
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                active
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              <Icon className="h-4 w-4" />
+              {label}
+            </Link>
+          );
+        })}
       </div>
     </>
   );

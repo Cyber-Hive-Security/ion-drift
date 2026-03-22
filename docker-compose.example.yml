@@ -35,6 +35,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
     volumes:
       - ion-drift-data:/app/data
       # Uncomment for custom config (optional — setup wizard handles first-run):

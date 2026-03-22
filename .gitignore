@@ -16,6 +16,10 @@ certs/
 *.key
 *.crt
 
+# Docker Compose (machine-specific ports, volumes, env)
+docker-compose.yml
+docker-compose.override.yml
+
 # Node modules and build output (frontend)
 web/node_modules/
 web/dist/

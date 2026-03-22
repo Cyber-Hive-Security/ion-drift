@@ -970,29 +970,6 @@ impl SwitchStore {
         Ok(rows)
     }
 
-    /// Wipe ALL port metrics and MAC entries for a device.
-    /// Called on first SNMP poll cycle to clear stale counter baselines.
-    pub async fn wipe_device_port_data(
-        &self,
-        device_id: &str,
-    ) -> Result<(), rusqlite::Error> {
-        let db = self.db.lock().await;
-        let metrics = db.execute(
-            "DELETE FROM switch_port_metrics WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        let macs = db.execute(
-            "DELETE FROM switch_mac_table WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        let baselines = db.execute(
-            "DELETE FROM port_rate_baselines WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        tracing::info!(device = device_id, metrics, macs, baselines, "wiped all port data for clean start");
-        Ok(())
-    }
-
     /// Purge port metrics and MAC entries with non-canonical port names.
     ///
     /// Called every SNMP poll cycle to clean up entries written when an
@@ -1212,24 +1189,25 @@ impl SwitchStore {
         &self,
         device_id: Option<&str>,
     ) -> Result<Vec<NeighborEntry>, rusqlite::Error> {
+        const MAX_NEIGHBORS: u32 = 10_000;
         let db = self.db.lock().await;
         let (sql, device_filter) = match device_id {
             Some(id) => (
                 "SELECT device_id, interface, mac_address, address, identity, platform, board, version, first_seen, last_seen
-                 FROM neighbor_discovery WHERE device_id = ?1 ORDER BY last_seen DESC",
+                 FROM neighbor_discovery WHERE device_id = ?1 ORDER BY last_seen DESC LIMIT ?2",
                 Some(id.to_string()),
             ),
             None => (
                 "SELECT device_id, interface, mac_address, address, identity, platform, board, version, first_seen, last_seen
-                 FROM neighbor_discovery ORDER BY last_seen DESC",
+                 FROM neighbor_discovery ORDER BY last_seen DESC LIMIT ?1",
                 None,
             ),
         };
         let mut stmt = db.prepare(sql)?;
         let rows = if let Some(ref id) = device_filter {
-            stmt.query_map(params![id], map_neighbor_row)?
+            stmt.query_map(params![id, MAX_NEIGHBORS], map_neighbor_row)?
         } else {
-            stmt.query_map([], map_neighbor_row)?
+            stmt.query_map(params![MAX_NEIGHBORS], map_neighbor_row)?
         };
         rows.collect()
     }
@@ -1357,6 +1335,31 @@ impl SwitchStore {
         )?;
         let rows = stmt.query_map([], map_identity_row)?;
         rows.collect()
+    }
+
+    /// Get a single network identity by MAC address.
+    pub async fn get_identity_by_mac(&self, mac: &str) -> Result<Option<NetworkIdentity>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT mac_address, best_ip, hostname, manufacturer, switch_device_id, switch_port,
+                    vlan_id, discovery_protocol, remote_identity, remote_platform,
+                    first_seen, last_seen, confidence,
+                    device_type, device_type_source, device_type_confidence,
+                    human_confirmed, human_label, disposition,
+                    is_infrastructure, switch_binding_source,
+                    (SELECT speed FROM switch_port_metrics
+                     WHERE device_id = network_identities.switch_device_id
+                       AND LOWER(port_name) = LOWER(network_identities.switch_port)
+                       AND speed IS NOT NULL
+                     ORDER BY id DESC LIMIT 1) AS link_speed
+             FROM network_identities WHERE mac_address = ?1",
+        )?;
+        let mut rows = stmt.query_map(rusqlite::params![mac], map_identity_row)?;
+        match rows.next() {
+            Some(Ok(identity)) => Ok(Some(identity)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        }
     }
 
     /// Get infrastructure-flagged identities (WAPs, unmanaged switches, etc.).
@@ -2292,7 +2295,7 @@ impl SwitchStore {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
             "SELECT id, device_a, port_a, device_b, port_b, label, speed_mbps, link_type, created_at
-             FROM backbone_links ORDER BY device_a, device_b",
+             FROM backbone_links ORDER BY device_a, device_b LIMIT 10000",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(BackboneLink {

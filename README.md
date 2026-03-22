@@ -78,6 +78,7 @@ The release build can take 10-30 minutes depending on hardware. With less than 4
 ## Quick Start
 
 ```bash
+cp docker-compose.example.yml docker-compose.yml
 docker compose up -d
 ```
 
@@ -112,6 +113,7 @@ Uses the RouterOS v7 REST API over HTTPS. Switch management supports RouterOS, S
 ## Docker Deployment
 
 ```bash
+cp docker-compose.example.yml docker-compose.yml
 docker compose up -d
 ```
 

@@ -148,6 +148,9 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
     // Alert engine
     crate::alerting::spawn_alert_engine(&state.task_supervisor, state.clone());
 
+    // Page view stats pruning (daily, retain 90 days)
+    spawn_stats_pruner(state.stats_store.clone());
+
     // Cert rotation (only if CertWarden is configured)
     if let Some(ref sm) = state.secrets_manager {
         if let Some(cw_config) = state.config.certwarden.resolve() {
@@ -161,6 +164,19 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
             }
         }
     }
+}
+
+/// Prune old page view stats daily (retain 90 days).
+fn spawn_stats_pruner(stats_store: std::sync::Arc<crate::stats_store::StatsStore>) {
+    tokio::spawn(async move {
+        // Wait 1 hour before first prune
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        loop {
+            stats_store.prune_old_views(90).await;
+            // Run once per day
+            tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
+        }
+    });
 }
 
 /// Clean up expired sessions every 10 minutes.

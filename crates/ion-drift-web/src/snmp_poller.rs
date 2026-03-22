@@ -118,36 +118,43 @@ async fn poll_snmp_switch(
 
     let classified = snmp_profile::classify_interfaces(&interfaces, profile);
 
-    // Filter out interfaces where ifName walk failed (canonical_name == descr).
-    // A partial ifName walk failure returns short names for some ports and
-    // ifDescr for others — we reject individual bad entries rather than
-    // requiring all-or-nothing, preventing mixed name sets in the DB.
-    let physical_classified: Vec<_> = classified
+    // Classify physical interfaces and check for partial ifName walk failures.
+    // If ANY physical interface has canonical_name == descr (meaning ifName was
+    // missing), reject the entire cycle to prevent mixed name sets in the DB.
+    // A partial walk would write some ports under short names and others under
+    // verbose ifDescr names, splitting metrics/MACs across two logical ports.
+    let all_physical: Vec<_> = classified
         .iter()
         .filter(|i| i.class == InterfaceClass::Physical)
-        .filter(|i| {
-            if i.canonical_name == i.descr && !i.descr.is_empty() {
-                // canonical_name == descr means ifName was missing for this interface
-                tracing::debug!(
-                    device = %device_id,
-                    port = %i.descr,
-                    idx = i.index,
-                    "dropping interface with missing ifName (canonical = ifDescr)"
-                );
-                false
-            } else {
-                true
-            }
-        })
         .collect();
 
-    if physical_classified.is_empty() {
+    if all_physical.is_empty() {
         tracing::warn!(
             device = %device_id,
-            "no physical interfaces with valid ifName, skipping data writes this cycle"
+            "no physical interfaces found, skipping data writes this cycle"
         );
         return;
     }
+
+    let bad_ports: Vec<_> = all_physical
+        .iter()
+        .filter(|i| i.canonical_name == i.descr && !i.descr.is_empty())
+        .collect();
+
+    if !bad_ports.is_empty() {
+        tracing::warn!(
+            device = %device_id,
+            bad_count = bad_ports.len(),
+            total = all_physical.len(),
+            first_bad = %bad_ports[0].descr,
+            "partial ifName walk failure — {} of {} physical ports missing ifName, skipping entire cycle",
+            bad_ports.len(),
+            all_physical.len(),
+        );
+        return;
+    }
+
+    let physical_classified = all_physical;
 
     // Build ifIndex -> ifName map for resolving bridge port numbers (includes ALL interfaces)
     let if_name_map: HashMap<u32, String> = interfaces

@@ -395,6 +395,10 @@ pub struct SankeyDeviceDestination {
     pub is_external: bool,
     pub bytes: i64,
     pub connections: i64,
+    pub geo_country_code: Option<String>,
+    pub geo_org: Option<String>,
+    pub geo_asn: Option<i64>,
+    pub geo_city: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -408,11 +412,32 @@ pub struct SankeyDeviceFlow {
 }
 
 #[derive(Serialize)]
+pub struct DeviceContext {
+    pub manufacturer: Option<String>,
+    pub device_type: Option<String>,
+    pub device_type_confidence: f64,
+    pub disposition: String,
+    pub human_label: Option<String>,
+    pub vlan_id: Option<u32>,
+    pub vlan_name: Option<String>,
+    pub switch_port: Option<String>,
+    pub link_speed_mbps: Option<u32>,
+    pub is_infrastructure: Option<bool>,
+    pub first_seen: i64,
+    pub last_seen: i64,
+    pub bytes_1h: i64,
+    pub bytes_24h: i64,
+    pub baseline_bytes_per_hour: f64,
+    pub connections_1h: i64,
+}
+
+#[derive(Serialize)]
 pub struct SankeyDeviceResponse {
     pub mac: String,
     pub hostname: Option<String>,
     pub ip: Option<String>,
     pub baseline_status: Option<String>,
+    pub device_context: Option<DeviceContext>,
     pub protocols: Vec<SankeyDeviceProtocol>,
     pub destinations: Vec<SankeyDeviceDestination>,
     pub flows: Vec<SankeyDeviceFlow>,
@@ -497,10 +522,11 @@ pub async fn device_trace(
             .collect();
         drop(stmt_p);
 
-        // Destinations aggregated by dst_ip
+        // Destinations aggregated by dst_ip with GeoIP enrichment
         let mut stmt_d = db.prepare(
             &format!("SELECT dst_ip, dst_hostname, dst_is_external,
-                    SUM(bytes_tx + bytes_rx) as total_bytes, COUNT(*) as conn_count
+                    SUM(bytes_tx + bytes_rx) as total_bytes, COUNT(*) as conn_count,
+                    MAX(geo_country_code), MAX(geo_org), MAX(geo_asn), MAX(geo_city)
              FROM connection_history
              WHERE {src_match} AND first_seen >= datetime('now', ?2){country_clause}
              GROUP BY dst_ip
@@ -516,6 +542,10 @@ pub async fn device_trace(
                     is_external: row.get::<_, i32>(2)? != 0,
                     bytes: row.get(3)?,
                     connections: row.get(4)?,
+                    geo_country_code: row.get(5)?,
+                    geo_org: row.get(6)?,
+                    geo_asn: row.get(7)?,
+                    geo_city: row.get(8)?,
                 })
             })
             .map_err(|e| format!("sankey device dest query: {e}"))?
@@ -571,11 +601,52 @@ pub async fn device_trace(
         _ => None,
     };
 
+    // Device context enrichment from identity, bandwidth, and baselines
+    let device_context = match state.switch_store.get_identity_by_mac(&mac).await {
+        Ok(Some(identity)) => {
+            let bw_1h = state.connection_store.bandwidth_by_mac(3600).unwrap_or_default();
+            let bw_24h = state.connection_store.bandwidth_by_mac(86400).unwrap_or_default();
+            let (tx_1h, rx_1h, conn_1h) = bw_1h.get(&mac).copied().unwrap_or((0, 0, 0));
+            let (tx_24h, rx_24h, _) = bw_24h.get(&mac).copied().unwrap_or((0, 0, 0));
+
+            let baseline_total = match state.behavior_store.get_baselines(&mac).await {
+                Ok(baselines) => baselines.iter().map(|b| b.avg_bytes_per_hour).sum::<f64>(),
+                Err(_) => 0.0,
+            };
+
+            let vlan_name = identity.vlan_id.and_then(|v| {
+                let registry = state.vlan_registry.try_read().ok()?;
+                Some(registry.vlan_name(v as i64))
+            });
+
+            Some(DeviceContext {
+                manufacturer: identity.manufacturer,
+                device_type: identity.device_type,
+                device_type_confidence: identity.device_type_confidence,
+                disposition: identity.disposition,
+                human_label: identity.human_label,
+                vlan_id: identity.vlan_id,
+                vlan_name,
+                switch_port: identity.switch_port,
+                link_speed_mbps: identity.link_speed_mbps,
+                is_infrastructure: identity.is_infrastructure,
+                first_seen: identity.first_seen,
+                last_seen: identity.last_seen,
+                bytes_1h: tx_1h + rx_1h,
+                bytes_24h: tx_24h + rx_24h,
+                baseline_bytes_per_hour: baseline_total,
+                connections_1h: conn_1h,
+            })
+        }
+        _ => None,
+    };
+
     Ok(Json(SankeyDeviceResponse {
         mac,
         hostname,
         ip,
         baseline_status,
+        device_context,
         protocols,
         destinations,
         flows,

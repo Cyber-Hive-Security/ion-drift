@@ -19,7 +19,7 @@ pub async fn list_neighbor_aliases(
         .get_neighbor_aliases()
         .await
         .map_err(|e| internal_error("neighbor aliases", e))?;
-    Ok(Json(serde_json::to_value(aliases).unwrap()))
+    Ok(Json(serde_json::to_value(aliases).unwrap_or_default()))
 }
 
 #[derive(Deserialize)]

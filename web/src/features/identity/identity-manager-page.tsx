@@ -75,7 +75,6 @@ const DEVICE_TYPE_LABELS: Record<string, string> = {
 const SOURCE_COLORS: Record<string, string> = {
   human: "bg-success/20 text-success border-success/30",
   lldp: "bg-primary/20 text-primary border-primary/30",
-  nmap: "bg-purple-500/20 text-purple-400 border-purple-500/30",
   conntrack: "bg-teal-500/20 text-teal-400 border-teal-500/30",
   traffic_pattern: "bg-warning/20 text-warning border-warning/30",
   oui: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",

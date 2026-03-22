@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Outlet, Link } from "@tanstack/react-router";
 import { useAuth } from "@/hooks/use-auth";
+import { usePageTracking } from "@/hooks/use-page-tracking";
 import { useBehaviorAlerts } from "@/api/queries";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
@@ -15,6 +16,7 @@ export function RootLayout() {
     () => window.matchMedia("(min-width: 768px)").matches,
   );
   const behaviorAlerts = useBehaviorAlerts({ enabled: isAuthenticated });
+  usePageTracking();
 
   if (isLoading) {
     return (

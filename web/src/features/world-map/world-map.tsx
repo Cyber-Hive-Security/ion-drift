@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback } from "react";
 import * as d3 from "d3";
+import type { GeoPermissibleObjects } from "d3-geo";
 import * as topojson from "topojson-client";
 import type { Topology, GeometryCollection } from "topojson-specification";
 import type { GeoSummaryEntry, CitySummaryEntry } from "@/api/types";
@@ -308,8 +309,8 @@ export function WorldMap({
       // Background sphere
       zoomGroup
         .append("path")
-        .datum({ type: "Sphere" } as any)
-        .attr("d", path as any)
+        .datum({ type: "Sphere" } as GeoPermissibleObjects)
+        .attr("d", path as unknown as d3.ValueFn<SVGPathElement, GeoPermissibleObjects, string | null>)
         .attr("fill", "#24272C")
         .attr("stroke", "#343840");
 
@@ -366,12 +367,12 @@ export function WorldMap({
       // ── Country polygons ──────────────────────────────────────
       zoomGroup
         .selectAll(".country")
-        .data((countries as any).features)
+        .data(countries.features)
         .join("path")
         .attr("class", "country")
         .attr("d", path as any)
         .attr("fill", (d: any) => {
-          const alpha2 = numericToAlpha2[d.id] || "";
+          const alpha2 = numericToAlpha2[d.id ?? ""] || "";
           return countryColor(alpha2, countryIndex.get(alpha2));
         })
         .attr("stroke", "#343840")
@@ -379,7 +380,7 @@ export function WorldMap({
         .attr("cursor", "pointer")
         .on("mouseenter", function (_event: MouseEvent, d: any) {
           d3.select(this).attr("stroke", "#00E5FF").attr("stroke-width", 1.5);
-          const alpha2 = numericToAlpha2[(d as any).id] || "";
+          const alpha2 = numericToAlpha2[d.id ?? ""] || "";
           const entry = countryIndex.get(alpha2);
           if (entry) {
             const flagged = entry.flagged_count > 0
@@ -400,8 +401,8 @@ export function WorldMap({
           d3.select(this).attr("stroke", "#343840").attr("stroke-width", 0.5);
           hideTooltip();
         })
-        .on("click", (_event: any, d: any) => {
-          const alpha2 = numericToAlpha2[(d as any).id] || "";
+        .on("click", (_event: MouseEvent, d: any) => {
+          const alpha2 = numericToAlpha2[d.id ?? ""] || "";
           onCountryClick?.(alpha2);
         });
 
@@ -434,7 +435,7 @@ export function WorldMap({
           arcsGroup
             .append("path")
             .datum(lineGeo)
-            .attr("d", path as any)
+            .attr("d", path as unknown as d3.ValueFn<SVGPathElement, GeoJSON.Feature<GeoJSON.LineString>, string | null>)
             .attr("fill", "none")
             .attr("stroke", color)
             .attr("stroke-width", strokeWidth)
@@ -533,7 +534,7 @@ export function WorldMap({
           cityArcsGroup
             .append("path")
             .datum(lineGeo)
-            .attr("d", path as any)
+            .attr("d", path as unknown as d3.ValueFn<SVGPathElement, GeoJSON.Feature<GeoJSON.LineString>, string | null>)
             .attr("fill", "none")
             .attr("stroke", color)
             .attr("stroke-width", arcWidth)

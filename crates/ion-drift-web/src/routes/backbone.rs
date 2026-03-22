@@ -19,7 +19,7 @@ pub async fn list_backbone_links(
         .get_backbone_links()
         .await
         .map_err(|e| internal_error("backbone links", e))?;
-    Ok(Json(serde_json::to_value(links).unwrap()))
+    Ok(Json(serde_json::to_value(links).unwrap_or_default()))
 }
 
 #[derive(Deserialize)]

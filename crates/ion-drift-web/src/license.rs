@@ -42,7 +42,8 @@ impl std::fmt::Display for LicenseTier {
 pub struct LicensePayload {
     pub licensee: String,
     pub tier: LicenseTier,
-    pub device_limit: u32,
+    #[serde(alias = "device_limit")]
+    pub router_limit: u32,
     pub issued: NaiveDate,
     pub expires: NaiveDate,
 }
@@ -57,7 +58,7 @@ pub enum LicenseMode {
         licensee: String,
         tier: LicenseTier,
         expires: NaiveDate,
-        device_limit: u32,
+        router_limit: u32,
         /// Days until expiry; None if > EXPIRY_WARNING_DAYS away.
         expiry_warning_days: Option<u32>,
     },
@@ -175,7 +176,7 @@ pub async fn determine_license_mode(
                         licensee: payload.licensee,
                         tier: payload.tier,
                         expires: payload.expires,
-                        device_limit: payload.device_limit,
+                        router_limit: payload.router_limit,
                         expiry_warning_days,
                     };
                 }

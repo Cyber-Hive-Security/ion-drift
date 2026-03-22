@@ -26,6 +26,7 @@ pub mod setup;
 pub mod snapshots;
 pub mod snmp_poller;
 pub mod state;
+pub mod stats_store;
 pub mod switch_poller;
 pub mod swos_poller;
 pub mod syslog;

@@ -54,7 +54,7 @@ pub async fn device_resources(
             let client = c.clone();
             drop(dm);
             let res: SystemResource = client.system_resources().await.map_err(api_error)?;
-            Ok(Json(serde_json::to_value(res).unwrap()))
+            Ok(Json(serde_json::to_value(res).unwrap_or_default()))
         }
         DeviceClient::SwOs(c) => {
             let client = c.clone();
@@ -176,7 +176,7 @@ pub async fn device_port_list(
         .get_device_port_list(&id)
         .await
         .map_err(|e| internal_error("port list", e))?;
-    Ok(Json(serde_json::to_value(data).unwrap()))
+    Ok(Json(serde_json::to_value(data).unwrap_or_default()))
 }
 
 // ── GET /api/devices/{id}/mac-table ──────────────────────────────

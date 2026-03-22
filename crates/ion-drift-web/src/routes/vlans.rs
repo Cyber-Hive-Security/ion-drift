@@ -20,7 +20,7 @@ pub async fn list_vlan_configs(
         .get_vlan_configs()
         .await
         .map_err(|e| internal_error("vlan configs", e))?;
-    Ok(Json(serde_json::to_value(configs).unwrap()))
+    Ok(Json(serde_json::to_value(configs).unwrap_or_default()))
 }
 
 /// PUT /api/network/vlan-config/{vlan_id} — upsert a VLAN config.

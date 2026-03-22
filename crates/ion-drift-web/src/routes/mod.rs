@@ -19,6 +19,7 @@ pub mod policy;
 pub mod provision;
 pub mod sankey;
 pub mod settings;
+pub mod stats;
 pub mod switch_data;
 pub mod system;
 pub mod topology;
@@ -308,7 +309,15 @@ async fn demo_sanitize_layer(
 pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<Router> {
     // SPA fallback: serve static files from web/dist/,
     // fall back to index.html for client-side routing.
+    // Hashed assets (/assets/*) get immutable cache headers.
     let index_html = web_dist.join("index.html");
+    let assets_service = ServeDir::new(web_dist.join("assets"));
+    let assets_with_cache = Router::new()
+        .nest_service("/assets", assets_service)
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("cache-control"),
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        ));
     let spa = ServeDir::new(&web_dist).not_found_service(ServeFile::new(index_html));
 
     // Derive CORS allowed origin from the OIDC redirect URI
@@ -695,6 +704,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/license", get(license::get_license))
         .route("/license/key", post(license::submit_license_key))
         .route("/license/acknowledge", post(license::acknowledge_license))
+        // Statistics / Diagnostic Report
+        .route("/stats/page-view", post(stats::record_page_view))
+        .route("/stats/page-views", get(stats::get_page_views))
+        .route("/stats/report", get(stats::diagnostic_report))
         // Demo mode sanitization (outermost — runs after response is built)
         .layer(middleware::from_fn(demo_sanitize_layer))
         // Global auth middleware for all API routes
@@ -727,10 +740,15 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
     Ok(app
         // Nest all API routes under /api with global auth layer
         .nest("/api", api_routes)
+        // Hashed static assets with immutable cache headers
+        .merge(assets_with_cache)
         // SPA static files (fallback for all non-API routes)
         .fallback_service(spa)
         // Middleware
         .layer(TraceLayer::new_for_http())
+        .layer(tower_http::compression::CompressionLayer::new()
+            .gzip(true)
+            .br(true))
         .layer(cors)
         // Security headers
         .layer(SetResponseHeaderLayer::overriding(
