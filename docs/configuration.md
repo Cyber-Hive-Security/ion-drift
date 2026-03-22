@@ -93,41 +93,71 @@ dns_server = "192.168.88.1"
 
 #### RouterOS User Permissions
 
-Ion Drift requires a dedicated RouterOS user with specific policies. **Do not use the default `admin` account in production.**
+Ion Drift requires a dedicated RouterOS user with specific policies. **Do not use the default `admin` account.** If Ion Drift's credentials were ever compromised, an attacker with `admin` access would have full control of your router — routing tables, firewall rules, VPN configs, everything.
 
-Create a user group and user on your router:
+**Step 1: Create a read-only user group and user:**
 
+```routeros
+/user group add name=ion-drift policy=api,read,!write,!ftp,!local,!telnet,!ssh,!reboot,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon,!rest-api
+/user add name=ion-drift group=ion-drift password=YourStrongPasswordHere
 ```
-/user/group/add name=ion-drift policy=api,read,write,sensitive,!ftp,!reboot,!policy,!local,!telnet,!ssh,!password,!sniff,!romon,!rest-api
-/user/add name=ion-drift group=ion-drift password=<strong-password>
+
+This is sufficient for all monitoring functionality. Ion Drift will read system resources, interfaces, firewall rules, DHCP leases, ARP tables, connection tracking, and logs.
+
+**Step 2 (optional): Temporarily enable write for auto-provisioning:**
+
+If you want to use Ion Drift's auto-provisioning feature (Settings > Provision) to automatically create mangle flow accounting rules and syslog forwarding on the router, temporarily add `write` to the group:
+
+```routeros
+/user group set ion-drift policy=api,read,write,!ftp,!local,!telnet,!ssh,!reboot,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon,!rest-api
 ```
+
+Run the provisioning from the Ion Drift UI, then **immediately remove write access**:
+
+```routeros
+/user group set ion-drift policy=api,read,!write,!ftp,!local,!telnet,!ssh,!reboot,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon,!rest-api
+```
+
+> **Security note:** The `write` policy should only be active during initial provisioning. Once your mangle and syslog rules are created, Ion Drift operates entirely in read-only mode. Leaving `write` enabled is unnecessary and increases your attack surface.
 
 **Required policies:**
 
-| Policy | Why |
-|--------|-----|
-| `api` | Required for all REST API access |
-| `read` | Read system resources, interfaces, firewall rules, DHCP, ARP, connections, logs |
-| `write` | Setup wizard writes firewall mangle rules, syslog config, and logging actions |
-| `sensitive` | Read connection tracking data and firewall counters |
+| Policy | Why | When |
+|--------|-----|------|
+| `api` | REST API access | Always |
+| `read` | Read system resources, interfaces, firewall, DHCP, ARP, connections, logs | Always |
+| `write` | Create mangle flow accounting rules and syslog forwarding config | Provisioning only — remove after |
 
 **API endpoints used (read):**
 
 - `/system/resource`, `/system/identity`, `/system/logging`, `/system/logging/action`
-- `/interface`, `/interface/ethernet`, `/interface/vlan`
-- `/ip/address`, `/ip/route`, `/ip/arp`, `/ip/dns/cache`
-- `/ip/dhcp-server`, `/ip/dhcp-server/lease`, `/ip/pool`
-- `/ip/firewall/filter`, `/ip/firewall/nat`, `/ip/firewall/mangle`, `/ip/firewall/connection`
-- `/log`
+- `/interface`, `/interface/bridge/host`, `/interface/bridge/port`, `/interface/bridge/vlan`, `/interface/ethernet`, `/interface/vlan`
+- `/ip/address`, `/ip/route`, `/ip/arp`, `/ip/dns`, `/ip/pool`
+- `/ip/dhcp-server`, `/ip/dhcp-server/lease`, `/ip/dhcp-server/network`
+- `/ip/firewall/filter`, `/ip/firewall/nat`, `/ip/firewall/mangle`, `/ip/firewall/connection`, `/ip/firewall/connection/tracking`, `/ip/firewall/address-list`
 - `/ip/neighbor`
+- `/log`
 
-**API endpoints used (write — setup wizard only):**
+**API endpoints used (write — provisioning only):**
 
-- `/ip/firewall/mangle` (POST/PUT) — creates traffic accounting rules
-- `/system/logging/action` (POST/PUT/DELETE) — configures syslog forwarding
-- `/system/logging` (POST/PUT) — creates logging rules for firewall topics
+- `/ip/firewall/mangle` (PUT) — creates traffic accounting rules
+- `/system/logging/action` (PUT) — configures syslog forwarding target
+- `/system/logging` (PUT) — creates logging rules for firewall topics
+- `/ip/firewall/filter` (PUT) — creates firewall log rules
 
-> **Note:** If you don't plan to use the setup wizard's automatic router provisioning, the `write` policy can be removed. Ion Drift will function in read-only mode for monitoring.
+#### TLS Requirements
+
+Ion Drift requires HTTPS for router connections. HTTP is not supported — router credentials are transmitted via HTTP Basic Auth on every API request, and sending them over an unencrypted connection would expose them to any observer on the network path.
+
+Configure your RouterOS with a TLS certificate (self-signed, Let's Encrypt, ACME, or your internal CA) and connect via HTTPS on port 443. If your CA is not publicly trusted, mount the CA certificate into the container and set `ca_cert_path` in the config.
+
+**Supported TLS certificate signature algorithms** (via `rustls`):
+
+- ECDSA with SHA-256 or SHA-384 (recommended: P-384/SHA-384 for higher security)
+- RSA with SHA-256, SHA-384, or SHA-512 (PKCS#1 v1.5 and PSS)
+- Ed25519
+
+Other signature algorithms (e.g., ECDSA-SHA512) are not supported by `rustls` and will result in a connection error.
 
 ---
 
