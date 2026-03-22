@@ -970,29 +970,6 @@ impl SwitchStore {
         Ok(rows)
     }
 
-    /// Wipe ALL port metrics and MAC entries for a device.
-    /// Called on first SNMP poll cycle to clear stale counter baselines.
-    pub async fn wipe_device_port_data(
-        &self,
-        device_id: &str,
-    ) -> Result<(), rusqlite::Error> {
-        let db = self.db.lock().await;
-        let metrics = db.execute(
-            "DELETE FROM switch_port_metrics WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        let macs = db.execute(
-            "DELETE FROM switch_mac_table WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        let baselines = db.execute(
-            "DELETE FROM port_rate_baselines WHERE device_id = ?1",
-            params![device_id],
-        )?;
-        tracing::info!(device = device_id, metrics, macs, baselines, "wiped all port data for clean start");
-        Ok(())
-    }
-
     /// Purge port metrics and MAC entries with non-canonical port names.
     ///
     /// Called every SNMP poll cycle to clean up entries written when an
