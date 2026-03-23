@@ -375,24 +375,35 @@ async fn main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("no primary router found in device manager"))?
     };
 
-    // Test connectivity
+    // Test connectivity — non-fatal so the web UI starts even if the router is unreachable.
+    // Users can fix credentials via Settings → Devices without filesystem access.
     tracing::info!(
         "connecting to router at {}:{}",
         config.router.host,
         config.router.port
     );
-    let router_name = mikrotik.test_connection().await?;
-    tracing::info!("connected to router: {router_name}");
-
-    // Update device status to Online
-    {
-        let mut dm = device_manager.write().await;
-        dm.set_status(
-            "rb4011",
-            device_manager::DeviceStatus::Online {
-                identity: router_name.clone(),
-            },
-        );
+    match mikrotik.test_connection().await {
+        Ok(name) => {
+            tracing::info!("connected to router: {name}");
+            let mut dm = device_manager.write().await;
+            dm.set_status(
+                "rb4011",
+                device_manager::DeviceStatus::Online {
+                    identity: name,
+                },
+            );
+        }
+        Err(e) => {
+            tracing::warn!("router connection failed at startup: {e}");
+            tracing::warn!("web UI will be available — fix router credentials in Settings > Devices");
+            let mut dm = device_manager.write().await;
+            dm.set_status(
+                "rb4011",
+                device_manager::DeviceStatus::Offline {
+                    error: e.to_string(),
+                },
+            );
+        }
     }
 
     tracing::info!("router provisioning available via Setup Wizard (Settings > Setup Wizard)");
