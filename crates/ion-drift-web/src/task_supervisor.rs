@@ -178,7 +178,9 @@ impl TaskSupervisor {
                         "restarting task after backoff"
                     );
 
-                    tokio::time::sleep(backoff).await;
+                    // Add jitter (±25%) to prevent thundering herd on shared dependency failures
+                    let jitter: f64 = rand::random::<f64>() * 0.5 + 0.75;
+                    tokio::time::sleep(backoff.mul_f64(jitter)).await;
 
                     // Exponential backoff: double up to max
                     backoff = (backoff * 2).min(max_backoff);

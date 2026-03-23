@@ -1,5 +1,6 @@
 mod alerting;
 mod anomaly_correlator;
+mod attack_techniques;
 mod auth;
 mod behavior_engine;
 mod bootstrap;
@@ -205,8 +206,81 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     } else {
-        None
+        // OIDC without mTLS bootstrap — derive KEK from the OIDC client secret
+        let db_path = data_dir.join("secrets.db");
+        let oidc_secret = config.oidc.as_ref()
+            .map(|o| o.client_secret.clone())
+            .unwrap_or_default();
+
+        match bootstrap::load_local_kek(&data_dir)? {
+            Some(result) => {
+                let sm = SecretsManager::new(&db_path, result.kek)?;
+                tracing::info!("OIDC mode (no mTLS): loading from cached KEK");
+                // Load secrets into config
+                if let Ok(Some(ss)) = sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
+                    config.session.session_secret = ss.expose_secret().to_string();
+                }
+                if let Ok(Some(u)) = sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
+                    config.router.username = u.expose_secret().to_string();
+                }
+                if let Ok(Some(p)) = sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
+                    config.router.password = p.expose_secret().to_string();
+                }
+                if let Ok(Some(cs)) = sm.decrypt_secret(secrets::SECRET_OIDC_CLIENT_SECRET).await {
+                    if let Some(ref mut oidc) = config.oidc {
+                        oidc.client_secret = cs.expose_secret().to_string();
+                    }
+                }
+                Some(Arc::new(tokio::sync::RwLock::new(sm)))
+            }
+            None => {
+                // First run: derive KEK from OIDC client secret, cache it, migrate secrets
+                if oidc_secret.is_empty() {
+                    anyhow::bail!(
+                        "OIDC client secret required for initial KEK derivation — set DRIFT_OIDC_SECRET env var on first run"
+                    );
+                }
+                tracing::info!("OIDC mode (no mTLS): deriving KEK from client secret");
+                let kek_result = bootstrap::derive_kek_from_password(&oidc_secret, &data_dir)?;
+                bootstrap::cache_kek_locally(&kek_result.kek, &data_dir)?;
+
+                let sm = SecretsManager::new(&db_path, kek_result.kek)?;
+
+                // Generate session secret
+                let session_secret = if config.session.session_secret.is_empty() {
+                    let bytes: [u8; 32] = rand::random();
+                    hex::encode(bytes)
+                } else {
+                    config.session.session_secret.clone()
+                };
+
+                // Migrate secrets from env vars / config into encrypted storage
+                let decrypted = DecryptedSecrets {
+                    router_username: config.router.username.clone(),
+                    router_password: secrecy::SecretString::from(config.router.password.clone()),
+                    oidc_client_secret: secrecy::SecretString::from(oidc_secret),
+                    session_secret: secrecy::SecretString::from(session_secret.clone()),
+                    certwarden_cert_api_key: None,
+                    certwarden_key_api_key: None,
+                    maxmind_account_id: None,
+                    maxmind_license_key: None,
+                };
+                sm.store_all(&decrypted).await?;
+                config.session.session_secret = session_secret;
+                tracing::info!("OIDC mode (no mTLS): secrets derived and encrypted");
+
+                Some(Arc::new(tokio::sync::RwLock::new(sm)))
+            }
+        }
     };
+
+    // Warn if router password is empty after all loading stages
+    if config.router.password.is_empty() {
+        tracing::warn!(
+            "router password is empty — connection will fail. \
+             Set credentials via the setup wizard or DRIFT_ROUTER_PASSWORD env var."
+        );
+    }
 
     // Warn if session cookies will be sent over HTTP on a non-localhost bind
     if !config.session.secure
@@ -314,24 +388,35 @@ async fn main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("no primary router found in device manager"))?
     };
 
-    // Test connectivity
+    // Test connectivity — non-fatal so the web UI starts even if the router is unreachable.
+    // Users can fix credentials via Settings → Devices without filesystem access.
     tracing::info!(
         "connecting to router at {}:{}",
         config.router.host,
         config.router.port
     );
-    let router_name = mikrotik.test_connection().await?;
-    tracing::info!("connected to router: {router_name}");
-
-    // Update device status to Online
-    {
-        let mut dm = device_manager.write().await;
-        dm.set_status(
-            "rb4011",
-            device_manager::DeviceStatus::Online {
-                identity: router_name.clone(),
-            },
-        );
+    match mikrotik.test_connection().await {
+        Ok(name) => {
+            tracing::info!("connected to router: {name}");
+            let mut dm = device_manager.write().await;
+            dm.set_status(
+                "rb4011",
+                device_manager::DeviceStatus::Online {
+                    identity: name,
+                },
+            );
+        }
+        Err(e) => {
+            tracing::warn!("router connection failed at startup: {e}");
+            tracing::warn!("web UI will be available — fix router credentials in Settings > Devices");
+            let mut dm = device_manager.write().await;
+            dm.set_status(
+                "rb4011",
+                device_manager::DeviceStatus::Offline {
+                    error: e.to_string(),
+                },
+            );
+        }
     }
 
     tracing::info!("router provisioning available via Setup Wizard (Settings > Setup Wizard)");
@@ -452,6 +537,13 @@ async fn main() -> anyhow::Result<()> {
         ))
     };
 
+    // Load ATT&CK technique database
+    let attack_techniques = Arc::new(attack_techniques::AttackTechniqueDb::load());
+    tracing::info!("loaded {} ATT&CK techniques, {} deviation mappings",
+        attack_techniques.techniques.len(),
+        attack_techniques.deviation_mappings.len(),
+    );
+
     // Create task supervisor
     let supervisor = TaskSupervisor::new();
 
@@ -485,6 +577,7 @@ async fn main() -> anyhow::Result<()> {
         stats_store: stats_store.clone(),
         task_supervisor: supervisor,
         login_limiter: auth::LoginRateLimiter::new(),
+        attack_techniques: attack_techniques.clone(),
     };
 
     // Spawn all background tasks

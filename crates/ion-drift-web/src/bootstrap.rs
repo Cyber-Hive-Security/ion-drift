@@ -477,18 +477,27 @@ pub fn load_local_kek(data_dir: &Path) -> anyhow::Result<Option<BootstrapResult>
 }
 
 /// Derive a KEK from a user password using argon2id KDF.
-/// The salt is derived from the db_path to ensure the same password produces
-/// the same KEK on the same installation, but different KEKs on different installations.
-pub fn derive_kek_from_password(password: &str, db_path: &Path) -> anyhow::Result<BootstrapResult> {
+/// Derive a KEK from a password/secret using argon2id.
+///
+/// Uses a random 16-byte salt persisted at `data_dir/kek.salt`. On first call the salt
+/// is generated and written to disk; subsequent calls read the existing salt. This ensures
+/// the same password produces the same KEK on the same installation while preventing
+/// cross-installation rainbow tables.
+pub fn derive_kek_from_password(password: &str, data_dir: &Path) -> anyhow::Result<BootstrapResult> {
     use argon2::Argon2;
-    use sha2::{Sha256, Digest};
 
-    // Derive a 16-byte salt from the db path
-    let mut hasher = Sha256::new();
-    hasher.update(b"ion-drift-kek-salt:");
-    hasher.update(db_path.to_string_lossy().as_bytes());
-    let salt_hash = hasher.finalize();
-    let salt = &salt_hash[..16];
+    // Use a random persistent salt (not derived from filesystem paths)
+    let salt_path = data_dir.join("kek.salt");
+    let salt: [u8; 16] = if salt_path.exists() {
+        std::fs::read(&salt_path)?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("corrupt kek.salt (expected 16 bytes)"))?
+    } else {
+        let s: [u8; 16] = rand::random();
+        std::fs::write(&salt_path, &s)?;
+        tracing::info!("generated random KEK salt at {}", salt_path.display());
+        s
+    };
 
     // Derive 32-byte KEK using argon2id with moderate parameters
     // m=65536 (64 MiB), t=3 iterations, p=4 parallelism
@@ -497,7 +506,7 @@ pub fn derive_kek_from_password(password: &str, db_path: &Path) -> anyhow::Resul
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
 
     let mut kek_bytes = [0u8; 32];
-    argon2.hash_password_into(password.as_bytes(), salt, &mut kek_bytes)
+    argon2.hash_password_into(password.as_bytes(), &salt, &mut kek_bytes)
         .map_err(|e| anyhow::anyhow!("argon2id KDF failed: {e}"))?;
 
     let kek = aes_gcm::Key::<aes_gcm::Aes256Gcm>::from_slice(&kek_bytes).to_owned();

@@ -166,6 +166,7 @@ pub struct DiagnosticReport {
     pub scale: ScaleMetrics,
     pub feature_adoption: FeatureAdoption,
     pub engine_health: EngineHealth,
+    pub policy_deviations: ion_drift_storage::behavior::PolicyDeviationCounts,
     pub error_summary: ErrorSummary,
     pub page_views: PageViewSummary,
 }
@@ -501,6 +502,13 @@ pub async fn diagnostic_report(
         by_page,
     };
 
+    // ── Policy deviations ────────────────────────────────────────
+    let policy_deviation_counts = state
+        .behavior_store
+        .policy_deviation_counts()
+        .await
+        .unwrap_or_default();
+
     // ── Error summary (placeholder) ──────────────────────────────
     let error_summary = ErrorSummary {
         placeholder: "Error tracking not yet implemented. Future: centralized error counters.".into(),
@@ -513,6 +521,7 @@ pub async fn diagnostic_report(
         scale,
         feature_adoption,
         engine_health,
+        policy_deviations: policy_deviation_counts,
         error_summary,
         page_views,
     }))

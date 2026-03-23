@@ -4,6 +4,8 @@ use axum::extract::{Path, Query, State};
 use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
 
+use ion_drift_storage::behavior::PolicyDeviation;
+
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 
@@ -441,6 +443,7 @@ pub struct SankeyDeviceResponse {
     pub protocols: Vec<SankeyDeviceProtocol>,
     pub destinations: Vec<SankeyDeviceDestination>,
     pub flows: Vec<SankeyDeviceFlow>,
+    pub policy_deviations: Vec<PolicyDeviation>,
     pub range: String,
 }
 
@@ -641,6 +644,13 @@ pub async fn device_trace(
         _ => None,
     };
 
+    // Policy deviations for this device
+    let policy_deviations = state
+        .behavior_store
+        .get_device_policy_deviations(&mac)
+        .await
+        .unwrap_or_default();
+
     Ok(Json(SankeyDeviceResponse {
         mac,
         hostname,
@@ -650,6 +660,7 @@ pub async fn device_trace(
         protocols,
         destinations,
         flows,
+        policy_deviations,
         range: range.to_string(),
     }))
 }

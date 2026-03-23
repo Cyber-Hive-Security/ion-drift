@@ -70,9 +70,57 @@ Used when `[oidc.bootstrap]` is configured. Keycloak-specific.
 
 Used when `[oidc]` is configured but `[oidc.bootstrap]` is not — i.e., OIDC with a non-Keycloak provider or without mTLS infrastructure.
 
-- Secrets are provided via `DRIFT_ROUTER_PASSWORD`, `DRIFT_OIDC_SECRET`, and `DRIFT_SESSION_SECRET` environment variables.
-- On first startup, env var secrets are migrated into the encrypted secrets DB (using a KEK derived from a machine key). After migration, the env vars are no longer read.
+- **Derivation:** The KEK is derived from the OIDC client secret using argon2id KDF on first startup.
+- **Caching:** The derived KEK is cached locally using `machine.key` + `kek.local` (same mechanism as Local KDF).
+- **Startup:** On subsequent starts, the KEK is loaded from the local cache. The client secret is not re-read.
+- **Migration:** On first startup, router credentials and session secret are migrated from environment variables / config into the encrypted secrets DB. After migration, env vars are no longer read.
+- **Recovery:** If the data volume is lost, the KEK can be re-derived from the original OIDC client secret. If the client secret has been rotated since initial setup, a fresh setup with re-entered credentials is required.
 - This mode supports any OIDC provider (Authentik, Authelia, etc.) without requiring Keycloak-specific mTLS setup.
+
+---
+
+## Security Model Comparison
+
+The three KEK modes provide different levels of protection depending on the threat scenario. The critical distinction is whether an attacker who gains access to the host filesystem can recover your encrypted secrets.
+
+| Threat Scenario | Local Auth | OIDC without mTLS | OIDC with mTLS Bootstrap |
+|----------------|------------|-------------------|--------------------------|
+| **Network observer** (sees traffic) | Protected (TLS) | Protected (TLS) | Protected (TLS) |
+| **Web UI brute force** | Protected (argon2id + rate limiting) | N/A (OIDC) | N/A (OIDC) |
+| **Docker container escape** | **Secrets recoverable** | **Secrets recoverable** | Protected (KEK in Keycloak) |
+| **Host filesystem read access** | **Secrets recoverable** | **Secrets recoverable** | Protected (KEK in Keycloak) |
+| **Backup/snapshot leak** | **Secrets recoverable** | **Secrets recoverable** | Protected (KEK in Keycloak) |
+| **Stolen/decommissioned disk** | **Secrets recoverable** | **Secrets recoverable** | Protected (KEK in Keycloak) |
+| **Data volume loss** | Re-run setup wizard | Re-enter env vars | Auto-recovers from Keycloak |
+
+### Why Local Auth and OIDC without mTLS are vulnerable to host compromise
+
+Both modes store everything needed to decrypt secrets on the local filesystem:
+
+1. `machine.key` — a random AES-256-GCM key stored in the data directory
+2. `kek.local` — the KEK encrypted with `machine.key`
+
+An attacker with read access to both files can decrypt `kek.local` to obtain the KEK, then decrypt all values in `secrets.db` (router password, OIDC client secret, session secret). No password, token, or external service is required.
+
+This is a deliberate trade-off for convenience — Ion Drift restarts without human intervention (no passphrase prompt). For single-server homelab deployments where the host is physically secured, this is an acceptable risk. For environments where host compromise is a realistic threat, use mTLS bootstrap.
+
+### Why mTLS Bootstrap is different
+
+In mTLS bootstrap mode, the KEK is stored as a user attribute in Keycloak and retrieved via mutual TLS authentication. An attacker with filesystem access gets the local cache (encrypted with a key derived from the client certificate private key), but:
+
+- The client certificate is issued by your CA and can be revoked
+- Keycloak access requires valid mTLS credentials
+- The KEK can be rotated in Keycloak independently of the host
+
+A local cache exists for resilience against Keycloak outages, but it's encrypted with the client certificate key — compromising it requires both the cache file and the private key file.
+
+### Recommendation
+
+| Deployment | Recommended Mode |
+|-----------|-----------------|
+| Homelab, single server, physically secured | Local auth — simplest setup, acceptable risk |
+| Homelab with existing OIDC provider | OIDC without mTLS — SSO convenience, same host-compromise risk as local auth |
+| Production, multi-user, compliance requirements | OIDC with mTLS bootstrap — KEK not recoverable from host alone |
 
 ---
 

@@ -18,6 +18,7 @@ use crate::poller_registry::PollerRegistry;
 use crate::routes::network_map_status::NetworkMapStatusCache;
 use crate::secrets::SecretsManager;
 use crate::stats_store::StatsStore;
+use crate::attack_techniques::AttackTechniqueDb;
 use crate::task_supervisor::TaskSupervisor;
 use crate::topology::NetworkTopology;
 
@@ -71,4 +72,6 @@ pub struct AppState {
     pub task_supervisor: TaskSupervisor,
     /// Per-key rate limiter for local login attempts.
     pub login_limiter: LoginRateLimiter,
+    /// ATT&CK technique database for policy deviation enrichment.
+    pub attack_techniques: Arc<AttackTechniqueDb>,
 }

@@ -1,5 +1,6 @@
 pub mod alerting;
 pub mod anomaly_correlator;
+pub mod attack_techniques;
 pub mod auth;
 pub mod behavior_engine;
 pub mod bootstrap;

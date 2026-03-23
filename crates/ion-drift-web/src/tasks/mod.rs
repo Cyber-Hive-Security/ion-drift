@@ -2,6 +2,7 @@ mod behavior;
 mod cert;
 mod connections;
 mod metrics;
+mod policy_deviation_detector;
 mod policy_sync;
 pub(crate) mod port_baselines;
 mod traffic;
@@ -137,6 +138,14 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         &state.task_supervisor,
         state.switch_store.clone(),
         state.mikrotik.clone(),
+    );
+
+    // Policy deviation detection (DNS)
+    policy_deviation_detector::spawn_policy_deviation_detector(
+        state.behavior_store.clone(),
+        state.connection_store.clone(),
+        state.vlan_registry.clone(),
+        state.attack_techniques.clone(),
     );
 
     // Port rate baselines

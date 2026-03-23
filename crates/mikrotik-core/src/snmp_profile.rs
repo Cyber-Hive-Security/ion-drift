@@ -15,6 +15,14 @@ use serde::Serialize;
 
 use crate::snmp_client::SnmpInterface;
 
+// ─── IANA ifType Constants (RFC 2863) ────────────────────────────
+
+const IFTYPE_ETHERNET_CSMACD: u32 = 6;
+const IFTYPE_SOFTWARE_LOOPBACK: u32 = 24;
+const IFTYPE_L2_VLAN: u32 = 135;
+const IFTYPE_IEEE8023AD_LAG: u32 = 136;
+const IFTYPE_PORT_CHANNEL: u32 = 161;
+
 // ─── Types ───────────────────────────────────────────────────────
 
 /// Classification of an SNMP interface by its role.
@@ -112,11 +120,6 @@ pub fn detect_profile(sys_descr: &str) -> &'static SnmpProfile {
         return &NETGEAR_PROFILE;
     }
 
-    // Future vendor profiles:
-    // if lower.contains("cisco") || lower.contains("ios") { return &CISCO_PROFILE; }
-    // if lower.contains("tp-link") || lower.contains("tplink") { return &TPLINK_PROFILE; }
-    // if lower.contains("d-link") || lower.contains("dgs-") { return &DLINK_PROFILE; }
-
     &GENERIC_PROFILE
 }
 
@@ -144,11 +147,9 @@ pub fn classify_interfaces(
                 InterfaceClass::Physical
             } else if profile.lag_if_types.contains(&iface.if_type) {
                 InterfaceClass::Lag
-            } else if iface.if_type == 135 {
-                // l2vlan — common across vendors
+            } else if iface.if_type == IFTYPE_L2_VLAN {
                 InterfaceClass::Vlan
-            } else if iface.if_type == 24 {
-                // softwareLoopback
+            } else if iface.if_type == IFTYPE_SOFTWARE_LOOPBACK {
                 InterfaceClass::Management
             } else {
                 InterfaceClass::Internal
@@ -191,8 +192,8 @@ pub fn classify_interfaces(
 /// - No hidden index ranges
 pub static GENERIC_PROFILE: SnmpProfile = SnmpProfile {
     vendor: "Generic",
-    physical_if_types: &[6],
-    lag_if_types: &[136, 161],
+    physical_if_types: &[IFTYPE_ETHERNET_CSMACD],
+    lag_if_types: &[IFTYPE_IEEE8023AD_LAG, IFTYPE_PORT_CHANNEL],
     hidden_index_ranges: &[],
     prefer_if_name: true,
     friendly_name_fn: generic_friendly_name,
@@ -216,8 +217,8 @@ fn generic_friendly_name(_idx: u32, if_name: &str, if_descr: &str, _if_type: u32
 /// High ifIndex ranges (3000+) are tunnels and internal interfaces.
 pub static NETGEAR_PROFILE: SnmpProfile = SnmpProfile {
     vendor: "Netgear",
-    physical_if_types: &[6],
-    lag_if_types: &[161],
+    physical_if_types: &[IFTYPE_ETHERNET_CSMACD],
+    lag_if_types: &[IFTYPE_PORT_CHANNEL],
     hidden_index_ranges: &[
         (3000, 3999),   // tunnel interfaces
         (7000, 7999),   // loopback

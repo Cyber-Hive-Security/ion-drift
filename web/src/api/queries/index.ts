@@ -8,3 +8,4 @@ export * from './topology';
 export * from './sankey';
 export * from './settings';
 export * from './stats';
+export * from './policy';

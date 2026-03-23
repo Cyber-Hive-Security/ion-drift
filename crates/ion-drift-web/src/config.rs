@@ -368,13 +368,13 @@ impl ServerConfig {
             }
             config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET").unwrap_or_default();
         } else if config.oidc.is_some() {
-            // Legacy mode with OIDC present: env vars are required
-            config.router.password = std::env::var("DRIFT_ROUTER_PASSWORD")
-                .map_err(|_| anyhow::anyhow!("DRIFT_ROUTER_PASSWORD env var is required"))?;
+            // OIDC without mTLS bootstrap: env vars are needed on first run for
+            // KEK derivation and secret migration, but optional after that (secrets
+            // are loaded from the encrypted DB in main.rs).
+            config.router.password = std::env::var("DRIFT_ROUTER_PASSWORD").unwrap_or_default();
 
             if let Some(ref mut oidc) = config.oidc {
-                oidc.client_secret = std::env::var("DRIFT_OIDC_SECRET")
-                    .map_err(|_| anyhow::anyhow!("DRIFT_OIDC_SECRET env var is required"))?;
+                oidc.client_secret = std::env::var("DRIFT_OIDC_SECRET").unwrap_or_default();
             }
 
             config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET")
@@ -383,9 +383,9 @@ impl ServerConfig {
                     uuid::Uuid::new_v4().to_string()
                 });
         } else {
-            // No OIDC configured: only router password is needed
-            config.router.password = std::env::var("DRIFT_ROUTER_PASSWORD")
-                .map_err(|_| anyhow::anyhow!("DRIFT_ROUTER_PASSWORD env var is required"))?;
+            // Local auth: env vars are optional — credentials are managed through
+            // the setup wizard and stored in the encrypted secrets DB.
+            config.router.password = std::env::var("DRIFT_ROUTER_PASSWORD").unwrap_or_default();
 
             config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET")
                 .unwrap_or_else(|_| {

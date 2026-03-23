@@ -1,0 +1,51 @@
+{
+  "techniques": {
+    "T1071.004": {
+      "id": "T1071.004",
+      "name": "Application Layer Protocol: DNS",
+      "tactic": "Command and Control",
+      "description": "Adversaries may communicate using the Domain Name System (DNS) application layer protocol to avoid detection/network filtering by blending in with existing traffic.",
+      "url": "https://attack.mitre.org/techniques/T1071/004/"
+    },
+    "T1568": {
+      "id": "T1568",
+      "name": "Dynamic Resolution",
+      "tactic": "Command and Control",
+      "description": "Adversaries may dynamically establish connections to command and control infrastructure to evade common detections and remediations.",
+      "url": "https://attack.mitre.org/techniques/T1568/"
+    },
+    "T1048.003": {
+      "id": "T1048.003",
+      "name": "Exfiltration Over Alternative Protocol: Unencrypted Non-C2 Protocol",
+      "tactic": "Exfiltration",
+      "description": "Adversaries may steal data by exfiltrating it over an un-encrypted network protocol other than that of the existing command and control channel.",
+      "url": "https://attack.mitre.org/techniques/T1048/003/"
+    },
+    "T1583.001": {
+      "id": "T1583.001",
+      "name": "Acquire Infrastructure: Domains",
+      "tactic": "Resource Development",
+      "description": "Adversaries may acquire domains that can be used during targeting. Domain names are the human readable names used to represent one or more IP addresses.",
+      "url": "https://attack.mitre.org/techniques/T1583/001/"
+    },
+    "T1124": {
+      "id": "T1124",
+      "name": "System Time Discovery",
+      "tactic": "Discovery",
+      "description": "An adversary may gather the system time and/or time zone from a local or remote system to set up follow-on actions.",
+      "url": "https://attack.mitre.org/techniques/T1124/"
+    },
+    "T1090": {
+      "id": "T1090",
+      "name": "Proxy",
+      "tactic": "Command and Control",
+      "description": "Adversaries may use a connection proxy to direct network traffic between systems or act as an intermediary for network communications.",
+      "url": "https://attack.mitre.org/techniques/T1090/"
+    }
+  },
+  "deviation_mappings": {
+    "dns": ["T1071.004", "T1568", "T1048.003", "T1583.001"],
+    "ntp": ["T1124"],
+    "gateway": ["T1090"]
+  }
+}

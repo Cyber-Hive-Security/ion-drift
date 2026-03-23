@@ -16,6 +16,7 @@ pub mod metrics;
 pub mod neighbor_aliases;
 pub mod network_map_status;
 pub mod policy;
+pub mod policy_deviations;
 pub mod provision;
 pub mod sankey;
 pub mod settings;
@@ -433,6 +434,12 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/behavior/wan-scan-pressure", get(behavior::wan_scan_pressure))
         // Policy
         .route("/policy", get(policy::policy_overview))
+        // Policy deviations
+        .route("/policy/deviations", get(policy_deviations::list_deviations))
+        .route("/policy/deviations/counts", get(policy_deviations::deviation_counts))
+        .route("/policy/deviations/device/{mac}", get(policy_deviations::device_deviations))
+        .route("/policy/deviations/{id}/resolve", post(policy_deviations::resolve_deviation))
+        .route("/attack-techniques", get(policy_deviations::attack_techniques))
         // Investigations
         .route("/investigations", get(behavior::list_investigations))
         .route(
