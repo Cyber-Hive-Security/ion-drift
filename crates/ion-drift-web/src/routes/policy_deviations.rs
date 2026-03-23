@@ -1,7 +1,8 @@
 //! Policy deviation API endpoints — DNS deviation detection with ATT&CK context.
 
 use axum::extract::{Path, Query, State};
-use axum::response::{Json, Response};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 
 use super::internal_error;
@@ -97,13 +98,28 @@ pub async fn resolve_deviation(
             "resolved"
         }
         "authorize" => {
-            // Create a DNS policy authorizing the observed target for this VLAN
+            // Merge the observed target into the existing DNS policy for this VLAN
+            // (don't replace — that would remove other authorized servers)
             if let Some(vlan) = deviation.vlan {
+                let existing = state.behavior_store
+                    .get_policies_for_service("dns", Some("udp"), Some(53), Some(vlan))
+                    .await
+                    .unwrap_or_default();
+
+                let mut targets: Vec<String> = existing.iter()
+                    .flat_map(|p| p.authorized_targets.clone())
+                    .collect();
+                if !targets.contains(&deviation.actual) {
+                    targets.push(deviation.actual.clone());
+                }
+                targets.sort();
+                targets.dedup();
+
                 state.behavior_store.upsert_policy(
                     "dns",
                     Some("udp"),
                     Some(53),
-                    &[deviation.actual.clone()],
+                    &targets,
                     Some(&[vlan]),
                     "admin_policy",
                     "medium",
@@ -115,7 +131,10 @@ pub async fn resolve_deviation(
         "dismiss" => "resolved",
         "acknowledge" => "acknowledged",
         _ => {
-            return Ok(Json(serde_json::json!({ "error": "invalid action" })));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "invalid action — use acknowledge, authorize, deny_all, or dismiss" })),
+            ).into_response());
         }
     };
 

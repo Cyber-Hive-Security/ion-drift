@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use ion_drift_storage::BehaviorStore;
-use ion_drift_storage::behavior::VlanRegistry;
+use ion_drift_storage::behavior::{VlanRegistry, ip_matches_target};
 
 use crate::attack_techniques::AttackTechniqueDb;
 use crate::connection_store::ConnectionStore;
@@ -92,7 +92,7 @@ async fn run_detection_cycle(
         tokio::task::spawn_blocking(move || {
             let db = store.lock_db()?;
             let mut stmt = db.prepare(
-                "SELECT src_mac, src_ip, dst_ip, src_vlan
+                "SELECT src_mac, MAX(src_ip), dst_ip, MAX(src_vlan)
                  FROM connection_history
                  WHERE dst_port = 53
                    AND first_seen >= datetime(?1)
@@ -223,32 +223,4 @@ async fn run_detection_cycle(
     }
 
     Ok(())
-}
-
-/// Check if an IP matches a target (exact match or CIDR).
-/// Duplicated from behavior.rs to avoid circular deps — simple utility.
-fn ip_matches_target(ip: &str, target: &str) -> bool {
-    if ip == target {
-        return true;
-    }
-    if let Some(slash_pos) = target.find('/') {
-        let network = &target[..slash_pos];
-        let prefix_len: u32 = match target[slash_pos + 1..].parse() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        if prefix_len > 32 {
-            return false;
-        }
-        let net_octets: Vec<u8> = network.split('.').filter_map(|o| o.parse().ok()).collect();
-        let ip_octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse().ok()).collect();
-        if net_octets.len() != 4 || ip_octets.len() != 4 {
-            return false;
-        }
-        let net_u32 = u32::from_be_bytes([net_octets[0], net_octets[1], net_octets[2], net_octets[3]]);
-        let ip_u32 = u32::from_be_bytes([ip_octets[0], ip_octets[1], ip_octets[2], ip_octets[3]]);
-        let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
-        return (net_u32 & mask) == (ip_u32 & mask);
-    }
-    false
 }

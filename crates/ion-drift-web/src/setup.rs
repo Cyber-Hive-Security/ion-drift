@@ -517,7 +517,8 @@ pub async fn local_setup_submit(
     }
 
     // Derive KEK from admin password
-    let kek_result = match crate::bootstrap::derive_kek_from_password(&form.admin_password, &state.db_path) {
+    let data_dir = state.db_path.parent().unwrap_or(std::path::Path::new("."));
+    let kek_result = match crate::bootstrap::derive_kek_from_password(&form.admin_password, data_dir) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("KEK derivation failed: {e}");
@@ -526,7 +527,6 @@ pub async fn local_setup_submit(
     };
 
     // Cache KEK for startup without password
-    let data_dir = state.db_path.parent().unwrap_or(std::path::Path::new("."));
     if let Err(e) = crate::bootstrap::cache_kek_locally(&kek_result.kek, data_dir) {
         tracing::error!("failed to cache KEK: {e}");
         return Html(render_local_setup_html(Some("Failed to cache encryption key. Check server logs."))).into_response();

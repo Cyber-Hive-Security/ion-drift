@@ -226,6 +226,11 @@ async fn main() -> anyhow::Result<()> {
                 if let Ok(Some(p)) = sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
                     config.router.password = p.expose_secret().to_string();
                 }
+                if let Ok(Some(cs)) = sm.decrypt_secret(secrets::SECRET_OIDC_CLIENT_SECRET).await {
+                    if let Some(ref mut oidc) = config.oidc {
+                        oidc.client_secret = cs.expose_secret().to_string();
+                    }
+                }
                 Some(Arc::new(tokio::sync::RwLock::new(sm)))
             }
             None => {
@@ -236,7 +241,7 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
                 tracing::info!("OIDC mode (no mTLS): deriving KEK from client secret");
-                let kek_result = bootstrap::derive_kek_from_password(&oidc_secret, &db_path)?;
+                let kek_result = bootstrap::derive_kek_from_password(&oidc_secret, &data_dir)?;
                 bootstrap::cache_kek_locally(&kek_result.kek, &data_dir)?;
 
                 let sm = SecretsManager::new(&db_path, kek_result.kek)?;
@@ -268,6 +273,14 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
+
+    // Warn if router password is empty after all loading stages
+    if config.router.password.is_empty() {
+        tracing::warn!(
+            "router password is empty — connection will fail. \
+             Set credentials via the setup wizard or DRIFT_ROUTER_PASSWORD env var."
+        );
+    }
 
     // Warn if session cookies will be sent over HTTP on a non-localhost bind
     if !config.session.secure

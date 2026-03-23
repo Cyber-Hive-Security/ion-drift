@@ -2842,7 +2842,10 @@ impl BehaviorStore {
                 occurrence_count = occurrence_count + 1,
                 ip_address = ?2,
                 expected = ?5,
-                severity = CASE WHEN ?9 = 'warning' AND severity = 'informational' THEN 'warning' ELSE severity END",
+                severity = CASE WHEN ?9 = 'warning' AND severity = 'informational' THEN 'warning' ELSE severity END,
+                status = CASE WHEN status IN ('resolved', 'acknowledged') THEN 'new' ELSE status END,
+                resolved_at = CASE WHEN status IN ('resolved', 'acknowledged') THEN NULL ELSE resolved_at END,
+                resolved_by = CASE WHEN status IN ('resolved', 'acknowledged') THEN NULL ELSE resolved_by END",
             params![
                 dev.mac_address, dev.ip_address, dev.vlan, dev.deviation_type,
                 dev.expected, dev.actual, dev.policy_source, techniques_json,
@@ -3084,7 +3087,8 @@ impl BehaviorStore {
 }
 
 /// Check if an IP address matches a target (exact IP or CIDR notation).
-fn ip_matches_target(ip: &str, target: &str) -> bool {
+/// Check if an IP matches a target (exact match or CIDR).
+pub fn ip_matches_target(ip: &str, target: &str) -> bool {
     if ip == target {
         return true;
     }

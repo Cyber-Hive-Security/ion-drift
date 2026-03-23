@@ -140,7 +140,7 @@ pub struct SnmpClient {
     pub host: String,
     pub port: u16,
     // v2c
-    pub community: Option<String>,
+    pub community: Option<SecretString>,
     // v3
     pub v3_username: Option<String>,
     pub v3_auth_password: Option<SecretString>,
@@ -170,7 +170,7 @@ impl SnmpClient {
         Self {
             host,
             port,
-            community: Some(community),
+            community: Some(SecretString::from(community)),
             v3_username: None,
             v3_auth_password: None,
             v3_auth_protocol: None,
@@ -278,7 +278,11 @@ impl SnmpClient {
 
             Ok(sess)
         } else {
-            let community = self.community.as_deref().unwrap_or("public");
+            let community_secret;
+            let community = match self.community.as_ref() {
+                Some(s) => { community_secret = s.expose_secret().to_string(); &community_secret }
+                None => "public",
+            };
             SyncSession::new_v2c(
                 &self.addr(),
                 community.as_bytes(),
