@@ -98,15 +98,18 @@ pub async fn resolve_deviation(
             "resolved"
         }
         "authorize" => {
-            // Merge the observed target into the existing DNS policy for this VLAN
-            // (don't replace — that would remove other authorized servers)
+            // Merge the observed target into the existing VLAN-scoped DNS policy.
+            // Only merge VLAN-specific policies — global policies are left separate
+            // so future global changes propagate cleanly.
             if let Some(vlan) = deviation.vlan {
                 let existing = state.behavior_store
                     .get_policies_for_service("dns", Some("udp"), Some(53), Some(vlan))
                     .await
                     .unwrap_or_default();
 
+                // Only include targets from VLAN-scoped policies, not global ones
                 let mut targets: Vec<String> = existing.iter()
+                    .filter(|p| p.vlan_scope.is_some())
                     .flat_map(|p| p.authorized_targets.clone())
                     .collect();
                 if !targets.contains(&deviation.actual) {

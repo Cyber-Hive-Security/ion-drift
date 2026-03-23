@@ -92,12 +92,12 @@ async fn run_detection_cycle(
         tokio::task::spawn_blocking(move || {
             let db = store.lock_db()?;
             let mut stmt = db.prepare(
-                "SELECT src_mac, MAX(src_ip), dst_ip, MAX(src_vlan)
+                "SELECT src_mac, src_ip, dst_ip, src_vlan
                  FROM connection_history
                  WHERE dst_port = 53
                    AND first_seen >= datetime(?1)
                    AND src_mac IS NOT NULL
-                 GROUP BY src_mac, dst_ip",
+                 GROUP BY src_mac, src_ip, src_vlan, dst_ip",
             ).map_err(|e| format!("dns deviation query: {e}"))?;
 
             let rows: Vec<(String, String, String, Option<String>)> = stmt.query_map(
