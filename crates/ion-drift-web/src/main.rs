@@ -212,11 +212,6 @@ async fn main() -> anyhow::Result<()> {
             .map(|o| o.client_secret.clone())
             .unwrap_or_default();
 
-        if oidc_secret.is_empty() {
-            tracing::error!("OIDC configured without mTLS bootstrap but no client secret available (set DRIFT_OIDC_SECRET)");
-            anyhow::bail!("OIDC client secret required for KEK derivation — set DRIFT_OIDC_SECRET env var");
-        }
-
         match bootstrap::load_local_kek(&data_dir)? {
             Some(result) => {
                 let sm = SecretsManager::new(&db_path, result.kek)?;
@@ -235,6 +230,11 @@ async fn main() -> anyhow::Result<()> {
             }
             None => {
                 // First run: derive KEK from OIDC client secret, cache it, migrate secrets
+                if oidc_secret.is_empty() {
+                    anyhow::bail!(
+                        "OIDC client secret required for initial KEK derivation — set DRIFT_OIDC_SECRET env var on first run"
+                    );
+                }
                 tracing::info!("OIDC mode (no mTLS): deriving KEK from client secret");
                 let kek_result = bootstrap::derive_kek_from_password(&oidc_secret, &db_path)?;
                 bootstrap::cache_kek_locally(&kek_result.kek, &data_dir)?;
