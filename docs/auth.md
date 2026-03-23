@@ -70,8 +70,11 @@ Used when `[oidc.bootstrap]` is configured. Keycloak-specific.
 
 Used when `[oidc]` is configured but `[oidc.bootstrap]` is not — i.e., OIDC with a non-Keycloak provider or without mTLS infrastructure.
 
-- Secrets are provided via `DRIFT_ROUTER_PASSWORD`, `DRIFT_OIDC_SECRET`, and `DRIFT_SESSION_SECRET` environment variables.
-- On first startup, env var secrets are migrated into the encrypted secrets DB (using a KEK derived from a machine key). After migration, the env vars are no longer read.
+- **Derivation:** The KEK is derived from the OIDC client secret using argon2id KDF on first startup.
+- **Caching:** The derived KEK is cached locally using `machine.key` + `kek.local` (same mechanism as Local KDF).
+- **Startup:** On subsequent starts, the KEK is loaded from the local cache. The client secret is not re-read.
+- **Migration:** On first startup, router credentials and session secret are migrated from environment variables / config into the encrypted secrets DB. After migration, env vars are no longer read.
+- **Recovery:** If the data volume is lost, the KEK can be re-derived from the original OIDC client secret. If the client secret has been rotated since initial setup, a fresh setup with re-entered credentials is required.
 - This mode supports any OIDC provider (Authentik, Authelia, etc.) without requiring Keycloak-specific mTLS setup.
 
 ---

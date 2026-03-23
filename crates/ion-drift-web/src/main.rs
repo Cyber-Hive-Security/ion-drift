@@ -206,7 +206,67 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     } else {
-        None
+        // OIDC without mTLS bootstrap — derive KEK from the OIDC client secret
+        let db_path = data_dir.join("secrets.db");
+        let oidc_secret = config.oidc.as_ref()
+            .map(|o| o.client_secret.clone())
+            .unwrap_or_default();
+
+        if oidc_secret.is_empty() {
+            tracing::error!("OIDC configured without mTLS bootstrap but no client secret available (set DRIFT_OIDC_SECRET)");
+            anyhow::bail!("OIDC client secret required for KEK derivation — set DRIFT_OIDC_SECRET env var");
+        }
+
+        match bootstrap::load_local_kek(&data_dir)? {
+            Some(result) => {
+                let sm = SecretsManager::new(&db_path, result.kek)?;
+                tracing::info!("OIDC mode (no mTLS): loading from cached KEK");
+                // Load secrets into config
+                if let Ok(Some(ss)) = sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
+                    config.session.session_secret = ss.expose_secret().to_string();
+                }
+                if let Ok(Some(u)) = sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
+                    config.router.username = u.expose_secret().to_string();
+                }
+                if let Ok(Some(p)) = sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
+                    config.router.password = p.expose_secret().to_string();
+                }
+                Some(Arc::new(tokio::sync::RwLock::new(sm)))
+            }
+            None => {
+                // First run: derive KEK from OIDC client secret, cache it, migrate secrets
+                tracing::info!("OIDC mode (no mTLS): deriving KEK from client secret");
+                let kek_result = bootstrap::derive_kek_from_password(&oidc_secret, &db_path)?;
+                bootstrap::cache_kek_locally(&kek_result.kek, &data_dir)?;
+
+                let sm = SecretsManager::new(&db_path, kek_result.kek)?;
+
+                // Generate session secret
+                let session_secret = if config.session.session_secret.is_empty() {
+                    let bytes: [u8; 32] = rand::random();
+                    hex::encode(bytes)
+                } else {
+                    config.session.session_secret.clone()
+                };
+
+                // Migrate secrets from env vars / config into encrypted storage
+                let decrypted = DecryptedSecrets {
+                    router_username: config.router.username.clone(),
+                    router_password: secrecy::SecretString::from(config.router.password.clone()),
+                    oidc_client_secret: secrecy::SecretString::from(oidc_secret),
+                    session_secret: secrecy::SecretString::from(session_secret.clone()),
+                    certwarden_cert_api_key: None,
+                    certwarden_key_api_key: None,
+                    maxmind_account_id: None,
+                    maxmind_license_key: None,
+                };
+                sm.store_all(&decrypted).await?;
+                config.session.session_secret = session_secret;
+                tracing::info!("OIDC mode (no mTLS): secrets derived and encrypted");
+
+                Some(Arc::new(tokio::sync::RwLock::new(sm)))
+            }
+        }
     };
 
     // Warn if session cookies will be sent over HTTP on a non-localhost bind
