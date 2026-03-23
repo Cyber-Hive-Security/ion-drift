@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-18
+> **Last updated:** 2026-03-23
 
 ## Overview
 
@@ -33,7 +33,6 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 ## Network Discovery
 
 - Passive service discovery from observed connection patterns (no active scanning required)
-- Optional active scanning (nmap) with quick/standard/deep profiles and scan exclusion lists
 - Device fingerprinting via OUI manufacturer lookup and traffic pattern classification
 - Automatic device type inference (camera, printer, server, phone, smart home, computer, media server) from behavioral heuristics
 - Network identity correlation combining DHCP, ARP, switch MAC tables, LLDP/CDP neighbors, and nmap results
@@ -71,6 +70,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - WAN scan pressure aggregation with time-series dashboard
 - Port flow baselines with network-wide anomaly classification (new port, volume spike, source anomaly, disappeared)
 - Two-layer correlation: device-level anomalies cross-linked with network-level port anomalies
+- DNS policy deviation detection with MITRE ATT&CK context *(beta)* — detects devices using unauthorized DNS servers, enriches with ATT&CK technique mappings (T1071.004, T1568, T1048.003, T1583.001), resolve actions create policies organically
 - Pattern suppression rules with auto-creation on operator dismiss
 - Priority boosting on operator flag (persistent severity escalation)
 - Deduplication with occurrence counting and last-occurrence tracking
@@ -111,7 +111,8 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 - AES-256-GCM encryption for all secrets at rest (router credentials, OIDC secrets, API keys)
 - Argon2id password hashing for local accounts
-- Key encryption key (KEK) via local argon2id derivation (default), mTLS Keycloak bootstrap (opt-in), or legacy environment variable
+- Key encryption key (KEK) via local argon2id derivation (default), OIDC client secret derivation (OIDC without mTLS), or mTLS Keycloak bootstrap (opt-in)
+- Random persistent salt for KEK derivation (unique per installation)
 - Key fingerprint tracking with per-secret currency status
 - Session secret regeneration on demand
 
@@ -133,6 +134,9 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 ## Administration
 
+- Statistics page with page view tracking, diagnostic report generation, and engine health overview
+- Graceful startup when router is unreachable — web UI starts so credentials can be fixed via Settings
+- HTTP compression (gzip + Brotli) and immutable cache headers for hashed static assets
 - Settings management for map configuration, monitored regions, and GeoIP database updates
 - Secrets management UI showing encryption status, key currency, and per-secret metadata
 - TLS certificate status monitoring with auto-renewal support

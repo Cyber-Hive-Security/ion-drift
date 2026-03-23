@@ -17,6 +17,12 @@ Ion Drift connects to your MikroTik router's REST API, monitors your network in 
 
 See [FEATURES.md](FEATURES.md) for the full feature list.
 
+### Beta Features
+
+Features marked *(beta)* are functional but undergoing extended testing. They may have rough edges.
+
+- **DNS Policy Deviation Detection** — Detects devices using unauthorized DNS servers by cross-referencing connection tracking with the infrastructure policy map. Enriched with MITRE ATT&CK technique context. Resolve actions create policies organically from observed traffic.
+
 ## Screenshots
 
 ### Network Topology

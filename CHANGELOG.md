@@ -4,6 +4,61 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.4] - 2026-03-23
+
+### Added
+
+- **DNS policy deviation detection with MITRE ATT&CK context [beta]** — cross-references connection tracking with infrastructure policy map to detect unauthorized DNS servers; enriched with ATT&CK technique mappings (T1071.004, T1568, T1048.003, T1583.001); resolve actions (authorize, deny_all, dismiss, acknowledge) create policies organically from observed traffic
+- Policy deviations dashboard card, investigation page cards with clickable ATT&CK pills, and policy page deviations table with inline resolve
+- Statistics page with page view tracking (90-day retention) and diagnostic report generation
+- Diagnostic report: environment info, scale metrics, feature adoption, engine health, inference stats, anomaly dispositions, page views
+- Investigation page enrichment: device context card (manufacturer, type, VLAN, switch port, link speed), traffic context (1h/24h bandwidth vs baseline), GeoIP on destinations
+- Graceful startup when router is unreachable — web UI starts so credentials can be fixed via Settings > Devices instead of requiring filesystem access
+- OIDC without mTLS bootstrap: KEK derived from OIDC client secret via argon2id (no env vars needed after first run)
+- Environment variables optional after first run for all auth modes (local, OIDC, mTLS bootstrap)
+- Security model comparison in auth docs with threat scenario matrix
+- HTTP compression (gzip + Brotli) via tower-http
+- Immutable cache headers for content-hashed static assets
+- VLAN metrics downsampling (SQL-level bucketing reduces response size ~12x)
+- Single primary router enforcement with infrastructure fallback dialog
+
+### Fixed
+
+- SNMP v2c community string wrapped in SecretString (was plain String; v3 passwords already wrapped)
+- KEK salt now random and persistent per installation (was deterministic from filesystem path)
+- OIDC client secret restored from encrypted DB on cached-KEK startup (was left empty, breaking OIDC login after restart)
+- Resolved/acknowledged policy deviations re-open when the same violation recurs
+- Authorize resolve action merges targets into existing VLAN policy instead of replacing (prevents silent allowlist clobbering)
+- DNS deviation detector skips DNS servers (their outbound port-53 is recursive resolution, not a violation)
+- DNS deviation query groups by all identity columns (was nondeterministic with MAX on ungrouped columns)
+- Authorize merge excludes global policies from VLAN-scoped writes (prevents stale global copies)
+- Task supervisor catches synchronous panics in factory calls (not just async future panics)
+- Backoff jitter (±25%) in task supervisor to prevent thundering herd
+- SNMP poll cycle rejected entirely on partial ifName walk failure (prevents mixed name sets)
+- Replaced serde_json unwrap() with unwrap_or_default() in 8 route handlers
+- Added LIMIT 10000 safety bounds to unbounded neighbor/backbone queries
+- Invalid deviation resolve action returns 400 instead of 200
+- Removed dead nmap scanning code (521-line page, types, hooks)
+- IANA ifType magic numbers replaced with named constants
+
+### Changed
+
+- "Legacy mode" renamed to "OIDC without mTLS bootstrap" in all docs
+- Config docs clarify credentials are managed via setup wizard, not env vars
+- Router port docs warn against 8728/8729 (proprietary API, not REST)
+- Docker Compose example includes credential management comment
+- Default router username in server.example.toml changed from "admin" to "ion-drift"
+- License display: "1 Router (full NDR) · Unlimited infrastructure devices"
+- Frontend queries split from monolithic queries.ts into 9 domain modules
+- Commented-out future vendor profile code removed from snmp_profile.rs
+
+### Security
+
+- Router user permissions docs: default to read-only, write only for provisioning
+- TLS requirements documented: supported signature algorithms (ECDSA-SHA256/384, RSA, Ed25519), ECDSA-SHA512 not supported
+- Docker container resource limits (2 CPU, 2GB RAM) in compose files
+- Warning logged when router password is empty after all loading stages
+
 ## [0.2.1] - 2026-03-17
 
 ### Added
