@@ -17,12 +17,16 @@ listen_port = 3000
 # Router IP or hostname (REQUIRED for production; default: 192.168.88.1 = Mikrotik factory default)
 # Override: DRIFT_ROUTER_HOST env var
 host = "192.168.88.1"
+# RouterOS REST API port. This MUST be 443 (HTTPS).
+# ⚠ Do NOT use port 8728 or 8729 — those are the RouterOS proprietary API (Winbox/API),
+# which speaks a completely different protocol. Ion Drift uses the REST API only.
 port = 443
 tls = true
 # Path to your CA certificate if the router uses a private/internal CA
 ca_cert_path = "/path/to/ca.crt"
-username = "admin"
-# password from DRIFT_ROUTER_PASSWORD env var (legacy mode only)
+# Username for the RouterOS REST API. Create a dedicated read-only user — do not use "admin".
+# Password is configured through the setup wizard and stored encrypted — no env var needed.
+username = "ion-drift"
 wan_interface = "1-WAN"
 # Internal DNS server IP for PTR lookups (optional; falls back to system resolver)
 # Override: DRIFT_ROUTER_DNS_SERVER env var
@@ -49,15 +53,17 @@ wan_interface = "1-WAN"
 # # admin_role = "ion-drift-admin"
 
 [session]
-# secret from DRIFT_SESSION_SECRET env var (legacy mode; auto-generated in bootstrap mode)
+# Session secret is auto-generated and stored encrypted by the setup wizard.
+# Only set DRIFT_SESSION_SECRET env var if using OIDC without mTLS bootstrap.
 cookie_name = "ion_drift_session"
 max_age_seconds = 86400
 secure = true
 same_site = "lax"
 
-# ── Bootstrap mode (enables encrypted secrets at rest) ──────────
+# ── mTLS Bootstrap (Keycloak-only, advanced) ────────────────────
 # Uncomment the sections below to enable mTLS KEK bootstrap + CertWarden cert management.
-# With bootstrap enabled, secrets are encrypted in SQLite (no env vars needed after setup).
+# With bootstrap enabled, the KEK is retrieved from Keycloak via mTLS instead of derived
+# from the admin password. Only needed for Keycloak deployments that want mTLS-based KEK.
 
 # [oidc.bootstrap]
 # client_id = "ion-drift-bootstrap"
