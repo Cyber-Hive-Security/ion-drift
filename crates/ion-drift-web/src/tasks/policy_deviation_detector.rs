@@ -1,7 +1,7 @@
 //! DNS policy deviation detector — background task that compares observed DNS traffic
 //! against the infrastructure policy map and records deviations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -54,21 +54,33 @@ async fn run_detection_cycle(
     // 1. Load DNS policies: service=dns
     let dns_policies = behavior_store.get_policies_for_service("dns", None, None, None).await?;
 
-    // Build VLAN → authorized DNS IPs map
+    // Build VLAN → authorized DNS IPs map (deduplicated)
     let mut vlan_authorized: HashMap<i64, Vec<String>> = HashMap::new();
     let mut global_authorized: Vec<String> = Vec::new();
+    // Collect ALL authorized DNS server IPs — devices at these IPs are DNS servers
+    // and their outbound port-53 traffic is recursive resolution, not a deviation.
+    let mut all_dns_server_ips: HashSet<String> = HashSet::new();
 
     for policy in &dns_policies {
+        for target in &policy.authorized_targets {
+            all_dns_server_ips.insert(target.clone());
+        }
+
         if let Some(ref scopes) = policy.vlan_scope {
             for &vlan_id in scopes {
-                vlan_authorized
-                    .entry(vlan_id)
-                    .or_default()
-                    .extend(policy.authorized_targets.clone());
+                let entry = vlan_authorized.entry(vlan_id).or_default();
+                for target in &policy.authorized_targets {
+                    if !entry.contains(target) {
+                        entry.push(target.clone());
+                    }
+                }
             }
         } else {
-            // Global policy — applies to all VLANs
-            global_authorized.extend(policy.authorized_targets.clone());
+            for target in &policy.authorized_targets {
+                if !global_authorized.contains(target) {
+                    global_authorized.push(target.clone());
+                }
+            }
         }
     }
 
@@ -116,6 +128,13 @@ async fn run_detection_cycle(
     let mut deviation_count = 0u32;
 
     for (src_mac, src_ip, dst_ip, _src_vlan_str) in &dns_connections {
+        // Skip DNS servers — their outbound port-53 traffic is recursive resolution,
+        // not a policy violation. A device is a DNS server if its IP appears in any
+        // policy's authorized_targets (derived from DHCP config).
+        if all_dns_server_ips.contains(src_ip) {
+            continue;
+        }
+
         // Resolve source IP to VLAN
         let vlan_id = registry.ip_to_vlan(src_ip);
         if vlan_id.is_none() {
