@@ -24,6 +24,8 @@ services:
     environment:
       - RUST_LOG=info,tower_http=warn,hyper=warn,maxminddb=warn,reqwest=warn,rustls=warn,hyper_util=warn
       - XDG_DATA_HOME=/app/data
+      # Router credentials are configured through the setup wizard and stored
+      # encrypted — do NOT add DRIFT_ROUTER_PASSWORD here. See docs/configuration.md.
     logging:
       driver: json-file
       options:

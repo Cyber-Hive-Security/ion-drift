@@ -66,13 +66,13 @@ Used when `[oidc.bootstrap]` is configured. Keycloak-specific.
 - **Local cache:** After successful retrieval, the KEK is cached locally (encrypted with a key derived from the client certificate) for resilience against Keycloak outages.
 - **Fallback:** If all Keycloak retries fail, the local cache is loaded as a fallback.
 
-### 3. Legacy Environment Variables
+### 3. OIDC without mTLS Bootstrap
 
-Used when neither local auth setup nor bootstrap is configured.
+Used when `[oidc]` is configured but `[oidc.bootstrap]` is not — i.e., OIDC with a non-Keycloak provider or without mTLS infrastructure.
 
-- Secrets are provided directly via `DRIFT_ROUTER_PASSWORD`, `DRIFT_OIDC_SECRET`, and `DRIFT_SESSION_SECRET` environment variables.
-- No encrypted storage — secrets exist only in process memory after being read from the environment.
-- This mode is a fallback for deployments that cannot use either local auth or mTLS bootstrap.
+- Secrets are provided via `DRIFT_ROUTER_PASSWORD`, `DRIFT_OIDC_SECRET`, and `DRIFT_SESSION_SECRET` environment variables.
+- On first startup, env var secrets are migrated into the encrypted secrets DB (using a KEK derived from a machine key). After migration, the env vars are no longer read.
+- This mode supports any OIDC provider (Authentik, Authelia, etc.) without requiring Keycloak-specific mTLS setup.
 
 ---
 
@@ -147,7 +147,7 @@ When no local users exist (typical for mTLS bootstrap deployments), Ion Drift op
 | Roles source | DB `role` field | `realm_access.roles` | `groups` | `groups` |
 | `roles_claim` | N/A | `realm_access.roles` (default) | `groups` | `groups` |
 | `admin_role` | `admin` (mapped internally) | `ion-drift-admin` (default) | configurable group name | configurable group name |
-| KEK mode | Local KDF | Local KDF or mTLS bootstrap | Local KDF | Local KDF |
+| KEK mode | Local KDF | Local KDF or mTLS bootstrap | Local KDF (machine key) | Local KDF (machine key) |
 | mTLS bootstrap | N/A | opt-in via `[oidc.bootstrap]` | N/A | N/A |
 | Setup complexity | Low | Medium | Medium | Medium |
 | External dependencies | None | Keycloak instance | Authentik instance | Authelia instance |
