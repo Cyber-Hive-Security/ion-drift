@@ -478,19 +478,19 @@ pub async fn update_device(
     drop(sm_read);
 
     if !needs_restart {
-        let mut dm = state.device_manager.write().await;
-        dm.update_runtime_device(&id, record, client);
-    }
+        {
+            let mut dm = state.device_manager.write().await;
+            dm.update_runtime_device(&id, record, client);
+        }
 
-    // Restart the poller with updated configuration, handling enabled/disabled transitions
-    {
+        // Restart the poller with updated configuration, handling enabled/disabled transitions.
+        // Skip when needs_restart — the old client would generate error logs until restart.
         let dm = state.device_manager.read().await;
         let mut registry = state.poller_registry.write().await;
         if let Some(entry) = dm.get_device(&id) {
             if !entry.record.enabled {
                 registry.stop_poller(&id);
             } else {
-                // Always (re)start poller for enabled devices — handles disabled→enabled transition
                 registry.start_poller(
                     entry,
                     state.device_manager.clone(),
@@ -498,7 +498,6 @@ pub async fn update_device(
                 );
             }
         } else {
-            // Device moved to disabled map — stop any existing poller
             registry.stop_poller(&id);
         }
     }

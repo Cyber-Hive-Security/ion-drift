@@ -476,8 +476,7 @@ pub fn load_local_kek(data_dir: &Path) -> anyhow::Result<Option<BootstrapResult>
     }))
 }
 
-/// Derive a KEK from a user password using argon2id KDF.
-/// Derive a KEK from a password/secret using argon2id.
+/// Derive a KEK from a password or secret using argon2id.
 ///
 /// Uses a random 16-byte salt persisted at `data_dir/kek.salt`. On first call the salt
 /// is generated and written to disk; subsequent calls read the existing salt. This ensures
