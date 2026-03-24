@@ -59,7 +59,11 @@ wan_interface = "1-WAN"
 # Only set DRIFT_SESSION_SECRET env var if using OIDC without mTLS bootstrap.
 cookie_name = "ion_drift_session"
 max_age_seconds = 86400
-secure = true
+# Set to true only if accessing Ion Drift over HTTPS (direct or via reverse proxy).
+# When false, session cookies work over plain HTTP. When true, browsers silently
+# reject cookies on HTTP connections — login appears to succeed but the session
+# is never stored.
+secure = false
 same_site = "lax"
 
 # ── mTLS Bootstrap (Keycloak-only, advanced) ────────────────────
