@@ -379,7 +379,7 @@ impl ServerConfig {
 
             config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET")
                 .unwrap_or_else(|_| {
-                    tracing::warn!("DRIFT_SESSION_SECRET not set, generating random secret");
+                    tracing::debug!("DRIFT_SESSION_SECRET not set, using temporary secret (will be overwritten by secrets DB if available)");
                     uuid::Uuid::new_v4().to_string()
                 });
         } else {
@@ -389,7 +389,7 @@ impl ServerConfig {
 
             config.session.session_secret = std::env::var("DRIFT_SESSION_SECRET")
                 .unwrap_or_else(|_| {
-                    tracing::warn!("DRIFT_SESSION_SECRET not set, generating random secret");
+                    tracing::debug!("DRIFT_SESSION_SECRET not set, using temporary secret (will be overwritten by secrets DB if available)");
                     uuid::Uuid::new_v4().to_string()
                 });
         }

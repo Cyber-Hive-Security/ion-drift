@@ -274,14 +274,6 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Warn if router password is empty after all loading stages
-    if config.router.password.is_empty() {
-        tracing::warn!(
-            "router password is empty — connection will fail. \
-             Set credentials via the setup wizard or DRIFT_ROUTER_PASSWORD env var."
-        );
-    }
-
     // Warn if session cookies will be sent over HTTP on a non-localhost bind
     if !config.session.secure
         && config.server.listen_addr != "127.0.0.1"
@@ -319,6 +311,17 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to init switch store: {e}"))?,
     );
 
+    // Auto-detect CA cert at well-known path if not explicitly configured
+    let ca_cert_path = config.router.ca_cert_path.clone().or_else(|| {
+        let well_known = std::path::Path::new("/app/certs/root_ca.crt");
+        if well_known.exists() {
+            tracing::info!("auto-detected CA cert at {}", well_known.display());
+            Some(well_known.to_string_lossy().to_string())
+        } else {
+            None
+        }
+    });
+
     let device_manager = if let Some(ref sm) = secrets_manager {
         let sm_read = sm.read().await;
         let has_devices = sm_read.has_devices().await.unwrap_or(false);
@@ -328,7 +331,7 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("loading devices from registry");
             let dm = device_manager::DeviceManager::load(
                 &sm_read,
-                config.router.ca_cert_path.as_deref(),
+                ca_cert_path.as_deref(),
             )
             .await?;
             drop(sm_read);
@@ -347,7 +350,7 @@ async fn main() -> anyhow::Result<()> {
                 host: config.router.host.clone(),
                 port: config.router.port,
                 tls: config.router.tls,
-                ca_cert_path: config.router.ca_cert_path.clone(),
+                ca_cert_path: ca_cert_path.clone(),
                 device_type: "router".to_string(),
                 model: Some("RB4011iGS+".to_string()),
                 is_primary: true,
@@ -390,11 +393,22 @@ async fn main() -> anyhow::Result<()> {
 
     // Test connectivity — non-fatal so the web UI starts even if the router is unreachable.
     // Users can fix credentials via Settings → Devices without filesystem access.
-    tracing::info!(
-        "connecting to router at {}:{}",
-        config.router.host,
-        config.router.port
-    );
+    {
+        let dm = device_manager.read().await;
+        if let Some(entry) = dm.all_devices().into_iter().find(|d| d.record.is_primary) {
+            tracing::info!(
+                "connecting to router at {}:{}",
+                entry.record.host,
+                entry.record.port
+            );
+        } else {
+            tracing::info!(
+                "connecting to router at {}:{}",
+                config.router.host,
+                config.router.port
+            );
+        }
+    }
     match mikrotik.test_connection().await {
         Ok(name) => {
             tracing::info!("connected to router: {name}");
