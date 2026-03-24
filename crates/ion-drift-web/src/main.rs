@@ -188,13 +188,30 @@ async fn main() -> anyhow::Result<()> {
                     if let Ok(Some(ss)) = sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
                         config.session.session_secret = ss.expose_secret().to_string();
                     }
-                    // Load router credentials if available
+                    // Load router credentials from DB if available
                     if let Ok(Some(u)) = sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
                         config.router.username = u.expose_secret().to_string();
                     }
-                    if let Ok(Some(p)) = sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
+                    let db_has_password = if let Ok(Some(p)) = sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
                         config.router.password = p.expose_secret().to_string();
+                        true
+                    } else {
+                        false
+                    };
+
+                    // Migrate env var credentials into encrypted DB if not already stored.
+                    // This handles the case where DRIFT_ROUTER_PASSWORD is set in compose
+                    // but the setup wizard only created the admin account (no router creds).
+                    if !db_has_password && !config.router.password.is_empty() {
+                        tracing::info!("migrating router credentials from env var to encrypted storage");
+                        if let Err(e) = sm.encrypt_secret(secrets::SECRET_ROUTER_USERNAME, &config.router.username).await {
+                            tracing::warn!("failed to migrate router username: {e}");
+                        }
+                        if let Err(e) = sm.encrypt_secret(secrets::SECRET_ROUTER_PASSWORD, &config.router.password).await {
+                            tracing::warn!("failed to migrate router password: {e}");
+                        }
                     }
+
                     Some(Arc::new(tokio::sync::RwLock::new(sm)))
                 } else {
                     tracing::info!("local auth mode: no users yet, entering setup");
