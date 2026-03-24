@@ -62,7 +62,7 @@ export function useUpdateDevice() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateDeviceRequest }) =>
-      apiFetch<{ message: string }>(`/api/devices/${encodeURIComponent(id)}`, {
+      apiFetch<{ message: string; restart_required?: boolean }>(`/api/devices/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),

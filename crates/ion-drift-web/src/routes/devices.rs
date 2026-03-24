@@ -447,21 +447,15 @@ pub async fn update_device(
     // Validate host (SSRF) and ca_cert_path (path traversal) before persisting
     validate_device_update(&update)?;
 
-    {
+    let needs_restart = {
         let dm = state.device_manager.read().await;
-        if let Some(entry) = dm.get_device(&id) {
-            if entry.record.is_primary && requires_primary_restart(&update) {
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error": "updating the primary router connection settings requires a server restart"
-                    })),
-                )
-                    .into_response());
-            }
-        }
-    }
+        dm.get_device(&id)
+            .map(|entry| entry.record.is_primary && requires_primary_restart(&update))
+            .unwrap_or(false)
+    };
 
+    // Always save — even if a restart is needed, persist the new credentials
+    // so they take effect on next startup.
     let sm_read = sm.read().await;
     sm_read
         .update_device(&id, &update)
@@ -483,7 +477,7 @@ pub async fn update_device(
     let client = build_runtime_client(&state, &sm_read, &record).await?;
     drop(sm_read);
 
-    {
+    if !needs_restart {
         let mut dm = state.device_manager.write().await;
         dm.update_runtime_device(&id, record, client);
     }
@@ -509,9 +503,16 @@ pub async fn update_device(
         }
     }
 
-    Ok(Json(serde_json::json!({
-        "message": "device updated"
-    })))
+    if needs_restart {
+        Ok(Json(serde_json::json!({
+            "message": "device updated — restart the container to apply primary router changes",
+            "restart_required": true
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "message": "device updated"
+        })))
+    }
 }
 
 // ── DELETE /api/devices/{id} ─────────────────────────────────────

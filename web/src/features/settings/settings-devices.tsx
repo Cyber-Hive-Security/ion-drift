@@ -186,8 +186,11 @@ export function SettingsDevices() {
     };
     if (editForm.username) data.username = editForm.username;
     if (editForm.password) data.password = editForm.password;
-    await updateDevice.mutateAsync({ id: editingDeviceId, data });
+    const result = await updateDevice.mutateAsync({ id: editingDeviceId, data });
     setEditingDeviceId(null);
+    if (result.restart_required) {
+      alert("Settings saved. Restart the container to apply primary router changes.\n\ndocker compose restart");
+    }
   };
 
   return (
