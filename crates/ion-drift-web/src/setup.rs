@@ -461,6 +461,8 @@ fn render_complete_html() -> String {
   p { color: #a3a3a3; font-size: 14px; line-height: 1.5 }
   .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid #404040; border-top-color: #22c55e; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 16px }
   @keyframes spin { to { transform: rotate(360deg) } }
+  .btn { display: inline-block; margin-top: 20px; padding: 10px 24px; background: #3b82f6; color: #fff; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 500; transition: background 0.2s }
+  .btn:hover { background: #2563eb }
 </style>
 <meta http-equiv="refresh" content="5">
 </head>
@@ -471,6 +473,7 @@ fn render_complete_html() -> String {
   <p>Certificate fetched, KEK bootstrapped, secrets encrypted and stored.</p>
   <p style="margin-top:8px">Restarting server...</p>
   <p style="margin-top:12px;color:#737373">This page will reload automatically.</p>
+  <a href="/" class="btn">Access Ion Drift</a>
 </div>
 </body>
 </html>"##
@@ -652,14 +655,16 @@ fn render_local_complete_html() -> String {
   .card { background: #171717; border: 1px solid #262626; border-radius: 12px; padding: 32px; width: 100%; max-width: 440px; text-align: center }
   h1 { font-size: 24px; margin-bottom: 12px; color: #22c55e }
   p { color: #a3a3a3; font-size: 14px; line-height: 1.6 }
+  .btn { display: inline-block; margin-top: 20px; padding: 10px 24px; background: #3b82f6; color: #fff; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 500; transition: background 0.2s }
+  .btn:hover { background: #2563eb }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>Setup Complete</h1>
   <p>Your admin account has been created.<br>
-  The server will restart automatically.<br>
-  You can then log in with your credentials.</p>
+  The server will restart automatically in a few seconds.</p>
+  <a href="/" class="btn">Access Ion Drift</a>
 </div>
 </body>
 </html>"#.to_string()
