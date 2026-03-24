@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-03-24
+
+### Added
+
+- **Router request queue** — all background poller API requests are serialized through a centralized queue, preventing concurrent TLS sessions from overwhelming low-end routers (hAP ac², RB750). Features priority scheduling (High/Normal/Low), batch submission, deduplication, adaptive gap control, circuit breaker, and starvation detection.
+- **Configurable poll intervals** — new `[polling]` config section with `queue_gap_secs`, `traffic_interval_secs`, `metrics_interval_secs`, `connection_interval_secs`, `behavior_interval_secs`, `correlation_interval_secs`, `topology_interval_secs`, `policy_sync_interval_secs`. All have sensible defaults; increase for low-end devices.
+- **In-app restart** — when primary router connection settings change, a modal offers "Restart Now" (triggers graceful process exit, Docker restarts automatically) or "I'll do it later". New `POST /api/system/restart` endpoint (admin-only).
+- **Env var credential migration** — `DRIFT_ROUTER_PASSWORD` is now automatically migrated to the encrypted secrets DB on first run. Remove the env var from compose after initial setup.
+- **Auto-detect CA cert** — mounts at `/app/certs/root_ca.crt` are auto-detected without requiring `ca_cert_path` in config (convention over configuration).
+- **Bundled default config** — Docker image includes a default `server.toml` so `docker compose up -d` works without any config file for public CA (Let's Encrypt) users.
+- **Setup wizard "Access Ion Drift" button** — setup complete page now has a link to the login page.
+- First-run walkthrough in docs, troubleshooting guide, expanded Quick Start.
+
+### Changed
+
+- Default `secure = false` for session cookies — most first-time users access over HTTP. Set `true` when behind HTTPS reverse proxy.
+- Default traffic poll interval increased from 10s to 30s; connection poll from 30s to 60s; correlation from 60s to 120s.
+- Primary router credential updates now save before returning restart-required (previously blocked the save entirely with a 409).
+- Device edit form only sends changed connection fields — editing name/model no longer triggers restart warning or requires re-entering credentials.
+- Removed nmap and libcap2-bin from Docker image (nmap scanning was removed in v0.2.4).
+- Removed `cap_add: NET_RAW/NET_ADMIN` from docker-compose.example.yml.
+
+### Fixed
+
+- **Login page redirect loop** — `usePageTracking` fired unauthenticated API calls causing 401 → full page reload loop on login screen.
+- **Credential persistence** — env var router password was never migrated to encrypted DB in local auth mode; removing the env var caused auth failure.
+- **CA cert permissions** — bind-mounted certs at `/app/certs/` were unreadable by the container's app user; entrypoint now copies to `/app/data/certs/` with correct ownership.
+- **Device edit disabled without credentials** — save button required username field even for non-credential changes.
+- **React hooks ordering error** — `useState` for edit state was after early return, causing "Rendered fewer hooks than expected" crash on settings page.
+- Hostname/SAN mismatch documented in troubleshooting (connecting by IP when cert is issued for hostname).
+
+### Security
+
+- `POST /api/system/restart` requires `RequireAdmin` — only admin users can trigger restart.
+
 ## [0.2.4] - 2026-03-23
 
 ### Added

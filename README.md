@@ -99,11 +99,11 @@ Open `http://your-host:3000` in your browser. The setup wizard guides you throug
 - A dedicated RouterOS API user with `api,read` policies (see [Router User Setup](#router-user-setup) below)
 - The router must have HTTPS enabled on port 443 with a TLS certificate
 
-No configuration files, environment variables, or build tools needed for the basic setup. Credentials are stored encrypted — never put passwords in config files or Docker environment variables.
+No environment variables or build tools needed. Credentials are stored encrypted — never put passwords in config files or Docker environment variables.
 
 Pre-built images are published to `ghcr.io/cyber-hive-security/ion-drift` on every release.
 
-> **Accessing over plain HTTP?** If you're not using a reverse proxy with HTTPS, set `secure = false` in the `[session]` section of your config file. See [docs/configuration.md](docs/configuration.md) for details. Without this, login will appear to succeed but the session cookie won't be stored by your browser.
+> **Using a private CA?** If your router's TLS certificate is signed by a private CA (Smallstep, EJBCA, self-signed), you need a minimal `server.toml` with `ca_cert_path` and the CA cert mounted. See [docs/configuration.md](docs/configuration.md#first-run) for details. If your router uses Let's Encrypt or another public CA, no config file is needed.
 
 ### Router User Setup
 
