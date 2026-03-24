@@ -21,12 +21,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::MikrotikClient;
 use ion_drift_storage::SwitchStore;
+use crate::router_queue::{RouterQueue, Priority, QueuedRequest};
 use crate::task_supervisor::TaskSupervisor;
-
-/// Background task interval (seconds).
-const POLL_INTERVAL_SECS: u64 = 120;
 
 /// Startup delay to let the correlation engine populate identities first.
 const STARTUP_DELAY_SECS: u64 = 150;
@@ -38,22 +35,23 @@ const SERVICE_MAX_AGE_SECS: i64 = 7 * 86400;
 pub fn spawn_passive_discovery(
     supervisor: &TaskSupervisor,
     switch_store: Arc<SwitchStore>,
-    router_client: MikrotikClient,
+    router_queue: RouterQueue,
+    interval_secs: u64,
 ) {
     supervisor.spawn("passive_discovery", move || {
         let switch_store = switch_store.clone();
-        let router_client = router_client.clone();
+        let router_queue = router_queue.clone();
         Box::pin(async move {
         tokio::time::sleep(Duration::from_secs(STARTUP_DELAY_SECS)).await;
-        tracing::info!("passive service discovery starting ({POLL_INTERVAL_SECS}s interval)");
+        tracing::info!(interval_secs, "passive service discovery starting");
 
-        let mut interval = tokio::time::interval(Duration::from_secs(POLL_INTERVAL_SECS));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.tick().await;
 
         loop {
             interval.tick().await;
 
-            if let Err(e) = run_passive_discovery(&switch_store, &router_client).await {
+            if let Err(e) = run_passive_discovery(&switch_store, &router_queue).await {
                 tracing::warn!("passive discovery error: {e}");
             }
 
@@ -68,15 +66,31 @@ pub fn spawn_passive_discovery(
 /// One cycle of passive discovery.
 async fn run_passive_discovery(
     store: &SwitchStore,
-    router: &MikrotikClient,
+    queue: &RouterQueue,
 ) -> anyhow::Result<()> {
-    // Fetch NAT and filter rules to discover which high ports are legitimate services.
-    // dst-nat rules reveal port forwards; filter accept rules on specific dst-ports
-    // reveal services the firewall explicitly allows.
-    let nat_ports = extract_nat_service_ports(router).await;
+    // Fetch connections, NAT rules, and filter rules in a single batch through the queue.
+    let batch_results = queue.submit(
+        "passive_discovery",
+        Priority::Low,
+        vec![
+            QueuedRequest::get("ip/firewall/connection"),
+            QueuedRequest::get("ip/firewall/nat"),
+            QueuedRequest::get("ip/firewall/filter"),
+        ],
+    ).await.map_err(|e| anyhow::anyhow!("passive discovery queue submit: {e}"))?;
 
-    // Fetch all active connections from the router
-    let connections = router.firewall_connections_full().await?;
+    let mut batch_iter = batch_results.into_iter();
+    let connections_result = batch_iter.next().unwrap();
+    let nat_result = batch_iter.next().unwrap();
+    let filter_result = batch_iter.next().unwrap();
+
+    // Extract service ports from NAT and filter rules
+    let nat_ports = extract_nat_service_ports_from_batch(&nat_result, &filter_result);
+
+    // Deserialize connections
+    let connections: Vec<mikrotik_core::resources::connection::FullConnectionEntry> =
+        serde_json::from_value(connections_result.map_err(|e| anyhow::anyhow!("{e}"))?)
+            .map_err(|e| anyhow::anyhow!("deserialize connections: {e}"))?;
 
     // Build a map: internal IP → set of (port, protocol) where it's the destination
     // (i.e., ports it's listening on).
@@ -229,52 +243,59 @@ fn is_internal_ip(ip: &str) -> bool {
     ion_drift_storage::behavior::is_internal_ip(ip)
 }
 
-/// Extract service ports from router NAT and filter rules.
+/// Extract service ports from pre-fetched NAT and filter rule batch results.
 ///
 /// - dst-nat rules with `to-ports` or `dst-port` reveal port forwards
 /// - filter accept rules with explicit `dst-port` reveal allowed services
 ///
 /// Returns a set of port numbers that are known to be legitimate services,
 /// even if they fall in the IANA ephemeral range (>= 49152).
-async fn extract_nat_service_ports(router: &MikrotikClient) -> HashSet<u32> {
+fn extract_nat_service_ports_from_batch(
+    nat_result: &Result<serde_json::Value, mikrotik_core::MikrotikError>,
+    filter_result: &Result<serde_json::Value, mikrotik_core::MikrotikError>,
+) -> HashSet<u32> {
     let mut ports = HashSet::new();
 
     // Extract ports from NAT dst-nat rules (port forwards)
-    if let Ok(nat_rules) = router.firewall_nat_rules().await {
-        for rule in &nat_rules {
-            if rule.action != "dst-nat" {
-                continue;
-            }
-            if rule.disabled == Some(true) {
-                continue;
-            }
-            // to-ports is the internal port the traffic is forwarded to
-            if let Some(ref to_ports) = rule.to_ports {
-                for p in parse_port_spec(to_ports) {
-                    ports.insert(p);
+    if let Ok(v) = nat_result {
+        if let Ok(nat_rules) = serde_json::from_value::<Vec<mikrotik_core::resources::firewall::NatRule>>(v.clone()) {
+            for rule in &nat_rules {
+                if rule.action != "dst-nat" {
+                    continue;
                 }
-            }
-            // dst-port is the external-facing port (also useful for service detection)
-            if let Some(ref dst_port) = rule.dst_port {
-                for p in parse_port_spec(dst_port) {
-                    ports.insert(p);
+                if rule.disabled == Some(true) {
+                    continue;
+                }
+                // to-ports is the internal port the traffic is forwarded to
+                if let Some(ref to_ports) = rule.to_ports {
+                    for p in parse_port_spec(to_ports) {
+                        ports.insert(p);
+                    }
+                }
+                // dst-port is the external-facing port (also useful for service detection)
+                if let Some(ref dst_port) = rule.dst_port {
+                    for p in parse_port_spec(dst_port) {
+                        ports.insert(p);
+                    }
                 }
             }
         }
     }
 
     // Extract ports from filter accept rules with explicit dst-port
-    if let Ok(filter_rules) = router.firewall_filter_rules().await {
-        for rule in &filter_rules {
-            if rule.action != "accept" {
-                continue;
-            }
-            if rule.disabled == Some(true) {
-                continue;
-            }
-            if let Some(ref dst_port) = rule.dst_port {
-                for p in parse_port_spec(dst_port) {
-                    ports.insert(p);
+    if let Ok(v) = filter_result {
+        if let Ok(filter_rules) = serde_json::from_value::<Vec<mikrotik_core::resources::firewall::FilterRule>>(v.clone()) {
+            for rule in &filter_rules {
+                if rule.action != "accept" {
+                    continue;
+                }
+                if rule.disabled == Some(true) {
+                    continue;
+                }
+                if let Some(ref dst_port) = rule.dst_port {
+                    for p in parse_port_spec(dst_port) {
+                        ports.insert(p);
+                    }
                 }
             }
         }

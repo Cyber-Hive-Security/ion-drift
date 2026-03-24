@@ -3,7 +3,6 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::MikrotikClient;
 use ion_drift_storage::SwitchStore;
 use ion_drift_storage::switch::{BackboneLink, MacTableEntry, PortRoleProbability};
 use crate::topology_inference::canonicalize_port_name;
@@ -14,9 +13,10 @@ use tokio::sync::RwLock;
 use crate::device_manager::DeviceManager;
 use crate::dns::DnsResolver;
 use crate::oui::OuiDb;
+use crate::router_queue::{RouterQueue, Priority, QueuedRequest};
 use crate::task_supervisor::TaskSupervisor;
 
-/// Spawn the correlation engine that runs every 60s to:
+/// Spawn the correlation engine on a configurable interval to:
 /// 1. Classify port roles (access/trunk/uplink/unused)
 /// 2. Build unified network identities from MAC/neighbor/OUI/ARP/DHCP data
 pub fn spawn_correlation_engine(
@@ -24,21 +24,22 @@ pub fn spawn_correlation_engine(
     switch_store: Arc<SwitchStore>,
     oui_db: Arc<OuiDb>,
     device_manager: Arc<RwLock<DeviceManager>>,
-    router_client: MikrotikClient,
+    router_queue: RouterQueue,
     dns_resolver: Arc<dyn DnsResolver>,
+    interval_secs: u64,
 ) {
     supervisor.spawn("correlation_engine", move || {
         let switch_store = switch_store.clone();
         let oui_db = oui_db.clone();
         let device_manager = device_manager.clone();
-        let router_client = router_client.clone();
+        let router_queue = router_queue.clone();
         let dns_resolver = dns_resolver.clone();
         Box::pin(async move {
         // 90-second startup delay — let switch pollers collect initial data
         tokio::time::sleep(Duration::from_secs(90)).await;
-        tracing::info!("correlation engine starting (60s interval)");
+        tracing::info!(interval_secs, "correlation engine starting");
 
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.tick().await;
 
         loop {
@@ -48,7 +49,7 @@ pub fn spawn_correlation_engine(
                 &switch_store,
                 &oui_db,
                 &device_manager,
-                &router_client,
+                &router_queue,
                 dns_resolver.as_ref(),
             )
             .await
@@ -63,7 +64,7 @@ async fn run_correlation(
     store: &SwitchStore,
     oui_db: &OuiDb,
     device_manager: &Arc<RwLock<DeviceManager>>,
-    router_client: &MikrotikClient,
+    router_queue: &RouterQueue,
     dns_resolver: &dyn DnsResolver,
 ) -> anyhow::Result<()> {
     // ── 0. Prune stale entries ──────────────────────────────────
@@ -85,10 +86,32 @@ async fn run_correlation(
         _ => {}
     }
 
-    // ── 0b. Sync VLAN config from router ─────────────────────────
-    // Discovers VLANs from the router's VLAN interfaces and IP addresses.
+    // ── 0b. Fetch router data in a single batch ─────────────────
+    // Bridge hosts, VLAN interfaces, IP addresses, ARP table, and DHCP leases
+    // are all fetched together through the queue to minimize router load.
+    let batch_results = router_queue.submit(
+        "correlation_engine",
+        Priority::Normal,
+        vec![
+            QueuedRequest::get("interface/bridge/host"),
+            QueuedRequest::get("interface/vlan"),
+            QueuedRequest::get("ip/address"),
+            QueuedRequest::get("ip/arp"),
+            QueuedRequest::get("ip/dhcp-server/lease"),
+        ],
+    ).await.map_err(|e| anyhow::anyhow!("correlation queue submit: {e}"))?;
+
+    let mut batch_iter = batch_results.into_iter();
+    let bridge_hosts_result = batch_iter.next().unwrap();
+    let vlan_ifaces_result = batch_iter.next().unwrap();
+    let ip_addrs_result = batch_iter.next().unwrap();
+    let arp_result = batch_iter.next().unwrap();
+    let dhcp_result = batch_iter.next().unwrap();
+
+    // Sync VLAN config from the batch results.
+    // Discovers VLANs, their names, subnets, and infers media type from naming conventions.
     // Only inserts new VLANs — never overwrites human edits.
-    if let Err(e) = sync_vlan_config_from_router(store, router_client).await {
+    if let Err(e) = sync_vlan_config_from_batch(store, &vlan_ifaces_result, &ip_addrs_result).await {
         tracing::warn!("VLAN config sync: {e}");
     }
 
@@ -128,10 +151,13 @@ async fn run_correlation(
         .unwrap_or_else(|| "rb4011".to_string());
     drop(dm_read);
 
-    // Fetch the router's bridge hosts so its local MACs enter the MAC table.
+    // Process bridge hosts so the router's local MACs enter the MAC table.
     // Without this, the router's port MACs (seen by switches on trunk ports)
     // would never be identified as switch-local and would leak into identities.
-    match router_client.bridge_hosts().await {
+    match bridge_hosts_result.and_then(|v| {
+        serde_json::from_value::<Vec<mikrotik_core::BridgeHost>>(v)
+            .map_err(|e| mikrotik_core::MikrotikError::Deserialize(e.to_string()))
+    }) {
         Ok(hosts) => {
             for host in &hosts {
                 let on_iface = host.on_interface.as_deref().unwrap_or("");
@@ -741,7 +767,10 @@ async fn run_correlation(
     }
 
     // From router ARP table — MAC→IP for every active device on the network
-    match router_client.arp_table().await {
+    match arp_result.and_then(|v| {
+        serde_json::from_value::<Vec<mikrotik_core::resources::ip::ArpEntry>>(v)
+            .map_err(|e| mikrotik_core::MikrotikError::Deserialize(e.to_string()))
+    }) {
         Ok(arp_entries) => {
             for entry in &arp_entries {
                 if let Some(ref mac) = entry.mac_address {
@@ -762,7 +791,10 @@ async fn run_correlation(
     }
 
     // From router DHCP leases — MAC→IP + hostname for every lease
-    match router_client.dhcp_leases().await {
+    match dhcp_result.and_then(|v| {
+        serde_json::from_value::<Vec<mikrotik_core::resources::ip::DhcpLease>>(v)
+            .map_err(|e| mikrotik_core::MikrotikError::Deserialize(e.to_string()))
+    }) {
         Ok(leases) => {
             for lease in &leases {
                 if let Some(ref mac) = lease.mac_address {
@@ -1179,17 +1211,26 @@ fn is_switch_local_mac(mac: &str, local_set: &HashSet<u64>) -> bool {
     }
 }
 
-/// Sync VLAN config from router VLAN interfaces + IP addresses.
+/// Sync VLAN config from pre-fetched batch results (VLAN interfaces + IP addresses).
 /// Discovers VLANs, their names, subnets, and infers media type from naming conventions.
 /// Only inserts missing VLANs — existing entries (including human edits) are preserved.
-async fn sync_vlan_config_from_router(
+async fn sync_vlan_config_from_batch(
     store: &SwitchStore,
-    router_client: &MikrotikClient,
+    vlan_ifaces_result: &Result<serde_json::Value, mikrotik_core::MikrotikError>,
+    ip_addrs_result: &Result<serde_json::Value, mikrotik_core::MikrotikError>,
 ) -> anyhow::Result<()> {
     use ion_drift_storage::switch::VlanConfig;
 
-    let vlan_ifaces = router_client.vlan_interfaces().await?;
-    let ip_addrs = router_client.ip_addresses().await?;
+    let vlan_ifaces: Vec<mikrotik_core::resources::interface::VlanInterface> = match vlan_ifaces_result {
+        Ok(v) => serde_json::from_value(v.clone())
+            .map_err(|e| anyhow::anyhow!("deserialize vlan interfaces: {e}"))?,
+        Err(e) => return Err(anyhow::anyhow!("vlan interfaces fetch failed: {e}")),
+    };
+    let ip_addrs: Vec<mikrotik_core::resources::ip::IpAddress> = match ip_addrs_result {
+        Ok(v) => serde_json::from_value(v.clone())
+            .map_err(|e| anyhow::anyhow!("deserialize ip addresses: {e}"))?,
+        Err(e) => return Err(anyhow::anyhow!("ip addresses fetch failed: {e}")),
+    };
 
     // Build map: interface name → subnet CIDR
     let mut iface_subnet: HashMap<String, String> = HashMap::new();

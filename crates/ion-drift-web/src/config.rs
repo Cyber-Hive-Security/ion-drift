@@ -19,7 +19,64 @@ pub struct ServerConfig {
     pub certwarden: CertWardenSection,
     #[serde(default)]
     pub syslog: SyslogSection,
+    #[serde(default)]
+    pub polling: PollingConfig,
 }
+
+/// Background poller interval configuration. All intervals are in seconds.
+/// Background pollers share a single RouterQueue so all requests are
+/// serialized through the request queue.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PollingConfig {
+    /// Minimum gap between queue batches in seconds. Increase for low-end devices.
+    #[serde(default = "default_queue_gap")]
+    pub queue_gap_secs: u64,
+    /// Traffic counters (WAN interface rates).
+    #[serde(default = "default_traffic_interval")]
+    pub traffic_interval_secs: u64,
+    /// System metrics (CPU, memory, disk).
+    #[serde(default = "default_metrics_interval")]
+    pub metrics_interval_secs: u64,
+    /// Connection history persistence.
+    #[serde(default = "default_connection_interval")]
+    pub connection_interval_secs: u64,
+    /// Device behavior analysis.
+    #[serde(default = "default_behavior_interval")]
+    pub behavior_interval_secs: u64,
+    /// Identity correlation engine.
+    #[serde(default = "default_correlation_interval")]
+    pub correlation_interval_secs: u64,
+    /// Network topology rebuild.
+    #[serde(default = "default_topology_interval")]
+    pub topology_interval_secs: u64,
+    /// Infrastructure policy sync from router DHCP/DNS/firewall.
+    #[serde(default = "default_policy_sync_interval")]
+    pub policy_sync_interval_secs: u64,
+}
+
+impl Default for PollingConfig {
+    fn default() -> Self {
+        Self {
+            queue_gap_secs: default_queue_gap(),
+            traffic_interval_secs: default_traffic_interval(),
+            metrics_interval_secs: default_metrics_interval(),
+            connection_interval_secs: default_connection_interval(),
+            behavior_interval_secs: default_behavior_interval(),
+            correlation_interval_secs: default_correlation_interval(),
+            topology_interval_secs: default_topology_interval(),
+            policy_sync_interval_secs: default_policy_sync_interval(),
+        }
+    }
+}
+
+fn default_queue_gap() -> u64 { 1 }
+fn default_traffic_interval() -> u64 { 5 }
+fn default_metrics_interval() -> u64 { 60 }
+fn default_connection_interval() -> u64 { 30 }
+fn default_behavior_interval() -> u64 { 60 }
+fn default_correlation_interval() -> u64 { 120 }
+fn default_topology_interval() -> u64 { 120 }
+fn default_policy_sync_interval() -> u64 { 300 }
 
 // ── OIDC Bootstrap (nested under [oidc.bootstrap]) ──────────────
 

@@ -10,23 +10,25 @@ use crate::connection_store;
 use crate::geo;
 use crate::investigation::InvestigationEngine;
 use crate::oui;
+use crate::router_queue::RouterQueue;
 
-/// Collect device observations, detect anomalies, and detect blocked attempts every 60s.
+/// Collect device observations, detect anomalies, and detect blocked attempts at a configurable interval.
 /// After detection, runs the investigation engine on any new uninvestigated anomalies.
 /// 3-minute startup delay to let the server stabilize.
 pub fn spawn_behavior_collector(
     store: Arc<ion_drift_storage::BehaviorStore>,
-    client: mikrotik_core::MikrotikClient,
+    queue: RouterQueue,
     oui_db: Arc<oui::OuiDb>,
     geo_cache: Arc<geo::GeoCache>,
     connection_store: Arc<connection_store::ConnectionStore>,
     firewall_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
     vlan_registry: Arc<RwLock<ion_drift_storage::behavior::VlanRegistry>>,
+    interval_secs: u64,
 ) {
     tokio::spawn(async move {
         // Wait 3 minutes before first collection
         tokio::time::sleep(Duration::from_secs(180)).await;
-        tracing::info!("behavior collector starting");
+        tracing::info!("behavior collector starting (interval={interval_secs}s)");
 
         let spike_candidates = behavior_engine::SpikeCandidates::new();
         let investigation_engine = Arc::new(InvestigationEngine::new(
@@ -40,7 +42,7 @@ pub fn spawn_behavior_collector(
         // Persistent byte tracker for computing deltas across observation cycles
         let mut prev_bytes: HashMap<String, (i64, i64)> = HashMap::new();
 
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
             cycle_count += 1;
@@ -49,10 +51,18 @@ pub fn spawn_behavior_collector(
             let registry = vlan_registry.read().await.clone();
 
             // Refresh firewall rules cache
-            behavior_engine::refresh_firewall_cache(&client, &firewall_cache).await;
+            behavior_engine::refresh_firewall_cache(&queue, &firewall_cache).await;
 
             // Collect observations (with delta-based byte tracking)
-            match behavior_engine::collect_observations(&client, &store, &oui_db, &registry, &mut prev_bytes).await {
+            match behavior_engine::collect_observations(
+                &queue,
+                &store,
+                &oui_db,
+                &registry,
+                &mut prev_bytes,
+            )
+            .await
+            {
                 Ok(count) => {
                     tracing::debug!("behavior: collected {count} observations");
                 }
@@ -64,7 +74,15 @@ pub fn spawn_behavior_collector(
 
             // Detect anomalies (with firewall rule correlation)
             let fw_rules = firewall_cache.read().await.0.clone();
-            match behavior_engine::detect_anomalies(&store, &spike_candidates, &registry, &fw_rules, &geo_cache).await {
+            match behavior_engine::detect_anomalies(
+                &store,
+                &spike_candidates,
+                &registry,
+                &fw_rules,
+                &geo_cache,
+            )
+            .await
+            {
                 Ok(count) => {
                     if count > 0 {
                         tracing::info!("behavior: detected {count} anomalies");
@@ -74,7 +92,10 @@ pub fn spawn_behavior_collector(
             }
 
             // Detect blocked attempts
-            match behavior_engine::detect_blocked_attempts(&client, &store, &oui_db, &geo_cache, &registry).await
+            match behavior_engine::detect_blocked_attempts(
+                &queue, &store, &oui_db, &geo_cache, &registry,
+            )
+            .await
             {
                 Ok(count) => {
                     if count > 0 {
@@ -102,14 +123,18 @@ pub fn spawn_behavior_collector(
                             for id in ids {
                                 match engine.investigate(id).await {
                                     Ok(inv) => {
-                                        if let Err(e) = store_ref.record_investigation(&inv).await {
+                                        if let Err(e) =
+                                            store_ref.record_investigation(&inv).await
+                                        {
                                             tracing::warn!("investigation: failed to store for anomaly {id}: {e}");
                                         } else {
                                             investigated += 1;
                                         }
                                     }
                                     Err(e) => {
-                                        tracing::warn!("investigation: failed for anomaly {id}: {e}");
+                                        tracing::warn!(
+                                            "investigation: failed for anomaly {id}: {e}"
+                                        );
                                     }
                                 }
                             }
@@ -119,7 +144,11 @@ pub fn spawn_behavior_collector(
                         });
                     }
                 }
-                Err(e) => tracing::warn!("investigation: failed to query uninvestigated anomalies: {e}"),
+                Err(e) => {
+                    tracing::warn!(
+                        "investigation: failed to query uninvestigated anomalies: {e}"
+                    )
+                }
             }
 
             let _ = &spike_candidates; // placeholder for future spike candidate tracking
@@ -129,7 +158,9 @@ pub fn spawn_behavior_collector(
                 match store.promote_eligible_devices().await {
                     Ok((baselined, sparse)) => {
                         if baselined > 0 || sparse > 0 {
-                            tracing::info!("behavior: promoted {baselined} to baselined, {sparse} to sparse");
+                            tracing::info!(
+                                "behavior: promoted {baselined} to baselined, {sparse} to sparse"
+                            );
                         }
                     }
                     Err(e) => tracing::warn!("behavior: device promotion failed: {e}"),
@@ -160,7 +191,10 @@ pub fn spawn_behavior_maintenance(
                     .as_secs();
                 let age = now.saturating_sub(last);
                 if age < 6 * 3600 {
-                    tracing::info!("behavior maintenance: last ran {}h ago, skipping startup run", age / 3600);
+                    tracing::info!(
+                        "behavior maintenance: last ran {}h ago, skipping startup run",
+                        age / 3600
+                    );
                     false
                 } else {
                     true
@@ -169,16 +203,21 @@ pub fn spawn_behavior_maintenance(
             _ => true,
         };
         if should_run {
-            run_behavior_maintenance(&store, &connection_store, &switch_store, &vlan_registry).await;
+            run_behavior_maintenance(&store, &connection_store, &switch_store, &vlan_registry)
+                .await;
         }
 
         loop {
             // Sleep until next 3 AM local time
             let sleep_secs = secs_until_hour(3);
-            tracing::info!("behavior maintenance: next run in {sleep_secs}s (~{:.1}h)", sleep_secs as f64 / 3600.0);
+            tracing::info!(
+                "behavior maintenance: next run in {sleep_secs}s (~{:.1}h)",
+                sleep_secs as f64 / 3600.0
+            );
             tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
 
-            run_behavior_maintenance(&store, &connection_store, &switch_store, &vlan_registry).await;
+            run_behavior_maintenance(&store, &connection_store, &switch_store, &vlan_registry)
+                .await;
         }
     });
 }
@@ -193,7 +232,9 @@ async fn run_behavior_maintenance(
     match store.promote_eligible_devices().await {
         Ok((baselined, sparse)) => {
             if baselined > 0 || sparse > 0 {
-                tracing::info!("behavior: promoted {baselined} to baselined, {sparse} to sparse");
+                tracing::info!(
+                    "behavior: promoted {baselined} to baselined, {sparse} to sparse"
+                );
             }
         }
         Err(e) => tracing::warn!("behavior: device promotion failed: {e}"),
@@ -236,7 +277,10 @@ async fn run_behavior_maintenance(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    if let Err(e) = store.set_metadata("last_maintenance", &now.to_string()).await {
+    if let Err(e) = store
+        .set_metadata("last_maintenance", &now.to_string())
+        .await
+    {
         tracing::warn!("failed to persist maintenance watermark: {e}");
     }
 }
@@ -244,7 +288,10 @@ async fn run_behavior_maintenance(
 /// Compute seconds until the next occurrence of `target_hour` (0-23) in local time.
 fn secs_until_hour(target_hour: u32) -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     // Determine local UTC offset by comparing libc localtime with UTC
     let local_offset_secs: i64 = {
         let t = now_secs as libc::time_t;
@@ -296,7 +343,8 @@ async fn classify_traffic_patterns(
         }
 
         // Aggregate port usage across observations
-        let mut port_counts: std::collections::HashMap<i64, u32> = std::collections::HashMap::new();
+        let mut port_counts: std::collections::HashMap<i64, u32> =
+            std::collections::HashMap::new();
         let mut total_upload: u64 = 0;
         let mut total_download: u64 = 0;
         let mut total_connections: u64 = 0;
@@ -314,37 +362,58 @@ async fn classify_traffic_patterns(
         let has_port = |p: i64| port_counts.contains_key(&p);
         let port_dominant = |p: i64| {
             let total: u32 = port_counts.values().sum();
-            if total == 0 { return false; }
+            if total == 0 {
+                return false;
+            }
             port_counts.get(&p).copied().unwrap_or(0) as f64 / total as f64 > 0.3
         };
 
-        let (device_type, confidence, rules): (Option<&str>, f64, Vec<&str>) = if
-            (has_port(554) || port_dominant(554)) && total_upload > total_download
-        {
-            (Some("camera"), 0.8, vec!["port_554_rtsp", "high_upload_ratio"])
-        } else if has_port(9100) || has_port(631) {
-            let low_traffic = total_connections < 100;
-            if low_traffic {
-                (Some("printer"), 0.8, vec!["printer_ports", "low_traffic"])
+        let (device_type, confidence, rules): (Option<&str>, f64, Vec<&str>) =
+            if (has_port(554) || port_dominant(554)) && total_upload > total_download {
+                (
+                    Some("camera"),
+                    0.8,
+                    vec!["port_554_rtsp", "high_upload_ratio"],
+                )
+            } else if has_port(9100) || has_port(631) {
+                let low_traffic = total_connections < 100;
+                if low_traffic {
+                    (
+                        Some("printer"),
+                        0.8,
+                        vec!["printer_ports", "low_traffic"],
+                    )
+                } else {
+                    (Some("printer"), 0.75, vec!["printer_ports"])
+                }
+            } else if has_port(32400) {
+                (Some("media_server"), 0.8, vec!["port_32400_plex"])
+            } else if has_port(8883) || has_port(1883) {
+                (Some("smart_home"), 0.75, vec!["mqtt_ports"])
+            } else if port_counts.len() <= 3
+                && (has_port(53) || has_port(443) || has_port(80))
+                && total_connections < 500
+            {
+                (
+                    Some("phone"),
+                    0.7,
+                    vec!["limited_port_diversity", "low_connections"],
+                )
+            } else if port_counts.len() > 15 && total_connections > 5000 {
+                (
+                    Some("computer"),
+                    0.7,
+                    vec!["high_port_diversity", "high_connections"],
+                )
+            } else if has_port(22) && has_port(443) && total_connections > 1000 {
+                (
+                    Some("server"),
+                    0.75,
+                    vec!["ssh_https_ports", "high_connections"],
+                )
             } else {
-                (Some("printer"), 0.75, vec!["printer_ports"])
-            }
-        } else if has_port(32400) {
-            (Some("media_server"), 0.8, vec!["port_32400_plex"])
-        } else if has_port(8883) || has_port(1883) {
-            (Some("smart_home"), 0.75, vec!["mqtt_ports"])
-        } else if port_counts.len() <= 3
-            && (has_port(53) || has_port(443) || has_port(80))
-            && total_connections < 500
-        {
-            (Some("phone"), 0.7, vec!["limited_port_diversity", "low_connections"])
-        } else if port_counts.len() > 15 && total_connections > 5000 {
-            (Some("computer"), 0.7, vec!["high_port_diversity", "high_connections"])
-        } else if has_port(22) && has_port(443) && total_connections > 1000 {
-            (Some("server"), 0.75, vec!["ssh_https_ports", "high_connections"])
-        } else {
-            (None, 0.0, vec![])
-        };
+                (None, 0.0, vec![])
+            };
 
         if let Some(dt) = device_type {
             let evidence = serde_json::json!({
@@ -356,22 +425,29 @@ async fn classify_traffic_patterns(
             });
 
             // Store classification
-            let _ = switch_store.upsert_traffic_classification(
-                mac,
-                dt,
-                confidence,
-                &evidence.to_string(),
-            ).await;
+            let _ = switch_store
+                .upsert_traffic_classification(mac, dt, confidence, &evidence.to_string())
+                .await;
 
             // Update identity (confidence hierarchy enforced by upsert)
-            let _ = switch_store.upsert_network_identity(
-                mac,
-                None, None, None, None, None, None, None, None, None,
-                0.0, // don't update base confidence
-                Some(dt),
-                Some("traffic_pattern"),
-                confidence,
-            ).await;
+            let _ = switch_store
+                .upsert_network_identity(
+                    mac,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    0.0, // don't update base confidence
+                    Some(dt),
+                    Some("traffic_pattern"),
+                    confidence,
+                )
+                .await;
 
             classified += 1;
         }

@@ -16,17 +16,36 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
     traffic::spawn_traffic_poller(
         state.traffic_tracker.clone(),
         state.live_traffic.clone(),
+        state.router_queue.clone(),
+        state.config.polling.traffic_interval_secs,
         state.mikrotik.clone(),
     );
-    traffic::spawn_vlan_metrics_poller(state.metrics_store.clone(), state.mikrotik.clone());
+    traffic::spawn_vlan_metrics_poller(
+        state.metrics_store.clone(),
+        state.router_queue.clone(),
+        state.config.polling.metrics_interval_secs,
+        state.mikrotik.clone(),
+    );
 
     // System metrics
-    metrics::spawn_metrics_poller(state.metrics_store.clone(), state.mikrotik.clone());
-    metrics::spawn_drops_poller(state.metrics_store.clone(), state.mikrotik.clone());
-    metrics::spawn_connection_metrics_poller(state.metrics_store.clone(), state.mikrotik.clone());
+    metrics::spawn_metrics_poller(
+        state.metrics_store.clone(),
+        state.router_queue.clone(),
+        state.config.polling.metrics_interval_secs,
+    );
+    metrics::spawn_drops_poller(
+        state.metrics_store.clone(),
+        state.router_queue.clone(),
+        state.config.polling.metrics_interval_secs,
+    );
+    metrics::spawn_connection_metrics_poller(
+        state.metrics_store.clone(),
+        state.router_queue.clone(),
+        state.config.polling.metrics_interval_secs,
+    );
     metrics::spawn_log_aggregation(
         state.metrics_store.clone(),
-        state.mikrotik.clone(),
+        state.router_queue.clone(),
         state.geo_cache.clone(),
         state.oui_db.clone(),
     );
@@ -37,12 +56,13 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
     // Behavior analysis + automated investigation
     behavior::spawn_behavior_collector(
         state.behavior_store.clone(),
-        state.mikrotik.clone(),
+        state.router_queue.clone(),
         state.oui_db.clone(),
         state.geo_cache.clone(),
         state.connection_store.clone(),
         state.firewall_rules_cache.clone(),
         state.vlan_registry.clone(),
+        state.config.polling.behavior_interval_secs,
     );
     behavior::spawn_behavior_maintenance(
         state.behavior_store.clone(),
@@ -59,21 +79,24 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.connection_store.clone(),
         state.behavior_store.clone(),
         state.vlan_registry.clone(),
+        state.config.polling.correlation_interval_secs,
     );
 
     // Policy synchronization
     policy_sync::spawn_policy_sync(
-        state.mikrotik.clone(),
+        state.router_queue.clone(),
         state.behavior_store.clone(),
         state.vlan_registry.clone(),
+        state.config.polling.policy_sync_interval_secs,
     );
 
     // Connection history
     connections::spawn_connection_persister(
         state.connection_store.clone(),
-        state.mikrotik.clone(),
+        state.router_queue.clone(),
         state.geo_cache.clone(),
         state.vlan_registry.clone(),
+        state.config.polling.connection_interval_secs,
     );
     connections::spawn_connection_pruner(state.connection_store.clone());
     crate::snapshots::spawn_snapshot_generator(
@@ -125,8 +148,9 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.switch_store.clone(),
         state.oui_db.clone(),
         state.device_manager.clone(),
-        state.mikrotik.clone(),
+        state.router_queue.clone(),
         dns_resolver,
+        state.config.polling.correlation_interval_secs,
     );
     crate::topology::spawn_topology_updater(
         &state.task_supervisor,
@@ -137,7 +161,8 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
     crate::passive_discovery::spawn_passive_discovery(
         &state.task_supervisor,
         state.switch_store.clone(),
-        state.mikrotik.clone(),
+        state.router_queue.clone(),
+        state.config.polling.topology_interval_secs,
     );
 
     // Policy deviation detection (DNS)
@@ -155,7 +180,11 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
     );
 
     // Alert engine
-    crate::alerting::spawn_alert_engine(&state.task_supervisor, state.clone());
+    crate::alerting::spawn_alert_engine(
+        &state.task_supervisor,
+        state.clone(),
+        state.config.polling.metrics_interval_secs,
+    );
 
     // Page view stats pruning (daily, retain 90 days)
     spawn_stats_pruner(state.stats_store.clone());

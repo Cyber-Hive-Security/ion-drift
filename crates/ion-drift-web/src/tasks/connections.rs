@@ -2,56 +2,50 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use mikrotik_core::resources::connection::FullConnectionEntry;
+use mikrotik_core::resources::ip::{ArpEntry, DhcpLease};
 use tokio::sync::RwLock;
 
 use crate::connection_store;
 use crate::geo;
+use crate::router_queue::{Priority, QueuedRequest, RouterQueue};
 
-/// Build an IP→MAC lookup from the router's ARP table and DHCP leases.
+/// Build an IP→MAC lookup from pre-fetched ARP entries and DHCP leases.
 /// DHCP entries take priority (more authoritative); ARP fills gaps.
-async fn build_ip_to_mac(client: &mikrotik_core::MikrotikClient) -> HashMap<String, String> {
-    let (arp_result, dhcp_result) = tokio::join!(client.arp_table(), client.dhcp_leases());
-
+fn build_ip_to_mac(arp_entries: &[ArpEntry], dhcp_leases: &[DhcpLease]) -> HashMap<String, String> {
     let mut ip_to_mac: HashMap<String, String> = HashMap::new();
 
     // DHCP leases first (authoritative)
-    if let Ok(leases) = dhcp_result {
-        for lease in &leases {
-            if let Some(ref mac) = lease.mac_address {
-                ip_to_mac.insert(lease.address.clone(), mac.to_uppercase());
-            }
+    for lease in dhcp_leases {
+        if let Some(ref mac) = lease.mac_address {
+            ip_to_mac.insert(lease.address.clone(), mac.to_uppercase());
         }
-    } else if let Err(e) = dhcp_result {
-        tracing::debug!("connection persister: DHCP fetch failed: {e}");
     }
 
     // ARP fills gaps
-    if let Ok(entries) = arp_result {
-        for entry in &entries {
-            if let Some(ref mac) = entry.mac_address {
-                ip_to_mac
-                    .entry(entry.address.clone())
-                    .or_insert_with(|| mac.to_uppercase());
-            }
+    for entry in arp_entries {
+        if let Some(ref mac) = entry.mac_address {
+            ip_to_mac
+                .entry(entry.address.clone())
+                .or_insert_with(|| mac.to_uppercase());
         }
-    } else if let Err(e) = arp_result {
-        tracing::debug!("connection persister: ARP fetch failed: {e}");
     }
 
     ip_to_mac
 }
 
-/// Persist active connections to history every 30 seconds (same cadence as the connections page poll).
+/// Persist active connections to history at a configurable interval.
 pub fn spawn_connection_persister(
     store: Arc<connection_store::ConnectionStore>,
-    client: mikrotik_core::MikrotikClient,
+    queue: RouterQueue,
     geo_cache: Arc<geo::GeoCache>,
     vlan_registry: Arc<RwLock<ion_drift_storage::behavior::VlanRegistry>>,
+    interval_secs: u64,
 ) {
     tokio::spawn(async move {
         // Wait 1 minute before starting (let server stabilize)
         tokio::time::sleep(Duration::from_secs(60)).await;
-        tracing::info!("connection history persister starting");
+        tracing::info!("connection history persister starting (interval={interval_secs}s)");
 
         // Seed previous byte counts from open connections to avoid inflated
         // first-poll deltas after a restart.
@@ -66,18 +60,48 @@ pub fn spawn_connection_persister(
             }
         };
 
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
 
-            // Fetch connections and IP→MAC map concurrently
-            let (conn_result, ip_to_mac) = tokio::join!(
-                client.firewall_connections_full(),
-                build_ip_to_mac(&client),
-            );
+            // Fetch ARP, DHCP, and connections as a single batch through the queue
+            let results = queue
+                .submit(
+                    "connections",
+                    Priority::High,
+                    vec![
+                        QueuedRequest::get("ip/arp"),
+                        QueuedRequest::get("ip/dhcp-server/lease"),
+                        QueuedRequest::get("ip/firewall/connection"),
+                    ],
+                )
+                .await;
+            let results = match results {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("connection persister: batch failed: {e}");
+                    continue;
+                }
+            };
 
-            let connections = match conn_result {
-                Ok(c) => c,
+            let arp_entries: Vec<ArpEntry> = match &results[0] {
+                Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+                Err(e) => {
+                    tracing::warn!("connection persister: ARP fetch failed: {e}");
+                    Vec::new()
+                }
+            };
+            let dhcp_leases: Vec<DhcpLease> = match &results[1] {
+                Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+                Err(e) => {
+                    tracing::warn!("connection persister: DHCP fetch failed: {e}");
+                    Vec::new()
+                }
+            };
+            let ip_to_mac = build_ip_to_mac(&arp_entries, &dhcp_leases);
+
+            let connections: Vec<FullConnectionEntry> = match &results[2] {
+                Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
                 Err(e) => {
                     tracing::warn!("connection persister: failed to fetch connections: {e}");
                     continue;
@@ -118,13 +142,14 @@ pub fn spawn_connection_persister(
                 let cur_rx = c.repl_bytes.unwrap_or(0) as i64;
 
                 // Compute bandwidth delta
-                let (delta_tx, delta_rx) = if let Some(&(prev_tx, prev_rx)) = prev_bytes.get(&conntrack_id) {
-                    // Clamp to 0 if counter reset (conntrack ID reuse)
-                    ((cur_tx - prev_tx).max(0), (cur_rx - prev_rx).max(0))
-                } else {
-                    // First observation — full value is the delta
-                    (cur_tx, cur_rx)
-                };
+                let (delta_tx, delta_rx) =
+                    if let Some(&(prev_tx, prev_rx)) = prev_bytes.get(&conntrack_id) {
+                        // Clamp to 0 if counter reset (conntrack ID reuse)
+                        ((cur_tx - prev_tx).max(0), (cur_rx - prev_rx).max(0))
+                    } else {
+                        // First observation — full value is the delta
+                        (cur_tx, cur_rx)
+                    };
 
                 // Update previous bytes tracker
                 prev_bytes.insert(conntrack_id.clone(), (cur_tx, cur_rx));

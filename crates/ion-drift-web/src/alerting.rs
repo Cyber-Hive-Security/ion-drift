@@ -1318,30 +1318,53 @@ async fn collect_device_offline_alerts(
 }
 
 async fn collect_dhcp_pool_alerts(state: &AppState, rule: &AlertRule, alerts: &mut Vec<PendingAlert>) {
+    use crate::router_queue::{Priority, QueuedRequest};
+
     let channels = parse_channels(&rule.delivery_channels);
 
-    // Fetch DHCP servers, pools, and leases from the router
-    let (servers_res, pools_res, leases_res) = tokio::join!(
-        state.mikrotik.dhcp_servers(),
-        state.mikrotik.ip_pools(),
-        state.mikrotik.dhcp_leases(),
-    );
+    // Fetch DHCP servers, pools, and leases from the router via queue (High priority for alerts)
+    let batch_results = match state.router_queue.submit(
+        "alert_engine_dhcp",
+        Priority::High,
+        vec![
+            QueuedRequest::get("ip/dhcp-server"),
+            QueuedRequest::get("ip/pool"),
+            QueuedRequest::get("ip/dhcp-server/lease"),
+        ],
+    ).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("alerting: dhcp_pool_exhausted: queue submit failed: {e}");
+            return;
+        }
+    };
 
-    let servers = match servers_res {
+    let mut batch_iter = batch_results.into_iter();
+    let servers_val = batch_iter.next().unwrap();
+    let pools_val = batch_iter.next().unwrap();
+    let leases_val = batch_iter.next().unwrap();
+
+    let servers: Vec<mikrotik_core::resources::ip::DhcpServer> = match servers_val.and_then(|v| {
+        serde_json::from_value(v).map_err(|e| mikrotik_core::MikrotikError::Deserialize(e.to_string()))
+    }) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("alerting: dhcp_pool_exhausted: failed to fetch DHCP servers: {e}");
             return;
         }
     };
-    let pools = match pools_res {
+    let pools: Vec<mikrotik_core::resources::ip::IpPool> = match pools_val.and_then(|v| {
+        serde_json::from_value(v).map_err(|e| mikrotik_core::MikrotikError::Deserialize(e.to_string()))
+    }) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!("alerting: dhcp_pool_exhausted: failed to fetch IP pools: {e}");
             return;
         }
     };
-    let leases = match leases_res {
+    let leases: Vec<mikrotik_core::resources::ip::DhcpLease> = match leases_val.and_then(|v| {
+        serde_json::from_value(v).map_err(|e| mikrotik_core::MikrotikError::Deserialize(e.to_string()))
+    }) {
         Ok(l) => l,
         Err(e) => {
             tracing::warn!("alerting: dhcp_pool_exhausted: failed to fetch DHCP leases: {e}");
@@ -1482,15 +1505,15 @@ fn parse_channels(json: &str) -> Vec<String> {
 
 // ── Background task ─────────────────────────────────────────────
 
-pub fn spawn_alert_engine(supervisor: &TaskSupervisor, state: AppState) {
+pub fn spawn_alert_engine(supervisor: &TaskSupervisor, state: AppState, interval_secs: u64) {
     supervisor.spawn("alert_engine", move || {
         let state = state.clone();
         Box::pin(async move {
         // 30 second startup delay
         tokio::time::sleep(Duration::from_secs(30)).await;
-        tracing::info!("alert engine starting");
+        tracing::info!(interval_secs, "alert engine starting");
 
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
 

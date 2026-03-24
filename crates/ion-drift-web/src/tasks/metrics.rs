@@ -5,21 +5,24 @@ use std::time::Duration;
 use crate::geo;
 use crate::log_parser;
 use crate::oui;
+use crate::router_queue::{Priority, RouterQueue};
 
-/// Poll system resources every 60 seconds, store CPU/memory metrics.
+/// Poll system resources, store CPU/memory metrics.
 /// Prune data older than 7 days every hour.
 pub fn spawn_metrics_poller(
     store: Arc<ion_drift_storage::MetricsStore>,
-    client: mikrotik_core::MikrotikClient,
+    queue: RouterQueue,
+    interval_secs: u64,
 ) {
+    let cleanup_ticks = if interval_secs > 0 { 3600 / interval_secs } else { 60 };
     tokio::spawn(async move {
         let mut tick_count: u64 = 0;
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
             tick_count += 1;
 
-            match client.system_resources().await {
+            match queue.get_typed::<mikrotik_core::resources::system::SystemResource>("metrics", Priority::Normal, "system/resource").await {
                 Ok(res) => {
                     let memory_used = res.total_memory - res.free_memory;
                     if let Err(e) = store
@@ -32,8 +35,8 @@ pub fn spawn_metrics_poller(
                 Err(e) => tracing::warn!("metrics poll failed: {e}"),
             }
 
-            // Cleanup all tables every 60 ticks (every hour)
-            if tick_count % 60 == 0 {
+            // Cleanup all tables every ~1 hour
+            if tick_count % cleanup_ticks == 0 {
                 if let Err(e) = store.cleanup(7 * 86400).await {
                     tracing::warn!("metrics cleanup failed: {e}");
                 }
@@ -42,17 +45,21 @@ pub fn spawn_metrics_poller(
     });
 }
 
-/// Poll firewall drop counters every 60 seconds, store totals in SQLite.
+/// Poll firewall drop counters, store totals in SQLite.
 pub fn spawn_drops_poller(
     store: Arc<ion_drift_storage::MetricsStore>,
-    client: mikrotik_core::MikrotikClient,
+    queue: RouterQueue,
+    interval_secs: u64,
 ) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
 
-            let rules = match client.firewall_filter_rules().await {
+            let rules: Vec<mikrotik_core::resources::firewall::FilterRule> = match queue
+                .get_typed("drops", Priority::Normal, "ip/firewall/filter")
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("drops poller: failed to fetch rules: {e}");
@@ -74,17 +81,21 @@ pub fn spawn_drops_poller(
     });
 }
 
-/// Poll connection tracking summary every 60 seconds, store in SQLite.
+/// Poll connection tracking summary, store in SQLite.
 pub fn spawn_connection_metrics_poller(
     store: Arc<ion_drift_storage::MetricsStore>,
-    client: mikrotik_core::MikrotikClient,
+    queue: RouterQueue,
+    interval_secs: u64,
 ) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
 
-            let connections = match client.firewall_connections(".id,protocol").await {
+            let connections: Vec<mikrotik_core::resources::connection::ConnectionEntry> = match queue
+                .get_typed("connection_metrics", Priority::Normal, "ip/firewall/connection?.proplist=.id,protocol")
+                .await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!("connection poller: failed to fetch connections: {e}");
@@ -114,7 +125,7 @@ pub fn spawn_connection_metrics_poller(
 /// Aggregate log statistics every hour, store roll-ups in SQLite.
 pub fn spawn_log_aggregation(
     store: Arc<ion_drift_storage::MetricsStore>,
-    client: mikrotik_core::MikrotikClient,
+    queue: RouterQueue,
     geo_cache: Arc<geo::GeoCache>,
     oui_db: Arc<oui::OuiDb>,
 ) {
@@ -129,7 +140,7 @@ pub fn spawn_log_aggregation(
                 .as_secs() as i64;
             let period_start = period_end - 3600;
 
-            match client.log_entries().await {
+            match queue.get_typed::<Vec<mikrotik_core::resources::log::LogEntry>>("log_aggregation", Priority::Normal, "log").await {
                 Ok(raw_entries) => {
                     let entries: Vec<_> = raw_entries
                         .iter()

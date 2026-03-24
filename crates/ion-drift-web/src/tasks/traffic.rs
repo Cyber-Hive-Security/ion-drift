@@ -2,12 +2,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::live_traffic::{LiveTrafficBuffer, TrafficSample};
+use crate::router_queue::{Priority, RouterQueue};
 
-/// Poll WAN traffic counters every 10 seconds for live rates,
+/// Poll WAN traffic counters for live rates,
 /// and every 15 minutes for lifetime totals (SQLite).
 pub fn spawn_traffic_poller(
     tracker: Arc<mikrotik_core::TrafficTracker>,
     live_buf: Arc<LiveTrafficBuffer>,
+    queue: RouterQueue,
+    interval_secs: u64,
     client: mikrotik_core::MikrotikClient,
 ) {
     tokio::spawn(async move {
@@ -23,15 +26,19 @@ pub fn spawn_traffic_poller(
         let mut prev_tx: Option<u64> = None;
         let mut prev_time: Option<std::time::Instant> = None;
         let mut tick_count: u64 = 0;
+        let lifetime_ticks = if interval_secs > 0 { 900 / interval_secs } else { 90 };
 
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.tick().await; // skip immediate tick
         loop {
             interval.tick().await;
             tick_count += 1;
 
             // Fetch current interface counters
-            let interfaces = match client.interfaces().await {
+            let interfaces: Vec<mikrotik_core::resources::interface::Interface> = match queue
+                .get_typed("traffic", Priority::Normal, "interface")
+                .await
+            {
                 Ok(i) => i,
                 Err(e) => {
                     tracing::warn!("live traffic poll failed: {e}");
@@ -70,8 +77,8 @@ pub fn spawn_traffic_poller(
                 prev_time = Some(now);
             }
 
-            // Poll lifetime totals every 90 ticks (~15 minutes at 10s interval)
-            if tick_count % 90 == 0 {
+            // Poll lifetime totals every ~15 minutes
+            if tick_count % lifetime_ticks == 0 {
                 match tracker.poll(&client).await {
                     Ok(t) => tracing::debug!(
                         "traffic poll: rx={}, tx={}", t.rx_bytes, t.tx_bytes
@@ -83,17 +90,22 @@ pub fn spawn_traffic_poller(
     });
 }
 
-/// Poll VLAN throughput every 60 seconds, store in SQLite.
+/// Poll VLAN throughput, store in SQLite.
 pub fn spawn_vlan_metrics_poller(
     store: Arc<ion_drift_storage::MetricsStore>,
+    queue: RouterQueue,
+    interval_secs: u64,
     client: mikrotik_core::MikrotikClient,
 ) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
 
-            let vlans = match client.vlan_interfaces().await {
+            let vlans: Vec<mikrotik_core::resources::interface::VlanInterface> = match queue
+                .get_typed("vlan_metrics", Priority::Normal, "interface/vlan")
+                .await
+            {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!("VLAN poller: failed to fetch VLANs: {e}");

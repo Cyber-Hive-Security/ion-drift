@@ -21,6 +21,7 @@ pub mod oui;
 pub mod passive_discovery;
 pub mod poller_registry;
 pub mod provision;
+pub mod router_queue;
 pub mod routes;
 pub mod secrets;
 pub mod setup;

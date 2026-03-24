@@ -21,6 +21,7 @@ mod oui;
 mod passive_discovery;
 mod poller_registry;
 mod provision;
+mod router_queue;
 mod routes;
 mod secrets;
 mod setup;
@@ -565,6 +566,12 @@ async fn main() -> anyhow::Result<()> {
     // Create task supervisor
     let supervisor = TaskSupervisor::new();
 
+    // Create serialized router request queue
+    let router_queue = router_queue::RouterQueue::new(
+        mikrotik.clone(),
+        std::time::Duration::from_secs(config.polling.queue_gap_secs),
+    );
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),
@@ -596,6 +603,7 @@ async fn main() -> anyhow::Result<()> {
         task_supervisor: supervisor,
         login_limiter: auth::LoginRateLimiter::new(),
         attack_techniques: attack_techniques.clone(),
+        router_queue,
     };
 
     // Spawn all background tasks

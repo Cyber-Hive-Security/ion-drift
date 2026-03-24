@@ -9,13 +9,16 @@ use std::collections::HashMap;
 use ion_drift_storage::behavior::{
     self, BehaviorStore, DeviceObservation, NewAnomaly, VlanRegistry, compute_confidence,
 };
-use mikrotik_core::MikrotikClient;
+use mikrotik_core::resources::connection::FullConnectionEntry;
 use mikrotik_core::resources::firewall::FilterRule;
+use mikrotik_core::resources::ip::{ArpEntry, DhcpLease};
+use mikrotik_core::resources::log::LogEntry;
 use tokio::sync::RwLock;
 
 use crate::geo::GeoCache;
 use crate::log_parser;
 use crate::oui::OuiDb;
+use crate::router_queue::{Priority, QueuedRequest, RouterQueue};
 
 /// Placeholder for volume spike candidate tracking (currently unused —
 /// multi-window persistence uses `count_elevated_observations` instead).
@@ -137,16 +140,34 @@ fn classify_vlan(registry: &VlanRegistry, ip: &str) -> i64 {
 /// Called every 60 seconds. The `prev_bytes` map tracks cumulative byte counts
 /// per conntrack ID across calls so we can record deltas instead of lifetime totals.
 pub async fn collect_observations(
-    client: &MikrotikClient,
+    queue: &RouterQueue,
     store: &BehaviorStore,
     oui_db: &OuiDb,
     registry: &VlanRegistry,
     prev_bytes: &mut HashMap<String, (i64, i64)>,
 ) -> Result<usize, String> {
-    // Fetch ARP + DHCP concurrently
-    let (arp_result, dhcp_result) = tokio::join!(client.arp_table(), client.dhcp_leases(),);
-    let arp_entries = arp_result.map_err(|e| format!("ARP fetch failed: {e}"))?;
-    let dhcp_leases = dhcp_result.map_err(|e| format!("DHCP fetch failed: {e}"))?;
+    // Fetch ARP, DHCP, and connections as a single batch through the queue
+    let results = queue
+        .submit(
+            "behavior-collect",
+            Priority::Normal,
+            vec![
+                QueuedRequest::get("ip/arp"),
+                QueuedRequest::get("ip/dhcp-server/lease"),
+                QueuedRequest::get("ip/firewall/connection"),
+            ],
+        )
+        .await
+        .map_err(|e| format!("behavior batch failed: {e}"))?;
+
+    let arp_entries: Vec<ArpEntry> = match &results[0] {
+        Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        Err(e) => return Err(format!("ARP fetch failed: {e}")),
+    };
+    let dhcp_leases: Vec<DhcpLease> = match &results[1] {
+        Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        Err(e) => return Err(format!("DHCP fetch failed: {e}")),
+    };
 
     // Build IP→MAC and IP→hostname maps
     let mut ip_to_mac: HashMap<String, String> = HashMap::new();
@@ -181,11 +202,11 @@ pub async fn collect_observations(
         }
     }
 
-    // Fetch connection tracking
-    let connections = client
-        .firewall_connections_full()
-        .await
-        .map_err(|e| format!("connections fetch failed: {e}"))?;
+    // Connection tracking was fetched in the batch above
+    let connections: Vec<FullConnectionEntry> = match &results[2] {
+        Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        Err(e) => return Err(format!("connections fetch failed: {e}")),
+    };
 
     let now = behavior::BehaviorStore::now_unix_pub();
 
@@ -683,23 +704,41 @@ pub async fn detect_anomalies(
 /// Detect blocked attempts from firewall drop logs.
 /// Called every 60 seconds.
 pub async fn detect_blocked_attempts(
-    client: &MikrotikClient,
+    queue: &RouterQueue,
     store: &BehaviorStore,
     oui_db: &OuiDb,
     geo_cache: &GeoCache,
     registry: &VlanRegistry,
 ) -> Result<usize, String> {
-    let log_entries = client
-        .log_entries()
+    // Fetch log, ARP, and DHCP as a single batch through the queue
+    let results = queue
+        .submit(
+            "behavior-blocked",
+            Priority::Normal,
+            vec![
+                QueuedRequest::get("log"),
+                QueuedRequest::get("ip/arp"),
+                QueuedRequest::get("ip/dhcp-server/lease"),
+            ],
+        )
         .await
-        .map_err(|e| format!("log fetch failed: {e}"))?;
+        .map_err(|e| format!("blocked-attempts batch failed: {e}"))?;
+
+    let log_entries: Vec<LogEntry> = match &results[0] {
+        Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        Err(e) => return Err(format!("log fetch failed: {e}")),
+    };
 
     let mut anomaly_count = 0;
 
-    // Fetch ARP + DHCP for MAC/hostname lookup
-    let (arp_result, dhcp_result) = tokio::join!(client.arp_table(), client.dhcp_leases(),);
-    let arp_entries = arp_result.map_err(|e| format!("ARP fetch failed: {e}"))?;
-    let dhcp_leases = dhcp_result.map_err(|e| format!("DHCP fetch failed: {e}"))?;
+    let arp_entries: Vec<ArpEntry> = match &results[1] {
+        Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        Err(e) => return Err(format!("ARP fetch failed: {e}")),
+    };
+    let dhcp_leases: Vec<DhcpLease> = match &results[2] {
+        Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        Err(e) => return Err(format!("DHCP fetch failed: {e}")),
+    };
 
     let mut ip_to_mac: HashMap<String, String> = HashMap::new();
     let mut ip_to_hostname: HashMap<String, String> = HashMap::new();
@@ -1097,7 +1136,7 @@ pub fn correlate_with_firewall(
 
 /// Refresh firewall rules cache if stale (>5 minutes).
 pub async fn refresh_firewall_cache(
-    client: &MikrotikClient,
+    queue: &RouterQueue,
     cache: &RwLock<(Vec<FilterRule>, std::time::Instant)>,
 ) {
     let needs_refresh = {
@@ -1105,7 +1144,14 @@ pub async fn refresh_firewall_cache(
         cached.1.elapsed() > std::time::Duration::from_secs(300)
     };
     if needs_refresh {
-        match client.firewall_filter_rules().await {
+        match queue
+            .get_typed::<Vec<FilterRule>>(
+                "behavior-fw-cache",
+                Priority::Normal,
+                "ip/firewall/filter",
+            )
+            .await
+        {
             Ok(rules) => {
                 let mut cached = cache.write().await;
                 *cached = (rules, std::time::Instant::now());

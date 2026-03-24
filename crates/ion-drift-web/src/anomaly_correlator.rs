@@ -18,6 +18,7 @@ pub fn spawn_anomaly_correlator(
     connection_store: Arc<ConnectionStore>,
     behavior_store: Arc<BehaviorStore>,
     vlan_registry: Arc<RwLock<VlanRegistry>>,
+    interval_secs: u64,
 ) {
     supervisor.spawn("anomaly_correlator", move || {
         let connection_store = connection_store.clone();
@@ -26,9 +27,9 @@ pub fn spawn_anomaly_correlator(
         Box::pin(async move {
         // Wait 5 minutes for behavior collector + baselines to have initial data
         tokio::time::sleep(Duration::from_secs(300)).await;
-        tracing::info!("anomaly correlator starting");
+        tracing::info!(interval_secs, "anomaly correlator starting");
 
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
 
