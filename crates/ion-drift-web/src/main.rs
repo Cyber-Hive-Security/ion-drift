@@ -311,15 +311,19 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to init switch store: {e}"))?,
     );
 
-    // Auto-detect CA cert at well-known path if not explicitly configured
+    // Auto-detect CA cert at well-known paths if not explicitly configured.
+    // Check /app/data/certs/ first (entrypoint copies mounted certs here with correct perms),
+    // then /app/certs/ (direct mount).
     let ca_cert_path = config.router.ca_cert_path.clone().or_else(|| {
-        let well_known = std::path::Path::new("/app/certs/root_ca.crt");
-        if well_known.exists() {
-            tracing::info!("auto-detected CA cert at {}", well_known.display());
-            Some(well_known.to_string_lossy().to_string())
-        } else {
-            None
+        let candidates = ["/app/data/certs/root_ca.crt", "/app/certs/root_ca.crt"];
+        for path in &candidates {
+            let p = std::path::Path::new(path);
+            if p.exists() {
+                tracing::info!("auto-detected CA cert at {}", p.display());
+                return Some(path.to_string());
+            }
         }
+        None
     });
 
     let device_manager = if let Some(ref sm) = secrets_manager {
