@@ -354,6 +354,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/system/resources", get(system::resources))
         .route("/system/identity", get(system::identity))
         .route("/system/tasks", get(system::tasks))
+        .route("/system/restart", post(system::restart))
         // Interfaces
         .route("/interfaces", get(interfaces::list))
         .route("/interfaces/vlans", get(interfaces::vlans))

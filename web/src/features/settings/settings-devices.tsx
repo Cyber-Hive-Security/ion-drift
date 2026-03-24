@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
-import { ApiError } from "@/api/client";
+import { ApiError, apiFetch } from "@/api/client";
 import {
   useDevices,
   useCreateDevice,
@@ -25,6 +25,7 @@ export function SettingsDevices() {
   const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ status: string; identity?: string; error?: string } | null>(null);
   const [showPrimaryConflict, setShowPrimaryConflict] = useState(false);
+  const [showRestartPrompt, setShowRestartPrompt] = useState(false);
 
   const createDevice = useCreateDevice();
   const updateDevice = useUpdateDevice();
@@ -194,8 +195,19 @@ export function SettingsDevices() {
     const result = await updateDevice.mutateAsync({ id: editingDeviceId, data });
     setEditingDeviceId(null);
     if (result.restart_required) {
-      alert("Settings saved. Restart the container to apply primary router changes.\n\ndocker compose restart");
+      setShowRestartPrompt(true);
     }
+  };
+
+  const handleRestart = async () => {
+    setShowRestartPrompt(false);
+    try {
+      await apiFetch("/api/system/restart", { method: "POST" });
+    } catch {
+      // Expected — server exits before response completes
+    }
+    // Wait for restart, then reload
+    setTimeout(() => window.location.reload(), 5000);
   };
 
   return (
@@ -685,6 +697,30 @@ export function SettingsDevices() {
             >
               Cancel
             </button>
+          </div>
+        </div>
+      )}
+      {showRestartPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="rounded-lg border border-border bg-card p-6 shadow-xl max-w-md space-y-4">
+            <h3 className="text-lg font-semibold text-foreground">Settings Saved</h3>
+            <p className="text-sm text-muted-foreground">
+              Primary router connection settings have been updated. A restart is required to apply the changes.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowRestartPrompt(false)}
+                className="rounded border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                I'll do it later
+              </button>
+              <button
+                onClick={handleRestart}
+                className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Restart Now
+              </button>
+            </div>
           </div>
         </div>
       )}
