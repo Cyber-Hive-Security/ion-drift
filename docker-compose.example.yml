@@ -15,9 +15,6 @@ services:
     image: ghcr.io/cyber-hive-security/ion-drift:latest
     container_name: ion-drift
     restart: unless-stopped
-    cap_add:
-      - NET_RAW
-      - NET_ADMIN
     ports:
       - "3000:3000"
       - "5514:5514/udp"

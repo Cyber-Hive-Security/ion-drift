@@ -21,13 +21,9 @@ RUN npm run build
 
 # Stage 3: Runtime
 FROM debian:bookworm-slim
-# SECURITY: nmap requires NET_RAW/NET_ADMIN for SYN scanning.
-# These capabilities are restricted to the nmap binary only (not the app).
-# If nmap scanning is disabled, remove this line and the docker-compose capabilities.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates gosu curl nmap libcap2-bin \
+    && apt-get install -y --no-install-recommends ca-certificates gosu curl \
     && rm -rf /var/lib/apt/lists/* \
-    && setcap cap_net_raw,cap_net_admin+eip /usr/bin/nmap \
     && groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app
 
 WORKDIR /app
@@ -35,10 +31,12 @@ COPY --from=rust-builder /build/target/release/ion-drift-web ./
 COPY --from=node-builder /build/web/dist ./web/dist/
 COPY docker/entrypoint.sh /entrypoint.sh
 
-# Config and certs are provided at runtime via volume mounts:
+# Bundle default config — users can override via volume mount:
 #   -v /path/to/server.toml:/app/config/server.toml:ro
 #   -v /path/to/ca.crt:/app/certs/root_ca.crt:ro
-RUN mkdir -p /app/config /app/certs /app/data/certs && chown -R app:app /app
+RUN mkdir -p /app/config /app/certs /app/data/certs
+COPY config/server.example.toml /app/config/server.toml
+RUN chown -R app:app /app
 
 ENV RUST_LOG=info
 ENV XDG_DATA_HOME=/app/data
