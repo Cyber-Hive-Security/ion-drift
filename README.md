@@ -83,27 +83,43 @@ The release build can take 10-30 minutes depending on hardware. With less than 4
 
 ## Quick Start
 
+**Before you start,** have these ready:
+- Your MikroTik router's hostname or IP address
+- A dedicated RouterOS API user with `api,read` policies (see [Router User Setup](#router-user-setup) below)
+- The router must have HTTPS enabled on port 443 with a TLS certificate
+
+**Step 1: Set up the config**
+
 ```bash
 cp docker-compose.example.yml docker-compose.yml
+mkdir -p config
+cp config/server.example.toml config/server.toml
+```
+
+Edit `config/server.toml` — at minimum, set your router hostname and uncomment the config mount in `docker-compose.yml`:
+
+```toml
+[router]
+host = "your-router.example.com"   # hostname must match the TLS certificate
+```
+
+If your router uses a private CA (Smallstep, EJBCA, self-signed), also set `ca_cert_path` and mount the CA cert. See [docs/configuration.md](docs/configuration.md#first-run) for details. If your router uses Let's Encrypt or another public CA, no `ca_cert_path` is needed.
+
+**Step 2: Start and set up**
+
+```bash
 docker compose up -d
 ```
 
 Open `http://your-host:3000` in your browser. The setup wizard guides you through initial configuration:
 
 1. **Create admin account** — choose a username and strong password (min 12 characters). This is your Ion Drift login, not your router password.
-2. **Log in** — after the wizard completes, you'll see the login page. Use the credentials you just created.
-3. **Add your router** — go to Settings → Devices. Enter your MikroTik router's hostname/IP and credentials. Ion Drift begins monitoring immediately.
-
-**Before you start,** have these ready:
-- Your MikroTik router's hostname or IP address
-- A dedicated RouterOS API user with `api,read` policies (see [Router User Setup](#router-user-setup) below)
-- The router must have HTTPS enabled on port 443 with a TLS certificate
+2. **Log in** — after the wizard completes, click "Access Ion Drift" and log in with the credentials you just created.
+3. **Add your router** — go to Settings → Devices. Enter your router credentials (username and password). Ion Drift begins monitoring immediately.
 
 No environment variables or build tools needed. Credentials are stored encrypted — never put passwords in config files or Docker environment variables.
 
 Pre-built images are published to `ghcr.io/cyber-hive-security/ion-drift` on every release.
-
-> **Using a private CA?** If your router's TLS certificate is signed by a private CA (Smallstep, EJBCA, self-signed), you need a minimal `server.toml` with `ca_cert_path` and the CA cert mounted. See [docs/configuration.md](docs/configuration.md#first-run) for details. If your router uses Let's Encrypt or another public CA, no config file is needed.
 
 ### Router User Setup
 

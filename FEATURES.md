@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-23
+> **Last updated:** 2026-03-24
 
 ## Overview
 
@@ -134,6 +134,11 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 ## Administration
 
+- **Router request queue** — serializes all background API requests through a priority-scheduled queue with adaptive gap control, circuit breaker, deduplication, and starvation detection. Prevents concurrent TLS sessions from overwhelming low-end routers.
+- Configurable poll intervals via `[polling]` config section (traffic, metrics, connections, behavior, correlation, topology, policy sync)
+- In-app restart from Settings → Devices with "Restart Now" / "I'll do it later" prompt
+- Auto-detect CA cert at `/app/certs/root_ca.crt` without config (convention over configuration)
+- Env var credential migration to encrypted secrets DB on first run
 - Statistics page with page view tracking, diagnostic report generation, and engine health overview
 - Graceful startup when router is unreachable — web UI starts so credentials can be fixed via Settings
 - HTTP compression (gzip + Brotli) and immutable cache headers for hashed static assets
