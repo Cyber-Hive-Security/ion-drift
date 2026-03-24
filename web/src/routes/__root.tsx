@@ -16,7 +16,9 @@ export function RootLayout() {
     () => window.matchMedia("(min-width: 768px)").matches,
   );
   const behaviorAlerts = useBehaviorAlerts({ enabled: isAuthenticated });
-  usePageTracking();
+  // Only track page views when authenticated — unauthenticated API calls
+  // return 401 which triggers a full page reload via apiFetch, causing a loop.
+  usePageTracking(isAuthenticated);
 
   if (isLoading) {
     return (

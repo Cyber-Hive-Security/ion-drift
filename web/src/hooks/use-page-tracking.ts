@@ -56,7 +56,7 @@ function extractContext(pathname: string, search: Record<string, unknown>): stri
   return "";
 }
 
-export function usePageTracking() {
+export function usePageTracking(enabled = true) {
   const routerState = useRouterState();
   const pathname = routerState.location.pathname;
   const search = routerState.location.search as Record<string, unknown>;
@@ -68,7 +68,8 @@ export function usePageTracking() {
     const context = extractContext(pathname, search);
     const key = `${page}:${context}`;
 
-    // Avoid duplicate fires for the same page+context
+    // Don't track when not authenticated or same page
+    if (!enabled) return;
     if (key === lastTracked.current) return;
     lastTracked.current = key;
 
