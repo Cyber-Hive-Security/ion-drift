@@ -59,6 +59,8 @@ export function SettingsDevices() {
     password: "",
   });
 
+  const [editOriginal, setEditOriginal] = useState<{ host: string; port: number; tls: boolean } | null>(null);
+
   if (isLoading) return <LoadingSpinner />;
   if (error)
     return (
@@ -162,6 +164,7 @@ export function SettingsDevices() {
 
   const handleStartEdit = (device: typeof devices extends (infer T)[] | undefined ? T : never) => {
     setEditingDeviceId(device.id);
+    setEditOriginal({ host: device.host, port: device.port, tls: device.tls });
     setEditForm({
       name: device.name,
       host: device.host,
@@ -178,12 +181,14 @@ export function SettingsDevices() {
     if (!editingDeviceId) return;
     const data: UpdateDeviceRequest = {
       name: editForm.name || undefined,
-      host: editForm.host || undefined,
-      port: parseInt(editForm.port) || 443,
-      tls: editForm.tls,
       model: editForm.model || undefined,
       poll_interval_secs: parseInt(editForm.poll_interval_secs) || 60,
     };
+    // Only send connection fields if they changed from the original
+    const newPort = parseInt(editForm.port) || 443;
+    if (editOriginal && editForm.host !== editOriginal.host) data.host = editForm.host;
+    if (editOriginal && newPort !== editOriginal.port) data.port = newPort;
+    if (editOriginal && editForm.tls !== editOriginal.tls) data.tls = editForm.tls;
     if (editForm.username) data.username = editForm.username;
     if (editForm.password) data.password = editForm.password;
     const result = await updateDevice.mutateAsync({ id: editingDeviceId, data });
@@ -367,7 +372,7 @@ export function SettingsDevices() {
                 <div className="flex gap-2 pt-1">
                   <button
                     onClick={handleSaveEdit}
-                    disabled={!editForm.name || !editForm.host || !editForm.username || updateDevice.isPending}
+                    disabled={!editForm.name || !editForm.host || updateDevice.isPending}
                     className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                   >
                     {updateDevice.isPending ? "Saving..." : "Save Changes"}
