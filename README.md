@@ -88,11 +88,33 @@ cp docker-compose.example.yml docker-compose.yml
 docker compose up -d
 ```
 
-Open `http://your-host:3000` in your browser. The setup wizard creates your admin account — no configuration files, environment variables, or build tools needed.
+Open `http://your-host:3000` in your browser. The setup wizard guides you through initial configuration:
 
-After setup, add your router connection in the web UI. Ion Drift begins monitoring immediately.
+1. **Create admin account** — choose a username and strong password (min 12 characters). This is your Ion Drift login, not your router password.
+2. **Log in** — after the wizard completes, you'll see the login page. Use the credentials you just created.
+3. **Add your router** — go to Settings → Devices. Enter your MikroTik router's hostname/IP and credentials. Ion Drift begins monitoring immediately.
+
+**Before you start,** have these ready:
+- Your MikroTik router's hostname or IP address
+- A dedicated RouterOS API user with `api,read` policies (see [Router User Setup](#router-user-setup) below)
+- The router must have HTTPS enabled on port 443 with a TLS certificate
+
+No configuration files, environment variables, or build tools needed for the basic setup. Credentials are stored encrypted — never put passwords in config files or Docker environment variables.
 
 Pre-built images are published to `ghcr.io/cyber-hive-security/ion-drift` on every release.
+
+> **Accessing over plain HTTP?** If you're not using a reverse proxy with HTTPS, set `secure = false` in the `[session]` section of your config file. See [docs/configuration.md](docs/configuration.md) for details. Without this, login will appear to succeed but the session cookie won't be stored by your browser.
+
+### Router User Setup
+
+Create a dedicated read-only user on your MikroTik router — **do not use the admin account:**
+
+```routeros
+/user group add name=ion-drift policy=api,read,!write,!ftp,!local,!telnet,!ssh,!reboot,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon,!rest-api
+/user add name=ion-drift group=ion-drift password=YourStrongPasswordHere
+```
+
+Ion Drift uses the **REST API on port 443** (HTTPS). Do not use port 8728 or 8729 — those are the RouterOS proprietary API (Winbox/API), a completely different protocol.
 
 ## Optional: OIDC Single Sign-On
 
@@ -177,6 +199,7 @@ For advanced configuration (OIDC, syslog, CertWarden, custom bind address), see 
 - [FEATURES.md](FEATURES.md) — Complete feature list
 - [CHANGELOG.md](CHANGELOG.md) — Release history
 - [SECURITY.md](SECURITY.md) — Vulnerability reporting policy
+- [docs/troubleshooting.md](docs/troubleshooting.md) — Common issues and solutions
 - [docs/configuration.md](docs/configuration.md) — Configuration reference with OIDC provider guides
 - [docs/auth.md](docs/auth.md) — Authentication architecture
 - [docs/behavior-engine-whitepaper.md](docs/behavior-engine-whitepaper.md) — Anomaly detection engine

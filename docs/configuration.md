@@ -6,6 +6,56 @@ Ion Drift works out of the box with no external dependencies. On first launch, v
 
 All configuration is optional for a basic setup — you only need to point Ion Drift at your Mikrotik router.
 
+## First Run
+
+On first launch, Ion Drift starts in setup mode. Here's what to expect:
+
+### 1. Setup Wizard
+
+Navigate to `http://your-host:3000/setup`. The wizard asks you to:
+- **Create an admin account** — username and password (minimum 12 characters). This is your Ion Drift login.
+- The wizard derives an encryption key from your password, generates a session secret, and stores everything encrypted.
+
+After submitting, the container needs to restart to switch from setup mode to normal mode. Docker's `restart: unless-stopped` handles this automatically — wait ~10 seconds.
+
+### 2. Login
+
+After restart, navigate to `http://your-host:3000`. You'll see the login page. Use the credentials you created in the wizard.
+
+**"Nothing happens when I click login"** — if the page appears to accept your password but doesn't log you in, check your `[session]` config:
+- `secure = true` (the default) means session cookies require HTTPS. If you're accessing over plain HTTP, the browser silently rejects the cookie.
+- Set `secure = false` if you're accessing Ion Drift directly over HTTP without a reverse proxy.
+
+### 3. Connect Your Router
+
+After login, go to **Settings → Devices** to add your MikroTik router:
+- **Host:** Your router's hostname or IP (e.g., `192.168.88.1` or `router.example.com`)
+- **Port:** `443` — Ion Drift uses the REST API over HTTPS. **Do not use port 8728 or 8729** — those are the RouterOS proprietary API (Winbox/API), a completely different protocol.
+- **TLS:** Enabled (required — Ion Drift does not support unencrypted router connections)
+- **Username/Password:** The dedicated `ion-drift` user you created on the router
+
+### 4. TLS Certificate Trust
+
+- **Let's Encrypt or other public CA:** No additional config needed. The certificate is trusted automatically.
+- **Private/internal CA (Smallstep, EJBCA, self-signed):** Mount your CA's root certificate into the container and set `ca_cert_path` in `[router]`:
+  ```yaml
+  # docker-compose.yml
+  volumes:
+    - ./certs/root_ca.crt:/app/certs/root_ca.crt:ro
+  ```
+  ```toml
+  # server.toml
+  [router]
+  ca_cert_path = "/app/certs/root_ca.crt"
+  ```
+  This is the CA certificate (the one that *signed* your router's cert), not the router's own certificate.
+
+### 5. Verify
+
+Once connected, the dashboard should start populating within 30 seconds. If the router shows as "Offline" in Settings → Devices, check [Troubleshooting](troubleshooting.md).
+
+---
+
 ## Configuration File
 
 Two example configs are provided:
