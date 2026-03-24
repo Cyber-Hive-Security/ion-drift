@@ -77,6 +77,8 @@ If curl works but Ion Drift doesn't, the password in the secrets database may be
 ca_cert_path = "/app/certs/root_ca.crt"
 ```
 
+**Hostname must match the certificate.** If your router's TLS certificate is issued for a hostname (e.g., `router.example.com`), you must connect using that hostname — not the IP address. Ion Drift (via rustls) enforces strict hostname verification. Set the router host in Settings → Devices to match the certificate's Subject Alternative Name (SAN).
+
 **Diagnose with curl:**
 
 ```bash
