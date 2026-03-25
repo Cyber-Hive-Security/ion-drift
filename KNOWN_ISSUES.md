@@ -4,6 +4,24 @@ Tracked issues from external code reviews and internal testing.
 
 ## Resolved
 
+### [HIGH] Session Secret Fail-Open on Decrypt Error (main.rs)
+**Source:** External security review 2026-03-25
+**Fixed:** v0.3.1
+
+Secret decryption errors were logged but startup continued with an empty session secret, creating a fail-open path where sessions were signed with a predictable empty HMAC key. Fixed by making decrypt errors fatal (`anyhow::bail!`) and generating an ephemeral random secret on `Ok(None)`.
+
+### [HIGH] Err/Ok(None) Conflation in Secret Loading (main.rs)
+**Source:** External security review 2026-03-25
+**Fixed:** v0.3.1
+
+Decrypt errors (`Err`) and missing secrets (`Ok(None)`) were both treated as "secret not found", allowing the env var migration path to trigger on KEK corruption. Fixed by making `Err` fatal and only allowing migration on `Ok(None)`.
+
+### [HIGH] Router Queue Poller Starvation
+**Source:** Internal testing 2026-03-25
+**Fixed:** v0.3.1
+
+Low-priority pollers (`log_aggregation`, `behavior-fw-cache`) were permanently starved by a steady stream of higher-priority batches. Fixed with age-based priority promotion (batches waiting >120s promoted to High priority) and reduced starvation log noise (warn once per threshold crossing instead of every loop iteration).
+
 ### [HIGH] Blocking SQLite I/O in StatsStore (stats_store.rs)
 **Source:** External review 2026-03-25
 **Fixed:** v0.3.1
@@ -40,6 +58,12 @@ Backoff includes ±25% jitter: `rand::random::<f64>() * 0.5 + 0.75` (line 182).
 
 Named constants `IFTYPE_L2_VLAN` and `IFTYPE_SOFTWARE_LOOPBACK` are used.
 
+### [LOW] Commented-Out Vendor Profile Code (snmp_profile.rs)
+**Source:** External review 2026-03-25
+**Status:** Already removed prior to review
+
+The commented code was already removed. The reviewer was working from an older snapshot.
+
 ## Won't Fix
 
 ### [LOW] Panic Message Information Leak (task_supervisor.rs)
@@ -47,33 +71,10 @@ Named constants `IFTYPE_L2_VLAN` and `IFTYPE_SOFTWARE_LOOPBACK` are used.
 
 Panic payloads are logged directly. We don't put secrets in `expect()` messages, and these are container-internal logs, not user-facing output. The sanitization overhead isn't warranted.
 
-### [LOW] Commented-Out Vendor Profile Code (snmp_profile.rs)
-**Source:** External review 2026-03-25
-
-The commented code was already removed prior to review. The reviewer was working from an older snapshot.
-
 ### [LOW] Policy Lookup Mixed Responsibilities (behavior.rs)
 **Source:** External review 2026-03-25
 
 `get_policies_for_service` combines fetching, filtering, and VLAN matching in one method. This is a style/refactor suggestion, not a bug. The current implementation is correct and the method is well-scoped. Refactoring would add abstraction without reducing defect risk.
-
-### [HIGH] Session Secret Fail-Open on Decrypt Error (main.rs)
-**Source:** External security review 2026-03-25
-**Fixed:** v0.3.1
-
-Secret decryption errors were logged but startup continued with an empty session secret, creating a fail-open path where sessions were signed with a predictable empty HMAC key. Fixed by making decrypt errors fatal (`anyhow::bail!`) and generating an ephemeral random secret on `Ok(None)`.
-
-### [HIGH] Err/Ok(None) Conflation in Secret Loading (main.rs)
-**Source:** External security review 2026-03-25
-**Fixed:** v0.3.1
-
-Decrypt errors (`Err`) and missing secrets (`Ok(None)`) were both treated as "secret not found", allowing the env var migration path to trigger on KEK corruption. Fixed by making `Err` fatal and only allowing migration on `Ok(None)`.
-
-### [HIGH] Router Queue Poller Starvation
-**Source:** Internal testing 2026-03-25
-**Fixed:** v0.3.1
-
-Low-priority pollers (`log_aggregation`, `behavior-fw-cache`) were permanently starved by a steady stream of higher-priority batches. Fixed with age-based priority promotion (batches waiting >120s promoted to High priority) and reduced starvation log noise (warn once per threshold crossing instead of every loop iteration).
 
 ## Open
 
