@@ -717,7 +717,7 @@ async fn main() -> anyhow::Result<()> {
         config.server.listen_addr, config.server.listen_port
     );
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    tracing::info!("ion-drift web server listening on {bind_addr}");
+    tracing::info!(version = routes::version(), "ion-drift web server listening on {bind_addr}");
 
     axum::serve(listener, app).await?;
 

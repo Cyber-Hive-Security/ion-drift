@@ -79,10 +79,17 @@ fn extract_origin(url: &str) -> String {
     url.to_string()
 }
 
+/// Build-time version, set via `ION_DRIFT_VERSION` env var during compilation.
+/// Falls back to "dev" for local builds.
+pub fn version() -> &'static str {
+    option_env!("ION_DRIFT_VERSION").unwrap_or("dev")
+}
+
 /// Health check endpoint — no auth required.
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
+        "version": version(),
         "demo_mode": demo::is_demo_mode(),
     }))
 }

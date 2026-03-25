@@ -5,11 +5,12 @@
 
 # Stage 1: Build Rust binary
 FROM rust:1-bookworm AS rust-builder
+ARG VERSION=dev
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY data/ data/
-RUN cargo build --release --bin ion-drift-web
+RUN ION_DRIFT_VERSION=${VERSION} cargo build --release --bin ion-drift-web
 
 # Stage 2: Build frontend
 FROM node:22-bookworm-slim AS node-builder
