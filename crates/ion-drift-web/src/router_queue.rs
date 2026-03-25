@@ -328,6 +328,10 @@ async fn queue_worker(
 
     // Starvation threshold: warn if a poller hasn't run in 5x its expected interval
     let starvation_threshold = Duration::from_secs(300);
+    // Track whether we've already warned about each poller's starvation
+    let mut starvation_warned: HashMap<String, bool> = HashMap::new();
+    // Age-based promotion: boost Low/Normal batches that have waited too long
+    let promotion_threshold = Duration::from_secs(120);
 
     tracing::info!(
         gap_ms = base_gap.as_millis() as u64,
@@ -379,10 +383,20 @@ async fn queue_worker(
             continue;
         }
 
-        // Pick the highest-priority batch
+        // Pick the highest-priority batch, with age-based promotion to prevent starvation.
+        // Batches waiting longer than promotion_threshold are promoted to High priority
+        // so low-priority pollers can't be starved indefinitely by a steady stream of
+        // higher-priority submissions.
         let next_id = pending
             .iter()
-            .min_by_key(|(_, b)| (b.priority, b.submitted_at))
+            .min_by_key(|(_, b)| {
+                let effective_priority = if b.submitted_at.elapsed() > promotion_threshold {
+                    Priority::High
+                } else {
+                    b.priority
+                };
+                (effective_priority, b.submitted_at)
+            })
             .map(|(id, _)| id.clone());
 
         let Some(next_id) = next_id else {
@@ -455,16 +469,20 @@ async fn queue_worker(
             m.poller_last_run.insert(batch.poller_id.clone(), Instant::now());
         }
 
-        // Starvation detection
+        // Starvation detection (warn once per threshold crossing, not every iteration)
         starvation_tracker.insert(batch.poller_id.clone(), Instant::now());
+        starvation_warned.insert(batch.poller_id.clone(), false);
         for (poller_id, last_run) in &starvation_tracker {
-            if last_run.elapsed() > starvation_threshold {
+            let is_starving = last_run.elapsed() > starvation_threshold;
+            let already_warned = starvation_warned.get(poller_id).copied().unwrap_or(false);
+            if is_starving && !already_warned {
                 tracing::warn!(
                     poller = %poller_id,
                     elapsed_secs = last_run.elapsed().as_secs(),
                     "poller starvation detected — hasn't executed in over {}s",
                     starvation_threshold.as_secs()
                 );
+                starvation_warned.insert(poller_id.clone(), true);
             }
         }
 
