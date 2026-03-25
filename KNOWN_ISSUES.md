@@ -76,27 +76,31 @@ Panic payloads are logged directly. We don't put secrets in `expect()` messages,
 
 `get_policies_for_service` combines fetching, filtering, and VLAN matching in one method. This is a style/refactor suggestion, not a bug. The current implementation is correct and the method is well-scoped. Refactoring would add abstraction without reducing defect risk.
 
-## Open
-
 ### [HIGH] Unbounded HTTP Response Body (client.rs)
 **Source:** External security review 2026-03-25
+**Fixed:** development
 
-`MikrotikClient::handle_response()` reads the entire response body into memory via `resp.text().await` without a size limit. A misbehaving router returning a massive response could cause OOM. Should enforce a cap (e.g., 2MB).
+`MikrotikClient::handle_response()` read entire response body into memory without a size limit. Fixed by adding `read_body_limited()` with a 2MB cap and `ResponseTooLarge` error variant.
 
 ### [HIGH] SNMP Walk Infinite Loop (snmp_client.rs)
 **Source:** External security review 2026-03-25
+**Fixed:** development
 
-SNMP walk functions don't verify that each returned OID is strictly greater than the previous. A buggy agent returning the same OID would loop indefinitely. Should track `last_oid` and break on non-advancing responses.
+All 7 SNMP walk functions now check OID monotonicity (break if OID doesn't strictly advance) and enforce a 10,000-iteration cap as a belt-and-suspenders safeguard.
 
 ### [MEDIUM] Manual UTF-8 Decoding in SwOS Client (swos_client.rs)
 **Source:** External security review 2026-03-25
+**Fixed:** development
 
-`decode_hex_string` manually implements UTF-8 decoding instead of using `String::from_utf8_lossy()`. Custom encoding implementations are prone to subtle bugs. Should decode hex to `Vec<u8>` then use the standard library.
+`decode_hex_string` replaced manual UTF-8 state machine with `String::from_utf8_lossy()`, which correctly handles all edge cases including 4-byte sequences and malformed input.
 
 ### [MEDIUM] Repetitive Encryption Boilerplate (secrets.rs)
 **Source:** External security review 2026-03-25
+**Fixed:** development
 
-AES-256-GCM encrypt logic (cipher creation, nonce generation, payload construction) is duplicated across `encrypt_secret`, `store_all`, `add_device`, and `update_device`. Should extract a private `encrypt_value()` helper to reduce drift risk.
+Extracted `encrypt_value()` helper method. All 9 encryption call sites across 4 functions now use the shared helper.
+
+## Open
 
 ### [LOW] ThreadRng for Encryption Nonces (secrets.rs)
 **Source:** External security review 2026-03-25

@@ -27,6 +27,9 @@ pub enum MikrotikError {
     #[error("SNMP error: {0}")]
     Snmp(String),
 
+    #[error("Response body too large ({0} bytes, limit {1})")]
+    ResponseTooLarge(usize, usize),
+
     #[error("Configuration error: {0}")]
     Config(String),
 }

@@ -155,21 +155,25 @@ impl SecretsManager {
         })
     }
 
-    /// Encrypt and store a secret.
-    pub async fn encrypt_secret(&self, name: &str, plaintext: &str) -> anyhow::Result<()> {
+    /// Encrypt a value with the KEK, using the secret name as AAD.
+    /// Returns (ciphertext, nonce_bytes).
+    fn encrypt_value(&self, name: &str, plaintext: &str) -> anyhow::Result<(Vec<u8>, [u8; 12])> {
         let cipher = Aes256Gcm::new(&self.kek);
         let nonce_bytes: [u8; 12] = rand::random();
         let nonce = Nonce::from_slice(&nonce_bytes);
-
-        // Use the secret name as AAD (additional authenticated data)
         let payload = Payload {
             msg: plaintext.as_bytes(),
             aad: name.as_bytes(),
         };
-
         let ciphertext = cipher
             .encrypt(nonce, payload)
-            .map_err(|e| anyhow::anyhow!("encryption failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("encryption failed for '{name}': {e}"))?;
+        Ok((ciphertext, nonce_bytes))
+    }
+
+    /// Encrypt and store a secret.
+    pub async fn encrypt_secret(&self, name: &str, plaintext: &str) -> anyhow::Result<()> {
+        let (ciphertext, nonce_bytes) = self.encrypt_value(name, plaintext)?;
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -312,7 +316,6 @@ impl SecretsManager {
             pairs.push((SECRET_MAXMIND_LICENSE_KEY, key.expose_secret()));
         }
 
-        let cipher = Aes256Gcm::new(&self.kek);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -320,15 +323,7 @@ impl SecretsManager {
 
         let mut encrypted: Vec<(&str, Vec<u8>, [u8; 12])> = Vec::new();
         for (name, plaintext) in &pairs {
-            let nonce_bytes: [u8; 12] = rand::random();
-            let nonce = Nonce::from_slice(&nonce_bytes);
-            let payload = Payload {
-                msg: plaintext.as_bytes(),
-                aad: name.as_bytes(),
-            };
-            let ciphertext = cipher
-                .encrypt(nonce, payload)
-                .map_err(|e| anyhow::anyhow!("encryption failed for '{name}': {e}"))?;
+            let (ciphertext, nonce_bytes) = self.encrypt_value(name, plaintext)?;
             encrypted.push((name, ciphertext, nonce_bytes));
         }
 
@@ -484,31 +479,8 @@ impl SecretsManager {
         let user_secret_name = format!("device:{}:username", device.id);
         let pass_secret_name = format!("device:{}:password", device.id);
 
-        let cipher = Aes256Gcm::new(&self.kek);
-
-        let user_nonce_bytes: [u8; 12] = rand::random();
-        let user_nonce = Nonce::from_slice(&user_nonce_bytes);
-        let user_ciphertext = cipher
-            .encrypt(
-                user_nonce,
-                Payload {
-                    msg: username.as_bytes(),
-                    aad: user_secret_name.as_bytes(),
-                },
-            )
-            .map_err(|e| anyhow::anyhow!("encryption failed for username: {e}"))?;
-
-        let pass_nonce_bytes: [u8; 12] = rand::random();
-        let pass_nonce = Nonce::from_slice(&pass_nonce_bytes);
-        let pass_ciphertext = cipher
-            .encrypt(
-                pass_nonce,
-                Payload {
-                    msg: password.as_bytes(),
-                    aad: pass_secret_name.as_bytes(),
-                },
-            )
-            .map_err(|e| anyhow::anyhow!("encryption failed for password: {e}"))?;
+        let (user_ciphertext, user_nonce_bytes) = self.encrypt_value(&user_secret_name, username)?;
+        let (pass_ciphertext, pass_nonce_bytes) = self.encrypt_value(&pass_secret_name, password)?;
 
         // Single transaction: device row + both credential secrets
         let db = self.db.lock().await;
@@ -556,28 +528,18 @@ impl SecretsManager {
         let now = now_unix();
 
         // Pre-encrypt any credential updates before taking the DB lock for the transaction
-        let cipher = Aes256Gcm::new(&self.kek);
-
         let encrypted_username = if let Some(ref username) = update.username {
-            let secret_name = format!("device:{id}:username");
-            let nonce_bytes: [u8; 12] = rand::random();
-            let nonce = Nonce::from_slice(&nonce_bytes);
-            let ciphertext = cipher
-                .encrypt(nonce, Payload { msg: username.as_bytes(), aad: secret_name.as_bytes() })
-                .map_err(|e| anyhow::anyhow!("encryption failed for username: {e}"))?;
-            Some((secret_name, ciphertext, nonce_bytes))
+            let name = format!("device:{id}:username");
+            let (ct, nonce) = self.encrypt_value(&name, username)?;
+            Some((name, ct, nonce))
         } else {
             None
         };
 
         let encrypted_password = if let Some(ref password) = update.password {
-            let secret_name = format!("device:{id}:password");
-            let nonce_bytes: [u8; 12] = rand::random();
-            let nonce = Nonce::from_slice(&nonce_bytes);
-            let ciphertext = cipher
-                .encrypt(nonce, Payload { msg: password.as_bytes(), aad: secret_name.as_bytes() })
-                .map_err(|e| anyhow::anyhow!("encryption failed for password: {e}"))?;
-            Some((secret_name, ciphertext, nonce_bytes))
+            let name = format!("device:{id}:password");
+            let (ct, nonce) = self.encrypt_value(&name, password)?;
+            Some((name, ct, nonce))
         } else {
             None
         };
@@ -586,27 +548,18 @@ impl SecretsManager {
             let mut v = Vec::new();
             if let Some(ref pp) = update.snmp_priv_password {
                 let name = format!("device:{id}:snmp_priv_password");
-                let nonce_bytes: [u8; 12] = rand::random();
-                let nonce = Nonce::from_slice(&nonce_bytes);
-                let ct = cipher.encrypt(nonce, Payload { msg: pp.as_bytes(), aad: name.as_bytes() })
-                    .map_err(|e| anyhow::anyhow!("encryption failed for snmp_priv_password: {e}"))?;
-                v.push((name, ct, nonce_bytes));
+                let (ct, nonce) = self.encrypt_value(&name, pp)?;
+                v.push((name, ct, nonce));
             }
             if let Some(ref ap) = update.snmp_auth_protocol {
                 let name = format!("device:{id}:snmp_auth_proto");
-                let nonce_bytes: [u8; 12] = rand::random();
-                let nonce = Nonce::from_slice(&nonce_bytes);
-                let ct = cipher.encrypt(nonce, Payload { msg: ap.as_bytes(), aad: name.as_bytes() })
-                    .map_err(|e| anyhow::anyhow!("encryption failed for snmp_auth_proto: {e}"))?;
-                v.push((name, ct, nonce_bytes));
+                let (ct, nonce) = self.encrypt_value(&name, ap)?;
+                v.push((name, ct, nonce));
             }
             if let Some(ref pp) = update.snmp_priv_protocol {
                 let name = format!("device:{id}:snmp_priv_proto");
-                let nonce_bytes: [u8; 12] = rand::random();
-                let nonce = Nonce::from_slice(&nonce_bytes);
-                let ct = cipher.encrypt(nonce, Payload { msg: pp.as_bytes(), aad: name.as_bytes() })
-                    .map_err(|e| anyhow::anyhow!("encryption failed for snmp_priv_proto: {e}"))?;
-                v.push((name, ct, nonce_bytes));
+                let (ct, nonce) = self.encrypt_value(&name, pp)?;
+                v.push((name, ct, nonce));
             }
             v
         };

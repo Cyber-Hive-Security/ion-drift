@@ -8,6 +8,10 @@ use tracing::{debug, trace};
 
 use crate::error::{MikrotikError, RouterOsErrorResponse};
 
+/// Maximum response body size (2 MB). RouterOS REST API responses are JSON and
+/// should never approach this limit under normal operation.
+const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
 /// Default RouterOS REST API port (HTTPS).
 pub const DEFAULT_ROUTER_PORT: u16 = 443;
 
@@ -276,7 +280,7 @@ impl MikrotikClient {
             return Err(self.parse_error(status.as_u16(), resp).await);
         }
 
-        let body = resp.text().await?;
+        let body = Self::read_body_limited(resp).await?;
         trace!(body_len = body.len(), "response received");
 
         serde_json::from_str::<T>(&body).map_err(|e| {
@@ -304,7 +308,7 @@ impl MikrotikClient {
     }
 
     async fn parse_error(&self, status: u16, resp: reqwest::Response) -> MikrotikError {
-        let body = resp.text().await.unwrap_or_default();
+        let body = Self::read_body_limited(resp).await.unwrap_or_default();
 
         if let Ok(ros_err) = serde_json::from_str::<RouterOsErrorResponse>(&body) {
             return MikrotikError::RouterOs {
@@ -319,5 +323,15 @@ impl MikrotikClient {
             message: body,
             detail: None,
         }
+    }
+
+    /// Read response body with a size limit to prevent OOM from misbehaving devices.
+    async fn read_body_limited(resp: reqwest::Response) -> Result<String, MikrotikError> {
+        let bytes = resp.bytes().await?;
+        if bytes.len() > MAX_RESPONSE_BYTES {
+            return Err(MikrotikError::ResponseTooLarge(bytes.len(), MAX_RESPONSE_BYTES));
+        }
+        String::from_utf8(bytes.to_vec())
+            .map_err(|e| MikrotikError::Deserialize(format!("invalid UTF-8 in response: {e}")))
     }
 }

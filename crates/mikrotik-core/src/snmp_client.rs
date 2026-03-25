@@ -13,6 +13,9 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::error::MikrotikError;
 
+/// Maximum SNMP walk iterations to prevent infinite loops from misbehaving agents.
+const MAX_WALK_ITERATIONS: usize = 10_000;
+
 // ─── GETNEXT with AuthUpdated retry ─────────────────────────────
 
 /// GETNEXT with one retry on `AuthUpdated`.
@@ -738,13 +741,19 @@ fn walk_string_column(
     let base_len = oid_components(&base).len();
     let mut map = HashMap::new();
     let mut current = base.clone();
+    let mut iterations = 0usize;
+    let mut last_components: Vec<u64> = Vec::new();
 
     loop {
+        iterations += 1;
+        if iterations > MAX_WALK_ITERATIONS {
+            tracing::warn!("SNMP walk hit iteration limit ({MAX_WALK_ITERATIONS}), breaking");
+            break;
+        }
+
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
-                // If we've collected some data, the walk likely ended at a table boundary
-                // rather than a true error. Log and return what we have.
                 if map.is_empty() {
                     return Err(MikrotikError::Snmp(format!("SNMP walk failed: {e}")));
                 }
@@ -758,6 +767,12 @@ fn walk_string_column(
             if !oid.starts_with(&base) {
                 return Ok(map);
             }
+            let new_components = oid_components(&oid);
+            if !last_components.is_empty() && new_components <= last_components {
+                tracing::warn!("SNMP walk: OID did not advance, breaking");
+                return Ok(map);
+            }
+            last_components = new_components;
             let suffix = oid_suffix(&oid, base_len);
             if let Some(&idx) = suffix.first() {
                 map.insert(idx as u32, value_to_string(&val));
@@ -783,13 +798,19 @@ fn walk_u64_column(
     let base_len = oid_components(&base).len();
     let mut map = HashMap::new();
     let mut current = base.clone();
+    let mut iterations = 0usize;
+    let mut last_components: Vec<u64> = Vec::new();
 
     loop {
+        iterations += 1;
+        if iterations > MAX_WALK_ITERATIONS {
+            tracing::warn!("SNMP walk hit iteration limit ({MAX_WALK_ITERATIONS}), breaking");
+            break;
+        }
+
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
-                // If we've collected some data, the walk likely ended at a table boundary
-                // rather than a true error. Log and return what we have.
                 if map.is_empty() {
                     return Err(MikrotikError::Snmp(format!("SNMP walk failed: {e}")));
                 }
@@ -803,6 +824,12 @@ fn walk_u64_column(
             if !oid.starts_with(&base) {
                 return Ok(map);
             }
+            let new_components = oid_components(&oid);
+            if !last_components.is_empty() && new_components <= last_components {
+                tracing::warn!("SNMP walk: OID did not advance, breaking");
+                return Ok(map);
+            }
+            last_components = new_components;
             let suffix = oid_suffix(&oid, base_len);
             if let Some(&idx) = suffix.first() {
                 map.insert(idx as u32, value_to_u64(&val));
@@ -828,13 +855,19 @@ fn walk_raw_column(
     let base_len = oid_components(&base).len();
     let mut map = HashMap::new();
     let mut current = base.clone();
+    let mut iterations = 0usize;
+    let mut last_components: Vec<u64> = Vec::new();
 
     loop {
+        iterations += 1;
+        if iterations > MAX_WALK_ITERATIONS {
+            tracing::warn!("SNMP walk hit iteration limit ({MAX_WALK_ITERATIONS}), breaking");
+            break;
+        }
+
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
-                // If we've collected some data, the walk likely ended at a table boundary
-                // rather than a true error. Log and return what we have.
                 if map.is_empty() {
                     return Err(MikrotikError::Snmp(format!("SNMP walk failed: {e}")));
                 }
@@ -848,6 +881,12 @@ fn walk_raw_column(
             if !oid.starts_with(&base) {
                 return Ok(map);
             }
+            let new_components = oid_components(&oid);
+            if !last_components.is_empty() && new_components <= last_components {
+                tracing::warn!("SNMP walk: OID did not advance, breaking");
+                return Ok(map);
+            }
+            last_components = new_components;
             let suffix = oid_suffix(&oid, base_len);
             if let Some(&idx) = suffix.first() {
                 if let Value::OctetString(bytes) = val {
@@ -876,8 +915,16 @@ fn walk_lldp_string(
     let base_len = oid_components(&base).len();
     let mut map = HashMap::new();
     let mut current = base.clone();
+    let mut iterations = 0usize;
+    let mut last_components: Vec<u64> = Vec::new();
 
     loop {
+        iterations += 1;
+        if iterations > MAX_WALK_ITERATIONS {
+            tracing::warn!("SNMP walk hit iteration limit ({MAX_WALK_ITERATIONS}), breaking");
+            break;
+        }
+
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
@@ -891,6 +938,12 @@ fn walk_lldp_string(
             if !oid.starts_with(&base) {
                 return Ok(map);
             }
+            let new_components = oid_components(&oid);
+            if !last_components.is_empty() && new_components <= last_components {
+                tracing::warn!("SNMP walk: OID did not advance, breaking");
+                return Ok(map);
+            }
+            last_components = new_components;
             let suffix = oid_suffix(&oid, base_len);
             // suffix: [timeMark, localPortNum, remIndex]
             if suffix.len() >= 3 {
@@ -919,8 +972,16 @@ fn walk_lldp_raw(
     let base_len = oid_components(&base).len();
     let mut map = HashMap::new();
     let mut current = base.clone();
+    let mut iterations = 0usize;
+    let mut last_components: Vec<u64> = Vec::new();
 
     loop {
+        iterations += 1;
+        if iterations > MAX_WALK_ITERATIONS {
+            tracing::warn!("SNMP walk hit iteration limit ({MAX_WALK_ITERATIONS}), breaking");
+            break;
+        }
+
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
@@ -934,6 +995,12 @@ fn walk_lldp_raw(
             if !oid.starts_with(&base) {
                 return Ok(map);
             }
+            let new_components = oid_components(&oid);
+            if !last_components.is_empty() && new_components <= last_components {
+                tracing::warn!("SNMP walk: OID did not advance, breaking");
+                return Ok(map);
+            }
+            last_components = new_components;
             let suffix = oid_suffix(&oid, base_len);
             if suffix.len() >= 3 {
                 let local_port = suffix[1] as u32;
@@ -963,13 +1030,19 @@ fn walk_indexed_fn(
     let base_len = oid_components(base).len();
     let mut current = base.clone();
     let mut count = 0u32;
+    let mut iterations = 0usize;
+    let mut last_components: Vec<u64> = Vec::new();
 
     loop {
+        iterations += 1;
+        if iterations > MAX_WALK_ITERATIONS {
+            tracing::warn!("SNMP walk hit iteration limit ({MAX_WALK_ITERATIONS}), breaking");
+            break;
+        }
+
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
-                // If we've processed some entries, the walk likely ended at a table boundary
-                // rather than a true error. Log and return success.
                 if count == 0 {
                     return Err(MikrotikError::Snmp(format!("SNMP walk failed: {e}")));
                 }
@@ -983,6 +1056,12 @@ fn walk_indexed_fn(
             if !oid.starts_with(base) {
                 return Ok(());
             }
+            let new_components = oid_components(&oid);
+            if !last_components.is_empty() && new_components <= last_components {
+                tracing::warn!("SNMP walk: OID did not advance, breaking");
+                return Ok(());
+            }
+            last_components = new_components;
             let suffix = oid_suffix(&oid, base_len);
             handler(&suffix, val);
             current = oid.to_owned();
@@ -1006,8 +1085,16 @@ fn walk_indexed_raw_fn(
 ) -> Result<(), MikrotikError> {
     let base_len = oid_components(base).len();
     let mut current = base.clone();
+    let mut iterations = 0usize;
+    let mut last_components: Vec<u64> = Vec::new();
 
     loop {
+        iterations += 1;
+        if iterations > MAX_WALK_ITERATIONS {
+            tracing::warn!("SNMP walk hit iteration limit ({MAX_WALK_ITERATIONS}), breaking");
+            break;
+        }
+
         let response = match getnext_retry!(sess, &current) {
             Ok(r) => r,
             Err(e) => {
@@ -1021,6 +1108,12 @@ fn walk_indexed_raw_fn(
             if !oid.starts_with(base) {
                 return Ok(());
             }
+            let new_components = oid_components(&oid);
+            if !last_components.is_empty() && new_components <= last_components {
+                tracing::warn!("SNMP walk: OID did not advance, breaking");
+                return Ok(());
+            }
+            last_components = new_components;
             let suffix = oid_suffix(&oid, base_len);
             if let Value::OctetString(bytes) = val {
                 handler(&suffix, bytes);

@@ -537,7 +537,6 @@ struct VlanRawEntry {
 ///
 /// Input: `"4d542d333130"` → Output: `"MT-310"`
 fn decode_hex_string(hex: &str) -> String {
-    let mut result = String::new();
     let bytes: Vec<u8> = (0..hex.len())
         .step_by(2)
         .filter_map(|i| {
@@ -549,37 +548,9 @@ fn decode_hex_string(hex: &str) -> String {
         })
         .collect();
 
-    // Decode as UTF-8, stopping at null byte
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == 0 {
-            break;
-        }
-
-        if b < 0x80 {
-            result.push(b as char);
-            i += 1;
-        } else if b < 0xE0 && i + 1 < bytes.len() {
-            let cp = ((b as u32 & 0x1F) << 6) | (bytes[i + 1] as u32 & 0x3F);
-            if let Some(c) = char::from_u32(cp) {
-                result.push(c);
-            }
-            i += 2;
-        } else if b < 0xF0 && i + 2 < bytes.len() {
-            let cp = ((b as u32 & 0x0F) << 12)
-                | ((bytes[i + 1] as u32 & 0x3F) << 6)
-                | (bytes[i + 2] as u32 & 0x3F);
-            if let Some(c) = char::from_u32(cp) {
-                result.push(c);
-            }
-            i += 3;
-        } else {
-            i += 1;
-        }
-    }
-
-    result
+    // Truncate at first null byte, then decode as UTF-8
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).to_string()
 }
 
 /// Format a raw hex MAC string into colon-separated uppercase.
