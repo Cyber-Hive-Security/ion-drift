@@ -93,17 +93,29 @@ The release build can take 10-30 minutes depending on hardware. With less than 4
 ```bash
 cp docker-compose.example.yml docker-compose.yml
 mkdir -p config
-cp config/server.example.toml config/server.toml
+cp config/production.example.toml config/production.toml
 ```
 
-Edit `config/server.toml` — at minimum, set your router hostname and uncomment the config mount in `docker-compose.yml`:
+Edit `config/production.toml` — fill in the `[router]` section for your environment:
 
 ```toml
 [router]
-host = "your-router.example.com"   # hostname must match the TLS certificate
+host = "your-router.example.com"   # hostname or IP — must match TLS certificate
+port = 443
+tls = true
+ca_cert_path = ""                  # set to "/app/certs/root_ca.crt" for private CA
+username = "ion-drift"
+wan_interface = "ether1"           # your router's WAN-facing interface name
 ```
 
-If your router uses a private CA (Smallstep, EJBCA, self-signed), also set `ca_cert_path` and mount the CA cert. See [docs/configuration.md](docs/configuration.md#first-run) for details. If your router uses Let's Encrypt or another public CA, no `ca_cert_path` is needed.
+Then uncomment the config mount in `docker-compose.yml`:
+
+```yaml
+volumes:
+  - ./config/production.toml:/app/config/server.toml:ro
+```
+
+If your router uses a private CA (Smallstep, EJBCA, self-signed), set `ca_cert_path` and mount the CA cert. See [docs/configuration.md](docs/configuration.md#first-run) for details. If your router uses Let's Encrypt or another public CA, leave `ca_cert_path` empty.
 
 **Step 2: Start and set up**
 

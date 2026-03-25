@@ -2,9 +2,32 @@
 
 ## Quick Start (Local Auth)
 
-Ion Drift works out of the box with no external dependencies. On first launch, visit the web UI and the setup wizard will guide you through creating an admin account. No OIDC provider, no environment variables, no config file editing required to get started.
+Ion Drift works out of the box with no external dependencies. Before first launch, create a config file with your router details:
 
-All configuration is optional for a basic setup — you only need to point Ion Drift at your Mikrotik router.
+```bash
+cp config/production.example.toml config/production.toml
+```
+
+Edit `config/production.toml` — at minimum, fill in the `[router]` section:
+
+```toml
+[router]
+host = "your-router.example.com"   # hostname or IP — must match TLS certificate
+port = 443
+tls = true
+ca_cert_path = ""                  # set to "/app/certs/root_ca.crt" for private CA
+username = "ion-drift"
+wan_interface = "ether1"           # your router's WAN-facing interface name
+```
+
+Then uncomment the config volume mount in `docker-compose.yml` so Ion Drift reads your file:
+
+```yaml
+volumes:
+  - ./config/production.toml:/app/config/server.toml:ro
+```
+
+The setup wizard handles everything else on first launch — admin account, encryption keys, and session secrets.
 
 ## First Run
 
