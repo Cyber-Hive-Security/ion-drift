@@ -2,13 +2,15 @@
 //!
 //! Tracks page navigation events for the Statistics/Diagnostic Report feature.
 //! Uses a separate `stats.db` database to avoid impacting the main data stores.
+//!
+//! All SQLite operations are offloaded to `spawn_blocking` to avoid blocking
+//! Tokio worker threads during I/O or WAL checkpoints.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use rusqlite::Connection;
 use serde::Serialize;
-use tokio::sync::Mutex;
 
 /// A single page view aggregate entry.
 #[derive(Debug, Clone, Serialize)]
@@ -20,8 +22,11 @@ pub struct PageViewEntry {
 }
 
 /// Persistent page view statistics store backed by SQLite.
+///
+/// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) because the lock is held
+/// only inside `spawn_blocking` closures — never across `.await` points.
 pub struct StatsStore {
-    db: Arc<Mutex<Connection>>,
+    db: Arc<std::sync::Mutex<Connection>>,
 }
 
 impl StatsStore {
@@ -45,22 +50,31 @@ impl StatsStore {
         )?;
 
         Ok(Self {
-            db: Arc::new(Mutex::new(conn)),
+            db: Arc::new(std::sync::Mutex::new(conn)),
         })
     }
 
     /// Record a page view, upserting the count for today's date.
     pub async fn record_page_view(&self, page: &str, context: &str) {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let db = self.db.lock().await;
-        if let Err(e) = db.execute(
-            "INSERT INTO page_views (page, context, view_date, view_count)
-             VALUES (?1, ?2, ?3, 1)
-             ON CONFLICT (page, context, view_date)
-             DO UPDATE SET view_count = view_count + 1",
-            rusqlite::params![page, context, today],
-        ) {
-            tracing::warn!("stats: page view insert failed: {e}");
+        let db = self.db.clone();
+        let page = page.to_string();
+        let context = context.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let db = db.lock().expect("stats db mutex poisoned");
+            db.execute(
+                "INSERT INTO page_views (page, context, view_date, view_count)
+                 VALUES (?1, ?2, ?3, 1)
+                 ON CONFLICT (page, context, view_date)
+                 DO UPDATE SET view_count = view_count + 1",
+                rusqlite::params![page, context, today],
+            )
+        })
+        .await;
+        match result {
+            Ok(Err(e)) => tracing::warn!("stats: page view insert failed: {e}"),
+            Err(e) => tracing::warn!("stats: page view task failed: {e}"),
+            _ => {}
         }
     }
 
@@ -69,32 +83,37 @@ impl StatsStore {
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64))
             .format("%Y-%m-%d")
             .to_string();
-        let db = self.db.lock().await;
-        let mut stmt = db
-            .prepare(
-                "SELECT page, context, view_date, view_count
-                 FROM page_views
-                 WHERE view_date >= ?1
-                 ORDER BY view_date DESC, view_count DESC",
-            )
-            .map_err(|e| format!("page_views query prepare: {e}"))?;
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = db.lock().map_err(|e| format!("stats db lock: {e}"))?;
+            let mut stmt = db
+                .prepare(
+                    "SELECT page, context, view_date, view_count
+                     FROM page_views
+                     WHERE view_date >= ?1
+                     ORDER BY view_date DESC, view_count DESC",
+                )
+                .map_err(|e| format!("page_views query prepare: {e}"))?;
 
-        let rows = stmt
-            .query_map(rusqlite::params![cutoff], |row| {
-                Ok(PageViewEntry {
-                    page: row.get(0)?,
-                    context: row.get(1)?,
-                    view_date: row.get(2)?,
-                    view_count: row.get(3)?,
+            let rows = stmt
+                .query_map(rusqlite::params![cutoff], |row| {
+                    Ok(PageViewEntry {
+                        page: row.get(0)?,
+                        context: row.get(1)?,
+                        view_date: row.get(2)?,
+                        view_count: row.get(3)?,
+                    })
                 })
-            })
-            .map_err(|e| format!("page_views query: {e}"))?;
+                .map_err(|e| format!("page_views query: {e}"))?;
 
-        let mut entries = Vec::new();
-        for row in rows {
-            entries.push(row.map_err(|e| format!("page_views row: {e}"))?);
-        }
-        Ok(entries)
+            let mut entries = Vec::new();
+            for row in rows {
+                entries.push(row.map_err(|e| format!("page_views row: {e}"))?);
+            }
+            Ok(entries)
+        })
+        .await
+        .map_err(|e| format!("stats task failed: {e}"))?
     }
 
     /// Delete page view rows older than `retain_days`.
@@ -102,17 +121,22 @@ impl StatsStore {
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(retain_days as i64))
             .format("%Y-%m-%d")
             .to_string();
-        let db = self.db.lock().await;
-        match db.execute(
-            "DELETE FROM page_views WHERE view_date < ?1",
-            rusqlite::params![cutoff],
-        ) {
-            Ok(count) => {
-                if count > 0 {
-                    tracing::info!("stats: pruned {count} old page view rows");
-                }
+        let db = self.db.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let db = db.lock().expect("stats db mutex poisoned");
+            db.execute(
+                "DELETE FROM page_views WHERE view_date < ?1",
+                rusqlite::params![cutoff],
+            )
+        })
+        .await;
+        match result {
+            Ok(Ok(count)) if count > 0 => {
+                tracing::info!("stats: pruned {count} old page view rows");
             }
-            Err(e) => tracing::warn!("stats: page view prune failed: {e}"),
+            Ok(Err(e)) => tracing::warn!("stats: page view prune failed: {e}"),
+            Err(e) => tracing::warn!("stats: page view prune task failed: {e}"),
+            _ => {}
         }
     }
 }
