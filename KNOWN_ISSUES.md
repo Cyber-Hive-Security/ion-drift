@@ -6,7 +6,7 @@ Tracked issues from external code reviews and internal testing.
 
 ### [HIGH] Blocking SQLite I/O in StatsStore (stats_store.rs)
 **Source:** External review 2026-03-25
-**Fixed:** `16b587c` (development)
+**Fixed:** v0.3.1
 
 StatsStore used `tokio::sync::Mutex` with synchronous rusqlite calls, blocking Tokio worker threads during I/O and WAL checkpoints. Fixed by switching to `std::sync::Mutex` + `spawn_blocking` for all database operations.
 
@@ -59,19 +59,19 @@ The commented code was already removed prior to review. The reviewer was working
 
 ### [HIGH] Session Secret Fail-Open on Decrypt Error (main.rs)
 **Source:** External security review 2026-03-25
-**Fixed:** development (this session)
+**Fixed:** v0.3.1
 
 Secret decryption errors were logged but startup continued with an empty session secret, creating a fail-open path where sessions were signed with a predictable empty HMAC key. Fixed by making decrypt errors fatal (`anyhow::bail!`) and generating an ephemeral random secret on `Ok(None)`.
 
 ### [HIGH] Err/Ok(None) Conflation in Secret Loading (main.rs)
 **Source:** External security review 2026-03-25
-**Fixed:** development (this session)
+**Fixed:** v0.3.1
 
 Decrypt errors (`Err`) and missing secrets (`Ok(None)`) were both treated as "secret not found", allowing the env var migration path to trigger on KEK corruption. Fixed by making `Err` fatal and only allowing migration on `Ok(None)`.
 
 ### [HIGH] Router Queue Poller Starvation
 **Source:** Internal testing 2026-03-25
-**Fixed:** `16b587c` (development)
+**Fixed:** v0.3.1
 
 Low-priority pollers (`log_aggregation`, `behavior-fw-cache`) were permanently starved by a steady stream of higher-priority batches. Fixed with age-based priority promotion (batches waiting >120s promoted to High priority) and reduced starvation log noise (warn once per threshold crossing instead of every loop iteration).
 

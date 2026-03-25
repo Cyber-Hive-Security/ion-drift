@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - 2026-03-25
+
+### Fixed
+
+- **[Security] Session secret fail-open** — secret decryption errors during startup were logged but ignored, leaving the service running with an empty HMAC session signing key. Decrypt errors are now fatal; `Ok(None)` generates an ephemeral random secret with a warning.
+- **[Security] Env var migration on KEK mismatch** — decrypt errors (`Err`) were conflated with missing secrets (`Ok(None)`), allowing the env var credential migration path to trigger on KEK corruption and silently overwrite encrypted secrets. Decrypt errors now abort startup.
+- **Router queue poller starvation** — low-priority pollers (`log_aggregation`, `behavior-fw-cache`) were permanently starved by steady high/normal-priority batches. Added age-based priority promotion: batches waiting >120s are promoted to High priority.
+- **StatsStore blocking I/O** — `tokio::sync::Mutex` with synchronous rusqlite calls blocked Tokio worker threads during I/O and WAL checkpoints. Switched to `std::sync::Mutex` + `spawn_blocking`.
+- **Starvation warning log flood** — poller starvation detection warned every queue loop iteration (thousands/minute). Now warns once per threshold crossing.
+
+### Changed
+
+- Secret decryption failures during startup now produce explicit error messages identifying the failing secret and suggesting root cause (KEK mismatch, missing `machine.key`), instead of silently falling through to "Authentication failed" from the router.
+
 ## [0.3.0] - 2026-03-24
 
 ### Added
