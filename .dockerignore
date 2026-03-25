@@ -5,3 +5,6 @@ web/dist/
 .env
 *.age
 .claude/
+*.md
+!README.md
+docs/
