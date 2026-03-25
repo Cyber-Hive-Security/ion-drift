@@ -8,9 +8,10 @@ use tracing::{debug, trace};
 
 use crate::error::{MikrotikError, RouterOsErrorResponse};
 
-/// Maximum response body size (2 MB). RouterOS REST API responses are JSON and
-/// should never approach this limit under normal operation.
-const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+/// Maximum response body size (8 MB). RouterOS connection tracking tables can
+/// exceed 2 MB on busy networks. 8 MB accommodates large tables while still
+/// preventing OOM from infinite/malformed responses.
+const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Default RouterOS REST API port (HTTPS).
 pub const DEFAULT_ROUTER_PORT: u16 = 443;
