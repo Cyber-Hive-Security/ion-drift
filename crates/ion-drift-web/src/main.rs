@@ -185,18 +185,30 @@ async fn main() -> anyhow::Result<()> {
                 if sm.has_local_users().await? {
                     tracing::info!("local auth mode: loading from cached KEK");
                     // Load session secret into config if available
-                    if let Ok(Some(ss)) = sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
-                        config.session.session_secret = ss.expose_secret().to_string();
+                    match sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
+                        Ok(Some(ss)) => config.session.session_secret = ss.expose_secret().to_string(),
+                        Ok(None) => tracing::warn!("session secret not found in secrets.db — sessions will not persist across restarts"),
+                        Err(e) => tracing::error!("failed to decrypt session secret: {e} — this usually means the encryption key (KEK) has changed. Was the data directory recreated without machine.key?"),
                     }
                     // Load router credentials from DB if available
-                    if let Ok(Some(u)) = sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
-                        config.router.username = u.expose_secret().to_string();
+                    match sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
+                        Ok(Some(u)) => config.router.username = u.expose_secret().to_string(),
+                        Ok(None) => {}
+                        Err(e) => tracing::error!("failed to decrypt router username: {e}"),
                     }
-                    let db_has_password = if let Ok(Some(p)) = sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
-                        config.router.password = p.expose_secret().to_string();
-                        true
-                    } else {
-                        false
+                    let db_has_password = match sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
+                        Ok(Some(p)) => {
+                            config.router.password = p.expose_secret().to_string();
+                            true
+                        }
+                        Ok(None) => {
+                            tracing::warn!("router password not found in secrets.db — router connections will fail");
+                            false
+                        }
+                        Err(e) => {
+                            tracing::error!("failed to decrypt router password: {e} — router connections will fail. Was the data directory recreated without machine.key?");
+                            false
+                        }
                     };
 
                     // Migrate env var credentials into encrypted DB if not already stored.
@@ -235,19 +247,29 @@ async fn main() -> anyhow::Result<()> {
                 let sm = SecretsManager::new(&db_path, result.kek)?;
                 tracing::info!("OIDC mode (no mTLS): loading from cached KEK");
                 // Load secrets into config
-                if let Ok(Some(ss)) = sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
-                    config.session.session_secret = ss.expose_secret().to_string();
+                match sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
+                    Ok(Some(ss)) => config.session.session_secret = ss.expose_secret().to_string(),
+                    Ok(None) => tracing::warn!("session secret not found in secrets.db — sessions will not persist across restarts"),
+                    Err(e) => tracing::error!("failed to decrypt session secret: {e} — this usually means the encryption key (KEK) has changed. Was the data directory recreated without machine.key?"),
                 }
-                if let Ok(Some(u)) = sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
-                    config.router.username = u.expose_secret().to_string();
+                match sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
+                    Ok(Some(u)) => config.router.username = u.expose_secret().to_string(),
+                    Ok(None) => {}
+                    Err(e) => tracing::error!("failed to decrypt router username: {e}"),
                 }
-                if let Ok(Some(p)) = sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
-                    config.router.password = p.expose_secret().to_string();
+                match sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
+                    Ok(Some(p)) => config.router.password = p.expose_secret().to_string(),
+                    Ok(None) => tracing::warn!("router password not found in secrets.db — router connections will fail"),
+                    Err(e) => tracing::error!("failed to decrypt router password: {e} — router connections will fail. Was the data directory recreated without machine.key?"),
                 }
-                if let Ok(Some(cs)) = sm.decrypt_secret(secrets::SECRET_OIDC_CLIENT_SECRET).await {
-                    if let Some(ref mut oidc) = config.oidc {
-                        oidc.client_secret = cs.expose_secret().to_string();
+                match sm.decrypt_secret(secrets::SECRET_OIDC_CLIENT_SECRET).await {
+                    Ok(Some(cs)) => {
+                        if let Some(ref mut oidc) = config.oidc {
+                            oidc.client_secret = cs.expose_secret().to_string();
+                        }
                     }
+                    Ok(None) => tracing::warn!("OIDC client secret not found in secrets.db — OIDC authentication will fail"),
+                    Err(e) => tracing::error!("failed to decrypt OIDC client secret: {e} — OIDC authentication will fail"),
                 }
                 Some(Arc::new(tokio::sync::RwLock::new(sm)))
             }
