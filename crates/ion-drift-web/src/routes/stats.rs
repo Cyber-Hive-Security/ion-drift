@@ -6,7 +6,9 @@ use axum::response::{IntoResponse, Json, Response};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::middleware::{RequireAdmin, RequireAuth};
+use crate::middleware::RequireAdmin;
+#[allow(unused_imports)]
+use crate::middleware::RequireAuth;
 use crate::state::AppState;
 use super::internal_error;
 
@@ -99,7 +101,7 @@ pub struct PageViewRequest {
 
 /// POST /api/stats/page-view — record a page navigation event.
 pub async fn record_page_view(
-    RequireAuth(_session): RequireAuth,
+    RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
     Json(body): Json<PageViewRequest>,
 ) -> Response {

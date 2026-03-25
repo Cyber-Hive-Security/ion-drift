@@ -2874,6 +2874,7 @@ mod tests {
                 "legit-device",
                 &[PortMetricEntry {
                     port_name: "ether1".into(),
+                    port_index: 0,
                     rx_bytes: 100,
                     tx_bytes: 200,
                     rx_packets: 10,
@@ -2913,6 +2914,7 @@ mod tests {
                     dev,
                     &[PortMetricEntry {
                         port_name: "ether1".into(),
+                        port_index: 0,
                         rx_bytes: 100,
                         tx_bytes: 200,
                         rx_packets: 10,

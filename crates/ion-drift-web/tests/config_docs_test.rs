@@ -24,6 +24,9 @@ fn server_example_contains_documented_keys() {
     let mut keys = Vec::new();
     flatten("", &parsed, &mut keys);
 
+    // Required keys that must be present (uncommented) in the example config.
+    // OIDC keys are intentionally omitted — the [oidc] section is commented out
+    // by default since local auth is the default mode.
     let required = [
         "server.listen_addr",
         "server.listen_port",
@@ -33,9 +36,6 @@ fn server_example_contains_documented_keys() {
         "router.ca_cert_path",
         "router.username",
         "router.wan_interface",
-        "oidc.issuer_url",
-        "oidc.client_id",
-        "oidc.redirect_uri",
         "session.cookie_name",
         "session.max_age_seconds",
         "session.secure",

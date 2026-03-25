@@ -62,6 +62,7 @@ async fn switch_store_crud_after_migration() {
             "sw1",
             &[ion_drift_storage::switch::PortMetricEntry {
                 port_name: "ether1".into(),
+                port_index: 0,
                 rx_bytes: 100,
                 tx_bytes: 200,
                 rx_packets: 10,

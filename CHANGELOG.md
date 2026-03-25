@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.2] - 2026-03-25
+
+### Security
+
+- **HTTP response body cap** — `MikrotikClient` now enforces a 2MB response body limit, preventing OOM from misbehaving or compromised routers. New `ResponseTooLarge` error variant.
+- **SNMP walk loop protection** — all 7 walk functions now check OID monotonicity (break if OID doesn't strictly advance) and enforce a 10,000-iteration safety cap, preventing infinite loops from buggy SNMP agents.
+- **`record_page_view` requires admin** — POST `/api/stats/page-view` now uses `RequireAdmin` to satisfy the mutating-endpoint authz policy.
+
+### Changed
+
+- **`decode_hex_string` rewritten** — replaced manual UTF-8 state machine with `String::from_utf8_lossy()`, correctly handling 4-byte sequences and malformed input.
+- **`encrypt_value()` helper** — extracted shared encryption helper in `SecretsManager`, eliminating 9 duplicated AES-256-GCM encrypt call sites across 4 functions.
+- **`router.ca_cert_path`** now present (empty default) in `server.example.toml` instead of commented out.
+
+### Fixed
+
+- Test failures: added missing `port_index` field to `PortMetricEntry` test initializers, removed OIDC keys from required config example keys (OIDC section is intentionally commented out).
+
 ## [0.3.1] - 2026-03-25
 
 ### Fixed

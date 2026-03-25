@@ -23,9 +23,9 @@ host = "192.168.88.1"
 port = 443
 tls = true
 # Path to your CA certificate if the router uses a private/internal CA.
-# Only set this if your router uses a certificate signed by a private CA (Smallstep, EJBCA, etc.).
-# Leave commented out for Let's Encrypt or other publicly trusted certificates.
-# ca_cert_path = "/app/certs/root_ca.crt"
+# Only needed if your router uses a certificate signed by a private CA (Smallstep, EJBCA, etc.).
+# Leave empty for Let's Encrypt or other publicly trusted certificates.
+ca_cert_path = ""
 # Username for the RouterOS REST API. Create a dedicated read-only user — do not use "admin".
 # Password is configured through the setup wizard and stored encrypted — no env var needed.
 username = "ion-drift"
