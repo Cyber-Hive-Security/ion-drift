@@ -184,17 +184,35 @@ async fn main() -> anyhow::Result<()> {
                 let sm = SecretsManager::new(&db_path, result.kek)?;
                 if sm.has_local_users().await? {
                     tracing::info!("local auth mode: loading from cached KEK");
-                    // Load session secret into config if available
+                    // Load session secret — fatal on decrypt error (KEK mismatch means
+                    // all secrets are unreadable, continuing would use an empty HMAC key).
                     match sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
                         Ok(Some(ss)) => config.session.session_secret = ss.expose_secret().to_string(),
-                        Ok(None) => tracing::warn!("session secret not found in secrets.db — sessions will not persist across restarts"),
-                        Err(e) => tracing::error!("failed to decrypt session secret: {e} — this usually means the encryption key (KEK) has changed. Was the data directory recreated without machine.key?"),
+                        Ok(None) => {
+                            // Not yet stored (e.g., upgrade from older version). Generate ephemeral
+                            // secret so sessions work, but warn that they won't survive restarts.
+                            let bytes: [u8; 32] = rand::random();
+                            config.session.session_secret = hex::encode(bytes);
+                            tracing::warn!("session secret not found in secrets.db — generated ephemeral secret (sessions will not survive restarts)");
+                        }
+                        Err(e) => {
+                            anyhow::bail!(
+                                "failed to decrypt session secret: {e} — this usually means the encryption key (KEK) has changed. \
+                                 Was the data directory recreated without machine.key? Ion Drift cannot start safely."
+                            );
+                        }
                     }
-                    // Load router credentials from DB if available
+                    // Load router credentials from DB if available.
+                    // Distinguish Err (KEK mismatch / corruption) from Ok(None) (not yet stored).
+                    // Only Ok(None) should allow env var migration; Err is fatal.
                     match sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
                         Ok(Some(u)) => config.router.username = u.expose_secret().to_string(),
                         Ok(None) => {}
-                        Err(e) => tracing::error!("failed to decrypt router username: {e}"),
+                        Err(e) => {
+                            anyhow::bail!(
+                                "failed to decrypt router username: {e} — KEK mismatch or data corruption. Ion Drift cannot start safely."
+                            );
+                        }
                     }
                     let db_has_password = match sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
                         Ok(Some(p)) => {
@@ -202,18 +220,20 @@ async fn main() -> anyhow::Result<()> {
                             true
                         }
                         Ok(None) => {
-                            tracing::warn!("router password not found in secrets.db — router connections will fail");
+                            tracing::warn!("router password not found in secrets.db — router connections will fail until configured");
                             false
                         }
                         Err(e) => {
-                            tracing::error!("failed to decrypt router password: {e} — router connections will fail. Was the data directory recreated without machine.key?");
-                            false
+                            anyhow::bail!(
+                                "failed to decrypt router password: {e} — KEK mismatch or data corruption. Ion Drift cannot start safely."
+                            );
                         }
                     };
 
                     // Migrate env var credentials into encrypted DB if not already stored.
                     // This handles the case where DRIFT_ROUTER_PASSWORD is set in compose
                     // but the setup wizard only created the admin account (no router creds).
+                    // Only runs when db_has_password is false (Ok(None)), never on Err (which bails above).
                     if !db_has_password && !config.router.password.is_empty() {
                         tracing::info!("migrating router credentials from env var to encrypted storage");
                         if let Err(e) = sm.encrypt_secret(secrets::SECRET_ROUTER_USERNAME, &config.router.username).await {
@@ -246,21 +266,38 @@ async fn main() -> anyhow::Result<()> {
             Some(result) => {
                 let sm = SecretsManager::new(&db_path, result.kek)?;
                 tracing::info!("OIDC mode (no mTLS): loading from cached KEK");
-                // Load secrets into config
+                // Load secrets — decrypt errors are fatal (KEK mismatch means all secrets
+                // are unreadable; continuing would use empty/default values unsafely).
                 match sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
                     Ok(Some(ss)) => config.session.session_secret = ss.expose_secret().to_string(),
-                    Ok(None) => tracing::warn!("session secret not found in secrets.db — sessions will not persist across restarts"),
-                    Err(e) => tracing::error!("failed to decrypt session secret: {e} — this usually means the encryption key (KEK) has changed. Was the data directory recreated without machine.key?"),
+                    Ok(None) => {
+                        let bytes: [u8; 32] = rand::random();
+                        config.session.session_secret = hex::encode(bytes);
+                        tracing::warn!("session secret not found in secrets.db — generated ephemeral secret (sessions will not survive restarts)");
+                    }
+                    Err(e) => {
+                        anyhow::bail!(
+                            "failed to decrypt session secret: {e} — KEK mismatch or data corruption. Ion Drift cannot start safely."
+                        );
+                    }
                 }
                 match sm.decrypt_secret(secrets::SECRET_ROUTER_USERNAME).await {
                     Ok(Some(u)) => config.router.username = u.expose_secret().to_string(),
                     Ok(None) => {}
-                    Err(e) => tracing::error!("failed to decrypt router username: {e}"),
+                    Err(e) => {
+                        anyhow::bail!(
+                            "failed to decrypt router username: {e} — KEK mismatch or data corruption. Ion Drift cannot start safely."
+                        );
+                    }
                 }
                 match sm.decrypt_secret(secrets::SECRET_ROUTER_PASSWORD).await {
                     Ok(Some(p)) => config.router.password = p.expose_secret().to_string(),
-                    Ok(None) => tracing::warn!("router password not found in secrets.db — router connections will fail"),
-                    Err(e) => tracing::error!("failed to decrypt router password: {e} — router connections will fail. Was the data directory recreated without machine.key?"),
+                    Ok(None) => tracing::warn!("router password not found in secrets.db — router connections will fail until configured"),
+                    Err(e) => {
+                        anyhow::bail!(
+                            "failed to decrypt router password: {e} — KEK mismatch or data corruption. Ion Drift cannot start safely."
+                        );
+                    }
                 }
                 match sm.decrypt_secret(secrets::SECRET_OIDC_CLIENT_SECRET).await {
                     Ok(Some(cs)) => {
@@ -269,7 +306,11 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     Ok(None) => tracing::warn!("OIDC client secret not found in secrets.db — OIDC authentication will fail"),
-                    Err(e) => tracing::error!("failed to decrypt OIDC client secret: {e} — OIDC authentication will fail"),
+                    Err(e) => {
+                        anyhow::bail!(
+                            "failed to decrypt OIDC client secret: {e} — KEK mismatch or data corruption. Ion Drift cannot start safely."
+                        );
+                    }
                 }
                 Some(Arc::new(tokio::sync::RwLock::new(sm)))
             }
