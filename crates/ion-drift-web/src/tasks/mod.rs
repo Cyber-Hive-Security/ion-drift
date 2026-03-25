@@ -19,6 +19,7 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.router_queue.clone(),
         state.config.polling.traffic_interval_secs,
         state.mikrotik.clone(),
+        state.config.router.wan_interface.clone(),
     );
     traffic::spawn_vlan_metrics_poller(
         state.metrics_store.clone(),
@@ -88,6 +89,7 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.behavior_store.clone(),
         state.vlan_registry.clone(),
         state.config.polling.policy_sync_interval_secs,
+        state.config.router.wan_interface.clone(),
     );
 
     // Connection history
@@ -157,6 +159,7 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.switch_store.clone(),
         state.device_manager.clone(),
         state.topology_cache.clone(),
+        state.config.router.wan_interface.clone(),
     );
     crate::passive_discovery::spawn_passive_discovery(
         &state.task_supervisor,

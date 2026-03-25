@@ -12,6 +12,7 @@ pub fn spawn_traffic_poller(
     queue: RouterQueue,
     interval_secs: u64,
     client: mikrotik_core::MikrotikClient,
+    wan_interface: String,
 ) {
     tokio::spawn(async move {
         // Initial poll for lifetime totals
@@ -46,7 +47,7 @@ pub fn spawn_traffic_poller(
                 }
             };
 
-            let wan = interfaces.iter().find(|i| i.name == "1-WAN");
+            let wan = interfaces.iter().find(|i| i.name == wan_interface);
             if let Some(wan) = wan {
                 let current_rx = wan.rx_byte.unwrap_or(0);
                 let current_tx = wan.tx_byte.unwrap_or(0);

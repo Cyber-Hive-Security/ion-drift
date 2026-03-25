@@ -537,7 +537,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize traffic tracker
     let traffic_tracker = Arc::new(
-        mikrotik_core::TrafficTracker::new(&data_dir.join("traffic.db"), "1-WAN")
+        mikrotik_core::TrafficTracker::new(&data_dir.join("traffic.db"), &config.router.wan_interface)
             .map_err(|e| anyhow::anyhow!("failed to init traffic tracker: {e}"))?,
     );
     let metrics_store = Arc::new(

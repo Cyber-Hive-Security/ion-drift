@@ -155,15 +155,14 @@ const TOP_MARGIN: f64 = 150.0;
 const ENDPOINT_OFFSET: f64 = 200.0;
 const SECTOR_PADDING: f64 = 40.0;
 
-/// Interfaces on the router that face the WAN/ISP.
-/// LLDP neighbors on these ports are collapsed into a single "WAN" node.
-const WAN_INTERFACES: &[&str] = &["ether1"];
+// WAN_INTERFACES removed — now passed as parameter from config.router.wan_interface
 
 // ── Graph construction ───────────────────────────────────────────
 
 pub async fn compute_topology(
     store: &SwitchStore,
     device_manager: &Arc<RwLock<DeviceManager>>,
+    wan_interface: &str,
 ) -> anyhow::Result<NetworkTopology> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -334,7 +333,7 @@ pub async fn compute_topology(
         // Skip WAN-facing neighbors on the router — they are ISP/external equipment
         // and will be collapsed into a single "WAN / ISP" node below.
         if Some(&source_device) == router_id.as_ref()
-            && WAN_INTERFACES.contains(&source_port.as_str())
+            && source_port == wan_interface
         {
             wan_neighbor_count += 1;
             continue;
@@ -1407,11 +1406,13 @@ pub fn spawn_topology_updater(
     switch_store: Arc<SwitchStore>,
     device_manager: Arc<RwLock<DeviceManager>>,
     cache: Arc<RwLock<Option<NetworkTopology>>>,
+    wan_interface: String,
 ) {
     supervisor.spawn("topology_updater", move || {
         let switch_store = switch_store.clone();
         let device_manager = device_manager.clone();
         let cache = cache.clone();
+        let wan_interface = wan_interface.clone();
         Box::pin(async move {
         // Wait for correlation engine to populate data
         tokio::time::sleep(Duration::from_secs(120)).await;
@@ -1420,7 +1421,7 @@ pub fn spawn_topology_updater(
         let mut interval = tokio::time::interval(Duration::from_secs(120));
 
         loop {
-            match compute_topology(&switch_store, &device_manager).await {
+            match compute_topology(&switch_store, &device_manager, &wan_interface).await {
                 Ok(topo) => {
                     tracing::info!(
                         nodes = topo.node_count,

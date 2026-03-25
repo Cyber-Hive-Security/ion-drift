@@ -19,6 +19,7 @@ pub fn spawn_policy_sync(
     behavior_store: Arc<BehaviorStore>,
     vlan_registry: Arc<RwLock<VlanRegistry>>,
     interval_secs: u64,
+    wan_interface: String,
 ) {
     tokio::spawn(async move {
         // Run immediately on startup, then at the configured interval
@@ -26,7 +27,7 @@ pub fn spawn_policy_sync(
         tracing::info!("policy sync starting (interval={interval_secs}s)");
         loop {
             interval.tick().await;
-            if let Err(e) = sync_policies(&queue, &behavior_store, &vlan_registry).await {
+            if let Err(e) = sync_policies(&queue, &behavior_store, &vlan_registry, &wan_interface).await {
                 tracing::warn!("policy sync failed: {e}");
             }
         }
@@ -84,6 +85,7 @@ async fn sync_policies(
     queue: &RouterQueue,
     store: &BehaviorStore,
     vlan_registry: &RwLock<VlanRegistry>,
+    wan_interface: &str,
 ) -> Result<(), String> {
     let sync_start = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -387,8 +389,8 @@ async fn sync_policies(
                     || rule
                         .in_interface
                         .as_deref()
-                        .map_or(false, |i| i != "ether1");
-                let is_wan = rule.in_interface.as_deref() == Some("ether1")
+                        .map_or(false, |i| i != wan_interface);
+                let is_wan = rule.in_interface.as_deref() == Some(wan_interface)
                     || rule.in_interface_list.as_deref() == Some("WAN")
                     || (rule.chain == "input" && !has_lan_filter);
                 if !is_wan {
