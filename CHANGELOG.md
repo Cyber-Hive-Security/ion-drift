@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.3] - 2026-03-25
+
+### Fixed
+
+- **Response body cap too low** — bumped from 2MB to 8MB. RouterOS connection tracking tables on busy networks return 2.6-2.8MB responses, hitting the previous cap. Reported by [@robertbovens](https://github.com/robertbovens) in [#4](https://github.com/Cyber-Hive-Security/ion-drift/issues/4).
+
 ## [0.3.2] - 2026-03-25
 
 ### Security
