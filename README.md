@@ -153,6 +153,8 @@ Ion Drift can monitor managed switches via SNMP (v2c or v3) alongside your Mikro
 | Vendor | Status |
 |--------|--------|
 | Netgear (ProSafe) | Supported — dedicated profile |
+| HPE/Aruba (2540 series) | Supported — dedicated profile |
+| Cisco Small Business (SG550X, SG350X, SG250X) | Supported — dedicated profile |
 | All others | Generic fallback — functional but may have display quirks |
 
 To help us build a profile for your switch, see [docs/snmp-profiles.md](docs/snmp-profiles.md).

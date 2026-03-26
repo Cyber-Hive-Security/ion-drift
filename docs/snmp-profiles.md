@@ -31,6 +31,8 @@ If no vendor-specific profile matches, Ion Drift uses the **generic fallback**. 
 | Vendor | Profile | Detection | Notes |
 |--------|---------|-----------|-------|
 | Netgear ProSafe | `NETGEAR_PROFILE` | `sysDescr` contains "netgear" or "prosafe" | Tested on MS510TXPP. Handles multi-gig naming, hidden indices. |
+| HPE/Aruba 2540 | `ARUBA_PROFILE` | `sysDescr` contains "aruba" or JL35x model | Tested on JL356A. Bare numeric ifName → "Port N". Hides VLAN (584+) and loopback (4807+) indices. |
+| Cisco Small Business | `CISCO_SMB_PROFILE` | `sysDescr` contains "sg550", "sg350", etc. | Tested on SG550X-24MP (8-unit stack). IOS-style `gi1/0/1` naming. Hides Port-Channels, tunnels, stack/logical ports. |
 | Generic | `GENERIC_PROFILE` | Fallback for all unrecognized devices | Standard MIB-II classification only. |
 
 ## Contributing a Profile

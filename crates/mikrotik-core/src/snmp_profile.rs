@@ -117,9 +117,27 @@ pub fn detect_profile(sys_descr: &str) -> &'static SnmpProfile {
     let lower = sys_descr.to_ascii_lowercase();
 
     if lower.contains("netgear") || lower.contains("prosafe") {
+        tracing::debug!(vendor = "Netgear", "SNMP profile matched");
         return &NETGEAR_PROFILE;
     }
 
+    if lower.contains("aruba") || lower.contains("jl356") || lower.contains("jl354")
+        || lower.contains("jl355") || lower.contains("jl357")
+        || (lower.contains("2540") && lower.contains("switch"))
+    {
+        tracing::debug!(vendor = "Aruba", sys_descr = %sys_descr, "SNMP profile matched");
+        return &ARUBA_PROFILE;
+    }
+
+    if lower.contains("sg550") || lower.contains("sg350") || lower.contains("sg250")
+        || lower.contains("sg500") || lower.contains("sf500")
+        || (lower.contains("cisco") && lower.contains("stackable managed switch"))
+    {
+        tracing::debug!(vendor = "Cisco SMB", sys_descr = %sys_descr, "SNMP profile matched");
+        return &CISCO_SMB_PROFILE;
+    }
+
+    tracing::debug!(sys_descr = %sys_descr, "no SNMP profile matched, using Generic");
     &GENERIC_PROFILE
 }
 
@@ -236,4 +254,117 @@ fn netgear_friendly_name(_idx: u32, if_name: &str, if_descr: &str, _if_type: u32
     } else {
         if_descr.to_string()
     }
+}
+
+// ─── Aruba Profile ──────────────────────────────────────────────
+
+/// Profile for HPE/Aruba 2540, 2530, and similar managed switches.
+///
+/// Aruba uses bare numeric ifName/ifDescr ("1", "2", ..., "28") for physical
+/// ports. SFP+ ports (25-28) report ifHighSpeed 10000. VLAN interfaces use
+/// ifType 53 (propVirtual) at index 584+. Loopback interfaces (lo0-lo7) are
+/// at indices 4807-4814 with ifType 24.
+///
+/// OUI: 88:3A:30 (HP/Aruba)
+/// sysDescr: "Aruba JL356A 2540-24G-PoE+-4SFP+ Switch"
+/// Entity MIB: JL356A
+pub static ARUBA_PROFILE: SnmpProfile = SnmpProfile {
+    vendor: "Aruba",
+    physical_if_types: &[IFTYPE_ETHERNET_CSMACD],
+    lag_if_types: &[IFTYPE_IEEE8023AD_LAG, IFTYPE_PORT_CHANNEL],
+    hidden_index_ranges: &[
+        (584, 999),      // VLAN interfaces (DEFAULT_VLAN etc.)
+        (4807, 4814),    // loopback lo0-lo7
+    ],
+    prefer_if_name: true,
+    friendly_name_fn: aruba_friendly_name,
+};
+
+fn aruba_friendly_name(idx: u32, if_name: &str, if_descr: &str, if_type: u32) -> String {
+    // Aruba uses bare numbers for ifName ("1", "2", ..., "28").
+    // Prefix with "Port " for clarity in the UI.
+    // SFP+ ports (typically indices 25-28 on 24-port models) get "SFP+" prefix.
+    let base = if !if_name.is_empty() { if_name } else { if_descr };
+
+    if if_type == IFTYPE_ETHERNET_CSMACD {
+        // Check if it's a bare number
+        if base.chars().all(|c| c.is_ascii_digit()) {
+            let port_num: u32 = base.parse().unwrap_or(idx);
+            // On 24G+4SFP+ models, ports 25-28 are SFP+
+            // We can't know the model from here, so just use "Port N"
+            return format!("Port {port_num}");
+        }
+    }
+
+    if if_type == IFTYPE_SOFTWARE_LOOPBACK {
+        return format!("lo{}", idx.saturating_sub(4807));
+    }
+
+    tracing::trace!(idx, if_name, if_descr, if_type, vendor = "Aruba", "unclassified interface name");
+    base.to_string()
+}
+
+// ─── Cisco SMB Profile ──────────────────────────────────────────
+
+/// Profile for Cisco Small Business switches (SG550X, SG350X, SG250X, etc.).
+///
+/// These use Cisco IOS-style naming with stack notation: gi{unit}/0/{port},
+/// te{unit}/0/{port}. Port-Channels are ifType 161 at indices 1000-1031.
+/// Tunnels are ifType 131 at 3000-3015. The switch pre-allocates interfaces
+/// for up to 8 stack units even if only 1 is present, resulting in hundreds
+/// of virtual (ifOperStatus=6 "notPresent") interfaces.
+///
+/// OUI: 40:A6:E8 (Cisco)
+/// sysDescr: "SG550X-24MP 24-Port Gigabit PoE Stackable Managed Switch"
+/// Entity MIB: SG550X-24MP-K9
+pub static CISCO_SMB_PROFILE: SnmpProfile = SnmpProfile {
+    vendor: "Cisco SMB",
+    physical_if_types: &[IFTYPE_ETHERNET_CSMACD],
+    lag_if_types: &[IFTYPE_PORT_CHANNEL],
+    hidden_index_ranges: &[
+        (1000, 1031),    // Port-Channel1-32 (LAGs — classified separately)
+        (3000, 3015),    // tunnel1-16
+        (7000, 7999),    // loopback
+        (8000, 8999),    // user-defined ports
+        (9000, 9999),    // stack-port
+        (20000, 20999),  // logical internal interfaces
+        (100000, u32::MAX), // management VLAN / internal
+    ],
+    prefer_if_name: true,
+    friendly_name_fn: cisco_smb_friendly_name,
+};
+
+fn cisco_smb_friendly_name(_idx: u32, if_name: &str, if_descr: &str, if_type: u32) -> String {
+    // Cisco SMB ifName uses short notation: gi1/0/1, te1/0/1, Po1
+    // ifDescr uses long form: GigabitEthernet1/0/1, TenGigabitEthernet1/0/1
+    // We prefer the short ifName form for display.
+    let base = if !if_name.is_empty() { if_name } else { if_descr };
+
+    if if_type == IFTYPE_PORT_CHANNEL {
+        // Port-Channel: ifName is "Po1", ifDescr is "Port-Channel1"
+        // Normalize to "Po1" format
+        if base.starts_with("Po") || base.starts_with("po") {
+            return base.to_string();
+        }
+        if let Some(num) = base.strip_prefix("Port-Channel") {
+            return format!("Po{num}");
+        }
+    }
+
+    if if_type == IFTYPE_ETHERNET_CSMACD {
+        // Already short: gi1/0/1, te1/0/1
+        if base.starts_with("gi") || base.starts_with("te") {
+            return base.to_string();
+        }
+        // Long form from ifDescr: extract unit/slot/port
+        if let Some(rest) = base.strip_prefix("GigabitEthernet") {
+            return format!("gi{rest}");
+        }
+        if let Some(rest) = base.strip_prefix("TenGigabitEthernet") {
+            return format!("te{rest}");
+        }
+    }
+
+    tracing::trace!(_idx, if_name, if_descr, if_type, vendor = "Cisco SMB", "unclassified interface name");
+    base.to_string()
 }
