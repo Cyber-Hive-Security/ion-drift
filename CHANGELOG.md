@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Security
+
+- **OsRng for all cryptographic random generation** — replaced `rand::random()` (ThreadRng) with `OsRng.try_fill_bytes()` for AES-256-GCM nonces, KEK generation, machine keys, argon2 salts, session tokens, and session secrets (13 call sites across 6 files). Non-crypto uses (backoff jitter, SwOS digest cnonce) left as `rand::random()`.
+- **OsRng failures propagate gracefully** — RNG errors return 500/startup errors instead of panicking the process. Preserves existing error-handling contracts (`cache_kek` best-effort, `encrypt_value` returns Result, etc.).
+
+### Fixed
+
+- **`vlan_scope` deserialization warning** — `"__global__"` sentinel in database was being JSON-parsed every poll cycle, triggering spurious warnings. Now filtered before parsing.
+- **Potential deadlock** — `futures::executor::block_on()` in legacy code path replaced with native async/await.
+
 ## [0.3.5] - 2026-03-26
 
 ### Added
