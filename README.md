@@ -144,6 +144,19 @@ Create a dedicated read-only user on your MikroTik router — **do not use the a
 
 Ion Drift uses the **REST API on port 443** (HTTPS). Do not use port 8728 or 8729 — those are the RouterOS proprietary API (Winbox/API), a completely different protocol.
 
+## SNMP Managed Switches
+
+Ion Drift can monitor managed switches via SNMP (v2c or v3) alongside your MikroTik router. Add switches through **Settings → Devices** with device type "SNMP Switch."
+
+**Vendor profiles** control how Ion Drift interprets each switch's SNMP data — interface naming, port classification, hidden index filtering, and counter support. Without a profile, the generic fallback works but interface names and port groupings may render incorrectly.
+
+| Vendor | Status |
+|--------|--------|
+| Netgear (ProSafe) | Supported — dedicated profile |
+| All others | Generic fallback — functional but may have display quirks |
+
+To help us build a profile for your switch, see [docs/snmp-profiles.md](docs/snmp-profiles.md).
+
 ## Optional: OIDC Single Sign-On
 
 Ion Drift works with any OpenID Connect provider (Keycloak, Authentik, Authelia). To enable SSO, add an `[oidc]` section to your config file. See [docs/configuration.md](docs/configuration.md) for provider-specific setup guides.
