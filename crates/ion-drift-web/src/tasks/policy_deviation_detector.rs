@@ -118,6 +118,18 @@ async fn run_detection_cycle(
         .map_err(|e| format!("spawn_blocking: {e}"))?
     }?;
 
+    // Build set of observed DNS server IPs — any IP that receives inbound port-53
+    // queries is acting as a DNS server. This catches servers like Technitium that
+    // aren't in DHCP-derived policies but still perform recursive resolution.
+    let mut observed_dns_servers: HashSet<String> = HashSet::new();
+    for (_src_mac, _src_ip, dst_ip, _vlan) in &dns_connections {
+        observed_dns_servers.insert(dst_ip.clone());
+    }
+    // Merge policy-derived and observation-derived DNS server sets
+    let dns_server_ips: HashSet<&str> = all_dns_server_ips.iter().map(|s| s.as_str())
+        .chain(observed_dns_servers.iter().map(|s| s.as_str()))
+        .collect();
+
     if dns_connections.is_empty() {
         return Ok(());
     }
@@ -129,9 +141,10 @@ async fn run_detection_cycle(
 
     for (src_mac, src_ip, dst_ip, _src_vlan_str) in &dns_connections {
         // Skip DNS servers — their outbound port-53 traffic is recursive resolution,
-        // not a policy violation. A device is a DNS server if its IP appears in any
-        // policy's authorized_targets (derived from DHCP config).
-        if all_dns_server_ips.contains(src_ip) {
+        // not a policy violation. A device is a DNS server if:
+        // 1. Its IP appears in any policy's authorized_targets (DHCP-derived), OR
+        // 2. It receives inbound port-53 queries from other devices (observed DNS server)
+        if dns_server_ips.iter().any(|&server_ip| ip_matches_target(src_ip, server_ip)) {
             continue;
         }
 

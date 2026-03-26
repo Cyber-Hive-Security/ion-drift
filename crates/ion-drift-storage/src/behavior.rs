@@ -2859,9 +2859,9 @@ impl BehaviorStore {
                 ip_address = ?2,
                 expected = ?5,
                 severity = CASE WHEN ?9 = 'warning' AND severity = 'informational' THEN 'warning' ELSE severity END,
-                status = CASE WHEN status IN ('resolved', 'acknowledged') THEN 'new' ELSE status END,
-                resolved_at = CASE WHEN status IN ('resolved', 'acknowledged') THEN NULL ELSE resolved_at END,
-                resolved_by = CASE WHEN status IN ('resolved', 'acknowledged') THEN NULL ELSE resolved_by END",
+                status = CASE WHEN status = 'resolved' THEN 'new' ELSE status END,
+                resolved_at = CASE WHEN status = 'resolved' THEN NULL ELSE resolved_at END,
+                resolved_by = CASE WHEN status = 'resolved' THEN NULL ELSE resolved_by END",
             params![
                 dev.mac_address, dev.ip_address, dev.vlan, dev.deviation_type,
                 dev.expected, dev.actual, dev.policy_source, techniques_json,
