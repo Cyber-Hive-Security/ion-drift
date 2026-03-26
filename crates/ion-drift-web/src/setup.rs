@@ -306,7 +306,10 @@ pub async fn setup_submit(
         use rand::rngs::OsRng;
         use rand::TryRngCore;
         let mut b = [0u8; 32];
-        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+        if let Err(e) = OsRng.try_fill_bytes(&mut b) {
+            tracing::error!("OS RNG failed: {e}");
+            return Html(render_local_setup_html(Some("Failed to generate session secret. Check server logs."))).into_response();
+        }
         b
     };
     let session_secret = hex::encode(session_bytes);
@@ -564,7 +567,10 @@ pub async fn local_setup_submit(
         use rand::rngs::OsRng;
         use rand::TryRngCore;
         let mut b = [0u8; 32];
-        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+        if let Err(e) = OsRng.try_fill_bytes(&mut b) {
+            tracing::error!("OS RNG failed: {e}");
+            return Html(render_local_setup_html(Some("Failed to generate session secret. Check server logs."))).into_response();
+        }
         b
     };
     let session_secret = hex::encode(session_bytes);

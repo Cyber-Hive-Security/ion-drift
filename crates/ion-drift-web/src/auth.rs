@@ -358,7 +358,8 @@ impl SessionStore {
         use rand::rngs::OsRng;
         use rand::TryRngCore;
         let mut token_bytes = [0u8; 32];
-        OsRng.try_fill_bytes(&mut token_bytes).expect("OS RNG unavailable");
+        OsRng.try_fill_bytes(&mut token_bytes)
+            .map_err(|e| anyhow::anyhow!("OS RNG failed generating session token: {e}"))?;
         let token = hex::encode(token_bytes);
         self.sign_session_id(&token).await
     }

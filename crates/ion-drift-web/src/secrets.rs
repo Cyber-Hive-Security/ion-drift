@@ -162,7 +162,8 @@ impl SecretsManager {
         use rand::TryRngCore;
         let cipher = Aes256Gcm::new(&self.kek);
         let mut nonce_bytes = [0u8; 12];
-        OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS RNG unavailable");
+        OsRng.try_fill_bytes(&mut nonce_bytes)
+            .map_err(|e| anyhow::anyhow!("OS RNG failed: {e}"))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
         let payload = Payload {
             msg: plaintext.as_bytes(),

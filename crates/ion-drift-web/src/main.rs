@@ -144,7 +144,8 @@ async fn main() -> anyhow::Result<()> {
                         use rand::rngs::OsRng;
                         use rand::TryRngCore;
                         let mut b = [0u8; 32];
-                        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+                        OsRng.try_fill_bytes(&mut b)
+                            .map_err(|e| anyhow::anyhow!("OS RNG failed: {e}"))?;
                         b
                     };
                     hex::encode(bytes)
@@ -201,7 +202,8 @@ async fn main() -> anyhow::Result<()> {
                         use rand::rngs::OsRng;
                         use rand::TryRngCore;
                         let mut b = [0u8; 32];
-                        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+                        OsRng.try_fill_bytes(&mut b)
+                            .map_err(|e| anyhow::anyhow!("OS RNG failed: {e}"))?;
                         b
                     };
                             config.session.session_secret = hex::encode(bytes);
@@ -287,7 +289,8 @@ async fn main() -> anyhow::Result<()> {
                         use rand::rngs::OsRng;
                         use rand::TryRngCore;
                         let mut b = [0u8; 32];
-                        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+                        OsRng.try_fill_bytes(&mut b)
+                            .map_err(|e| anyhow::anyhow!("OS RNG failed: {e}"))?;
                         b
                     };
                         config.session.session_secret = hex::encode(bytes);
@@ -351,7 +354,8 @@ async fn main() -> anyhow::Result<()> {
                         use rand::rngs::OsRng;
                         use rand::TryRngCore;
                         let mut b = [0u8; 32];
-                        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+                        OsRng.try_fill_bytes(&mut b)
+                            .map_err(|e| anyhow::anyhow!("OS RNG failed: {e}"))?;
                         b
                     };
                     hex::encode(bytes)

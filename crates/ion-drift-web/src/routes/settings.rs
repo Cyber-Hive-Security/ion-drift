@@ -274,7 +274,10 @@ pub async fn regenerate_session(
         use rand::rngs::OsRng;
         use rand::TryRngCore;
         let mut b = [0u8; 32];
-        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+        OsRng.try_fill_bytes(&mut b).map_err(|e| {
+            tracing::error!("OS RNG failed: {e}");
+            super::internal_error("generate session secret", e)
+        })?;
         b
     };
     let new_secret = hex::encode(session_bytes);
