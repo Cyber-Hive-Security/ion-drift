@@ -10,32 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **SNMP profiles for HPE/Aruba and Cisco SMB switches** — Aruba 2540 (JL356A) and Cisco SG550X/SG350X/SG250X stackable switches now have dedicated profiles with proper interface naming, port classification, and hidden index filtering. Data contributed by [@robertbovens](https://github.com/robertbovens).
 - **Auto-generated device ID** — primary router device ID is now slugified from the router's identity string (e.g., "MikroTik-ac2" → "mikrotik-ac2") instead of hardcoded "rb4011". Model auto-detected from `system/resource` board-name.
-- **Version endpoint** — `/health` now returns a `version` field. Startup log includes version. Set via `ION_DRIFT_VERSION` build arg in Docker.
-- **SNMP profile collection script** — `scripts/snmp-profile-collect.sh` for users to collect switch OID data with automatic anonymization.
 - **SNMP profile documentation** — `docs/snmp-profiles.md` explains profiles, generic fallback behavior, and how to contribute.
-
-### Security
-
-- **SSRF DNS rebinding mitigation** — `revalidate_host()` at connection time on add-device and test-connection endpoints.
-- **SwOS response body cap** — 8MB limit matching `MikrotikClient`.
-- **Device error sanitization** — API endpoints return safe error categories instead of raw internal details.
-- **Login rate limiter tracks IP** — brute-force protection on both username and client IP via `X-Forwarded-For`/`X-Real-IP`.
 
 ### Fixed
 
 - **Legacy device ID migration** — existing installations with `device:rb4011:*` secrets are automatically migrated on startup. Secrets re-encrypted with new AAD in a single transaction. Rollback-safe, retries on failure.
 - **Correlation engine silent fallback** — removed dangerous `unwrap_or("rb4011")` that could corrupt port identity data. Now skips cycle if no router found.
-- **WAN interface hardcoded** — `wan_interface` from config now used in traffic poller, traffic tracker, topology, and policy sync (was hardcoded to "1-WAN"/"ether1").
 - **`vlan_scope` deserialization warning** — `"__global__"` sentinel in database was being JSON-parsed every poll cycle, triggering spurious warnings. Now filtered before parsing.
-- **Policy deserialization warnings** — corrupt `authorized_targets` or `vlan_scope` JSON logs a warning instead of silently defaulting.
-- **SwOS parse failure visibility** — `stats.b` and `vlan.b` parse failures upgraded to `tracing::warn`.
 - **Potential deadlock** — `futures::executor::block_on()` in legacy code path replaced with native async/await.
-- **Response body cap too low** — bumped from 2MB to 8MB for large connection tracking tables.
-
-### Changed
-
-- Quick Start docs updated to use `production.toml` with complete `[router]` section including `wan_interface`.
-- Docker build context excludes docs/markdown files via `.dockerignore`.
 
 ## [0.3.4] - 2026-03-25
 
