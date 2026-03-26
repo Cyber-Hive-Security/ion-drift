@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.4] - 2026-03-25
+
+### Security
+
+- **SSRF DNS rebinding mitigation** — added `revalidate_host()` check immediately before client construction in add-device and test-connection handlers, closing the TOCTOU window between initial validation and connection.
+- **SwOS response body cap** — `SwosClient::fetch()` now enforces 8MB body limit matching `MikrotikClient`, preventing OOM from compromised switches.
+- **Device error sanitization** — device API endpoints no longer leak internal hostnames, certificate details, or file paths. Errors are classified into safe categories (`auth_failed`, `tls_error`, `connection_timeout`, etc.) and full details are logged server-side only.
+- **Login rate limiter tracks IP** — brute-force protection now rate-limits by both username and client IP (via `X-Forwarded-For`/`X-Real-IP`), preventing username rotation attacks from a single source.
+
+### Fixed
+
+- **Policy deserialization warnings** — corrupt `authorized_targets` or `vlan_scope` JSON in policy rows now logs a warning instead of silently defaulting to empty, preventing silent policy changes from data corruption.
+- **SwOS parse failure visibility** — `stats.b` and `vlan.b` parse failures upgraded from silent `debug` to `tracing::warn` with degraded status context.
+- **WAN interface hardcoded** — `wan_interface` from `server.toml` was ignored in 4 places (traffic poller, traffic tracker, topology, policy sync), all hardcoded to `"1-WAN"` or `"ether1"`. Now reads from config everywhere.
+- **Version endpoint** — `/health` now returns `version` field; startup log includes version. Set via `ION_DRIFT_VERSION` env var at build time (Dockerfile `--build-arg VERSION=...`).
+
+### Added
+
+- **SNMP profile collection script** — `scripts/snmp-profile-collect.sh` for users to collect switch OID data for building new vendor profiles. Automatically anonymizes MACs (OUI preserved), hostnames, and port descriptions.
+
 ## [0.3.3] - 2026-03-25
 
 ### Fixed
