@@ -417,8 +417,13 @@ async fn main() -> anyhow::Result<()> {
 
             // Check if the primary router still uses the legacy "rb4011" ID and migrate
             if sm_read.has_device(device_manager::LEGACY_DEVICE_ID).await.unwrap_or(false) {
-                // Probe router for identity to generate the new ID
-                let probe_config = config.mikrotik_config();
+                // Probe router for identity — need credentials from secrets.db
+                let mut probe_config = config.mikrotik_config();
+                if let Ok(Some(creds)) = sm_read.get_device_credentials(device_manager::LEGACY_DEVICE_ID).await {
+                    let (u, p) = creds;
+                    probe_config.username = u;
+                    probe_config.password = secrecy::SecretString::from(p.expose_secret().to_string());
+                }
                 if let Ok(probe_client) = mikrotik_core::MikrotikClient::new(probe_config) {
                     if let Ok(identity) = probe_client.test_connection().await {
                         let new_id = device_manager::slugify_device_id(&identity);
