@@ -8,6 +8,30 @@ use tokio::time::Instant;
 use crate::config::ServerConfig;
 use crate::secrets::{DeviceRecord, SecretsManager};
 
+/// Legacy hardcoded device ID from pre-v0.3.5. Used for migration detection.
+pub const LEGACY_DEVICE_ID: &str = "rb4011";
+
+/// Generate a device ID by slugifying the router identity string.
+/// Lowercase, non-alphanumeric replaced with `-`, trimmed, truncated to 64 chars.
+/// Falls back to `"router-1"` if the identity is empty.
+pub fn slugify_device_id(identity: &str) -> String {
+    let slug: String = identity
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .collect::<String>()
+        .replace("--", "-");
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "router-1".to_string()
+    } else if slug.len() > 64 {
+        slug[..64].trim_end_matches('-').to_string()
+    } else {
+        slug
+    }
+}
+
 /// Status of a managed device.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "status")]
@@ -216,19 +240,20 @@ impl DeviceManager {
     }
 
     /// Build from legacy config (single router, no device registry).
-    pub fn from_config(config: &ServerConfig) -> anyhow::Result<Self> {
+    /// `device_id` and `device_name` are auto-generated from router identity.
+    pub fn from_config(config: &ServerConfig, device_id: &str, device_name: &str, model: Option<&str>) -> anyhow::Result<Self> {
         let mikrotik_config = config.mikrotik_config();
         let client = MikrotikClient::new(mikrotik_config)?;
 
         let record = DeviceRecord {
-            id: "rb4011".to_string(),
-            name: "RB4011".to_string(),
+            id: device_id.to_string(),
+            name: device_name.to_string(),
             host: config.router.host.clone(),
             port: config.router.port,
             tls: config.router.tls,
             ca_cert_path: config.router.ca_cert_path.clone(),
             device_type: "router".to_string(),
-            model: Some("RB4011iGS+".to_string()),
+            model: model.map(|m| m.to_string()),
             is_primary: true,
             enabled: true,
             poll_interval_secs: 60,
@@ -238,7 +263,7 @@ impl DeviceManager {
 
         let mut devices = HashMap::new();
         devices.insert(
-            "rb4011".to_string(),
+            device_id.to_string(),
             DeviceEntry {
                 client: DeviceClient::RouterOs(client),
                 record,

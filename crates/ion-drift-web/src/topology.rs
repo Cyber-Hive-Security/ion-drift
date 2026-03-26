@@ -650,7 +650,7 @@ pub async fn compute_topology(
                 source: rid.clone(),
                 target: wan_id,
                 kind: EdgeKind::Uplink,
-                source_port: Some("ether1".to_string()),
+                source_port: Some(wan_interface.to_string()),
                 target_port: None,
                 vlans: Vec::new(),
                 speed_mbps: Some(1000), // WAN — 1Gbps fiber

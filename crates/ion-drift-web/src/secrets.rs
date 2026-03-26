@@ -711,6 +711,118 @@ impl SecretsManager {
         Ok(count > 0)
     }
 
+    /// Check if a specific device ID exists in the registry.
+    pub async fn has_device(&self, id: &str) -> anyhow::Result<bool> {
+        let db = self.db.lock().await;
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM devices WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Migrate a device from one ID to another, re-encrypting all associated secrets.
+    ///
+    /// Required because secrets use the secret name as AAD — a simple rename would
+    /// break decryption. This method decrypts with the old AAD and re-encrypts with
+    /// the new AAD, all in a single transaction.
+    ///
+    /// Returns the number of secrets re-encrypted.
+    pub async fn migrate_device_id(&self, old_id: &str, new_id: &str) -> anyhow::Result<usize> {
+        // Find all secrets keyed to the old device ID
+        let old_prefix = format!("device:{old_id}:");
+        let new_prefix = format!("device:{new_id}:");
+
+        let db = self.db.lock().await;
+
+        // Collect secret names for this device
+        let mut stmt = db.prepare(
+            "SELECT name FROM encrypted_secrets WHERE name LIKE ?1"
+        )?;
+        let names: Vec<String> = stmt.query_map(
+            params![format!("{old_prefix}%")],
+            |row| row.get(0),
+        )?.filter_map(|r| r.ok()).collect();
+        drop(stmt);
+
+        if names.is_empty() && !self.has_device_in_db(&db, old_id)? {
+            return Ok(0);
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let tx = db.unchecked_transaction()?;
+
+        // Re-encrypt each secret with the new name as AAD
+        let mut count = 0;
+        for old_name in &names {
+            let suffix = old_name.strip_prefix(&old_prefix).unwrap_or(old_name);
+            let new_name = format!("{new_prefix}{suffix}");
+
+            // Decrypt with old AAD
+            let row = tx.query_row(
+                "SELECT ciphertext, nonce, key_fingerprint FROM encrypted_secrets WHERE name = ?1",
+                params![old_name],
+                |row| Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                )),
+            )?;
+            let (ciphertext, nonce_bytes, stored_fp) = row;
+
+            if stored_fp != self.key_fingerprint {
+                return Err(anyhow::anyhow!(
+                    "cannot migrate '{old_name}': encrypted with different key (fingerprint: {stored_fp}, current: {})",
+                    self.key_fingerprint
+                ));
+            }
+
+            let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
+            let cipher = aes_gcm::Aes256Gcm::new(&self.kek);
+            use aes_gcm::aead::{Aead, KeyInit, Payload};
+
+            let plaintext = cipher
+                .decrypt(nonce, Payload { msg: &ciphertext, aad: old_name.as_bytes() })
+                .map_err(|e| anyhow::anyhow!("decrypt failed for '{old_name}': {e}"))?;
+
+            // Re-encrypt with new AAD
+            let (new_ct, new_nonce) = self.encrypt_value(&new_name, &String::from_utf8_lossy(&plaintext))?;
+
+            // Delete old, insert new
+            tx.execute("DELETE FROM encrypted_secrets WHERE name = ?1", params![old_name])?;
+            tx.execute(
+                "INSERT OR REPLACE INTO encrypted_secrets (name, ciphertext, nonce, key_fingerprint, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![new_name, new_ct, new_nonce.as_slice(), self.key_fingerprint, now],
+            )?;
+            count += 1;
+        }
+
+        // Update the device row ID
+        tx.execute(
+            "UPDATE devices SET id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![new_id, now, old_id],
+        )?;
+
+        tx.commit()?;
+        Ok(count)
+    }
+
+    /// Internal helper: check if device exists without acquiring lock (caller holds it).
+    fn has_device_in_db(&self, db: &rusqlite::Connection, id: &str) -> anyhow::Result<bool> {
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM devices WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     // ── Local user management ───────────────────────────────────
 
     /// Create a local user with argon2id-hashed password.

@@ -7,6 +7,9 @@ use secrecy::SecretString;
 
 use crate::bootstrap;
 use crate::certwarden;
+
+/// Role assigned to local admin users created via the setup wizard.
+const LOCAL_ADMIN_ROLE: &str = "admin";
 use crate::config::{OidcBootstrapSection, TlsSection};
 use crate::secrets::{DecryptedSecrets, SecretsManager};
 
@@ -545,7 +548,7 @@ pub async fn local_setup_submit(
     };
 
     // Create the local admin user
-    if let Err(e) = sm.create_local_user(username, &form.admin_password, "admin").await {
+    if let Err(e) = sm.create_local_user(username, &form.admin_password, LOCAL_ADMIN_ROLE).await {
         tracing::error!("failed to create admin user: {e}");
         return Html(render_local_setup_html(Some("Failed to create admin account. Check server logs."))).into_response();
     }

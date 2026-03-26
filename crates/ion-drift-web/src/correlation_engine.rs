@@ -145,10 +145,13 @@ async fn run_correlation(
     for d in dm_read.get_swos_switches() {
         switch_ids.push(d.record.id.clone());
     }
-    let router_id = dm_read
-        .get_router()
-        .map(|r| r.record.id.clone())
-        .unwrap_or_else(|| "rb4011".to_string());
+    let router_id = match dm_read.get_router() {
+        Some(r) => r.record.id.clone(),
+        None => {
+            tracing::warn!("no primary router in device manager, skipping correlation cycle");
+            return Ok(());
+        }
+    };
     drop(dm_read);
 
     // Process bridge hosts so the router's local MACs enter the MAC table.

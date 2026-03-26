@@ -425,19 +425,58 @@ async fn main() -> anyhow::Result<()> {
             // No devices in registry — migrate from config/env vars
             drop(sm_read);
             tracing::info!("no devices in registry, creating primary router entry from config");
-            let dm = device_manager::DeviceManager::from_config(&config)?;
+
+            // Probe the router to auto-detect identity and model before creating the device entry
+            let probe_config = config.mikrotik_config();
+            let probe_client = mikrotik_core::MikrotikClient::new(probe_config)?;
+            let (identity, model) = match probe_client.test_connection().await {
+                Ok(name) => {
+                    tracing::info!("router identity: {name}");
+                    // Try to get board name for model detection
+                    let board = probe_client.get::<serde_json::Value>("system/resource")
+                        .await
+                        .ok()
+                        .and_then(|v| v.get("board-name").and_then(|b| b.as_str().map(String::from)));
+                    (name, board)
+                }
+                Err(e) => {
+                    tracing::warn!("router probe failed, using defaults: {e}");
+                    ("router".to_string(), None)
+                }
+            };
+
+            let device_id = device_manager::slugify_device_id(&identity);
+            tracing::info!(device_id = %device_id, identity = %identity, "auto-generated device ID");
+
+            let dm = device_manager::DeviceManager::from_config(&config, &device_id, &identity, model.as_deref())?;
 
             // Persist the primary router to the devices table
             let sm_read = sm.read().await;
+
+            // Check for legacy "rb4011" device and migrate if needed
+            if sm_read.has_device(device_manager::LEGACY_DEVICE_ID).await.unwrap_or(false)
+                && device_id != device_manager::LEGACY_DEVICE_ID
+            {
+                tracing::info!(
+                    old_id = device_manager::LEGACY_DEVICE_ID,
+                    new_id = %device_id,
+                    "migrating legacy device ID"
+                );
+                match sm_read.migrate_device_id(device_manager::LEGACY_DEVICE_ID, &device_id).await {
+                    Ok(count) => tracing::info!("legacy device migration complete: re-encrypted {count} secrets"),
+                    Err(e) => tracing::warn!("legacy device migration failed (will retry next startup): {e}"),
+                }
+            }
+
             let new_device = secrets::NewDevice {
-                id: "rb4011".to_string(),
-                name: "RB4011".to_string(),
+                id: device_id.clone(),
+                name: identity.clone(),
                 host: config.router.host.clone(),
                 port: config.router.port,
                 tls: config.router.tls,
                 ca_cert_path: ca_cert_path.clone(),
                 device_type: "router".to_string(),
-                model: Some("RB4011iGS+".to_string()),
+                model,
                 is_primary: true,
                 enabled: true,
                 poll_interval_secs: 60,
@@ -464,7 +503,14 @@ async fn main() -> anyhow::Result<()> {
         }
     } else {
         // Legacy mode (no secrets manager) — build from config
-        device_manager::DeviceManager::from_config(&config)?
+        // Probe router for identity; fall back to host if unreachable
+        let probe_config = config.mikrotik_config();
+        let identity = mikrotik_core::MikrotikClient::new(probe_config)
+            .ok()
+            .and_then(|c| futures::executor::block_on(c.test_connection()).ok())
+            .unwrap_or_else(|| config.router.host.clone());
+        let device_id = device_manager::slugify_device_id(&identity);
+        device_manager::DeviceManager::from_config(&config, &device_id, &identity, None)?
     };
 
     let device_manager = Arc::new(tokio::sync::RwLock::new(device_manager));
@@ -494,12 +540,17 @@ async fn main() -> anyhow::Result<()> {
             );
         }
     }
+    // Get the primary router's device ID for status updates
+    let primary_id = {
+        let dm = device_manager.read().await;
+        dm.get_router().map(|r| r.record.id.clone()).unwrap_or_default()
+    };
     match mikrotik.test_connection().await {
         Ok(name) => {
             tracing::info!("connected to router: {name}");
             let mut dm = device_manager.write().await;
             dm.set_status(
-                "rb4011",
+                &primary_id,
                 device_manager::DeviceStatus::Online {
                     identity: name,
                 },
@@ -510,7 +561,7 @@ async fn main() -> anyhow::Result<()> {
             tracing::warn!("web UI will be available — fix router credentials in Settings > Devices");
             let mut dm = device_manager.write().await;
             dm.set_status(
-                "rb4011",
+                &primary_id,
                 device_manager::DeviceStatus::Offline {
                     error: e.to_string(),
                 },
