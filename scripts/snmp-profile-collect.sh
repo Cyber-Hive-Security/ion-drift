@@ -90,33 +90,25 @@ snmpwalk -On "${SNMP_ARGS[@]}" 1.3.6.1.2.1.31.1.1.1.10 2>&1 | head -5 || echo "(
 echo "(sample — 5 entries)"
 
 echo ""
-echo "=== 10. MAC Address Table (Q-BRIDGE dot1qTpFdbPort) ==="
-echo "--- dot1qTpFdbPort (1.3.6.1.2.1.17.7.1.2.2.1.2) ---"
-snmpwalk -On "${SNMP_ARGS[@]}" 1.3.6.1.2.1.17.7.1.2.2.1.2 2>&1 | head -10 || echo "(failed)"
-echo "(sample — 10 entries)"
+echo "=== 10. Q-BRIDGE FDB Support Check ==="
+echo "--- dot1qTpFdbPort (1.3.6.1.2.1.17.7.1.2.2.1.2) — structure only ---"
+# Only check if the OID is supported and count entries; actual MACs are not needed
+COUNT=$(snmpwalk -On "${SNMP_ARGS[@]}" 1.3.6.1.2.1.17.7.1.2.2.1.2 2>&1 | grep -c "INTEGER" || true)
+echo "FDB entries found: $COUNT"
 
 echo ""
-echo "=== 11. LLDP Remote System Name ==="
-echo "--- lldpRemSysName (1.0.8802.1.1.2.1.4.1.1.9) ---"
-snmpwalk -On "${SNMP_ARGS[@]}" 1.0.8802.1.1.2.1.4.1.1.9 2>&1 || echo "(failed or no LLDP neighbors)"
+echo "=== 11. LLDP Support Check ==="
+echo "--- lldpRemSysName (1.0.8802.1.1.2.1.4.1.1.9) — entry count only ---"
+COUNT=$(snmpwalk -On "${SNMP_ARGS[@]}" 1.0.8802.1.1.2.1.4.1.1.9 2>&1 | grep -c "STRING" || true)
+echo "LLDP neighbors found: $COUNT"
 
 echo ""
-echo "=== 12. LLDP Remote Chassis ID ==="
-echo "--- lldpRemChassisId (1.0.8802.1.1.2.1.4.1.1.5) ---"
-snmpwalk -On "${SNMP_ARGS[@]}" 1.0.8802.1.1.2.1.4.1.1.5 2>&1 || echo "(failed or no LLDP neighbors)"
-
-echo ""
-echo "=== 13. LLDP Remote Port Description ==="
-echo "--- lldpRemPortDesc (1.0.8802.1.1.2.1.4.1.1.8) ---"
-snmpwalk -On "${SNMP_ARGS[@]}" 1.0.8802.1.1.2.1.4.1.1.8 2>&1 || echo "(failed or no LLDP neighbors)"
-
-echo ""
-echo "=== 14. Interface Physical Address (ifPhysAddress) ==="
-echo "--- ifPhysAddress (1.3.6.1.2.1.2.2.1.6) ---"
+echo "=== 12. Switch Interface MACs (ifPhysAddress) ==="
+echo "--- ifPhysAddress (1.3.6.1.2.1.2.2.1.6) — OUI only ---"
 snmpwalk -On "${SNMP_ARGS[@]}" 1.3.6.1.2.1.2.2.1.6 2>&1 || echo "(failed)"
 
 echo ""
-echo "=== 15. Entity MIB (for model/serial) ==="
+echo "=== 13. Entity MIB (for model/serial) ==="
 echo "--- entPhysicalModelName (1.3.6.1.2.1.47.1.1.1.1.13) ---"
 snmpwalk -On "${SNMP_ARGS[@]}" 1.3.6.1.2.1.47.1.1.1.1.13 2>&1 | head -5 || echo "(failed or not supported)"
 
@@ -133,18 +125,13 @@ echo "Anonymizing..."
 
 # Build replacement maps for consistent anonymization
 declare -A MAC_MAP
-declare -A IP_MAP
-declare -A HOST_MAP
 MAC_COUNT=0
-IP_COUNT=0
-HOST_COUNT=0
 
 anonymize() {
     local data
     data=$(cat "$RAWFILE")
 
-    # Replace MAC addresses (XX:XX:XX:XX:XX:XX and XX-XX-XX-XX-XX-XX formats)
-    # Preserve OUI (first 3 octets) for vendor identification, anonymize last 3
+    # Replace MAC addresses — preserve OUI (first 3 octets) for vendor ID, anonymize last 3
     while IFS= read -r mac; do
         if [[ -z "${MAC_MAP[$mac]+x}" ]]; then
             MAC_COUNT=$((MAC_COUNT + 1))
@@ -154,36 +141,13 @@ anonymize() {
         data=$(echo "$data" | sed "s/$mac/${MAC_MAP[$mac]}/gi")
     done < <(echo "$data" | grep -oiE '([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}' | sort -u)
 
-    # Replace IPv4 addresses (but not OID components)
-    # Only match IPs in string context (after = or in quotes), not bare OID numbers
-    while IFS= read -r ip; do
-        if [[ -z "${IP_MAP[$ip]+x}" ]]; then
-            IP_COUNT=$((IP_COUNT + 1))
-            IP_MAP[$ip]="10.0.0.$IP_COUNT"
-        fi
-        # Use word boundary matching to avoid mangling OIDs
-        data=$(echo "$data" | sed "s/\"$ip\"/\"${IP_MAP[$ip]}\"/g")
-    done < <(echo "$data" | grep -oE '"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}"' | tr -d '"' | sort -u)
-
-    # Replace hostnames in sysName and LLDP system name values
-    # These appear as STRING: "hostname" — replace the quoted value
-    while IFS= read -r hostname; do
-        [ -z "$hostname" ] && continue
-        # Skip generic/vendor strings we want to keep
-        case "$hostname" in
-            Aruba*|aruba*|HP*|Cisco*|MikroTik*|Netgear*|""|-) continue ;;
-        esac
-        if [[ -z "${HOST_MAP[$hostname]+x}" ]]; then
-            HOST_COUNT=$((HOST_COUNT + 1))
-            HOST_MAP[$hostname]="switch-host-$HOST_COUNT"
-        fi
-        data=$(echo "$data" | sed "s/\"$hostname\"/\"${HOST_MAP[$hostname]}\"/g")
-    done < <(echo "$data" | grep -E 'sysName|lldpRemSysName' -A1 | grep -oE '"[^"]*"' | tr -d '"' | sort -u)
-
-    # Replace the target host IP/hostname in the header
+    # Redact target host IP/hostname
     data=$(echo "$data" | sed "s/$HOST/[redacted-host]/g")
 
-    # Replace ifAlias values (user-defined port descriptions)
+    # Redact sysName (device hostname)
+    data=$(echo "$data" | sed -E '/sysName/{ s/STRING: "([^"]+)"/STRING: "[redacted-hostname]"/g; }')
+
+    # Redact ifAlias values (user-defined port descriptions)
     data=$(echo "$data" | sed -E '/ifAlias/,/^===/{ s/STRING: "([^"]+)"/STRING: "[port-description]"/g; }')
 
     echo "$data"
@@ -196,8 +160,7 @@ echo ""
 echo "Done! Anonymized output saved to: $OUTFILE"
 echo ""
 echo "Anonymization summary:"
-echo "  MACs:      $MAC_COUNT replaced (OUI preserved for vendor ID)"
-echo "  IPs:       $IP_COUNT replaced"
-echo "  Hostnames: $HOST_COUNT replaced"
+echo "  MACs: $MAC_COUNT anonymized (OUI preserved for vendor ID)"
+echo "  sysName, ifAlias, target host: redacted"
 echo ""
 echo "Please review the file before sharing, then attach it to the GitHub issue."
