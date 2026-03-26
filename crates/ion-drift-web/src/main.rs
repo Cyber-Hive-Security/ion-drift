@@ -536,10 +536,10 @@ async fn main() -> anyhow::Result<()> {
         // Legacy mode (no secrets manager) — build from config
         // Probe router for identity; fall back to host if unreachable
         let probe_config = config.mikrotik_config();
-        let identity = mikrotik_core::MikrotikClient::new(probe_config)
-            .ok()
-            .and_then(|c| futures::executor::block_on(c.test_connection()).ok())
-            .unwrap_or_else(|| config.router.host.clone());
+        let identity = match mikrotik_core::MikrotikClient::new(probe_config) {
+            Ok(c) => c.test_connection().await.unwrap_or_else(|_| config.router.host.clone()),
+            Err(_) => config.router.host.clone(),
+        };
         let device_id = device_manager::slugify_device_id(&identity);
         device_manager::DeviceManager::from_config(&config, &device_id, &identity, None)?
     };
