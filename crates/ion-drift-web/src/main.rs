@@ -414,6 +414,32 @@ async fn main() -> anyhow::Result<()> {
         if has_devices {
             // Load devices from registry
             tracing::info!("loading devices from registry");
+
+            // Check if the primary router still uses the legacy "rb4011" ID and migrate
+            if sm_read.has_device(device_manager::LEGACY_DEVICE_ID).await.unwrap_or(false) {
+                // Probe router for identity to generate the new ID
+                let probe_config = config.mikrotik_config();
+                if let Ok(probe_client) = mikrotik_core::MikrotikClient::new(probe_config) {
+                    if let Ok(identity) = probe_client.test_connection().await {
+                        let new_id = device_manager::slugify_device_id(&identity);
+                        if new_id != device_manager::LEGACY_DEVICE_ID {
+                            tracing::info!(
+                                old_id = device_manager::LEGACY_DEVICE_ID,
+                                new_id = %new_id,
+                                identity = %identity,
+                                "migrating legacy device ID"
+                            );
+                            match sm_read.migrate_device_id(device_manager::LEGACY_DEVICE_ID, &new_id).await {
+                                Ok(count) => tracing::info!("legacy device migration complete: re-encrypted {count} secrets"),
+                                Err(e) => tracing::warn!("legacy device migration failed (will retry next startup): {e}"),
+                            }
+                        }
+                    } else {
+                        tracing::warn!("router unreachable — legacy device ID migration deferred to next startup");
+                    }
+                }
+            }
+
             let dm = device_manager::DeviceManager::load(
                 &sm_read,
                 ca_cert_path.as_deref(),
