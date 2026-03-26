@@ -34,6 +34,18 @@ StatsStore used `tokio::sync::Mutex` with synchronous rusqlite calls, blocking T
 
 The factory function call is wrapped in `std::panic::catch_unwind` (lines 121-130). The reviewer was working from an older snapshot.
 
+### [HIGH] Unbounded HTTP Response Body (client.rs)
+**Source:** External security review 2026-03-25
+**Fixed:** v0.3.2
+
+`MikrotikClient::handle_response()` read entire response body into memory without a size limit. Fixed by adding `read_body_limited()` with 8MB cap and `ResponseTooLarge` error variant.
+
+### [HIGH] SNMP Walk Infinite Loop (snmp_client.rs)
+**Source:** External security review 2026-03-25
+**Fixed:** v0.3.2
+
+All 7 SNMP walk functions now check OID monotonicity (break if OID doesn't strictly advance) and enforce a 10,000-iteration cap.
+
 ### [MEDIUM] DNS Deviation Query Nondeterminism (policy_deviation_detector.rs)
 **Source:** External review 2026-03-25
 **Status:** Already fixed in v0.2.4
@@ -52,6 +64,18 @@ Authorize action filters `p.vlan_scope.is_some()` to merge only VLAN-scoped targ
 
 Backoff includes ±25% jitter: `rand::random::<f64>() * 0.5 + 0.75` (line 182).
 
+### [MEDIUM] Manual UTF-8 Decoding in SwOS Client (swos_client.rs)
+**Source:** External security review 2026-03-25
+**Fixed:** v0.3.2
+
+`decode_hex_string` replaced manual UTF-8 state machine with `String::from_utf8_lossy()`.
+
+### [MEDIUM] Repetitive Encryption Boilerplate (secrets.rs)
+**Source:** External security review 2026-03-25
+**Fixed:** v0.3.2
+
+Extracted `encrypt_value()` helper method. All 9 encryption call sites across 4 functions now use the shared helper.
+
 ### [LOW] Magic Numbers for IANA ifType (snmp_profile.rs)
 **Source:** External review 2026-03-25
 **Status:** Already fixed prior to review
@@ -64,6 +88,19 @@ Named constants `IFTYPE_L2_VLAN` and `IFTYPE_SOFTWARE_LOOPBACK` are used.
 
 The commented code was already removed. The reviewer was working from an older snapshot.
 
+### [LOW] ThreadRng for Encryption Nonces (secrets.rs)
+**Source:** External security review 2026-03-25
+**Fixed:** v0.3.5 (development)
+
+All cryptographic and session random generation now uses `OsRng.try_fill_bytes()` instead of `rand::random()` (ThreadRng). 13 call sites across 6 files updated.
+
+## Accepted
+
+### [LOW] Default Router Credentials in Library (client.rs)
+**Source:** External security review 2026-03-25
+
+`DEFAULT_ROUTER_HOST` (`192.168.88.1`) and `DEFAULT_ROUTER_USERNAME` (`admin`) are MikroTik factory defaults used as config fallbacks. Validation logic prevents silent use — the setup wizard requires explicit credentials. These defaults match the vendor's factory configuration and are documented in the Quick Start guide.
+
 ## Won't Fix
 
 ### [LOW] Panic Message Information Leak (task_supervisor.rs)
@@ -75,39 +112,3 @@ Panic payloads are logged directly. We don't put secrets in `expect()` messages,
 **Source:** External review 2026-03-25
 
 `get_policies_for_service` combines fetching, filtering, and VLAN matching in one method. This is a style/refactor suggestion, not a bug. The current implementation is correct and the method is well-scoped. Refactoring would add abstraction without reducing defect risk.
-
-### [HIGH] Unbounded HTTP Response Body (client.rs)
-**Source:** External security review 2026-03-25
-**Fixed:** development
-
-`MikrotikClient::handle_response()` read entire response body into memory without a size limit. Fixed by adding `read_body_limited()` with a 2MB cap and `ResponseTooLarge` error variant.
-
-### [HIGH] SNMP Walk Infinite Loop (snmp_client.rs)
-**Source:** External security review 2026-03-25
-**Fixed:** development
-
-All 7 SNMP walk functions now check OID monotonicity (break if OID doesn't strictly advance) and enforce a 10,000-iteration cap as a belt-and-suspenders safeguard.
-
-### [MEDIUM] Manual UTF-8 Decoding in SwOS Client (swos_client.rs)
-**Source:** External security review 2026-03-25
-**Fixed:** development
-
-`decode_hex_string` replaced manual UTF-8 state machine with `String::from_utf8_lossy()`, which correctly handles all edge cases including 4-byte sequences and malformed input.
-
-### [MEDIUM] Repetitive Encryption Boilerplate (secrets.rs)
-**Source:** External security review 2026-03-25
-**Fixed:** development
-
-Extracted `encrypt_value()` helper method. All 9 encryption call sites across 4 functions now use the shared helper.
-
-## Open
-
-### [LOW] ThreadRng for Encryption Nonces (secrets.rs)
-**Source:** External security review 2026-03-25
-
-`rand::random()` is used for AES-256-GCM nonces. While the default RNG is currently CSPRNG, explicit `OsRng` usage is preferred for cryptographic operations.
-
-### [LOW] Default Router Credentials in Library (client.rs)
-**Source:** External security review 2026-03-25
-
-`DEFAULT_ROUTER_HOST` and `DEFAULT_ROUTER_USERNAME` constants exist as fallbacks. Validation logic prevents silent use, but removing defaults would be more defensive.

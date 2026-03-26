@@ -9,4 +9,5 @@ Thank you to everyone who has contributed to Ion Drift — whether through code,
 ## Bug Reports & Testing
 
 - [@robertbovens](https://github.com/robertbovens) — RouterOS www-ssl connection failures, response body cap, first-run testing ([#4](https://github.com/Cyber-Hive-Security/ion-drift/issues/4))
+- [@nlindblo](https://github.com/nlindblo) — WAN interface config bug, Kubernetes deployment testing ([#5](https://github.com/Cyber-Hive-Security/ion-drift/issues/5))
 - [vitaleg](https://github.com/vitaleg) — Secrets persistence investigation ([#4](https://github.com/Cyber-Hive-Security/ion-drift/issues/4))
