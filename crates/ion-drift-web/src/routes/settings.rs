@@ -270,7 +270,13 @@ pub async fn regenerate_session(
     })?;
 
     // Generate new session secret
-    let session_bytes: [u8; 32] = rand::random();
+    let session_bytes: [u8; 32] = {
+        use rand::rngs::OsRng;
+        use rand::TryRngCore;
+        let mut b = [0u8; 32];
+        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+        b
+    };
     let new_secret = hex::encode(session_bytes);
 
     let sm = sm.read().await;

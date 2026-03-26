@@ -5,6 +5,8 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use rand::rngs::OsRng;
+use rand::TryRngCore;
 use reqwest::Identity;
 use sha2::Digest;
 use std::path::Path;
@@ -141,7 +143,8 @@ async fn try_bootstrap(
 
     // No KEK found — generate and store
     tracing::info!("no KEK found in Keycloak, generating new one");
-    let kek_bytes: [u8; 32] = rand::random();
+    let mut kek_bytes = [0u8; 32];
+    OsRng.try_fill_bytes(&mut kek_bytes).expect("OS RNG unavailable");
 
     write_kek_attribute(client, config, &token, &user_id, &kek_bytes).await?;
 
@@ -342,7 +345,8 @@ fn cache_kek(data_dir: &Path, key_path: &str, kek: &Key<Aes256Gcm>) -> anyhow::R
     let cache_key = derive_cache_key(key_path)?;
     let cipher = Aes256Gcm::new(&cache_key);
 
-    let nonce_bytes: [u8; 12] = rand::random();
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS RNG unavailable");
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
@@ -410,14 +414,16 @@ pub fn cache_kek_locally(kek: &Key<Aes256Gcm>, data_dir: &Path) -> anyhow::Resul
             .try_into()
             .map_err(|_| anyhow::anyhow!("corrupt machine.key"))?
     } else {
-        let key: [u8; 32] = rand::random();
+        let mut key = [0u8; 32];
+        OsRng.try_fill_bytes(&mut key).expect("OS RNG unavailable");
         std::fs::write(&machine_key_path, &key)?;
         key
     };
 
     let machine_key = Key::<Aes256Gcm>::from_slice(&machine_key_bytes);
     let cipher = Aes256Gcm::new(machine_key);
-    let nonce_bytes: [u8; 12] = rand::random();
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS RNG unavailable");
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
@@ -492,7 +498,8 @@ pub fn derive_kek_from_password(password: &str, data_dir: &Path) -> anyhow::Resu
             .try_into()
             .map_err(|_| anyhow::anyhow!("corrupt kek.salt (expected 16 bytes)"))?
     } else {
-        let s: [u8; 16] = rand::random();
+        let mut s = [0u8; 16];
+        OsRng.try_fill_bytes(&mut s).expect("OS RNG unavailable");
         std::fs::write(&salt_path, &s)?;
         tracing::info!("generated random KEK salt at {}", salt_path.display());
         s

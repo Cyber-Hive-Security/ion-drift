@@ -355,7 +355,10 @@ impl SessionStore {
     }
 
     pub async fn issue_session_id(&self) -> anyhow::Result<String> {
-        let token_bytes: [u8; 32] = rand::random();
+        use rand::rngs::OsRng;
+        use rand::TryRngCore;
+        let mut token_bytes = [0u8; 32];
+        OsRng.try_fill_bytes(&mut token_bytes).expect("OS RNG unavailable");
         let token = hex::encode(token_bytes);
         self.sign_session_id(&token).await
     }

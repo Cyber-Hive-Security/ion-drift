@@ -302,7 +302,13 @@ pub async fn setup_submit(
     };
 
     // Step 6: Generate session secret and encrypt all 6 secrets
-    let session_bytes: [u8; 32] = rand::random();
+    let session_bytes: [u8; 32] = {
+        use rand::rngs::OsRng;
+        use rand::TryRngCore;
+        let mut b = [0u8; 32];
+        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+        b
+    };
     let session_secret = hex::encode(session_bytes);
 
     let secrets = DecryptedSecrets {
@@ -554,7 +560,13 @@ pub async fn local_setup_submit(
     }
 
     // Generate and store session secret
-    let session_bytes: [u8; 32] = rand::random();
+    let session_bytes: [u8; 32] = {
+        use rand::rngs::OsRng;
+        use rand::TryRngCore;
+        let mut b = [0u8; 32];
+        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+        b
+    };
     let session_secret = hex::encode(session_bytes);
     if let Err(e) = sm.encrypt_secret(crate::secrets::SECRET_SESSION_SECRET, &session_secret).await {
         tracing::error!("failed to store session secret: {e}");

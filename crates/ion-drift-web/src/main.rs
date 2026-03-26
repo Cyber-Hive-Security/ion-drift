@@ -140,7 +140,13 @@ async fn main() -> anyhow::Result<()> {
                 // Migrate env vars into encrypted DB
                 tracing::info!("migrating env var secrets to encrypted storage");
                 let session_secret = if config.session.session_secret.is_empty() {
-                    let bytes: [u8; 32] = rand::random();
+                    let bytes: [u8; 32] = {
+                        use rand::rngs::OsRng;
+                        use rand::TryRngCore;
+                        let mut b = [0u8; 32];
+                        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+                        b
+                    };
                     hex::encode(bytes)
                 } else {
                     config.session.session_secret.clone()
@@ -191,7 +197,13 @@ async fn main() -> anyhow::Result<()> {
                         Ok(None) => {
                             // Not yet stored (e.g., upgrade from older version). Generate ephemeral
                             // secret so sessions work, but warn that they won't survive restarts.
-                            let bytes: [u8; 32] = rand::random();
+                            let bytes: [u8; 32] = {
+                        use rand::rngs::OsRng;
+                        use rand::TryRngCore;
+                        let mut b = [0u8; 32];
+                        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+                        b
+                    };
                             config.session.session_secret = hex::encode(bytes);
                             tracing::warn!("session secret not found in secrets.db — generated ephemeral secret (sessions will not survive restarts)");
                         }
@@ -271,7 +283,13 @@ async fn main() -> anyhow::Result<()> {
                 match sm.decrypt_secret(secrets::SECRET_SESSION_SECRET).await {
                     Ok(Some(ss)) => config.session.session_secret = ss.expose_secret().to_string(),
                     Ok(None) => {
-                        let bytes: [u8; 32] = rand::random();
+                        let bytes: [u8; 32] = {
+                        use rand::rngs::OsRng;
+                        use rand::TryRngCore;
+                        let mut b = [0u8; 32];
+                        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+                        b
+                    };
                         config.session.session_secret = hex::encode(bytes);
                         tracing::warn!("session secret not found in secrets.db — generated ephemeral secret (sessions will not survive restarts)");
                     }
@@ -329,7 +347,13 @@ async fn main() -> anyhow::Result<()> {
 
                 // Generate session secret
                 let session_secret = if config.session.session_secret.is_empty() {
-                    let bytes: [u8; 32] = rand::random();
+                    let bytes: [u8; 32] = {
+                        use rand::rngs::OsRng;
+                        use rand::TryRngCore;
+                        let mut b = [0u8; 32];
+                        OsRng.try_fill_bytes(&mut b).expect("OS RNG unavailable");
+                        b
+                    };
                     hex::encode(bytes)
                 } else {
                     config.session.session_secret.clone()

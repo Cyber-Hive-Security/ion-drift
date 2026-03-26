@@ -158,8 +158,11 @@ impl SecretsManager {
     /// Encrypt a value with the KEK, using the secret name as AAD.
     /// Returns (ciphertext, nonce_bytes).
     fn encrypt_value(&self, name: &str, plaintext: &str) -> anyhow::Result<(Vec<u8>, [u8; 12])> {
+        use rand::rngs::OsRng;
+        use rand::TryRngCore;
         let cipher = Aes256Gcm::new(&self.kek);
-        let nonce_bytes: [u8; 12] = rand::random();
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS RNG unavailable");
         let nonce = Nonce::from_slice(&nonce_bytes);
         let payload = Payload {
             msg: plaintext.as_bytes(),
