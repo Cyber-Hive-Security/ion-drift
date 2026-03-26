@@ -21,6 +21,9 @@ use tracing::debug;
 
 use crate::error::MikrotikError;
 
+/// Maximum response body size for SwOS endpoints (8 MB, matching MikrotikClient).
+const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
 // ─── Data Types ──────────────────────────────────────────────────
 
 /// PHY speed class determines how the `spd` field in `link.b` is decoded.
@@ -150,7 +153,7 @@ impl SwosClient {
         tracing::debug!(url = %url, status = %status, "SwOS fetch: initial response");
 
         if status == reqwest::StatusCode::OK {
-            return Ok(resp.text().await?);
+            return Self::read_body_limited(resp).await;
         }
 
         if status != reqwest::StatusCode::UNAUTHORIZED {
@@ -259,9 +262,19 @@ impl SwosClient {
             });
         }
 
-        let body = resp.text().await?;
+        let body = Self::read_body_limited(resp).await?;
         tracing::debug!(url = %url, body_len = body.len(), "SwOS fetch: success");
         Ok(body)
+    }
+
+    /// Read response body with a size limit to prevent OOM.
+    async fn read_body_limited(resp: reqwest::Response) -> Result<String, MikrotikError> {
+        let bytes = resp.bytes().await?;
+        if bytes.len() > MAX_RESPONSE_BYTES {
+            return Err(MikrotikError::ResponseTooLarge(bytes.len(), MAX_RESPONSE_BYTES));
+        }
+        String::from_utf8(bytes.to_vec())
+            .map_err(|e| MikrotikError::Deserialize(format!("invalid UTF-8 in SwOS response: {e}")))
     }
 
     /// Test connectivity by fetching system info. Returns the device identity.
@@ -436,7 +449,7 @@ impl SwosClient {
             Ok(v) => v,
             Err(e) => {
                 // Some SwOS firmware (CSS106) returns non-parseable stats.b
-                debug!(host = %self.host, error = %e, "stats.b parse failed, returning empty");
+                tracing::warn!(host = %self.host, error = %e, "stats.b parse failed — device may be running unsupported firmware, returning empty (degraded)");
                 return Ok(Vec::new());
             }
         };
@@ -484,7 +497,7 @@ impl SwosClient {
             Ok(v) => v,
             Err(e) => {
                 // Some SwOS firmware (CSS106) uses a different vlan.b format
-                debug!(host = %self.host, error = %e, "vlan.b parse failed, returning empty");
+                tracing::warn!(host = %self.host, error = %e, "vlan.b parse failed — device may be running unsupported firmware, returning empty (degraded)");
                 return Ok(Vec::new());
             }
         };

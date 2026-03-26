@@ -15,6 +15,30 @@ use crate::state::AppState;
 
 use super::internal_error;
 
+/// Classify a device connection error into a safe user-facing message.
+/// Logs the full error server-side, returns only the category to the client.
+fn sanitize_device_error(context: &str, e: &dyn std::fmt::Display) -> String {
+    let full = e.to_string();
+    tracing::warn!(context = %context, error = %full, "device operation failed");
+
+    let lower = full.to_lowercase();
+    if lower.contains("authentication") || lower.contains("unauthorized") {
+        "authentication_failed: check username and password".into()
+    } else if lower.contains("tls") || lower.contains("certificate") || lower.contains("ssl") {
+        "tls_error: certificate validation failed — check CA cert path and hostname".into()
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        "connection_timeout: device did not respond — check host and port".into()
+    } else if lower.contains("connection refused") {
+        "connection_refused: device refused the connection — check host, port, and service status".into()
+    } else if lower.contains("dns") || lower.contains("resolve") || lower.contains("no such host") {
+        "dns_error: hostname could not be resolved".into()
+    } else if lower.contains("response body too large") {
+        "response_too_large: device returned an oversized response".into()
+    } else {
+        "connection_failed: unable to reach device — check host, port, and network connectivity".into()
+    }
+}
+
 fn is_blocked_host(host: &str) -> bool {
     use std::net::ToSocketAddrs;
     if let Ok(addrs) = (host, 0u16).to_socket_addrs() {
@@ -67,6 +91,16 @@ fn validate_host(host: &str) -> Result<(), Response> {
     }
     if is_blocked_host(host) {
         return Err(bad_request("host resolves to a blocked address"));
+    }
+    Ok(())
+}
+
+/// Re-validate a host at connection time to prevent DNS rebinding (TOCTOU).
+/// Called immediately before creating a device client, after initial validate_host.
+fn revalidate_host(host: &str) -> Result<(), Response> {
+    if is_blocked_host(host) {
+        tracing::warn!(host = %host, "DNS rebinding detected: host resolved to blocked address at connection time");
+        return Err(bad_request("host resolves to a blocked address (DNS rebinding detected)"));
     }
     Ok(())
 }
@@ -135,7 +169,7 @@ async fn build_runtime_client(
             username,
             password.expose_secret().to_string(),
         )
-        .map_err(|e| bad_request(&format!("failed to create SwOS client: {e}")))?;
+        .map_err(|e| bad_request(&sanitize_device_error("SwOS client creation", &e)))?;
         return Ok(DeviceClient::SwOs(client));
     }
 
@@ -155,7 +189,7 @@ async fn build_runtime_client(
     };
 
     let client = MikrotikClient::new(config)
-        .map_err(|e| bad_request(&format!("failed to create client: {e}")))?;
+        .map_err(|e| bad_request(&sanitize_device_error("client creation", &e)))?;
     Ok(DeviceClient::RouterOs(client))
 }
 
@@ -280,6 +314,9 @@ pub async fn create_device(
         validate_ca_cert_path(path)?;
     }
 
+    // Re-validate host at connection time to prevent DNS rebinding
+    revalidate_host(&req.device.host)?;
+
     // Build client based on device type and test connection
     let (client, identity) = if req.device.device_type == "snmp_switch" {
         let snmp = if req.snmp_priv_password.is_some() || req.snmp_auth_protocol.is_some() {
@@ -306,7 +343,7 @@ pub async fn create_device(
         let identity = snmp.test_connection().await.map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("connection test failed: {e}") })),
+                Json(serde_json::json!({ "error": sanitize_device_error("connection test", &e) })),
             )
                 .into_response()
         })?;
@@ -321,14 +358,14 @@ pub async fn create_device(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("failed to create SwOS client: {e}") })),
+                Json(serde_json::json!({ "error": sanitize_device_error("SwOS client creation", &e) })),
             )
                 .into_response()
         })?;
         let identity = swos.test_connection().await.map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("connection test failed: {e}") })),
+                Json(serde_json::json!({ "error": sanitize_device_error("connection test", &e) })),
             )
                 .into_response()
         })?;
@@ -353,7 +390,7 @@ pub async fn create_device(
         let routeros = MikrotikClient::new(config).map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("failed to create client: {e}") })),
+                Json(serde_json::json!({ "error": sanitize_device_error("client creation", &e) })),
             )
                 .into_response()
         })?;
@@ -361,7 +398,7 @@ pub async fn create_device(
         let identity = routeros.test_connection().await.map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("connection test failed: {e}") })),
+                Json(serde_json::json!({ "error": sanitize_device_error("connection test", &e) })),
             )
                 .into_response()
         })?;
@@ -618,7 +655,7 @@ pub async fn test_device(
             );
             Ok(Json(serde_json::json!({
                 "status": "offline",
-                "error": e.to_string()
+                "error": sanitize_device_error("connection test", &e)
             })))
         }
     }
@@ -655,6 +692,9 @@ pub async fn test_connection(
         validate_ca_cert_path(path)?;
     }
 
+    // Re-validate host at connection time to prevent DNS rebinding
+    revalidate_host(&req.host)?;
+
     let device_type = req.device_type.as_deref().unwrap_or("switch");
 
     if device_type == "snmp_switch" {
@@ -679,7 +719,7 @@ pub async fn test_connection(
             }))),
             Err(e) => Ok(Json(serde_json::json!({
                 "status": "offline",
-                "error": e.to_string()
+                "error": sanitize_device_error("connection test", &e)
             }))),
         }
     } else if device_type == "swos_switch" {
@@ -687,7 +727,7 @@ pub async fn test_connection(
             .map_err(|e| {
                 (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("failed to create SwOS client: {e}") })),
+                Json(serde_json::json!({ "error": sanitize_device_error("SwOS client creation", &e) })),
             )
                 .into_response()
             })?;
@@ -698,7 +738,7 @@ pub async fn test_connection(
             }))),
             Err(e) => Ok(Json(serde_json::json!({
                 "status": "offline",
-                "error": e.to_string()
+                "error": sanitize_device_error("connection test", &e)
             }))),
         }
     } else {
@@ -720,7 +760,7 @@ pub async fn test_connection(
         let client = MikrotikClient::new(config).map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("failed to create client: {e}") })),
+                Json(serde_json::json!({ "error": sanitize_device_error("client creation", &e) })),
             )
                 .into_response()
         })?;
@@ -732,7 +772,7 @@ pub async fn test_connection(
             }))),
             Err(e) => Ok(Json(serde_json::json!({
                 "status": "offline",
-                "error": e.to_string()
+                "error": sanitize_device_error("connection test", &e)
             }))),
         }
     }

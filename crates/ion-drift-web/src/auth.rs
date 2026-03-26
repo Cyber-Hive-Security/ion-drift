@@ -442,8 +442,28 @@ fn now_secs() -> u64 {
 
 // ── Login rate limiter ────────────────────────────────────────────
 
+/// Extract client IP from request headers (reverse proxy) or peer address.
+/// Checks X-Forwarded-For (first IP), then X-Real-IP, then falls back to "unknown".
+pub fn extract_client_ip(headers: &axum::http::HeaderMap) -> String {
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = xff.split(',').next() {
+            let trimmed = first.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        let trimmed = real_ip.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
 /// Per-key rate limiter for login attempts.
-/// Tracks failed attempts by key (username or IP) and enforces cooldowns.
+/// Tracks failed attempts by both username and client IP independently.
 #[derive(Clone)]
 pub struct LoginRateLimiter {
     /// Map of key → (attempt_count, last_attempt_timestamp)
@@ -851,8 +871,18 @@ pub async fn local_login(
     headers: axum::http::HeaderMap,
     Json(req): Json<LocalLoginRequest>,
 ) -> Result<(CookieJar, Json<serde_json::Value>), Response> {
-    // Rate limit by username
+    // Rate limit by both username and client IP
+    let client_ip = extract_client_ip(&headers);
+    let ip_key = format!("ip:{client_ip}");
     if let Err(retry_after) = state.login_limiter.check(&req.username) {
+        tracing::warn!(username = %req.username, client_ip = %client_ip, "login rate limited by username");
+        return Err(json_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            &format!("too many login attempts, retry in {retry_after}s"),
+        ));
+    }
+    if let Err(retry_after) = state.login_limiter.check(&ip_key) {
+        tracing::warn!(client_ip = %client_ip, "login rate limited by IP");
         return Err(json_error(
             StatusCode::TOO_MANY_REQUESTS,
             &format!("too many login attempts, retry in {retry_after}s"),
@@ -873,7 +903,8 @@ pub async fn local_login(
             // Use the same error for both "user not found" and "wrong password"
             // to prevent user enumeration
             state.login_limiter.record_failure(&req.username);
-            tracing::warn!(username = %req.username, "failed local login attempt");
+            state.login_limiter.record_failure(&ip_key);
+            tracing::warn!(username = %req.username, client_ip = %client_ip, "failed local login attempt");
             json_error(StatusCode::UNAUTHORIZED, "invalid username or password")
         })?;
     drop(sm);
@@ -931,7 +962,8 @@ pub async fn local_login(
     let jar = CookieJar::new().add(cookie);
 
     state.login_limiter.record_success(&req.username);
-    tracing::info!(username = %req.username, "local login successful");
+    state.login_limiter.record_success(&ip_key);
+    tracing::info!(username = %req.username, client_ip = %client_ip, "local login successful");
 
     Ok((jar, Json(serde_json::json!({ "authenticated": true }))))
 }
