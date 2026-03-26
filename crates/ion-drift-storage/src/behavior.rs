@@ -2658,10 +2658,12 @@ impl BehaviorStore {
                     tracing::warn!(targets = %targets_str, error = %e, "corrupt authorized_targets JSON in policy row, defaulting to empty");
                     Vec::new()
                 }),
-                vlan_scope: vlan_str.and_then(|s| serde_json::from_str(&s).map_err(|e| {
-                    tracing::warn!(vlan_scope = %s, error = %e, "corrupt vlan_scope JSON in policy row, treating as global");
-                    e
-                }).ok()),
+                vlan_scope: vlan_str
+                    .filter(|s| s != "__global__")
+                    .and_then(|s| serde_json::from_str(&s).map_err(|e| {
+                        tracing::warn!(vlan_scope = %s, error = %e, "corrupt vlan_scope JSON in policy row, treating as global");
+                        e
+                    }).ok()),
                 source: row.get(6)?,
                 priority: row.get(7)?,
                 last_synced: row.get(8)?,
@@ -2743,10 +2745,12 @@ impl BehaviorStore {
                     tracing::warn!(targets = %targets_str, error = %e, "corrupt authorized_targets JSON in policy row, defaulting to empty");
                     Vec::new()
                 }),
-                vlan_scope: vlan_str.and_then(|s| serde_json::from_str(&s).map_err(|e| {
-                    tracing::warn!(vlan_scope = %s, error = %e, "corrupt vlan_scope JSON in policy row, treating as global");
-                    e
-                }).ok()),
+                vlan_scope: vlan_str
+                    .filter(|s| s != "__global__")
+                    .and_then(|s| serde_json::from_str(&s).map_err(|e| {
+                        tracing::warn!(vlan_scope = %s, error = %e, "corrupt vlan_scope JSON in policy row, treating as global");
+                        e
+                    }).ok()),
                 source: row.get(6)?,
                 priority: row.get(7)?,
                 last_synced: row.get(8)?,
