@@ -449,7 +449,7 @@ function PolicyDeviationsSection() {
     }
   }
 
-  const resolveDevice = (mac: string, ip: string) =>
+  const resolveDevice = (mac: string, _ip: string) =>
     macMap.get(mac) ?? { name: null, manufacturer: null };
   const resolveIp = (ip: string) => ipMap.get(ip) ?? null;
 
