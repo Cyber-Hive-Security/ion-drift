@@ -13,8 +13,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **DNS deviation false positives** — DNS servers were incorrectly flagged for performing recursive resolution. Exclusion now identifies DNS servers both from policy `authorized_targets` (DHCP-derived) AND by observing which IPs receive inbound port-53 queries. Also uses `ip_matches_target()` for CIDR support instead of exact string match.
+- **Acknowledge/Dismiss state overwritten** — the detector was re-opening acknowledged and dismissed deviations on every cycle. Now only `resolved` (from Authorize) is re-opened on recurrence; acknowledged and dismissed states are durable.
 - **`vlan_scope` deserialization warning** — `"__global__"` sentinel in database was being JSON-parsed every poll cycle, triggering spurious warnings. Now filtered before parsing.
 - **Potential deadlock** — `futures::executor::block_on()` in legacy code path replaced with native async/await.
+
+### Added
+
+- **VLAN column in deviations table** — policy page deviations table now shows VLAN name for each deviation.
+- **First Seen column** — deviations table and investigation cards now show both First Seen and Last Seen timestamps.
+- **Policy deviations in diagnostic report** — report now includes total, new, acknowledged, resolved, and DNS deviation counts.
+- **"View in Policy" link** — investigation page deviation cards link back to the Policy page for resolution.
 
 ## [0.3.5] - 2026-03-26
 
