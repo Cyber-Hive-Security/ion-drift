@@ -8,7 +8,9 @@ import {
   useUpdateMonitoredRegions,
   useUpdateGeoipDatabases,
   useResetBehavior,
+  useResetPreview,
 } from "@/api/queries";
+import type { BehaviorResetCounts } from "@/api/queries";
 import {
   Radio,
   Globe,
@@ -416,14 +418,62 @@ function ConnectionHistorySection() {
 
 // ── Behavior Engine Reset Section ────────────────────────────────
 
+function ResetCountsTable({ counts, label }: { counts: BehaviorResetCounts; label: string }) {
+  const rows = [
+    ["Anomalies", counts.anomalies],
+    ["Baselines", counts.baselines],
+    ["Observations", counts.observations],
+    ["Device Profiles", counts.profiles],
+    ["Priority Boosts", counts.boosts],
+    ["Scheduler Watermarks", counts.watermarks],
+    ["Policy Deviations", counts.policy_deviations],
+  ] as const;
+  const total = rows.reduce((sum, [, n]) => sum + n, 0);
+
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+      <p className="font-medium mb-2">{label}</p>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+        {rows.map(([name, n]) => (
+          <div key={name} className="flex items-center justify-between">
+            <span className="text-muted-foreground">{name}</span>
+            <span className="font-mono tabular-nums">{formatNumber(n)}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 pt-2 border-t border-border flex items-center justify-between font-medium">
+        <span>Total</span>
+        <span className="font-mono tabular-nums">{formatNumber(total)}</span>
+      </div>
+    </div>
+  );
+}
+
 function BehaviorResetSection() {
   const resetMutation = useResetBehavior();
-  const [result, setResult] = useState<{
-    anomalies: number;
-    baselines: number;
-    observations: number;
-    profiles: number;
-  } | null>(null);
+  const preview = useResetPreview();
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<BehaviorResetCounts | null>(null);
+
+  const handleInitiate = async () => {
+    setResult(null);
+    setConfirming(true);
+    preview.refetch();
+  };
+
+  const handleConfirm = async () => {
+    try {
+      const res = await resetMutation.mutateAsync();
+      setResult(res);
+      setConfirming(false);
+    } catch {
+      // error handled by TanStack
+    }
+  };
+
+  const handleCancel = () => {
+    setConfirming(false);
+  };
 
   return (
     <div className="rounded-lg border bg-card p-6">
@@ -437,36 +487,60 @@ function BehaviorResetSection() {
         scheduler watermarks. Suppression rules are kept. The engine will restart its learning
         period and rebuild baselines from scratch.
       </p>
-      <div className="flex items-center gap-4">
+
+      {!confirming && !result && (
         <button
           className="inline-flex items-center gap-2 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground shadow hover:bg-destructive/90 transition-colors"
-          onClick={async () => {
-            if (!window.confirm("Reset all baselines and anomaly data? All anomalies, traffic baselines, device profiles, and observations will be permanently deleted. The engine will restart learning from scratch. This cannot be undone.")) {
-              return;
-            }
-            try {
-              const res = await resetMutation.mutateAsync();
-              setResult(res);
-            } catch {
-              // error handled by TanStack
-            }
-          }}
-          disabled={resetMutation.isPending}
+          onClick={handleInitiate}
         >
           <Trash2 className="h-4 w-4" />
-          {resetMutation.isPending ? "Resetting..." : "Reset Baselines & Anomalies"}
+          Reset Baselines &amp; Anomalies
         </button>
-        {result && (
-          <span className="text-sm text-muted-foreground">
-            Deleted {formatNumber(result.anomalies)} anomalies, {formatNumber(result.profiles)} profiles, {formatNumber(result.baselines)} baselines, {formatNumber(result.observations)} observations
-          </span>
-        )}
-        {resetMutation.error && (
-          <span className="text-sm text-destructive">
-            {resetMutation.error.message}
-          </span>
-        )}
-      </div>
+      )}
+
+      {confirming && (
+        <div className="space-y-4">
+          {preview.isFetching && (
+            <p className="text-sm text-muted-foreground">Loading counts...</p>
+          )}
+          {preview.data && <ResetCountsTable counts={preview.data} label="The following data will be permanently deleted:" />}
+          <div className="flex items-center gap-3">
+            <button
+              className="inline-flex items-center gap-2 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground shadow hover:bg-destructive/90 transition-colors"
+              onClick={handleConfirm}
+              disabled={resetMutation.isPending || preview.isFetching}
+            >
+              <AlertTriangle className="h-4 w-4" />
+              {resetMutation.isPending ? "Resetting..." : "Confirm Reset"}
+            </button>
+            <button
+              className="inline-flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+              onClick={handleCancel}
+              disabled={resetMutation.isPending}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <div className="space-y-4">
+          <ResetCountsTable counts={result} label="Reset complete. Deleted:" />
+          <button
+            className="text-sm text-muted-foreground underline hover:text-foreground"
+            onClick={() => setResult(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {resetMutation.error && (
+        <p className="mt-2 text-sm text-destructive">
+          {resetMutation.error.message}
+        </p>
+      )}
     </div>
   );
 }

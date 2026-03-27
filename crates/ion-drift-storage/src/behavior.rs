@@ -2167,6 +2167,24 @@ impl BehaviorStore {
             .map_err(|e| format!("delete all anomalies failed: {e}"))
     }
 
+    /// Preview what a full reset would delete (row counts per table, no mutation).
+    pub async fn reset_preview(&self) -> Result<BehaviorResetResult, String> {
+        let db = self.db.lock().await;
+        let count = |table: &str| -> Result<usize, String> {
+            db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get::<_, usize>(0))
+                .map_err(|e| format!("count {table}: {e}"))
+        };
+        Ok(BehaviorResetResult {
+            anomalies: count("device_anomalies")?,
+            baselines: count("device_baselines")?,
+            observations: count("device_observations")?,
+            profiles: count("device_profiles")?,
+            boosts: count("anomaly_priority_boosts")?,
+            watermarks: count("scheduler_watermarks")?,
+            policy_deviations: count("policy_deviations")?,
+        })
+    }
+
     /// Full behavior engine reset: delete all anomalies, baselines, observations,
     /// profiles, priority boosts, and watermarks. Suppressions are kept (user-created).
     /// Returns counts of deleted rows per table.

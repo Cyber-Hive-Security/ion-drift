@@ -418,6 +418,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             get(behavior::anomalies).delete(behavior::delete_all_anomalies),
         )
         .route("/behavior/reset", post(behavior::reset_behavior))
+        .route("/behavior/reset-preview", get(behavior::reset_preview))
         .route(
             "/behavior/anomalies/export.csv",
             get(behavior::export_anomalies_csv),

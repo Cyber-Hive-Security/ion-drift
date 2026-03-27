@@ -107,18 +107,29 @@ export function useDeleteAllAnomalies() {
   });
 }
 
+export interface BehaviorResetCounts {
+  anomalies: number;
+  baselines: number;
+  observations: number;
+  profiles: number;
+  boosts: number;
+  watermarks: number;
+  policy_deviations: number;
+}
+
+export function useResetPreview() {
+  return useQuery({
+    queryKey: ["behavior", "reset-preview"],
+    queryFn: () => apiFetch<BehaviorResetCounts>("/api/behavior/reset-preview"),
+    enabled: false, // only fetch on demand
+  });
+}
+
 export function useResetBehavior() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () =>
-      apiFetch<{
-        anomalies: number;
-        baselines: number;
-        observations: number;
-        profiles: number;
-        boosts: number;
-        watermarks: number;
-      }>("/api/behavior/reset", {
+      apiFetch<BehaviorResetCounts>("/api/behavior/reset", {
         method: "POST",
       }),
     onSuccess: () => {

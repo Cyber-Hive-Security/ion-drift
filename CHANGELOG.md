@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.3.6]
+## [0.3.6] - 2026-03-27
 
 ### Security
 
@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Acknowledge/Dismiss state overwritten** — the detector was re-opening acknowledged and dismissed deviations on every cycle. Now only `resolved` (from Authorize) is re-opened on recurrence; acknowledged and dismissed states are durable.
 - **`vlan_scope` deserialization warning** — `"__global__"` sentinel in database was being JSON-parsed every poll cycle, triggering spurious warnings. Now filtered before parsing.
 - **Potential deadlock** — `futures::executor::block_on()` in legacy code path replaced with native async/await.
+- **Behavior reset required double-click** — `window.confirm()` provided no feedback, so the first click appeared to do nothing. Replaced with an inline two-step flow: first click fetches and displays row counts per table, second click confirms the reset with full deletion summary.
+- **Phantom SNMP interfaces on stackable switches** — Cisco SG550X and similar stackable switches pre-allocate interfaces for up to 8 stack units, creating hundreds of `ifOperStatus=6` (notPresent) ghost interfaces. Profiles with `skip_not_present` now filter these automatically.
 
 ### Added
 
@@ -24,6 +26,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **First Seen column** — deviations table and investigation cards now show both First Seen and Last Seen timestamps.
 - **Policy deviations in diagnostic report** — report now includes total, new, acknowledged, resolved, and DNS deviation counts.
 - **"View in Policy" link** — investigation page deviation cards link back to the Policy page for resolution.
+- **Dismissed status for deviations** — "Dismiss" action now sets a distinct `dismissed` status (previously mapped to `resolved`). Dismissed deviations are hidden from the default view.
+- **Delete all deviations** — admin action to purge all policy deviations; also included in the full behavior engine reset.
+- **Reset preview endpoint** — `GET /api/behavior/reset-preview` returns row counts per table without deleting, powering the new two-step reset UI.
+- **Sidebar scrollbar** — sidebar content area is now scrollable on smaller screens; logo header and Settings footer stay pinned.
 
 ## [0.3.5] - 2026-03-26
 

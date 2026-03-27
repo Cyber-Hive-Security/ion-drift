@@ -507,6 +507,19 @@ pub async fn delete_all_anomalies(
     })))
 }
 
+/// GET /api/behavior/reset-preview — preview counts for what a full reset would delete.
+pub async fn reset_preview(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let result = state
+        .behavior_store
+        .reset_preview()
+        .await
+        .map_err(|e| internal_error("behavior reset preview", e))?;
+    Ok(Json(serde_json::json!(result)))
+}
+
 /// POST /api/behavior/reset — full behavior engine reset.
 /// Deletes anomalies, baselines, observations, profiles, boosts, watermarks.
 /// Keeps suppressions (user-created rules).
