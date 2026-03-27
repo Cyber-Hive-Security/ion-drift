@@ -257,6 +257,16 @@ function ReportModal({
             <ReportRow label="Flagged" value={formatNumber(eng.anomaly_dispositions_7d.flagged)} />
           </ReportSection>
 
+          <ReportSection title="Policy Deviations">
+            <ReportRow label="Total" value={formatNumber(report.policy_deviations.total)} />
+            <ReportRow label="New" value={formatNumber(report.policy_deviations.new)} />
+            <ReportRow label="Acknowledged" value={formatNumber(report.policy_deviations.acknowledged)} />
+            <ReportRow label="Resolved" value={formatNumber(report.policy_deviations.resolved)} />
+            {report.policy_deviations.dns > 0 && (
+              <ReportRow label="DNS Deviations" value={formatNumber(report.policy_deviations.dns)} />
+            )}
+          </ReportSection>
+
           <ReportSection title="Inference Engine">
             <ReportRow label="Tracked MACs" value={formatNumber(eng.inference.tracked_macs)} />
             <ReportRow label="Avg Confidence" value={`${(eng.inference.avg_confidence * 100).toFixed(1)}%`} />

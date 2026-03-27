@@ -256,6 +256,7 @@ const severityColor: Record<string, string> = {
 function deviationColumns(
   attackDb: Record<string, { name: string; url: string }> | undefined,
   onResolve: (id: number, action: string) => void,
+  vlanName: (id: number) => string,
 ): Column<PolicyDeviation>[] {
   return [
     {
@@ -280,6 +281,17 @@ function deviationColumns(
         </div>
       ),
       sortValue: (r) => r.mac_address,
+    },
+    {
+      key: "vlan",
+      header: "VLAN",
+      width: "100px",
+      render: (r) => (
+        <span className="text-xs text-muted-foreground">
+          {r.vlan != null ? vlanName(r.vlan) : "—"}
+        </span>
+      ),
+      sortValue: (r) => r.vlan ?? -1,
     },
     {
       key: "expected",
@@ -346,6 +358,13 @@ function deviationColumns(
       },
     },
     {
+      key: "first_seen",
+      header: "First Seen",
+      width: "100px",
+      render: (r) => <span className="text-xs text-muted-foreground">{formatTimeAgo(r.first_seen)}</span>,
+      sortValue: (r) => -r.first_seen,
+    },
+    {
       key: "last_seen",
       header: "Last Seen",
       width: "100px",
@@ -385,6 +404,7 @@ function PolicyDeviationsSection() {
   const { data: deviations, isLoading } = usePolicyDeviations({ limit: 200 });
   const { data: attackDb } = useAttackTechniques();
   const resolveMutation = useResolvePolicyDeviation();
+  const vlanLookup = useVlanLookup();
 
   const techniques = attackDb?.techniques;
 
@@ -398,7 +418,7 @@ function PolicyDeviationsSection() {
     <>
       <h2 className="mb-2 mt-6 text-lg font-semibold">Policy Deviations</h2>
       <DataTable
-        columns={deviationColumns(techniques, handleResolve)}
+        columns={deviationColumns(techniques, handleResolve, vlanLookup.name)}
         data={deviations}
         rowKey={(r) => String(r.id)}
         emptyMessage="No policy deviations detected"

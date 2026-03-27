@@ -765,6 +765,12 @@ function PolicyDeviationCards({ deviations }: { deviations: PolicyDeviation[] })
               <span className="text-muted-foreground ml-3">Actual: </span>
               <span className="font-mono text-destructive">{d.actual}</span>
             </div>
+            <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+              {d.vlan != null && <span>VLAN {d.vlan}</span>}
+              <span>First: {formatTimeAgoUnix(d.first_seen)}</span>
+              <span>Last: {formatTimeAgoUnix(d.last_seen)}</span>
+              <a href="/policy" className="text-primary hover:underline">View in Policy →</a>
+            </div>
             {d.attack_techniques.length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {d.attack_techniques.map((t) => {
