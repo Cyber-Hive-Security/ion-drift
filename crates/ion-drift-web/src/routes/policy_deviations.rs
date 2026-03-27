@@ -3,13 +3,26 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::internal_error;
 use crate::middleware::{RequireAdmin, RequireAuth};
 use crate::state::AppState;
 
 use ion_drift_storage::behavior::{PolicyDeviation, PolicyDeviationCounts};
+
+/// Enriched deviation with human-readable labels for device, expected, and actual IPs.
+#[derive(Serialize)]
+pub struct EnrichedDeviation {
+    #[serde(flatten)]
+    pub inner: PolicyDeviation,
+    /// Hostname or friendly name of the device (from device profiles).
+    pub device_hostname: Option<String>,
+    /// Human-readable label for the expected value (hostname or org name).
+    pub expected_label: Option<String>,
+    /// Human-readable label for the actual value (hostname or org name).
+    pub actual_label: Option<String>,
+}
 
 // ── GET /api/policy/deviations ────────────────────────────────────
 
@@ -22,11 +35,32 @@ pub struct DeviationListQuery {
     pub limit: Option<i64>,
 }
 
+/// Resolve an IP to a human-readable label.
+/// Tries device profiles (internal), then GeoIP org/ISP (external).
+fn resolve_ip_label(
+    ip: &str,
+    ip_to_hostname: &std::collections::HashMap<String, String>,
+    geo_cache: &crate::geo::GeoCache,
+) -> Option<String> {
+    // Check internal device profiles first (IP → hostname)
+    if let Some(name) = ip_to_hostname.get(ip) {
+        return Some(name.clone());
+    }
+    // Fall back to GeoIP org for external IPs
+    if let Some(geo) = geo_cache.lookup_cached(ip) {
+        // Prefer org, fall back to ISP
+        if let Some(org) = geo.org.as_ref().or(geo.isp.as_ref()) {
+            return Some(org.clone());
+        }
+    }
+    None
+}
+
 pub async fn list_deviations(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
     Query(q): Query<DeviationListQuery>,
-) -> Result<Json<Vec<PolicyDeviation>>, Response> {
+) -> Result<Json<Vec<EnrichedDeviation>>, Response> {
     let deviations = state
         .behavior_store
         .get_policy_deviations(
@@ -38,7 +72,50 @@ pub async fn list_deviations(
         .await
         .map_err(|e| internal_error("list deviations", e))?;
 
-    Ok(Json(deviations))
+    // Build MAC → hostname map from device profiles
+    let macs: Vec<&str> = deviations.iter().map(|d| d.mac_address.as_str()).collect();
+    let profiles = state
+        .behavior_store
+        .get_profiles_bulk(&macs)
+        .await
+        .unwrap_or_default();
+
+    // Build IP → hostname map from all profiles (for resolving expected/actual IPs)
+    let all_profiles = state
+        .behavior_store
+        .get_all_profiles()
+        .await
+        .unwrap_or_default();
+    let mut ip_to_hostname = std::collections::HashMap::new();
+    for p in &all_profiles {
+        if let (Some(ip), Some(hostname)) = (&p.current_ip, &p.hostname) {
+            if !hostname.is_empty() {
+                ip_to_hostname.insert(ip.clone(), hostname.clone());
+            }
+        }
+    }
+
+    let enriched: Vec<EnrichedDeviation> = deviations
+        .into_iter()
+        .map(|d| {
+            let device_hostname = profiles
+                .get(&d.mac_address)
+                .and_then(|p| p.hostname.clone())
+                .filter(|h| !h.is_empty());
+
+            let expected_label = resolve_ip_label(&d.expected, &ip_to_hostname, &state.geo_cache);
+            let actual_label = resolve_ip_label(&d.actual, &ip_to_hostname, &state.geo_cache);
+
+            EnrichedDeviation {
+                inner: d,
+                device_hostname,
+                expected_label,
+                actual_label,
+            }
+        })
+        .collect();
+
+    Ok(Json(enriched))
 }
 
 // ── GET /api/policy/deviations/device/{mac} ───────────────────────

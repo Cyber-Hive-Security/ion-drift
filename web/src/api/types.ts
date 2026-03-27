@@ -1850,6 +1850,12 @@ export interface PolicyDeviation {
   occurrence_count: number;
   resolved_at: number | null;
   resolved_by: string | null;
+  /** Hostname from device profile (enriched by API). */
+  device_hostname: string | null;
+  /** Human-readable label for expected IP (hostname or GeoIP org). */
+  expected_label: string | null;
+  /** Human-readable label for actual IP (hostname or GeoIP org). */
+  actual_label: string | null;
 }
 
 export interface PolicyDeviationCounts {
