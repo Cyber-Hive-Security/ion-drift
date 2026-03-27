@@ -56,6 +56,13 @@ Firewall rule viewer with drop statistics and geo-enriched drop country attribut
 
 ![Firewall](caps/ion-drift-firewall.png)
 
+### DNS Policy Deviations *(beta)*
+Detects devices using unauthorized DNS servers by cross-referencing connection tracking with your router's DHCP and DNS configuration. Every deviation is enriched with [MITRE ATT&CK](https://attack.mitre.org/) technique context (T1071.004, T1568, T1048.003, T1583.001). Resolve actions — Authorize, Acknowledge, Dismiss — create policies organically from observed traffic.
+
+During beta testing on our own production network, the deviation detector flagged our authoritative DNS server for performing recursive resolution directly to root servers — bypassing our AdGuard ad-filtering pipeline entirely. A misconfiguration we'd missed for months, found and fixed in 20 minutes. If it catches that on a network run by the developers, it'll catch IoT devices hardcoding `8.8.8.8` on yours.
+
+<!-- ![Policy Deviations](caps/ion-drift-policy-deviations.png) -->
+
 ## System Requirements
 
 ### Pre-built Docker Image (recommended)
