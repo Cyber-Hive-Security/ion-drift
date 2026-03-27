@@ -4,7 +4,7 @@ import { PageShell } from "@/components/layout/page-shell";
 import { DataTable, type Column } from "@/components/data-table";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
-import { usePolicyDeviations, useResolvePolicyDeviation, useAttackTechniques } from "@/api/queries";
+import { usePolicyDeviations, useResolvePolicyDeviation, useAttackTechniques, useNetworkIdentities } from "@/api/queries";
 import type { PolicyDeviation } from "@/api/types";
 
 interface PolicyEntry {
@@ -258,6 +258,8 @@ function deviationColumns(
   attackDb: Record<string, { name: string; url: string }> | undefined,
   onResolve: (id: number, action: string) => void,
   vlanName: (id: number) => string,
+  resolveDevice: (mac: string, ip: string) => { name: string | null; manufacturer: string | null },
+  resolveIp: (ip: string) => string | null,
 ): Column<PolicyDeviation>[] {
   return [
     {
@@ -274,14 +276,23 @@ function deviationColumns(
     {
       key: "device",
       header: "Device",
-      width: "140px",
-      render: (r) => (
-        <div className="text-xs">
-          <div className="font-mono">{r.mac_address}</div>
-          <div className="text-muted-foreground">{r.ip_address}</div>
-        </div>
-      ),
-      sortValue: (r) => r.mac_address,
+      width: "180px",
+      render: (r) => {
+        const dev = resolveDevice(r.mac_address, r.ip_address);
+        return (
+          <div className="text-xs">
+            {dev.name && <div className="font-medium truncate" title={dev.name}>{dev.name}</div>}
+            <div className="font-mono text-muted-foreground">{r.ip_address}</div>
+            {dev.manufacturer && !dev.name && (
+              <div className="text-muted-foreground truncate" title={dev.manufacturer}>{dev.manufacturer}</div>
+            )}
+          </div>
+        );
+      },
+      sortValue: (r) => {
+        const dev = resolveDevice(r.mac_address, r.ip_address);
+        return dev.name ?? r.mac_address;
+      },
     },
     {
       key: "vlan",
@@ -297,12 +308,28 @@ function deviationColumns(
     {
       key: "expected",
       header: "Expected",
-      render: (r) => <span className="font-mono text-xs text-emerald-400">{r.expected}</span>,
+      render: (r) => {
+        const name = resolveIp(r.expected);
+        return (
+          <div className="text-xs">
+            {name && <div className="text-emerald-400 truncate" title={name}>{name}</div>}
+            <div className={`font-mono ${name ? "text-emerald-400/60" : "text-emerald-400"}`}>{r.expected}</div>
+          </div>
+        );
+      },
     },
     {
       key: "actual",
       header: "Actual",
-      render: (r) => <span className="font-mono text-xs text-destructive">{r.actual}</span>,
+      render: (r) => {
+        const name = resolveIp(r.actual);
+        return (
+          <div className="text-xs">
+            {name && <div className="text-destructive truncate" title={name}>{name}</div>}
+            <div className={`font-mono ${name ? "text-destructive/60" : "text-destructive"}`}>{r.actual}</div>
+          </div>
+        );
+      },
     },
     {
       key: "attack",
@@ -404,10 +431,27 @@ function deviationColumns(
 function PolicyDeviationsSection() {
   const { data: deviations, isLoading } = usePolicyDeviations({ limit: 200 });
   const { data: attackDb } = useAttackTechniques();
+  const { data: identities } = useNetworkIdentities();
   const resolveMutation = useResolvePolicyDeviation();
   const vlanLookup = useVlanLookup();
 
   const techniques = attackDb?.techniques;
+
+  // Build MAC→identity and IP→hostname lookup maps
+  const macMap = new Map<string, { name: string | null; manufacturer: string | null }>();
+  const ipMap = new Map<string, string>();
+  if (identities) {
+    for (const id of identities) {
+      macMap.set(id.mac_address, { name: id.hostname, manufacturer: id.manufacturer });
+      if (id.best_ip && id.hostname) {
+        ipMap.set(id.best_ip, id.hostname);
+      }
+    }
+  }
+
+  const resolveDevice = (mac: string, ip: string) =>
+    macMap.get(mac) ?? { name: null, manufacturer: null };
+  const resolveIp = (ip: string) => ipMap.get(ip) ?? null;
 
   const handleResolve = (id: number, action: string) => {
     resolveMutation.mutate({ id, action });
@@ -419,7 +463,7 @@ function PolicyDeviationsSection() {
     <>
       <h2 className="mb-2 mt-6 text-lg font-semibold">Policy Deviations</h2>
       <DataTable
-        columns={deviationColumns(techniques, handleResolve, vlanLookup.name)}
+        columns={deviationColumns(techniques, handleResolve, vlanLookup.name, resolveDevice, resolveIp)}
         data={deviations}
         rowKey={(r) => String(r.id)}
         emptyMessage="No policy deviations detected"
