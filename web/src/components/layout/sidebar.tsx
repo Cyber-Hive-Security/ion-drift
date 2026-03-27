@@ -55,7 +55,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <span className="text-[10px] leading-tight text-muted-foreground">by Cyber Hive Security</span>
         </div>
       </div>
-      <nav className="flex-1 space-y-1 p-3">
+      <div className="flex-1 overflow-y-auto">
+      <nav className="space-y-1 p-3">
         <span className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Router
         </span>
@@ -157,6 +158,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           </div>
         </div>
       )}
+      </div>
       <div className="border-t border-border p-3 space-y-0.5">
         {[
           { to: "/statistics", label: "Statistics", icon: BarChart3 },
