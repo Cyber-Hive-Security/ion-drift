@@ -101,6 +101,8 @@ pub struct SnmpInterface {
     /// 135=l2vlan, 136=ieee8023adLag, 209=bridge, etc.
     pub if_type: u32,
     pub oper_status: bool,
+    /// Raw SNMP ifOperStatus value: 1=up, 2=down, 3=testing, 5=dormant, 6=notPresent, 7=lowerLayerDown
+    pub oper_status_raw: u32,
     pub admin_status: bool,
     pub speed_mbps: u64,
     pub mac_address: Option<String>,
@@ -417,6 +419,7 @@ impl SnmpClient {
                     if_type: if_type.get(&idx).copied().unwrap_or(0) as u32,
                     admin_status: if_admin.get(&idx).copied().unwrap_or(0) == 1,
                     oper_status: if_oper.get(&idx).copied().unwrap_or(0) == 1,
+                    oper_status_raw: if_oper.get(&idx).copied().unwrap_or(0) as u32,
                     speed_mbps,
                     mac_address,
                     rx_bytes: if_hc_in.get(&idx).copied().unwrap_or(0),

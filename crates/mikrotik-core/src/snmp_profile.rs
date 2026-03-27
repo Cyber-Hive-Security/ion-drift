@@ -66,6 +66,10 @@ pub struct SnmpProfile {
     /// for canonical name derivation.
     pub prefer_if_name: bool,
 
+    /// Skip interfaces with ifOperStatus=6 (notPresent). Useful for stackable
+    /// switches that pre-allocate interfaces for all possible stack units.
+    pub skip_not_present: bool,
+
     /// Derive a display-friendly name from interface metadata.
     /// Arguments: (ifIndex, ifName, ifDescr, ifType)
     pub friendly_name_fn: fn(u32, &str, &str, u32) -> String,
@@ -161,6 +165,11 @@ pub fn classify_interfaces(
                 }
             }
 
+            // Skip notPresent interfaces (stackable switches with phantom ports)
+            if profile.skip_not_present && iface.oper_status_raw == 6 {
+                return None;
+            }
+
             let class = if profile.physical_if_types.contains(&iface.if_type) {
                 InterfaceClass::Physical
             } else if profile.lag_if_types.contains(&iface.if_type) {
@@ -214,6 +223,7 @@ pub static GENERIC_PROFILE: SnmpProfile = SnmpProfile {
     lag_if_types: &[IFTYPE_IEEE8023AD_LAG, IFTYPE_PORT_CHANNEL],
     hidden_index_ranges: &[],
     prefer_if_name: true,
+    skip_not_present: false,
     friendly_name_fn: generic_friendly_name,
 };
 
@@ -244,6 +254,7 @@ pub static NETGEAR_PROFILE: SnmpProfile = SnmpProfile {
         (20000, u32::MAX), // internal logical interfaces
     ],
     prefer_if_name: true,
+    skip_not_present: false,
     friendly_name_fn: netgear_friendly_name,
 };
 
@@ -277,6 +288,7 @@ pub static ARUBA_PROFILE: SnmpProfile = SnmpProfile {
         (4807, 4814),    // loopback lo0-lo7
     ],
     prefer_if_name: true,
+    skip_not_present: false,
     friendly_name_fn: aruba_friendly_name,
 };
 
@@ -331,6 +343,7 @@ pub static CISCO_SMB_PROFILE: SnmpProfile = SnmpProfile {
         (100000, u32::MAX), // management VLAN / internal
     ],
     prefer_if_name: true,
+    skip_not_present: true, // SG550X stacks pre-allocate ports for up to 8 units
     friendly_name_fn: cisco_smb_friendly_name,
 };
 
