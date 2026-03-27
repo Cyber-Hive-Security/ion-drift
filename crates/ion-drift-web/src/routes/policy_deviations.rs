@@ -131,7 +131,7 @@ pub async fn resolve_deviation(
             }
             "resolved"
         }
-        "dismiss" => "resolved",
+        "dismiss" => "dismissed",
         "acknowledge" => "acknowledged",
         _ => {
             return Err((

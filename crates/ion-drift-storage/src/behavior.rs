@@ -2901,6 +2901,10 @@ impl BehaviorStore {
         if let Some(s) = status {
             param_values.push(Box::new(s.to_string()));
             sql.push_str(&format!(" AND status = ?{}", param_values.len()));
+        } else {
+            // By default, hide dismissed deviations — users dismissed them intentionally.
+            // Pass status="dismissed" explicitly to query only dismissed items.
+            sql.push_str(" AND status != 'dismissed'");
         }
         if let Some(m) = mac {
             param_values.push(Box::new(m.to_string()));
@@ -2952,7 +2956,7 @@ impl BehaviorStore {
         let mut counts = PolicyDeviationCounts::default();
 
         counts.total = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations", [], |row| row.get(0),
+            "SELECT COUNT(*) FROM policy_deviations WHERE status != 'dismissed'", [], |row| row.get(0),
         ).unwrap_or(0);
         counts.new = db.query_row(
             "SELECT COUNT(*) FROM policy_deviations WHERE status = 'new'", [], |row| row.get(0),

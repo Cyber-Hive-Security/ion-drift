@@ -245,6 +245,7 @@ const statusColor: Record<string, string> = {
   new: "bg-warning/15 text-warning",
   acknowledged: "bg-sky-400/15 text-sky-400",
   resolved: "bg-emerald-400/15 text-emerald-400",
+  dismissed: "bg-muted text-muted-foreground",
 };
 
 const severityColor: Record<string, string> = {
@@ -353,7 +354,7 @@ function deviationColumns(
         </span>
       ),
       sortValue: (r) => {
-        const order: Record<string, number> = { new: 0, acknowledged: 1, resolved: 2 };
+        const order: Record<string, number> = { new: 0, acknowledged: 1, resolved: 2, dismissed: 3 };
         return order[r.status] ?? 3;
       },
     },
