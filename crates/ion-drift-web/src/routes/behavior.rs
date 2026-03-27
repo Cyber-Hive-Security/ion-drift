@@ -521,8 +521,8 @@ pub async fn reset_behavior(
         .map_err(|e| internal_error("behavior reset", e))?;
 
     tracing::warn!(
-        "behavior engine reset: {} anomalies, {} baselines, {} observations, {} profiles deleted (admin action)",
-        result.anomalies, result.baselines, result.observations, result.profiles,
+        "behavior engine reset: {} anomalies, {} baselines, {} observations, {} profiles, {} policy deviations deleted (admin action)",
+        result.anomalies, result.baselines, result.observations, result.profiles, result.policy_deviations,
     );
     Ok(Json(serde_json::json!(result)))
 }

@@ -443,7 +443,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         // Policy
         .route("/policy", get(policy::policy_overview))
         // Policy deviations
-        .route("/policy/deviations", get(policy_deviations::list_deviations))
+        .route("/policy/deviations", get(policy_deviations::list_deviations).delete(policy_deviations::delete_all_deviations))
         .route("/policy/deviations/counts", get(policy_deviations::deviation_counts))
         .route("/policy/deviations/device/{mac}", get(policy_deviations::device_deviations))
         .route("/policy/deviations/{id}/resolve", post(policy_deviations::resolve_deviation))

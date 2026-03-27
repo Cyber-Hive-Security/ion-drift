@@ -154,6 +154,22 @@ pub async fn resolve_deviation(
     })))
 }
 
+// ── DELETE /api/policy/deviations ─────────────────────────────────
+
+pub async fn delete_all_deviations(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let count = state
+        .behavior_store
+        .delete_all_policy_deviations()
+        .await
+        .map_err(|e| internal_error("delete all deviations", e))?;
+
+    tracing::info!("deleted all policy deviations: {count} rows (admin action)");
+    Ok(Json(serde_json::json!({ "ok": true, "deleted": count })))
+}
+
 // ── GET /api/policy/deviations/counts ─────────────────────────────
 
 pub async fn deviation_counts(

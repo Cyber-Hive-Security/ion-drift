@@ -610,6 +610,7 @@ pub struct BehaviorResetResult {
     pub profiles: usize,
     pub boosts: usize,
     pub watermarks: usize,
+    pub policy_deviations: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2183,6 +2184,8 @@ impl BehaviorStore {
             .map_err(|e| format!("reset boosts: {e}"))?;
         let watermarks = db.execute("DELETE FROM scheduler_watermarks", [])
             .map_err(|e| format!("reset watermarks: {e}"))?;
+        let policy_deviations = db.execute("DELETE FROM policy_deviations", [])
+            .map_err(|e| format!("reset policy_deviations: {e}"))?;
         Ok(BehaviorResetResult {
             anomalies,
             baselines,
@@ -2190,7 +2193,15 @@ impl BehaviorStore {
             profiles,
             boosts,
             watermarks,
+            policy_deviations,
         })
+    }
+
+    /// Delete all policy deviations.
+    pub async fn delete_all_policy_deviations(&self) -> Result<usize, String> {
+        let db = self.db.lock().await;
+        db.execute("DELETE FROM policy_deviations", [])
+            .map_err(|e| format!("delete all policy deviations failed: {e}"))
     }
 
     // ── Investigation methods ──
