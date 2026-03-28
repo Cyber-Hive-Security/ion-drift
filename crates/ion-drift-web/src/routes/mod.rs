@@ -442,7 +442,8 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/behavior/alerts", get(behavior::alerts))
         .route("/behavior/wan-scan-pressure", get(behavior::wan_scan_pressure))
         // Policy
-        .route("/policy", get(policy::policy_overview))
+        .route("/policy", get(policy::policy_overview).post(policy::create_policy))
+        .route("/policy/{id}", put(policy::update_policy).delete(policy::delete_policy))
         // Policy deviations
         .route("/policy/deviations", get(policy_deviations::list_deviations).delete(policy_deviations::delete_all_deviations))
         .route("/policy/deviations/counts", get(policy_deviations::deviation_counts))

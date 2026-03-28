@@ -429,6 +429,8 @@ pub struct InfrastructurePolicy {
     pub priority: String,
     pub last_synced: i64,
     pub router_entity_id: Option<String>,
+    /// True for admin-created policies; false for router-synced. Stale reaper skips user_created policies.
+    pub user_created: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -964,6 +966,17 @@ impl BehaviorStore {
                 last_synced INTEGER NOT NULL
             );",
         ).map_err(|e| format!("Phase 2 tables creation failed: {e}"))?;
+
+        // Migration: add user_created flag to infrastructure_policy (protects admin policies from stale reaper)
+        let has_user_created: bool = conn
+            .prepare("SELECT user_created FROM infrastructure_policy LIMIT 0")
+            .is_ok();
+        if !has_user_created {
+            conn.execute_batch(
+                "ALTER TABLE infrastructure_policy ADD COLUMN user_created INTEGER NOT NULL DEFAULT 0;",
+            )
+            .map_err(|e| format!("migration (user_created column) failed: {e}"))?;
+        }
 
         // Migration: policy deviations table (Phase 2 — DNS deviation detection)
         conn.execute_batch(
@@ -2658,7 +2671,7 @@ impl BehaviorStore {
     ) -> Result<Vec<InfrastructurePolicy>, String> {
         let db = self.db.lock().await;
         let mut sql = String::from(
-            "SELECT id, service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id
+            "SELECT id, service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id, user_created
              FROM infrastructure_policy WHERE service = ?1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -2697,6 +2710,7 @@ impl BehaviorStore {
                 priority: row.get(7)?,
                 last_synced: row.get(8)?,
                 router_entity_id: row.get(9)?,
+                user_created: row.get::<_, i32>(10).unwrap_or(0) != 0,
             })
         }).map_err(|e| format!("query failed: {e}"))?;
 
@@ -2759,7 +2773,7 @@ impl BehaviorStore {
     pub async fn get_all_policies(&self) -> Result<Vec<InfrastructurePolicy>, String> {
         let db = self.db.lock().await;
         let mut stmt = db.prepare(
-            "SELECT id, service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id
+            "SELECT id, service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id, user_created
              FROM infrastructure_policy ORDER BY service, port",
         ).map_err(|e| format!("prepare failed: {e}"))?;
         let rows = stmt.query_map([], |row| {
@@ -2784,9 +2798,119 @@ impl BehaviorStore {
                 priority: row.get(7)?,
                 last_synced: row.get(8)?,
                 router_entity_id: row.get(9)?,
+                user_created: row.get::<_, i32>(10).unwrap_or(0) != 0,
             })
         }).map_err(|e| format!("query failed: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("collect failed: {e}"))
+    }
+
+    /// Get a single policy by ID.
+    pub async fn get_policy_by_id(&self, id: i64) -> Result<Option<InfrastructurePolicy>, String> {
+        let db = self.db.lock().await;
+        db.query_row(
+            "SELECT id, service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id, user_created
+             FROM infrastructure_policy WHERE id = ?1",
+            params![id],
+            |row| {
+                let targets_str: String = row.get(4)?;
+                let vlan_str: Option<String> = row.get(5)?;
+                Ok(InfrastructurePolicy {
+                    id: row.get(0)?,
+                    service: row.get(1)?,
+                    protocol: row.get(2)?,
+                    port: row.get(3)?,
+                    authorized_targets: serde_json::from_str(&targets_str).unwrap_or_default(),
+                    vlan_scope: vlan_str
+                        .filter(|s| s != "__global__")
+                        .and_then(|s| serde_json::from_str(&s).ok()),
+                    source: row.get(6)?,
+                    priority: row.get(7)?,
+                    last_synced: row.get(8)?,
+                    router_entity_id: row.get(9)?,
+                    user_created: row.get::<_, i32>(10).unwrap_or(0) != 0,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| format!("get_policy_by_id failed: {e}"))
+    }
+
+    /// Create an admin policy (user_created = 1, protected from stale reaper).
+    pub async fn create_admin_policy(
+        &self,
+        service: &str,
+        protocol: Option<&str>,
+        port: Option<i64>,
+        authorized_targets: &[String],
+        vlan_scope: Option<&[i64]>,
+        priority: &str,
+    ) -> Result<i64, String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        let targets_json = serde_json::to_string(authorized_targets).unwrap_or_default();
+        let vlan_json = vlan_scope
+            .map(|v| {
+                let mut sorted = v.to_vec();
+                sorted.sort();
+                serde_json::to_string(&sorted).unwrap_or_default()
+            })
+            .unwrap_or_else(|| "__global__".to_string());
+        db.execute(
+            "INSERT INTO infrastructure_policy
+                (service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, user_created)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'admin_policy', ?6, ?7, 1)",
+            params![service, protocol, port, targets_json, vlan_json, priority, now],
+        ).map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint") {
+                "policy with same service/protocol/port/vlan already exists".to_string()
+            } else {
+                format!("create_admin_policy failed: {e}")
+            }
+        })?;
+        Ok(db.last_insert_rowid())
+    }
+
+    /// Update an admin policy. Returns error if the policy is router-synced (user_created = 0).
+    pub async fn update_admin_policy(
+        &self,
+        id: i64,
+        authorized_targets: &[String],
+        vlan_scope: Option<&[i64]>,
+        priority: &str,
+    ) -> Result<(), String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        let targets_json = serde_json::to_string(authorized_targets).unwrap_or_default();
+        let vlan_json = vlan_scope
+            .map(|v| {
+                let mut sorted = v.to_vec();
+                sorted.sort();
+                serde_json::to_string(&sorted).unwrap_or_default()
+            })
+            .unwrap_or_else(|| "__global__".to_string());
+        let updated = db.execute(
+            "UPDATE infrastructure_policy
+             SET authorized_targets = ?1, vlan_scope = ?2, priority = ?3, last_synced = ?4
+             WHERE id = ?5 AND user_created = 1",
+            params![targets_json, vlan_json, priority, now, id],
+        ).map_err(|e| format!("update_admin_policy failed: {e}"))?;
+        if updated == 0 {
+            return Err("policy not found or is router-synced (not editable)".to_string());
+        }
+        Ok(())
+    }
+
+    /// Delete an admin policy. Returns error if the policy is router-synced (user_created = 0).
+    pub async fn delete_admin_policy(&self, id: i64) -> Result<(), String> {
+        let db = self.db.lock().await;
+        let deleted = db.execute(
+            "DELETE FROM infrastructure_policy WHERE id = ?1 AND user_created = 1",
+            params![id],
+        ).map_err(|e| format!("delete_admin_policy failed: {e}"))?;
+        if deleted == 0 {
+            return Err("policy not found or is router-synced (not deletable)".to_string());
+        }
+        Ok(())
     }
 
     /// Upsert a firewall ION tag.
@@ -2850,10 +2974,11 @@ impl BehaviorStore {
     }
 
     /// Remove stale policies not updated in the latest sync.
+    /// Admin policies (user_created = 1) are never reaped — only router-synced policies are cleaned up.
     pub async fn remove_stale_policies(&self, sync_cutoff: i64) -> Result<usize, String> {
         let db = self.db.lock().await;
         let deleted = db.execute(
-            "DELETE FROM infrastructure_policy WHERE last_synced < ?1",
+            "DELETE FROM infrastructure_policy WHERE user_created = 0 AND last_synced < ?1",
             params![sync_cutoff],
         ).map_err(|e| format!("remove_stale_policies failed: {e}"))?;
         Ok(deleted)
