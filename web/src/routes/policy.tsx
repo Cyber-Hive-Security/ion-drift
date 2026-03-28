@@ -1,11 +1,16 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { PageShell } from "@/components/layout/page-shell";
 import { DataTable, type Column } from "@/components/data-table";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
-import { usePolicyDeviations, useResolvePolicyDeviation, useDeleteAllDeviations, useAttackTechniques } from "@/api/queries";
+import {
+  usePolicyDeviations, useResolvePolicyDeviation, useDeleteAllDeviations, useAttackTechniques,
+  useCreatePolicy, useUpdatePolicy, useDeletePolicy,
+} from "@/api/queries";
 import type { PolicyDeviation } from "@/api/types";
+import { Lock, Pencil, Trash2, Plus, X } from "lucide-react";
 
 interface PolicyEntry {
   id: number;
@@ -17,6 +22,7 @@ interface PolicyEntry {
   source: string;
   priority: string;
   last_synced: number;
+  user_created: boolean;
 }
 
 interface IonTagEntry {
@@ -65,7 +71,11 @@ const tagColor: Record<string, string> = {
   digest: "bg-amber-400/15 text-amber-400",
 };
 
-function policyColumns(vlanNames: Record<number, string>): Column<PolicyEntry>[] {
+function policyColumns(
+  vlanNames: Record<number, string>,
+  onEdit: (policy: PolicyEntry) => void,
+  onDelete: (policy: PolicyEntry) => void,
+): Column<PolicyEntry>[] {
   return [
     {
       key: "service",
@@ -90,7 +100,7 @@ function policyColumns(vlanNames: Record<number, string>): Column<PolicyEntry>[]
       header: "Authorized Targets",
       render: (r) => (
         <span className="max-w-sm truncate font-mono text-xs" title={r.authorized_targets.join(", ")}>
-          {r.authorized_targets.join(", ")}
+          {r.authorized_targets.length === 0 ? <span className="text-destructive">deny all</span> : r.authorized_targets.join(", ")}
         </span>
       ),
     },
@@ -110,9 +120,13 @@ function policyColumns(vlanNames: Record<number, string>): Column<PolicyEntry>[]
     {
       key: "source",
       header: "Source",
-      width: "140px",
-      render: (r) => <span className="text-xs text-muted-foreground">{r.source}</span>,
-      sortValue: (r) => r.source,
+      width: "100px",
+      render: (r) => (
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          {r.user_created ? "admin" : <><Lock className="h-3 w-3" /> router</>}
+        </span>
+      ),
+      sortValue: (r) => r.user_created ? "a" : "z",
     },
     {
       key: "priority",
@@ -129,11 +143,22 @@ function policyColumns(vlanNames: Record<number, string>): Column<PolicyEntry>[]
       },
     },
     {
-      key: "synced",
-      header: "Last Synced",
-      width: "100px",
-      render: (r) => <span className="text-xs text-muted-foreground">{formatTimeAgo(r.last_synced)}</span>,
-      sortValue: (r) => -r.last_synced,
+      key: "actions",
+      header: "",
+      width: "70px",
+      render: (r) => {
+        if (!r.user_created) return null;
+        return (
+          <div className="flex items-center gap-1">
+            <button onClick={() => onEdit(r)} className="rounded p-1 hover:bg-muted" title="Edit policy">
+              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+            <button onClick={() => onDelete(r)} className="rounded p-1 hover:bg-destructive/10" title="Delete policy">
+              <Trash2 className="h-3.5 w-3.5 text-destructive/70" />
+            </button>
+          </div>
+        );
+      },
     },
   ];
 }
@@ -192,13 +217,224 @@ function ionTagColumns(): Column<IonTagEntry>[] {
   ];
 }
 
+// ── Policy Form Modal ────────────────────────────────────────────
+
+interface PolicyFormProps {
+  editing: PolicyEntry | null;
+  vlanNames: Record<number, string>;
+  onClose: () => void;
+}
+
+function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
+  const createMutation = useCreatePolicy();
+  const updateMutation = useUpdatePolicy();
+
+  const [service, setService] = useState(editing?.service ?? "");
+  const [protocol, setProtocol] = useState(editing?.protocol ?? "udp");
+  const [port, setPort] = useState(editing?.port?.toString() ?? "");
+  const [targets, setTargets] = useState(editing?.authorized_targets.join("\n") ?? "");
+  const [selectedVlans, setSelectedVlans] = useState<number[]>(editing?.vlan_scope ?? []);
+  const [globalScope, setGlobalScope] = useState(!editing?.vlan_scope);
+  const [priority, setPriority] = useState(editing?.priority ?? "medium");
+  const [error, setError] = useState<string | null>(null);
+
+  const vlanIds = Object.keys(vlanNames).map(Number).sort((a, b) => a - b);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    const parsedTargets = targets.split("\n").map((t) => t.trim()).filter(Boolean);
+    const parsedPort = port ? parseInt(port, 10) : null;
+    const vlanScope = globalScope ? null : selectedVlans.length > 0 ? selectedVlans : null;
+
+    try {
+      if (editing) {
+        await updateMutation.mutateAsync({
+          id: editing.id,
+          authorized_targets: parsedTargets,
+          vlan_scope: vlanScope,
+          priority,
+        });
+      } else {
+        await createMutation.mutateAsync({
+          service: service.toLowerCase(),
+          protocol: protocol === "any" ? null : protocol,
+          port: parsedPort,
+          authorized_targets: parsedTargets,
+          vlan_scope: vlanScope,
+          priority,
+        });
+      }
+      onClose();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to save policy";
+      setError(msg);
+    }
+  };
+
+  const isPending = createMutation.isPending || updateMutation.isPending;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-lg border bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">{editing ? "Edit Policy" : "Create Policy"}</h3>
+          <button onClick={onClose} className="rounded p-1 hover:bg-muted"><X className="h-4 w-4" /></button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {!editing && (
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Service</label>
+                <input
+                  type="text"
+                  value={service}
+                  onChange={(e) => setService(e.target.value)}
+                  placeholder="dns, ntp, custom"
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Protocol</label>
+                <select
+                  value={protocol}
+                  onChange={(e) => setProtocol(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="udp">UDP</option>
+                  <option value="tcp">TCP</option>
+                  <option value="any">Any</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Port</label>
+                <input
+                  type="number"
+                  value={port}
+                  onChange={(e) => setPort(e.target.value)}
+                  placeholder="53"
+                  min={1}
+                  max={65535}
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                />
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Authorized Targets (one per line, IP or CIDR)</label>
+            <textarea
+              value={targets}
+              onChange={(e) => setTargets(e.target.value)}
+              rows={4}
+              placeholder={"10.20.25.5\n10.20.25.6\n192.168.1.0/24"}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 font-mono text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">VLAN Scope</label>
+            <div className="mt-1 flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={globalScope}
+                  onChange={(e) => setGlobalScope(e.target.checked)}
+                  className="rounded"
+                />
+                All VLANs
+              </label>
+            </div>
+            {!globalScope && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {vlanIds.map((id) => (
+                  <label key={id} className="flex items-center gap-1.5 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={selectedVlans.includes(id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedVlans([...selectedVlans, id]);
+                        } else {
+                          setSelectedVlans(selectedVlans.filter((v) => v !== id));
+                        }
+                      }}
+                      className="rounded"
+                    />
+                    {vlanNames[id] ?? `VLAN ${id}`}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Priority</label>
+            <select
+              value={priority}
+              onChange={(e) => setPriority(e.target.value)}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+            >
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+
+          {error && (
+            <p className="text-sm text-destructive">{error}</p>
+          )}
+
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="rounded-md border px-4 py-1.5 text-sm hover:bg-muted">
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isPending}
+              className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              {isPending ? "Saving..." : editing ? "Update" : "Create"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Policy Page ─────────────────────────────────────────────────
+
 export function PolicyPage() {
   const { data, isLoading, error } = usePolicyOverview();
   const vlan = useVlanLookup();
+  const deleteMutation = useDeletePolicy();
+
+  const [showForm, setShowForm] = useState(false);
+  const [editingPolicy, setEditingPolicy] = useState<PolicyEntry | null>(null);
 
   if (isLoading) return <LoadingSpinner />;
   if (error) return <PageShell title="Policy Map"><p className="text-destructive">Failed to load policy data</p></PageShell>;
   if (!data) return null;
+
+  const handleEdit = (policy: PolicyEntry) => {
+    setEditingPolicy(policy);
+    setShowForm(true);
+  };
+
+  const handleDelete = (policy: PolicyEntry) => {
+    if (!window.confirm(`Delete policy "${policy.service}" (${policy.protocol ?? "any"}:${policy.port ?? "any"})? This cannot be undone.`)) return;
+    deleteMutation.mutate(policy.id);
+  };
+
+  const handleCloseForm = () => {
+    setShowForm(false);
+    setEditingPolicy(null);
+  };
 
   return (
     <PageShell title="Infrastructure Policy Map">
@@ -207,10 +443,19 @@ export function PolicyPage() {
         {data.policy_count > 0 && ` ${data.policy_count} policies, ${data.tag_count} ION tags.`}
       </p>
 
-      <h2 className="mb-2 text-lg font-semibold">Service Policies</h2>
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-lg font-semibold">Service Policies</h2>
+        <button
+          onClick={() => { setEditingPolicy(null); setShowForm(true); }}
+          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add Policy
+        </button>
+      </div>
       <div className="mb-6">
         <DataTable
-          columns={policyColumns(vlan.names)}
+          columns={policyColumns(vlan.names, handleEdit, handleDelete)}
           data={data.policies}
           rowKey={(r) => String(r.id)}
           emptyMessage="No policies synced yet — sync runs on startup and every 60 minutes"
@@ -235,6 +480,14 @@ export function PolicyPage() {
         </>
       )}
       <PolicyDeviationsSection />
+
+      {showForm && (
+        <PolicyFormModal
+          editing={editingPolicy}
+          vlanNames={vlan.names}
+          onClose={handleCloseForm}
+        />
+      )}
     </PageShell>
   );
 }

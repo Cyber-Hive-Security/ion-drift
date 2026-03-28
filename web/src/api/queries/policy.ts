@@ -80,6 +80,65 @@ export function useDeleteAllDeviations() {
   });
 }
 
+export interface CreatePolicyRequest {
+  service: string;
+  protocol: string | null;
+  port: number | null;
+  authorized_targets: string[];
+  vlan_scope: number[] | null;
+  priority: string;
+  force?: boolean;
+}
+
+export interface UpdatePolicyRequest {
+  authorized_targets: string[];
+  vlan_scope: number[] | null;
+  priority: string;
+}
+
+export function useCreatePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: CreatePolicyRequest) =>
+      apiFetch<{ ok: boolean; id: number }>("/api/policy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["policy"] });
+    },
+  });
+}
+
+export function useUpdatePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...req }: UpdatePolicyRequest & { id: number }) =>
+      apiFetch<{ ok: boolean }>(`/api/policy/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["policy"] });
+    },
+  });
+}
+
+export function useDeletePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiFetch<{ ok: boolean }>(`/api/policy/${id}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["policy"] });
+    },
+  });
+}
+
 export function useAttackTechniques() {
   return useQuery({
     queryKey: ["attack-techniques"],
