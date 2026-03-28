@@ -2647,17 +2647,19 @@ impl BehaviorStore {
                 serde_json::to_string(&sorted).unwrap_or_default()
             })
             .unwrap_or_else(|| "__global__".to_string());
+        let is_admin = source == "admin_policy";
         db.execute(
             "INSERT INTO infrastructure_policy
-                (service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                (service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id, user_created)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(service, protocol, port, vlan_scope) DO UPDATE SET
                 authorized_targets = ?4,
                 source = ?6,
                 priority = ?7,
                 last_synced = ?8,
-                router_entity_id = ?9",
-            params![service, protocol, port, targets_json, vlan_json, source, priority, now, router_entity_id],
+                router_entity_id = ?9,
+                user_created = MAX(user_created, ?10)",
+            params![service, protocol, port, targets_json, vlan_json, source, priority, now, router_entity_id, is_admin as i32],
         ).map_err(|e| format!("upsert_policy failed: {e}"))?;
         Ok(())
     }
