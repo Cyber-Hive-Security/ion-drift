@@ -138,7 +138,7 @@ pub async fn device_deviations(
 
 #[derive(Deserialize)]
 pub struct ResolveRequest {
-    pub action: String, // "deny_all", "authorize", "dismiss", "acknowledge"
+    pub action: String, // "deny_all" (flag all), "authorize", "dismiss", "acknowledge"
 }
 
 pub async fn resolve_deviation(

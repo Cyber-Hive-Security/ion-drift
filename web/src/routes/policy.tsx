@@ -100,7 +100,7 @@ function policyColumns(
       header: "Authorized Targets",
       render: (r) => (
         <span className="max-w-sm truncate font-mono text-xs" title={r.authorized_targets.join(", ")}>
-          {r.authorized_targets.length === 0 ? <span className="text-destructive">deny all</span> : r.authorized_targets.join(", ")}
+          {r.authorized_targets.length === 0 ? <span className="text-warning">flag all</span> : r.authorized_targets.join(", ")}
         </span>
       ),
     },
@@ -655,7 +655,7 @@ function deviationColumns(
             <option value="" disabled>Resolve...</option>
             <option value="acknowledge">Acknowledge</option>
             <option value="authorize">Authorize</option>
-            <option value="deny_all">Deny All</option>
+            <option value="deny_all">Flag All</option>
             <option value="dismiss">Dismiss</option>
           </select>
         );
