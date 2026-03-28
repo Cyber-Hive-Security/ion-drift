@@ -4,7 +4,7 @@ import { PageShell } from "@/components/layout/page-shell";
 import { DataTable, type Column } from "@/components/data-table";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
-import { usePolicyDeviations, useResolvePolicyDeviation, useAttackTechniques } from "@/api/queries";
+import { usePolicyDeviations, useResolvePolicyDeviation, useDeleteAllDeviations, useAttackTechniques } from "@/api/queries";
 import type { PolicyDeviation } from "@/api/types";
 
 interface PolicyEntry {
@@ -415,6 +415,7 @@ function PolicyDeviationsSection() {
   const { data: deviations, isLoading } = usePolicyDeviations({ limit: 200 });
   const { data: attackDb } = useAttackTechniques();
   const resolveMutation = useResolvePolicyDeviation();
+  const deleteAllMutation = useDeleteAllDeviations();
   const vlanLookup = useVlanLookup();
 
   const techniques = attackDb?.techniques;
@@ -423,11 +424,25 @@ function PolicyDeviationsSection() {
     resolveMutation.mutate({ id, action });
   };
 
+  const handleDeleteAll = () => {
+    if (!window.confirm(`Delete all ${deviations?.length ?? 0} policy deviations? This cannot be undone.`)) return;
+    deleteAllMutation.mutate();
+  };
+
   if (isLoading || !deviations || deviations.length === 0) return null;
 
   return (
     <>
-      <h2 className="mb-2 mt-6 text-lg font-semibold">Policy Deviations</h2>
+      <div className="flex items-center justify-between mt-6 mb-2">
+        <h2 className="text-lg font-semibold">Policy Deviations</h2>
+        <button
+          className="inline-flex items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 transition-colors"
+          onClick={handleDeleteAll}
+          disabled={deleteAllMutation.isPending}
+        >
+          {deleteAllMutation.isPending ? "Deleting..." : `Delete All (${deviations.length})`}
+        </button>
+      </div>
       <DataTable
         columns={deviationColumns(techniques, handleResolve, vlanLookup.name)}
         data={deviations}

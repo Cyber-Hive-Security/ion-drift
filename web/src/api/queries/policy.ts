@@ -65,6 +65,21 @@ export function useResolvePolicyDeviation() {
   });
 }
 
+export function useDeleteAllDeviations() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ ok: boolean; deleted: number }>("/api/policy/deviations", {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["policy-deviations"] });
+      qc.invalidateQueries({ queryKey: ["policy"] });
+      qc.invalidateQueries({ queryKey: ["behavior"] });
+    },
+  });
+}
+
 export function useAttackTechniques() {
   return useQuery({
     queryKey: ["attack-techniques"],
