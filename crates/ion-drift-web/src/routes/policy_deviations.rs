@@ -157,14 +157,25 @@ pub async fn resolve_deviation(
         .map_err(|e| internal_error("get deviation", e))?
         .ok_or_else(|| internal_error("get deviation", "not found"))?;
 
+    // Derive service metadata from deviation_type prefix.
+    // Temporary shim — Phase 3 adds service/protocol/port columns to the deviation table.
+    let (service, protocol, port): (&str, Option<&str>, Option<i64>) =
+        if deviation.deviation_type.starts_with("dns") {
+            ("dns", Some("udp"), Some(53))
+        } else if deviation.deviation_type.starts_with("ntp") {
+            ("ntp", Some("udp"), Some(123))
+        } else {
+            ("unknown", None, None)
+        };
+
     let status = match body.action.as_str() {
         "deny_all" => {
-            // Create a deny-all DNS policy for this VLAN
+            // Create a deny-all policy for this service/VLAN
             if let Some(vlan) = deviation.vlan {
                 state.behavior_store.upsert_policy(
-                    "dns",
-                    Some("udp"),
-                    Some(53),
+                    service,
+                    protocol,
+                    port,
                     &[],
                     Some(&[vlan]),
                     "admin_policy",
@@ -175,12 +186,12 @@ pub async fn resolve_deviation(
             "resolved"
         }
         "authorize" => {
-            // Merge the observed target into the existing VLAN-scoped DNS policy.
+            // Merge the observed target into the existing VLAN-scoped policy.
             // Only merge VLAN-specific policies — global policies are left separate
             // so future global changes propagate cleanly.
             if let Some(vlan) = deviation.vlan {
                 let existing = state.behavior_store
-                    .get_policies_for_service("dns", Some("udp"), Some(53), Some(vlan))
+                    .get_policies_for_service(service, protocol, port, Some(vlan))
                     .await
                     .unwrap_or_default();
 
@@ -196,9 +207,9 @@ pub async fn resolve_deviation(
                 targets.dedup();
 
                 state.behavior_store.upsert_policy(
-                    "dns",
-                    Some("udp"),
-                    Some(53),
+                    service,
+                    protocol,
+                    port,
                     &targets,
                     Some(&[vlan]),
                     "admin_policy",

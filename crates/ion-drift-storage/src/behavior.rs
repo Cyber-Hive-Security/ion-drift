@@ -472,6 +472,7 @@ pub struct PolicyDeviationCounts {
     pub acknowledged: i64,
     pub resolved: i64,
     pub dns: i64,
+    pub ntp: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -3123,6 +3124,9 @@ impl BehaviorStore {
         ).unwrap_or(0);
         counts.dns = db.query_row(
             "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'dns%'", [], |row| row.get(0),
+        ).unwrap_or(0);
+        counts.ntp = db.query_row(
+            "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'ntp%'", [], |row| row.get(0),
         ).unwrap_or(0);
 
         Ok(counts)

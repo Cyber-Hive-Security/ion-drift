@@ -1864,6 +1864,7 @@ export interface PolicyDeviationCounts {
   acknowledged: number;
   resolved: number;
   dns: number;
+  ntp: number;
 }
 
 export interface AttackTechnique {
