@@ -217,6 +217,7 @@ async fn detect_port_service(
                  WHERE dst_port = ?1
                    AND first_seen >= datetime(?2)
                    AND src_mac IS NOT NULL
+                   AND bytes_rx > 0
                  GROUP BY src_mac, src_ip, src_vlan, dst_ip",
             ).map_err(|e| format!("{} deviation query: {e}", "service"))?;
 
