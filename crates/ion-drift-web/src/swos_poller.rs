@@ -169,6 +169,13 @@ async fn poll_swos_switch(
         Ok(_) => Vec::new(),
         Err(e) => {
             tracing::warn!(device = %device_id, "SwOS stats.b: {e}");
+            {
+                let mut dm_w = dm.write().await;
+                dm_w.add_limitation(
+                    device_id,
+                    "This device does not expose per-port traffic counters. Bandwidth utilization, byte counters, and rate calculations are unavailable.".to_string(),
+                );
+            }
             Vec::new()
         }
     };
