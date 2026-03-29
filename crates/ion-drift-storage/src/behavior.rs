@@ -3059,9 +3059,10 @@ impl BehaviorStore {
             param_values.push(Box::new(s.to_string()));
             sql.push_str(&format!(" AND status = ?{}", param_values.len()));
         } else {
-            // By default, hide dismissed deviations — users dismissed them intentionally.
-            // Pass status="dismissed" explicitly to query only dismissed items.
-            sql.push_str(" AND status != 'dismissed'");
+            // By default, hide resolved and dismissed deviations.
+            // Resolved = policy action taken (authorize/flag all). Dismissed = user chose to ignore.
+            // Pass status explicitly to query specific states.
+            sql.push_str(" AND status NOT IN ('dismissed', 'resolved')");
         }
         if let Some(m) = mac {
             param_values.push(Box::new(m.to_string()));
