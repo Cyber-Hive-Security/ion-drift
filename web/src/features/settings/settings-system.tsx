@@ -11,6 +11,8 @@ import {
   useResetPreview,
 } from "@/api/queries";
 import type { BehaviorResetCounts } from "@/api/queries";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "@/api/client";
 import {
   Radio,
   Globe,
@@ -22,8 +24,56 @@ import {
   X,
   Trash2,
   Brain,
+  Info,
 } from "lucide-react";
 import { formatBytes, formatNumber } from "@/lib/format";
+
+// ── About Section ───────────────────────────────────────────────
+
+function AboutSection() {
+  const { data } = useQuery({
+    queryKey: ["health"],
+    queryFn: () => apiFetch<{ status: string; version: string }>("/health"),
+    staleTime: Infinity,
+  });
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-3 border-b border-border p-4">
+        <Info className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">About Ion Drift</h2>
+      </div>
+      <div className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Version</span>
+          <span className="text-sm font-mono">{data?.version ?? "—"}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">License</span>
+          <a
+            href="https://polyformproject.org/licenses/shield/1.0.0/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-primary hover:underline"
+          >
+            PolyForm Shield 1.0.0
+          </a>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Publisher</span>
+          <a
+            href="https://www.mycyberhive.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-primary hover:underline"
+          >
+            Cyber Hive Security LLC
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Syslog Section ──────────────────────────────────────────────
 
@@ -550,6 +600,7 @@ function BehaviorResetSection() {
 export function SettingsSystem() {
   return (
     <div className="space-y-6">
+      <AboutSection />
       <SyslogSection />
       <GeoIpSection />
       <MonitoredRegionsSection />
