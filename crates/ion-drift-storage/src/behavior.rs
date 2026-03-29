@@ -2653,11 +2653,11 @@ impl BehaviorStore {
                 (service, protocol, port, authorized_targets, vlan_scope, source, priority, last_synced, router_entity_id, user_created)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(service, protocol, port, vlan_scope) DO UPDATE SET
-                authorized_targets = ?4,
-                source = ?6,
-                priority = ?7,
+                authorized_targets = CASE WHEN user_created = 1 AND ?10 = 0 THEN authorized_targets ELSE ?4 END,
+                source = CASE WHEN user_created = 1 AND ?10 = 0 THEN source ELSE ?6 END,
+                priority = CASE WHEN user_created = 1 AND ?10 = 0 THEN priority ELSE ?7 END,
                 last_synced = ?8,
-                router_entity_id = ?9,
+                router_entity_id = CASE WHEN user_created = 1 AND ?10 = 0 THEN router_entity_id ELSE ?9 END,
                 user_created = MAX(user_created, ?10)",
             params![service, protocol, port, targets_json, vlan_json, source, priority, now, router_entity_id, is_admin as i32],
         ).map_err(|e| format!("upsert_policy failed: {e}"))?;
