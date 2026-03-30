@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-24
+> **Last updated:** 2026-03-30
 
 ## Overview
 
@@ -18,7 +18,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Real-time system resource monitoring (CPU, memory, disk, uptime) via RouterOS REST API
 - Multi-device management with CRUD operations, connection testing, and per-device polling intervals
 - SNMP v3 polling for managed switches (port metrics, MAC tables, VLAN membership)
-- Per-manufacturer SNMP profiles for vendor-specific interface classification (Netgear, Generic)
+- Per-manufacturer SNMP profiles for vendor-specific interface classification (Netgear, HPE/Aruba, Cisco SMB, Generic)
 - SwOS support for MikroTik budget switches with board-specific PHY speed decoding
 - Hardware limitations banner for devices that don't expose full capabilities
 - Live traffic rates per interface with historical time-series
@@ -70,7 +70,11 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - WAN scan pressure aggregation with time-series dashboard
 - Port flow baselines with network-wide anomaly classification (new port, volume spike, source anomaly, disappeared)
 - Two-layer correlation: device-level anomalies cross-linked with network-level port anomalies
-- DNS policy deviation detection with MITRE ATT&CK context *(beta)* — detects devices using unauthorized DNS servers, enriches with ATT&CK technique mappings (T1071.004, T1568, T1048.003, T1583.001), resolve actions create policies organically
+- **DNS policy deviation detection** with MITRE ATT&CK context — detects devices using unauthorized DNS servers, enriches with ATT&CK technique mappings (T1071.004, T1568, T1048.003, T1583.001), resolve actions create policies organically
+- **NTP policy deviation detection** with MITRE ATT&CK context — detects devices using unauthorized NTP servers (T1124), policies auto-synced from DHCP option 42
+- **Policy editor** — create, edit, and delete custom network policies via the UI. Admin policies protected from router sync overwrite. Router-synced policies locked (read-only)
+- **Deviation enrichment** — device hostnames, GeoIP org names for external IPs, per-VLAN severity, CSV export with formula injection defense
+- **Blocked connection filtering** — firewall-blocked connections (zero reply bytes) excluded from deviation detection. Router WAN IP excluded from detection via `ip/dhcp-client`
 - Pattern suppression rules with auto-creation on operator dismiss
 - Priority boosting on operator flag (persistent severity escalation)
 - Deduplication with occurrence counting and last-occurrence tracking
@@ -105,7 +109,8 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Session management UI with active session listing and individual revocation
 - Global auth middleware on all API routes (defense-in-depth alongside per-handler extractors)
 - CSRF protection via Content-Type enforcement on mutating requests
-- Login rate limiting
+- Login rate limiting with IP validation (rightmost XFF, verified as IpAddr)
+- Setup wizard bootstrap token (one-time token logged to stdout, prevents unauthorized setup claims)
 
 ## Encryption
 
@@ -149,6 +154,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - VLAN configuration (name, subnet, color, media type, sensitivity level) stored in database
 - Router provisioning planner: generates and applies mangle rules, syslog config, and firewall rules
 - Demo mode with automatic PII sanitization on all API responses
+- About section in Settings → System showing version, license, and publisher
 - Health check endpoint for container orchestration
 - Security headers (X-Frame-Options, CSP, X-Content-Type-Options, X-XSS-Protection)
 - CORS configuration derived from OIDC redirect URI

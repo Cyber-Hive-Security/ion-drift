@@ -17,11 +17,11 @@ Ion Drift connects to your MikroTik router's REST API, monitors your network in 
 
 See [FEATURES.md](FEATURES.md) for the full feature list.
 
-### Beta Features
-
-Features marked *(beta)* are functional but undergoing extended testing. They may have rough edges.
+### Policy Deviation Detection
 
 - **DNS Policy Deviation Detection** — Detects devices using unauthorized DNS servers by cross-referencing connection tracking with the infrastructure policy map. Enriched with MITRE ATT&CK technique context. Resolve actions create policies organically from observed traffic.
+- **NTP Policy Deviation Detection** — Detects devices using unauthorized NTP servers. ATT&CK technique T1124 (System Time Discovery). Policies auto-synced from DHCP option 42.
+- **Policy Editor** — Create custom network policies directly. Admin policies survive router sync cycles. Router-synced policies are read-only with lock icon.
 
 ## Screenshots
 
@@ -56,10 +56,10 @@ Firewall rule viewer with drop statistics and geo-enriched drop country attribut
 
 ![Firewall](caps/ion-drift-firewall.png)
 
-### DNS Policy Deviations *(beta)*
-Detects devices using unauthorized DNS servers by cross-referencing connection tracking with your router's DHCP and DNS configuration. Every deviation is enriched with [MITRE ATT&CK](https://attack.mitre.org/) technique context (T1071.004, T1568, T1048.003, T1583.001). Resolve actions — Authorize, Acknowledge, Dismiss — create policies organically from observed traffic.
+### Policy Deviations
+Detects devices using unauthorized DNS and NTP servers by cross-referencing connection tracking with your router's DHCP and DNS configuration. Every deviation is enriched with [MITRE ATT&CK](https://attack.mitre.org/) technique context. Resolve actions — Authorize, Acknowledge, Flag All, Dismiss — create policies organically from observed traffic. Custom policies can be created via the built-in policy editor.
 
-During beta testing on our own production network, the deviation detector flagged our authoritative DNS server for performing recursive resolution directly to root servers — bypassing our AdGuard ad-filtering pipeline entirely. A misconfiguration we'd missed for months, found and fixed in 20 minutes. If it catches that on a network run by the developers, it'll catch IoT devices hardcoding `8.8.8.8` on yours.
+On our own production network, the deviation detector flagged our authoritative DNS server for performing recursive resolution directly to root servers — bypassing our AdGuard ad-filtering pipeline entirely. A misconfiguration we'd missed for months, found and fixed in 20 minutes. If it catches that on a network run by the developers, it'll catch IoT devices hardcoding `8.8.8.8` on yours.
 
 <!-- ![Policy Deviations](caps/ion-drift-policy-deviations.png) -->
 

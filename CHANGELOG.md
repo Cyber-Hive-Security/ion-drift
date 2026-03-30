@@ -82,9 +82,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Legacy device ID migration** — existing installations with `device:rb4011:*` secrets are automatically migrated on startup. Secrets re-encrypted with new AAD in a single transaction. Rollback-safe, retries on failure.
 - **Correlation engine silent fallback** — removed dangerous `unwrap_or("rb4011")` that could corrupt port identity data. Now skips cycle if no router found.
-- **`vlan_scope` deserialization warning** — `"__global__"` sentinel in database was being JSON-parsed every poll cycle, triggering spurious warnings. Now filtered before parsing.
-- **Potential deadlock** — `futures::executor::block_on()` in legacy code path replaced with native async/await.
-
 ## [0.3.4] - 2026-03-25
 
 ### Security
