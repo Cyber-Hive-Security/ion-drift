@@ -433,6 +433,80 @@ pub struct InfrastructurePolicy {
     pub user_created: bool,
 }
 
+// ── Source of Authority (SoA) Model ──────────────────────────────
+// Governs how every signal is classified, trusted, and acted upon.
+// T1 (Router) > T2 (RouterOS Switch) > T3 (SwOS/SNMP).
+
+/// Classification of a detection signal's trustworthiness.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DataClassification {
+    /// Direct from router or switch config/state (T1/T2). Actionable by Arc.
+    Authoritative,
+    /// Derived from authoritative data. Actionable by Arc.
+    Observed,
+    /// Multi-signal heuristic. Arc plan-only — never auto-execute.
+    Inferred,
+}
+
+impl DataClassification {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Authoritative => "authoritative",
+            Self::Observed => "observed",
+            Self::Inferred => "inferred",
+        }
+    }
+
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "observed" => Self::Observed,
+            "inferred" => Self::Inferred,
+            _ => Self::Authoritative,
+        }
+    }
+}
+
+/// Which authority tier provided the data.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceTier {
+    /// T1: RouterOS REST API (primary authority for L3/identity/policy).
+    Router,
+    /// T2: RouterOS switch (CRS series — primary for L2/topology).
+    RosSwitch,
+    /// T3: SwOS or SNMP managed switch (support only).
+    SwosSnmp,
+    /// Inference from multiple sources (no single authority).
+    MultiSignal,
+    /// Operator-created (policy editor, manual identity).
+    Admin,
+}
+
+impl SourceTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Router => "router",
+            Self::RosSwitch => "ros_switch",
+            Self::SwosSnmp => "swos_snmp",
+            Self::MultiSignal => "multi_signal",
+            Self::Admin => "admin",
+        }
+    }
+
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "ros_switch" => Self::RosSwitch,
+            "swos_snmp" => Self::SwosSnmp,
+            "multi_signal" => Self::MultiSignal,
+            "admin" => Self::Admin,
+            _ => Self::Router,
+        }
+    }
+}
+
+// ── Policy Deviation Types ──────────────────────────────────────
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicyDeviation {
     pub id: i64,
@@ -451,6 +525,13 @@ pub struct PolicyDeviation {
     pub occurrence_count: i64,
     pub resolved_at: Option<i64>,
     pub resolved_by: Option<String>,
+    // Phase 3: structured service metadata + SoA classification
+    pub service: String,
+    pub protocol: Option<String>,
+    pub port: Option<i64>,
+    pub policy_id: Option<i64>,
+    pub classification: DataClassification,
+    pub observed_from: SourceTier,
 }
 
 pub struct NewPolicyDeviation {
@@ -463,6 +544,13 @@ pub struct NewPolicyDeviation {
     pub policy_source: Option<String>,
     pub attack_techniques: Vec<String>,
     pub severity: String,
+    // Phase 3: structured service metadata + SoA classification
+    pub service: String,
+    pub protocol: Option<String>,
+    pub port: Option<i64>,
+    pub policy_id: Option<i64>,
+    pub classification: DataClassification,
+    pub observed_from: SourceTier,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -473,6 +561,7 @@ pub struct PolicyDeviationCounts {
     pub resolved: i64,
     pub dns: i64,
     pub ntp: i64,
+    pub gateway: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -1005,6 +1094,33 @@ impl BehaviorStore {
             CREATE INDEX IF NOT EXISTS idx_deviations_mac ON policy_deviations(mac_address);
             CREATE INDEX IF NOT EXISTS idx_deviations_type ON policy_deviations(deviation_type);",
         ).map_err(|e| format!("Policy deviations table creation failed: {e}"))?;
+
+        // Migration: Phase 3 — add service metadata + SoA classification to policy_deviations
+        let has_service_col: bool = conn
+            .prepare("SELECT service FROM policy_deviations LIMIT 0")
+            .is_ok();
+        if !has_service_col {
+            conn.execute_batch(
+                "ALTER TABLE policy_deviations ADD COLUMN service TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE policy_deviations ADD COLUMN protocol TEXT;
+                 ALTER TABLE policy_deviations ADD COLUMN port INTEGER;
+                 ALTER TABLE policy_deviations ADD COLUMN policy_id INTEGER;
+                 ALTER TABLE policy_deviations ADD COLUMN classification TEXT NOT NULL DEFAULT 'authoritative';
+                 ALTER TABLE policy_deviations ADD COLUMN observed_from TEXT NOT NULL DEFAULT 'router';",
+            )
+            .map_err(|e| format!("migration (Phase 3 service metadata) failed: {e}"))?;
+
+            // Backfill existing deviations with service metadata from deviation_type prefix
+            conn.execute_batch(
+                "UPDATE policy_deviations SET service='dns', protocol='udp', port=53
+                   WHERE deviation_type LIKE 'dns%' AND service='';
+                 UPDATE policy_deviations SET service='ntp', protocol='udp', port=123
+                   WHERE deviation_type LIKE 'ntp%' AND service='';",
+            )
+            .map_err(|e| format!("migration (Phase 3 backfill) failed: {e}"))?;
+
+            tracing::info!("Phase 3 migration: added service metadata + SoA classification to policy_deviations");
+        }
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -3006,10 +3122,15 @@ impl BehaviorStore {
         let techniques_json = serde_json::to_string(&dev.attack_techniques).unwrap_or_else(|_| "[]".to_string());
 
         // Try insert; on conflict update count and last_seen
+        let classification_str = dev.classification.as_str();
+        let observed_from_str = dev.observed_from.as_str();
         let changed = db.execute(
             "INSERT INTO policy_deviations
-                (mac_address, ip_address, vlan, deviation_type, expected, actual, policy_source, attack_techniques, severity, status, first_seen, last_seen, occurrence_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'new', ?10, ?10, 1)
+                (mac_address, ip_address, vlan, deviation_type, expected, actual, policy_source,
+                 attack_techniques, severity, status, first_seen, last_seen, occurrence_count,
+                 service, protocol, port, policy_id, classification, observed_from)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'new', ?10, ?10, 1,
+                     ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(mac_address, deviation_type, actual) DO UPDATE SET
                 last_seen = ?10,
                 occurrence_count = occurrence_count + 1,
@@ -3022,7 +3143,9 @@ impl BehaviorStore {
             params![
                 dev.mac_address, dev.ip_address, dev.vlan, dev.deviation_type,
                 dev.expected, dev.actual, dev.policy_source, techniques_json,
-                dev.severity, now
+                dev.severity, now,
+                dev.service, dev.protocol, dev.port, dev.policy_id,
+                classification_str, observed_from_str
             ],
         ).map_err(|e| format!("record_policy_deviation failed: {e}"))?;
 
@@ -3077,7 +3200,8 @@ impl BehaviorStore {
         let mut sql = format!(
             "SELECT id, mac_address, ip_address, vlan, deviation_type, expected, actual,
                     policy_source, attack_techniques, severity, status,
-                    first_seen, last_seen, occurrence_count, resolved_at, resolved_by
+                    first_seen, last_seen, occurrence_count, resolved_at, resolved_by,
+                    classification, observed_from, service, protocol, port, policy_id
              FROM policy_deviations{where_clause} ORDER BY last_seen DESC",
         );
 
@@ -3138,6 +3262,9 @@ impl BehaviorStore {
         counts.ntp = db.query_row(
             "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'ntp%'", [], |row| row.get(0),
         ).unwrap_or(0);
+        counts.gateway = db.query_row(
+            "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'gateway%'", [], |row| row.get(0),
+        ).unwrap_or(0);
 
         Ok(counts)
     }
@@ -3148,7 +3275,8 @@ impl BehaviorStore {
         db.query_row(
             "SELECT id, mac_address, ip_address, vlan, deviation_type, expected, actual,
                     policy_source, attack_techniques, severity, status,
-                    first_seen, last_seen, occurrence_count, resolved_at, resolved_by
+                    first_seen, last_seen, occurrence_count, resolved_at, resolved_by,
+                    classification, observed_from, service, protocol, port, policy_id
              FROM policy_deviations WHERE id = ?1",
             params![id],
             Self::map_deviation_row,
@@ -3157,6 +3285,8 @@ impl BehaviorStore {
 
     fn map_deviation_row(row: &rusqlite::Row) -> rusqlite::Result<PolicyDeviation> {
         let techniques_str: String = row.get(8)?;
+        let classification_str: String = row.get(16).unwrap_or_else(|_| "authoritative".to_string());
+        let observed_from_str: String = row.get(17).unwrap_or_else(|_| "router".to_string());
         Ok(PolicyDeviation {
             id: row.get(0)?,
             mac_address: row.get(1)?,
@@ -3174,6 +3304,12 @@ impl BehaviorStore {
             occurrence_count: row.get(13)?,
             resolved_at: row.get(14)?,
             resolved_by: row.get(15)?,
+            service: row.get(18).unwrap_or_default(),
+            protocol: row.get(19).unwrap_or_default(),
+            port: row.get(20).unwrap_or_default(),
+            policy_id: row.get(21).unwrap_or_default(),
+            classification: DataClassification::from_str_lossy(&classification_str),
+            observed_from: SourceTier::from_str_lossy(&observed_from_str),
         })
     }
 

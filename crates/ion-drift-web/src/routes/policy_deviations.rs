@@ -171,16 +171,10 @@ pub async fn resolve_deviation(
         .map_err(|e| internal_error("get deviation", e))?
         .ok_or_else(|| internal_error("get deviation", "not found"))?;
 
-    // Derive service metadata from deviation_type prefix.
-    // Temporary shim — Phase 3 adds service/protocol/port columns to the deviation table.
-    let (service, protocol, port): (&str, Option<&str>, Option<i64>) =
-        if deviation.deviation_type.starts_with("dns") {
-            ("dns", Some("udp"), Some(53))
-        } else if deviation.deviation_type.starts_with("ntp") {
-            ("ntp", Some("udp"), Some(123))
-        } else {
-            ("unknown", None, None)
-        };
+    // Read service metadata directly from the deviation record (Phase 3).
+    let service = &deviation.service;
+    let protocol = deviation.protocol.as_deref();
+    let port = deviation.port;
 
     let status = match body.action.as_str() {
         "deny_all" => {

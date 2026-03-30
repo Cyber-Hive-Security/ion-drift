@@ -1859,6 +1859,15 @@ export interface PolicyDeviation {
   expected_label: string | null;
   /** Human-readable label for actual IP (hostname or GeoIP org). */
   actual_label: string | null;
+  /** Phase 3: structured service metadata */
+  service: string;
+  protocol: string | null;
+  port: number | null;
+  policy_id: number | null;
+  /** SoA classification: "authoritative", "observed", or "inferred" */
+  classification: string;
+  /** Source tier: "router", "ros_switch", "swos_snmp", "multi_signal", "admin" */
+  observed_from: string;
 }
 
 export interface PolicyDeviationCounts {
@@ -1868,6 +1877,7 @@ export interface PolicyDeviationCounts {
   resolved: number;
   dns: number;
   ntp: number;
+  gateway: number;
 }
 
 export interface AttackTechnique {

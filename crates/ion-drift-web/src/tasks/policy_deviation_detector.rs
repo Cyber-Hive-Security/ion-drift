@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use ion_drift_storage::BehaviorStore;
-use ion_drift_storage::behavior::{VlanRegistry, ip_matches_target};
+use ion_drift_storage::behavior::{VlanRegistry, ip_matches_target, DataClassification, SourceTier};
 
 use crate::attack_techniques::AttackTechniqueDb;
 use crate::connection_store::ConnectionStore;
@@ -342,6 +342,12 @@ async fn detect_port_service(
                 policy_source: Some(service.default_policy_source().to_string()),
                 attack_techniques: attack_techniques.clone(),
                 severity,
+                service: service.service_name().to_string(),
+                protocol: Some(service.protocol().to_string()),
+                port: Some(service.port()),
+                policy_id: None,
+                classification: DataClassification::Authoritative,
+                observed_from: SourceTier::Router,
             };
             behavior_store.record_policy_deviation(&dev).await?;
             deviation_count += 1;
@@ -363,6 +369,12 @@ async fn detect_port_service(
                 policy_source: Some("global_policy".to_string()),
                 attack_techniques: attack_techniques.clone(),
                 severity,
+                service: service.service_name().to_string(),
+                protocol: Some(service.protocol().to_string()),
+                port: Some(service.port()),
+                policy_id: None,
+                classification: DataClassification::Authoritative,
+                observed_from: SourceTier::Router,
             };
             behavior_store.record_policy_deviation(&dev).await?;
             deviation_count += 1;
@@ -379,6 +391,12 @@ async fn detect_port_service(
                 policy_source: None,
                 attack_techniques: attack_techniques.clone(),
                 severity,
+                service: service.service_name().to_string(),
+                protocol: Some(service.protocol().to_string()),
+                port: Some(service.port()),
+                policy_id: None,
+                classification: DataClassification::Authoritative,
+                observed_from: SourceTier::Router,
             };
             behavior_store.record_policy_deviation(&dev).await?;
             deviation_count += 1;
