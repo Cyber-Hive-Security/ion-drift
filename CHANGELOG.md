@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.7] - 2026-03-30
+
+### Security
+
+- **Setup wizard bootstrap token** — both OIDC and local setup modes now generate a one-time random token logged to stdout. The setup form requires this token, preventing unauthorized setup claims on shared networks.
+- **X-Forwarded-For hardening** — login rate limiter now uses the rightmost XFF entry (set by nearest proxy, harder to spoof) and validates values as IP addresses.
+- **KEK file permissions** — `machine.key` and `kek.local` are now chmod 0600 on Unix after creation, preventing other users from reading key material.
+- **WAN IP parameterized query** — replaced string interpolation with bound SQL parameter for router WAN IP exclusion in the deviation detector.
+- **CSV formula injection defense** — CSV export sanitizes cells starting with `=`, `+`, `-`, `@` by prefixing with single quote to neutralize spreadsheet formula execution.
+
+### Added
+
+- **NTP deviation detection** — detects devices using unauthorized NTP servers (port 123/UDP). Same architecture as DNS detection with `ServiceType` enum. ATT&CK technique T1124 (System Time Discovery). NTP policies auto-synced from DHCP option 42.
+- **Policy editor** — create, edit, and delete admin policies via the UI. Modal form with service, protocol, port, authorized targets, VLAN scope, and priority. Router-synced policies show a lock icon (not editable). Admin policies show edit/delete icons.
+- **Policy CRUD API** — `POST /api/policy`, `PUT /api/policy/{id}`, `DELETE /api/policy/{id}` with input validation, hard conflict detection (409 on duplicate tuple), and soft conflict detection (overlapping CIDRs require `force=true`).
+- **Admin policy protection** — `user_created` boolean column on infrastructure_policy table. Stale reaper skips admin policies. Sync cycle preserves admin-modified targets, source, and priority.
+- **Deviation enrichment** — Device column shows hostname from behavior profiles. Expected and Actual columns show internal hostnames or GeoIP org names for external IPs (e.g., "Google LLC" for 8.8.8.8).
+- **Delete All deviations button** — admin action on the policy page with confirmation dialog.
+- **CSV export** — "Export CSV" button on policy deviations section. Includes device hostname, VLAN name, severity, ATT&CK IDs, and timestamps.
+- **Deviation total count** — API returns `total_count` and `truncated` flag. Frontend shows warning when results exceed the limit.
+- **Per-VLAN severity** — deviation severity computed from VLAN sensitivity (floor) and policy priority (escalation). Critical VLAN = critical deviation regardless of policy priority.
+- **About section** — Settings → System now shows version, license (PolyForm Shield 1.0.0), and publisher (Cyber Hive Security LLC) with links.
+
+### Fixed
+
+- **Resolve actions generalized** — authorize/deny_all (now "Flag All") work for both DNS and NTP deviations via service-type prefix mapping.
+- **VLAN-less resolve no-op** — authorize/Flag All now return 400 error if the deviation has no VLAN scope, instead of silently succeeding without creating a policy.
+- **Blocked connections filtered** — detector only flags connections with `bytes_rx > 0` (bidirectional traffic). Firewall-blocked attempts are not deviations.
+- **Router WAN IP excluded** — detector fetches WAN IP from `ip/dhcp-client` at startup and excludes router-originated traffic from deviation detection.
+- **Admin policy sync protection** — upsert now uses CASE logic to skip overwriting targets/source/priority when the existing row is admin-protected and the incoming upsert is not from an admin action.
+- **Resolved deviations hidden** — default deviation view excludes both `resolved` and `dismissed` status.
+- **CSS106 limitation banner** — hardware limitation banner now shows when `stats.b` returns a parse error (Err path), not just empty Ok.
+- **"Deny All" renamed to "Flag All"** — clarifies this is an observation policy, not router enforcement.
+- **Authorize target cap** — merged target list capped at 1000 entries to prevent unbounded memory growth.
+
+### Changed
+
+- **Detector refactored** — DNS-specific detection logic extracted into generic `detect_port_service()` with `ServiceType` enum carrying protocol, port, skip_server_ips flag, and ATT&CK technique list.
+
 ## [0.3.6] - 2026-03-27
 
 ### Security
