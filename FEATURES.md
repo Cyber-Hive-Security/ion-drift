@@ -75,6 +75,9 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - **Policy editor** — create, edit, and delete custom network policies via the UI. Admin policies protected from router sync overwrite. Router-synced policies locked (read-only)
 - **Deviation enrichment** — device hostnames, GeoIP org names for external IPs, per-VLAN severity, CSV export with formula injection defense
 - **Blocked connection filtering** — firewall-blocked connections (zero reply bytes) excluded from deviation detection. Router WAN IP excluded from detection via `ip/dhcp-client`
+- **Source of Authority (SoA) model** — every detection carries a classification (Authoritative, Observed, Inferred) and source tier (Router T1, Switch T2, SNMP T3). Enforced at the Rust type level via enums. Inferred data is never treated as fact.
+- **Structured service metadata** — deviations carry service, protocol, port, and policy_id columns. Resolve actions read directly from the record, not from string-prefix inference.
+- **Bundled DB-IP Lite GeoIP** — world map and org enrichment work out of the box without a MaxMind account. MaxMind GeoLite2 takes priority if provided.
 - Pattern suppression rules with auto-creation on operator dismiss
 - Priority boosting on operator flag (persistent severity escalation)
 - Deduplication with occurrence counting and last-occurrence tracking

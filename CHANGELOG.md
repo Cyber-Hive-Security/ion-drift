@@ -11,10 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Bundled DB-IP Lite GeoIP databases** — Docker image now includes DB-IP Lite City and ASN databases for out-of-box GeoIP support. World map, country summaries, and deviation enrichment (org names) work immediately without a MaxMind account. MaxMind GeoLite2 takes priority if the user provides their own files.
 - **GeoIP source indicator** — Settings → System → GeoIP section now shows which database source is active ("MaxMind GeoLite2" or "DB-IP Lite") with appropriate attribution text.
 - **DB-IP attribution** — CC BY 4.0 license attribution displayed in the GeoIP settings section when DB-IP Lite is the active source.
+- **Source of Authority (SoA) model** — `DataClassification` (Authoritative, Observed, Inferred) and `SourceTier` (Router, RosSwitch, SwosSnmp, MultiSignal, Admin) enums enforced at the Rust type level. Every deviation carries its classification and provenance.
+- **Structured service metadata on deviations** — `service`, `protocol`, `port`, `policy_id`, `classification`, and `observed_from` columns added to `policy_deviations` table. Existing deviations backfilled from deviation_type prefix on startup.
+- **Policy lineage** — `policy_id` links each deviation to the infrastructure policy that defined "authorized," preserving traceability to T1 (Router) policy intent.
+- **Policy editor documentation** — `docs/policy-editor.md` covers policy creation, resolve actions, admin policy protection, per-VLAN severity, CSV export, and ATT&CK mappings.
 
 ### Changed
 
 - **GeoIP provider fallback chain** — `MaxMind GeoLite2 → DB-IP Lite → none`. The provider loads the first available database set from the geoip directory, preferring MaxMind if both exist.
+- **Resolve handler reads from columns** — removed the temporary string-prefix shim (`dns_* → udp/53`). Service, protocol, and port are now read directly from the deviation record.
 
 ## [0.3.7] - 2026-03-30
 
