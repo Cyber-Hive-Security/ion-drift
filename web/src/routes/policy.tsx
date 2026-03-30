@@ -10,7 +10,7 @@ import {
   useCreatePolicy, useUpdatePolicy, useDeletePolicy,
 } from "@/api/queries";
 import type { PolicyDeviation } from "@/api/types";
-import { Lock, Pencil, Trash2, Plus, X } from "lucide-react";
+import { Lock, Pencil, Trash2, Plus, X, Download } from "lucide-react";
 
 interface PolicyEntry {
   id: number;
@@ -682,19 +682,55 @@ function PolicyDeviationsSection() {
     deleteAllMutation.mutate();
   };
 
+  const handleExport = () => {
+    if (!deviations || deviations.length === 0) return;
+    const headers = ["Type", "Device", "IP", "VLAN", "Expected", "Actual", "Severity", "Status", "Count", "First Seen", "Last Seen", "ATT&CK"];
+    const rows = deviations.map((d) => [
+      d.deviation_type,
+      d.device_hostname ?? d.mac_address,
+      d.ip_address,
+      d.vlan != null ? vlanLookup.name(d.vlan) : "",
+      d.expected,
+      d.actual,
+      d.severity,
+      d.status,
+      String(d.occurrence_count),
+      new Date(d.first_seen * 1000).toISOString(),
+      new Date(d.last_seen * 1000).toISOString(),
+      d.attack_techniques.join(" "),
+    ]);
+    const csv = [headers, ...rows].map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `policy-deviations-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   if (isLoading || !deviations || deviations.length === 0) return null;
 
   return (
     <>
       <div className="flex items-center justify-between mt-6 mb-2">
         <h2 className="text-lg font-semibold">Policy Deviations</h2>
-        <button
-          className="inline-flex items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 transition-colors"
-          onClick={handleDeleteAll}
-          disabled={deleteAllMutation.isPending}
-        >
-          {deleteAllMutation.isPending ? "Deleting..." : `Delete All (${deviations.length})`}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors"
+            onClick={handleExport}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export CSV
+          </button>
+          <button
+            className="inline-flex items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 transition-colors"
+            onClick={handleDeleteAll}
+            disabled={deleteAllMutation.isPending}
+          >
+            {deleteAllMutation.isPending ? "Deleting..." : `Delete All (${deviations.length})`}
+          </button>
+        </div>
       </div>
       <DataTable
         columns={deviationColumns(techniques, handleResolve, vlanLookup.name)}
