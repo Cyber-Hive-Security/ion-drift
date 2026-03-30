@@ -493,8 +493,12 @@ pub async fn syslog_status(
 /// GeoIP database status.
 #[derive(Serialize)]
 pub struct GeoIpStatus {
-    pub has_maxmind: bool,
+    pub loaded: bool,
+    /// "maxmind", "dbip", or "none"
+    pub source: String,
     pub has_credentials: bool,
+    /// Attribution text for the active database source.
+    pub attribution: Option<String>,
 }
 
 /// GET /api/settings/geoip — GeoIP database status.
@@ -513,8 +517,17 @@ pub async fn geoip_status(
         false
     };
 
+    let source = state.geo_cache.source_name();
+    let attribution = match source.as_str() {
+        "dbip" => Some("IP Geolocation by DB-IP (https://db-ip.com) — CC BY 4.0".to_string()),
+        "maxmind" => Some("This product includes GeoLite2 data created by MaxMind (https://www.maxmind.com)".to_string()),
+        _ => None,
+    };
+
     Ok(Json(GeoIpStatus {
-        has_maxmind: state.geo_cache.has_maxmind(),
+        loaded: state.geo_cache.has_maxmind(),
+        source,
         has_credentials,
+        attribution,
     }))
 }

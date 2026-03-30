@@ -155,12 +155,14 @@ function GeoIpSection() {
 
       <div className="p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">MaxMind Database</span>
+          <span className="text-sm text-muted-foreground">Status</span>
           <div className="flex items-center gap-1.5">
-            {data.has_maxmind ? (
+            {data.loaded ? (
               <>
                 <Check className="h-3.5 w-3.5 text-success" />
-                <span className="text-sm text-success">Loaded</span>
+                <span className="text-sm text-success">
+                  {data.source === "maxmind" ? "MaxMind GeoLite2" : data.source === "dbip" ? "DB-IP Lite" : "Loaded"}
+                </span>
               </>
             ) : (
               <>
@@ -170,6 +172,11 @@ function GeoIpSection() {
             )}
           </div>
         </div>
+        {data.source === "dbip" && !data.has_credentials && (
+          <p className="text-xs text-muted-foreground">
+            Using bundled DB-IP Lite databases. For improved city-level accuracy, add MaxMind credentials below.
+          </p>
+        )}
         <div className="flex items-center justify-between">
           <span className="text-sm text-muted-foreground">MaxMind Credentials</span>
           <div className="flex items-center gap-1.5">
@@ -186,7 +193,7 @@ function GeoIpSection() {
         {data.has_credentials && (
           <div className="flex items-center justify-between pt-1">
             <span className="text-sm text-muted-foreground">
-              {data.has_maxmind ? "Re-download latest databases" : "Download databases"}
+              {data.source === "maxmind" ? "Re-download latest databases" : "Download MaxMind databases"}
             </span>
             <button
               onClick={() => updateMutation.mutate()}
@@ -208,7 +215,7 @@ function GeoIpSection() {
             {(updateMutation.error as Error)?.message || "Download failed"}
           </p>
         )}
-        {!data.has_credentials && (
+        {!data.has_credentials && !data.loaded && (
           <p className="text-xs text-muted-foreground mt-2">
             Add MaxMind Account ID and License Key in the Security tab to enable GeoIP.
             Free account required &mdash;{" "}
@@ -220,6 +227,11 @@ function GeoIpSection() {
             >
               sign up at maxmind.com
             </a>
+          </p>
+        )}
+        {data.attribution && (
+          <p className="text-[10px] text-muted-foreground/60 mt-3 pt-2 border-t border-border">
+            {data.attribution}
           </p>
         )}
       </div>

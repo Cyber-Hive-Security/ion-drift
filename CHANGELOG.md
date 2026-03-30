@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.8]
+
+### Added
+
+- **Bundled DB-IP Lite GeoIP databases** — Docker image now includes DB-IP Lite City and ASN databases for out-of-box GeoIP support. World map, country summaries, and deviation enrichment (org names) work immediately without a MaxMind account. MaxMind GeoLite2 takes priority if the user provides their own files.
+- **GeoIP source indicator** — Settings → System → GeoIP section now shows which database source is active ("MaxMind GeoLite2" or "DB-IP Lite") with appropriate attribution text.
+- **DB-IP attribution** — CC BY 4.0 license attribution displayed in the GeoIP settings section when DB-IP Lite is the active source.
+
+### Changed
+
+- **GeoIP provider fallback chain** — `MaxMind GeoLite2 → DB-IP Lite → none`. The provider loads the first available database set from the geoip directory, preferring MaxMind if both exist.
+
 ## [0.3.7] - 2026-03-30
 
 ### Security

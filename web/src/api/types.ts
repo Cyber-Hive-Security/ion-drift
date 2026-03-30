@@ -909,8 +909,11 @@ export interface SyslogStatus {
 }
 
 export interface GeoIpStatus {
-  has_maxmind: boolean;
+  loaded: boolean;
+  /** "maxmind", "dbip", or "none" */
+  source: string;
   has_credentials: boolean;
+  attribution: string | null;
 }
 
 export interface MapConfig {

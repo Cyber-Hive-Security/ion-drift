@@ -41,11 +41,15 @@ pub trait GeoProvider: Send + Sync {
     fn lookup(&self, ip: &IpAddr) -> Option<GeoInfo>;
     fn try_load(&self, dir: &Path);
     fn is_loaded(&self) -> bool;
+    /// Which database source is active: "maxmind", "dbip", or "none".
+    fn source_name(&self) -> String;
 }
 
 pub struct MaxMindProvider {
     mmdb_city: RwLock<Option<Arc<maxminddb::Reader<Vec<u8>>>>>,
     mmdb_asn: RwLock<Option<Arc<maxminddb::Reader<Vec<u8>>>>>,
+    /// Which database source is loaded: "maxmind", "dbip", or "none".
+    source: RwLock<String>,
 }
 
 impl MaxMindProvider {
@@ -53,7 +57,13 @@ impl MaxMindProvider {
         Self {
             mmdb_city: RwLock::new(None),
             mmdb_asn: RwLock::new(None),
+            source: RwLock::new("none".to_string()),
         }
+    }
+
+    /// Which database source is loaded: "maxmind", "dbip", or "none".
+    pub fn source_name(&self) -> String {
+        self.source.read().map(|s| s.clone()).unwrap_or_else(|_| "none".to_string())
     }
 
     fn lookup_asn(&self, ip: &IpAddr) -> (Option<String>, Option<String>, Option<String>) {
@@ -123,36 +133,57 @@ impl GeoProvider for MaxMindProvider {
     }
 
     fn try_load(&self, dir: &Path) {
-        let city_path = dir.join("GeoLite2-City.mmdb");
-        let asn_path = dir.join("GeoLite2-ASN.mmdb");
+        // Priority: MaxMind GeoLite2 > DB-IP Lite
+        // Both use the same MMDB format (maxminddb reader handles both).
+        let candidates: &[(&str, &str, &str)] = &[
+            ("GeoLite2-City.mmdb", "GeoLite2-ASN.mmdb", "maxmind"),
+            ("dbip-city-lite.mmdb", "dbip-asn-lite.mmdb", "dbip"),
+        ];
 
-        if city_path.exists() {
+        for &(city_file, asn_file, source) in candidates {
+            let city_path = dir.join(city_file);
+            if !city_path.exists() {
+                continue;
+            }
             match maxminddb::Reader::open_readfile(&city_path) {
                 Ok(reader) => {
-                    tracing::info!("loaded MaxMind GeoLite2-City from {}", city_path.display());
+                    tracing::info!(source = source, "loaded GeoIP city database from {}", city_path.display());
                     if let Ok(mut guard) = self.mmdb_city.write() {
                         *guard = Some(Arc::new(reader));
                     }
                 }
-                Err(e) => tracing::warn!("failed to load GeoLite2-City: {e}"),
-            }
-        }
-
-        if asn_path.exists() {
-            match maxminddb::Reader::open_readfile(&asn_path) {
-                Ok(reader) => {
-                    tracing::info!("loaded MaxMind GeoLite2-ASN from {}", asn_path.display());
-                    if let Ok(mut guard) = self.mmdb_asn.write() {
-                        *guard = Some(Arc::new(reader));
-                    }
+                Err(e) => {
+                    tracing::warn!(source = source, "failed to load city database: {e}");
+                    continue;
                 }
-                Err(e) => tracing::warn!("failed to load GeoLite2-ASN: {e}"),
             }
+
+            let asn_path = dir.join(asn_file);
+            if asn_path.exists() {
+                match maxminddb::Reader::open_readfile(&asn_path) {
+                    Ok(reader) => {
+                        tracing::info!(source = source, "loaded GeoIP ASN database from {}", asn_path.display());
+                        if let Ok(mut guard) = self.mmdb_asn.write() {
+                            *guard = Some(Arc::new(reader));
+                        }
+                    }
+                    Err(e) => tracing::warn!(source = source, "failed to load ASN database: {e}"),
+                }
+            }
+
+            if let Ok(mut s) = self.source.write() {
+                *s = source.to_string();
+            }
+            return; // Loaded successfully, don't try lower-priority sources
         }
     }
 
     fn is_loaded(&self) -> bool {
         self.mmdb_city.read().map(|g| g.is_some()).unwrap_or(false)
+    }
+
+    fn source_name(&self) -> String {
+        self.source.read().map(|s| s.clone()).unwrap_or_else(|_| "none".to_string())
     }
 }
 
@@ -208,9 +239,14 @@ impl GeoCache {
         self.try_load_maxmind(dir);
     }
 
-    /// Whether MaxMind databases are loaded.
+    /// Whether GeoIP databases are loaded (MaxMind or DB-IP).
     pub fn has_maxmind(&self) -> bool {
         self.provider.is_loaded()
+    }
+
+    /// Which GeoIP database source is active: "maxmind", "dbip", or "none".
+    pub fn source_name(&self) -> String {
+        self.provider.source_name()
     }
 
     /// Synchronous lookup. Tries MaxMind first, then ip-api cache.
