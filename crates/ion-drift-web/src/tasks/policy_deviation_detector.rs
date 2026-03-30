@@ -13,6 +13,7 @@ use ion_drift_storage::behavior::{VlanRegistry, ip_matches_target};
 
 use crate::attack_techniques::AttackTechniqueDb;
 use crate::connection_store::ConnectionStore;
+use crate::device_manager::DeviceManager;
 
 // ── Service type definitions ────────────────────────────────────
 
@@ -114,10 +115,20 @@ pub fn spawn_policy_deviation_detector(
     connection_store: Arc<ConnectionStore>,
     vlan_registry: Arc<RwLock<VlanRegistry>>,
     attack_db: Arc<AttackTechniqueDb>,
+    device_manager: Arc<tokio::sync::RwLock<DeviceManager>>,
 ) {
     tokio::spawn(async move {
         // Wait 30s after startup to let policy sync and connections populate
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+
+        // Fetch router WAN IP from ip/dhcp-client — excludes router's own traffic from detection.
+        let wan_ip = fetch_wan_ip(&device_manager).await;
+        if let Some(ref ip) = wan_ip {
+            tracing::info!(wan_ip = %ip, "policy deviation detector: excluding router WAN IP");
+        } else {
+            tracing::warn!("policy deviation detector: could not determine WAN IP — router's own traffic may generate false positives");
+        }
+
         tracing::info!("policy deviation detector started (DNS + NTP)");
 
         let mut last_check = chrono::Utc::now() - chrono::Duration::seconds(120);
@@ -134,6 +145,7 @@ pub fn spawn_policy_deviation_detector(
                     &vlan_registry,
                     &attack_db,
                     &last_check,
+                    &wan_ip,
                 ).await {
                     tracing::warn!(
                         service = service.service_name(),
@@ -148,6 +160,28 @@ pub fn spawn_policy_deviation_detector(
     });
 }
 
+/// Fetch the router's WAN IP from ip/dhcp-client.
+async fn fetch_wan_ip(device_manager: &tokio::sync::RwLock<DeviceManager>) -> Option<String> {
+    let dm = device_manager.read().await;
+    let router = dm.get_router()?;
+    let client = match &router.client {
+        crate::device_manager::DeviceClient::RouterOs(c) => c,
+        _ => return None,
+    };
+    let result: serde_json::Value = client.get("ip/dhcp-client").await.ok()?;
+    // ip/dhcp-client returns an array; find the one with status=bound
+    let entries = result.as_array()?;
+    for entry in entries {
+        if entry.get("status").and_then(|s| s.as_str()) == Some("bound") {
+            // address field is "x.x.x.x/prefix"
+            let addr = entry.get("address").and_then(|a| a.as_str())?;
+            let ip = addr.split('/').next().unwrap_or(addr);
+            return Some(ip.to_string());
+        }
+    }
+    None
+}
+
 // ── Generic port-based service detector ─────────────────────────
 
 async fn detect_port_service(
@@ -157,6 +191,7 @@ async fn detect_port_service(
     vlan_registry: &RwLock<VlanRegistry>,
     attack_db: &AttackTechniqueDb,
     last_check: &chrono::DateTime<chrono::Utc>,
+    wan_ip: &Option<String>,
 ) -> Result<(), String> {
     let svc_name = service.service_name();
     let dst_port = service.port();
@@ -209,17 +244,29 @@ async fn detect_port_service(
         let store = connection_store.clone();
         let since = since_str.clone();
         let port = dst_port;
+        let wan_ip = wan_ip.clone();
         tokio::task::spawn_blocking(move || {
             let db = store.lock_db()?;
-            let mut stmt = db.prepare(
+            // Exclude router's own WAN IP from detection — its NTP/DNS traffic
+            // to upstream servers is not a policy deviation.
+            let wan_exclude = if let Some(ref wip) = wan_ip {
+                format!(" AND src_ip != '{}'", wip.replace('\'', ""))
+            } else {
+                String::new()
+            };
+            let query = format!(
                 "SELECT src_mac, src_ip, dst_ip, src_vlan
                  FROM connection_history
                  WHERE dst_port = ?1
                    AND first_seen >= datetime(?2)
                    AND src_mac IS NOT NULL
                    AND bytes_rx > 0
+                   {}
                  GROUP BY src_mac, src_ip, src_vlan, dst_ip",
-            ).map_err(|e| format!("{} deviation query: {e}", "service"))?;
+                wan_exclude,
+            );
+            let mut stmt = db.prepare(&query)
+                .map_err(|e| format!("{} deviation query: {e}", "service"))?;
 
             let rows: Vec<(String, String, String, Option<String>)> = stmt.query_map(
                 rusqlite::params![port, since],

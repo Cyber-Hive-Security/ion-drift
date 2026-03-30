@@ -168,12 +168,13 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.config.polling.topology_interval_secs,
     );
 
-    // Policy deviation detection (DNS)
+    // Policy deviation detection (DNS + NTP)
     policy_deviation_detector::spawn_policy_deviation_detector(
         state.behavior_store.clone(),
         state.connection_store.clone(),
         state.vlan_registry.clone(),
         state.attack_techniques.clone(),
+        state.device_manager.clone(),
     );
 
     // Port rate baselines
