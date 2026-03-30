@@ -420,6 +420,11 @@ pub fn cache_kek_locally(kek: &Key<Aes256Gcm>, data_dir: &Path) -> anyhow::Resul
         OsRng.try_fill_bytes(&mut key)
             .map_err(|e| anyhow::anyhow!("OS RNG failed generating machine key: {e}"))?;
         std::fs::write(&machine_key_path, &key)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&machine_key_path, std::fs::Permissions::from_mode(0o600));
+        }
         key
     };
 
@@ -439,6 +444,11 @@ pub fn cache_kek_locally(kek: &Key<Aes256Gcm>, data_dir: &Path) -> anyhow::Resul
     data.extend_from_slice(&nonce_bytes);
     data.extend_from_slice(&ciphertext);
     std::fs::write(&kek_cache_path, &data)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&kek_cache_path, std::fs::Permissions::from_mode(0o600));
+    }
 
     Ok(())
 }

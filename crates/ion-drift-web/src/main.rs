@@ -838,6 +838,17 @@ async fn main() -> anyhow::Result<()> {
 async fn run_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> anyhow::Result<()> {
     let db_path = data_dir.join("secrets.db");
 
+    // Generate a one-time bootstrap token to prevent unauthorized setup claims
+    let bootstrap_token = {
+        use rand::rngs::OsRng;
+        use rand::TryRngCore;
+        let mut bytes = [0u8; 16];
+        OsRng.try_fill_bytes(&mut bytes).expect("OS RNG failed");
+        hex::encode(bytes)
+    };
+    tracing::warn!("SETUP TOKEN: {bootstrap_token}");
+    tracing::warn!("Use this token to complete the setup wizard. It is required to prevent unauthorized access.");
+
     let setup_state = setup::SetupState {
         db_path,
         router_username: config.router.username.clone(),
@@ -846,6 +857,7 @@ async fn run_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> an
         ca_cert_path: config.oidc.as_ref().and_then(|o| o.ca_cert_path.clone()).unwrap_or_default(),
         certwarden_base_url: config.certwarden.base_url.clone(),
         certwarden_cert_name: config.certwarden.cert_name.clone(),
+        bootstrap_token: Some(bootstrap_token),
     };
 
     let app = axum::Router::new()
@@ -877,8 +889,20 @@ async fn run_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> an
 /// Presents a form to create the initial admin account, derives the KEK from the
 /// password, caches it with a machine key, and exits for Docker/systemd restart.
 async fn run_local_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> anyhow::Result<()> {
+    // Generate a one-time bootstrap token to prevent unauthorized setup claims
+    let bootstrap_token = {
+        use rand::rngs::OsRng;
+        use rand::TryRngCore;
+        let mut bytes = [0u8; 16];
+        OsRng.try_fill_bytes(&mut bytes).expect("OS RNG failed");
+        hex::encode(bytes)
+    };
+    tracing::warn!("SETUP TOKEN: {bootstrap_token}");
+    tracing::warn!("Use this token to complete the setup wizard. It is required to prevent unauthorized access.");
+
     let state = setup::LocalSetupState {
         db_path: data_dir.join("secrets.db"),
+        bootstrap_token: Some(bootstrap_token),
     };
 
     let app = axum::Router::new()

@@ -248,28 +248,21 @@ async fn detect_port_service(
         tokio::task::spawn_blocking(move || {
             let db = store.lock_db()?;
             // Exclude router's own WAN IP from detection — its NTP/DNS traffic
-            // to upstream servers is not a policy deviation.
-            let wan_exclude = if let Some(ref wip) = wan_ip {
-                format!(" AND src_ip != '{}'", wip.replace('\'', ""))
-            } else {
-                String::new()
-            };
-            let query = format!(
+            // to upstream servers is not a policy deviation. Uses parameterized
+            // query (?3 IS NULL OR src_ip != ?3) so WAN IP never touches SQL string.
+            let mut stmt = db.prepare(
                 "SELECT src_mac, src_ip, dst_ip, src_vlan
                  FROM connection_history
                  WHERE dst_port = ?1
                    AND first_seen >= datetime(?2)
                    AND src_mac IS NOT NULL
                    AND bytes_rx > 0
-                   {}
+                   AND (?3 IS NULL OR src_ip != ?3)
                  GROUP BY src_mac, src_ip, src_vlan, dst_ip",
-                wan_exclude,
-            );
-            let mut stmt = db.prepare(&query)
-                .map_err(|e| format!("{} deviation query: {e}", "service"))?;
+            ).map_err(|e| format!("{} deviation query: {e}", "service"))?;
 
             let rows: Vec<(String, String, String, Option<String>)> = stmt.query_map(
-                rusqlite::params![port, since],
+                rusqlite::params![port, since, wan_ip],
                 |row| Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,

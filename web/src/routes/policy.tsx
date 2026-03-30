@@ -665,12 +665,15 @@ function deviationColumns(
 }
 
 function PolicyDeviationsSection() {
-  const { data: deviations, isLoading } = usePolicyDeviations({ limit: 200 });
+  const { data: response, isLoading } = usePolicyDeviations({ limit: 500 });
   const { data: attackDb } = useAttackTechniques();
   const resolveMutation = useResolvePolicyDeviation();
   const deleteAllMutation = useDeleteAllDeviations();
   const vlanLookup = useVlanLookup();
 
+  const deviations = response?.deviations;
+  const totalCount = response?.total_count ?? 0;
+  const truncated = response?.truncated ?? false;
   const techniques = attackDb?.techniques;
 
   const handleResolve = (id: number, action: string) => {
@@ -678,7 +681,7 @@ function PolicyDeviationsSection() {
   };
 
   const handleDeleteAll = () => {
-    if (!window.confirm(`Delete all ${deviations?.length ?? 0} policy deviations? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete all ${totalCount} policy deviations? This cannot be undone.`)) return;
     deleteAllMutation.mutate();
   };
 
@@ -699,7 +702,9 @@ function PolicyDeviationsSection() {
       new Date(d.last_seen * 1000).toISOString(),
       d.attack_techniques.join(" "),
     ]);
-    const csv = [headers, ...rows].map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+    // Sanitize cells to prevent CSV formula injection (=, +, -, @, \t, \r)
+    const sanitize = (v: string) => /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+    const csv = [headers, ...rows].map((r) => r.map((c) => `"${sanitize(c).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -728,10 +733,15 @@ function PolicyDeviationsSection() {
             onClick={handleDeleteAll}
             disabled={deleteAllMutation.isPending}
           >
-            {deleteAllMutation.isPending ? "Deleting..." : `Delete All (${deviations.length})`}
+            {deleteAllMutation.isPending ? "Deleting..." : `Delete All (${totalCount})`}
           </button>
         </div>
       </div>
+      {truncated && (
+        <p className="mb-2 text-xs text-warning">
+          Showing {deviations.length} of {totalCount} deviations. Increase limit or use filters to see all.
+        </p>
+      )}
       <DataTable
         columns={deviationColumns(techniques, handleResolve, vlanLookup.name)}
         data={deviations}

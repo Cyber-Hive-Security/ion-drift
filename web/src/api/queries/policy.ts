@@ -6,6 +6,12 @@ import type {
   AttackTechniqueDb,
 } from "../types";
 
+interface DeviationListResponse {
+  deviations: PolicyDeviation[];
+  total_count: number;
+  truncated: boolean;
+}
+
 export function usePolicyDeviations(params?: {
   status?: string;
   mac?: string;
@@ -21,7 +27,7 @@ export function usePolicyDeviations(params?: {
   return useQuery({
     queryKey: ["policy-deviations", params],
     queryFn: () =>
-      apiFetch<PolicyDeviation[]>(
+      apiFetch<DeviationListResponse>(
         `/api/policy/deviations${q ? `?${q}` : ""}`,
       ),
     refetchInterval: 60_000,

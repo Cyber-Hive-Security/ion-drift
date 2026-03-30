@@ -25,6 +25,8 @@ pub struct SetupState {
     pub ca_cert_path: String,
     pub certwarden_base_url: Option<String>,
     pub certwarden_cert_name: Option<String>,
+    /// One-time bootstrap token required to complete setup (prevents unauthorized claims).
+    pub bootstrap_token: Option<String>,
 }
 
 /// `GET /setup` — Render the setup form.
@@ -37,6 +39,7 @@ pub async fn setup_page(State(state): State<SetupState>) -> Html<String> {
 
 #[derive(serde::Deserialize)]
 pub struct SetupForm {
+    setup_token: Option<String>,
     router_username: String,
     router_password: String,
     oidc_client_secret: String,
@@ -56,6 +59,14 @@ pub async fn setup_submit(
     State(state): State<SetupState>,
     axum::extract::Form(form): axum::extract::Form<SetupForm>,
 ) -> Response {
+    // Validate bootstrap token
+    if let Some(ref expected) = state.bootstrap_token {
+        let provided = form.setup_token.as_deref().unwrap_or("");
+        if provided != expected {
+            return Html(format!("<h1>Invalid setup token</h1><p>Check the server logs for the correct token.</p><p><a href=\"/setup\">Try again</a></p>")).into_response();
+        }
+    }
+
     let cw_url = state.certwarden_base_url.as_deref().unwrap_or("");
     let cw_name = state.certwarden_cert_name.as_deref().unwrap_or("");
 
@@ -500,10 +511,13 @@ fn render_complete_html() -> String {
 #[derive(Clone)]
 pub struct LocalSetupState {
     pub db_path: PathBuf,
+    /// One-time bootstrap token required to complete setup (prevents unauthorized claims).
+    pub bootstrap_token: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 pub struct LocalSetupForm {
+    pub setup_token: Option<String>,
     pub admin_username: String,
     pub admin_password: String,
     pub admin_password_confirm: String,
@@ -519,6 +533,14 @@ pub async fn local_setup_submit(
     State(state): State<LocalSetupState>,
     Form(form): Form<LocalSetupForm>,
 ) -> Response {
+    // Validate bootstrap token (prevents unauthorized setup claims on shared networks)
+    if let Some(ref expected) = state.bootstrap_token {
+        let provided = form.setup_token.as_deref().unwrap_or("");
+        if provided != expected {
+            return Html(render_local_setup_html(Some("Invalid setup token. Check the server logs for the correct token."))).into_response();
+        }
+    }
+
     // Validate
     let username = form.admin_username.trim();
     if username.is_empty() || username.len() > 64 {
@@ -645,8 +667,12 @@ fn render_local_setup_html(error: Option<&str>) -> String {
   {error_html}
   <form method="POST" action="/setup">
 
+    <label for="setup_token">Setup Token</label>
+    <input type="text" id="setup_token" name="setup_token" required autocomplete="off" autofocus>
+    <p class="hint">Check the server logs (docker logs) for the one-time setup token.</p>
+
     <label for="admin_username">Admin Username</label>
-    <input type="text" id="admin_username" name="admin_username" required autocomplete="username" autofocus>
+    <input type="text" id="admin_username" name="admin_username" required autocomplete="username">
 
     <label for="admin_password">Password</label>
     <input type="password" id="admin_password" name="admin_password" required autocomplete="new-password">

@@ -3045,35 +3045,41 @@ impl BehaviorStore {
         mac: Option<&str>,
         deviation_type: Option<&str>,
         limit: Option<i64>,
-    ) -> Result<Vec<PolicyDeviation>, String> {
+    ) -> Result<(Vec<PolicyDeviation>, i64), String> {
         let db = self.db.lock().await;
-        let mut sql = String::from(
-            "SELECT id, mac_address, ip_address, vlan, deviation_type, expected, actual,
-                    policy_source, attack_techniques, severity, status,
-                    first_seen, last_seen, occurrence_count, resolved_at, resolved_by
-             FROM policy_deviations WHERE 1=1",
-        );
+        let mut where_clause = String::from(" WHERE 1=1");
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
         if let Some(s) = status {
             param_values.push(Box::new(s.to_string()));
-            sql.push_str(&format!(" AND status = ?{}", param_values.len()));
+            where_clause.push_str(&format!(" AND status = ?{}", param_values.len()));
         } else {
             // By default, hide resolved and dismissed deviations.
             // Resolved = policy action taken (authorize/flag all). Dismissed = user chose to ignore.
             // Pass status explicitly to query specific states.
-            sql.push_str(" AND status NOT IN ('dismissed', 'resolved')");
+            where_clause.push_str(" AND status NOT IN ('dismissed', 'resolved')");
         }
         if let Some(m) = mac {
             param_values.push(Box::new(m.to_string()));
-            sql.push_str(&format!(" AND mac_address = ?{}", param_values.len()));
+            where_clause.push_str(&format!(" AND mac_address = ?{}", param_values.len()));
         }
         if let Some(dt) = deviation_type {
             param_values.push(Box::new(dt.to_string()));
-            sql.push_str(&format!(" AND deviation_type = ?{}", param_values.len()));
+            where_clause.push_str(&format!(" AND deviation_type = ?{}", param_values.len()));
         }
 
-        sql.push_str(" ORDER BY last_seen DESC");
+        // Count total matching rows (before LIMIT)
+        let count_sql = format!("SELECT COUNT(*) FROM policy_deviations{where_clause}");
+        let count_params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
+        let total_count: i64 = db.query_row(&count_sql, count_params.as_slice(), |row| row.get(0))
+            .unwrap_or(0);
+
+        let mut sql = format!(
+            "SELECT id, mac_address, ip_address, vlan, deviation_type, expected, actual,
+                    policy_source, attack_techniques, severity, status,
+                    first_seen, last_seen, occurrence_count, resolved_at, resolved_by
+             FROM policy_deviations{where_clause} ORDER BY last_seen DESC",
+        );
 
         if let Some(lim) = limit {
             param_values.push(Box::new(lim));
@@ -3084,12 +3090,13 @@ impl BehaviorStore {
         let mut stmt = db.prepare(&sql).map_err(|e| format!("prepare deviations: {e}"))?;
         let rows = stmt.query_map(params_ref.as_slice(), Self::map_deviation_row)
             .map_err(|e| format!("query deviations: {e}"))?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("collect deviations: {e}"))
+        let deviations = rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("collect deviations: {e}"))?;
+        Ok((deviations, total_count))
     }
 
     /// Get deviations for a specific device MAC.
     pub async fn get_device_policy_deviations(&self, mac: &str) -> Result<Vec<PolicyDeviation>, String> {
-        self.get_policy_deviations(None, Some(mac), None, None).await
+        self.get_policy_deviations(None, Some(mac), None, None).await.map(|(devs, _)| devs)
     }
 
     /// Resolve a deviation by ID with a status and optional resolver name.

@@ -447,19 +447,22 @@ fn now_secs() -> u64 {
 // ── Login rate limiter ────────────────────────────────────────────
 
 /// Extract client IP from request headers (reverse proxy) or peer address.
-/// Checks X-Forwarded-For (first IP), then X-Real-IP, then falls back to "unknown".
+/// Uses the rightmost X-Forwarded-For entry (set by the nearest trusted proxy),
+/// then X-Real-IP, then falls back to "unknown". Values are validated as IP addresses
+/// to prevent spoofed non-IP strings from bypassing rate limiting.
 pub fn extract_client_ip(headers: &axum::http::HeaderMap) -> String {
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            let trimmed = first.trim();
-            if !trimmed.is_empty() {
+        // Use rightmost entry — set by the nearest proxy, harder to spoof than leftmost
+        if let Some(last) = xff.rsplit(',').next() {
+            let trimmed = last.trim();
+            if !trimmed.is_empty() && trimmed.parse::<std::net::IpAddr>().is_ok() {
                 return trimmed.to_string();
             }
         }
     }
     if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
         let trimmed = real_ip.trim();
-        if !trimmed.is_empty() {
+        if !trimmed.is_empty() && trimmed.parse::<std::net::IpAddr>().is_ok() {
             return trimmed.to_string();
         }
     }

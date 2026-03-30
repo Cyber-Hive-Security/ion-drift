@@ -24,6 +24,14 @@ pub struct EnrichedDeviation {
     pub actual_label: Option<String>,
 }
 
+/// Paginated deviation response with total count for truncation detection.
+#[derive(Serialize)]
+pub struct DeviationListResponse {
+    pub deviations: Vec<EnrichedDeviation>,
+    pub total_count: i64,
+    pub truncated: bool,
+}
+
 // ── GET /api/policy/deviations ────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -60,17 +68,19 @@ pub async fn list_deviations(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
     Query(q): Query<DeviationListQuery>,
-) -> Result<Json<Vec<EnrichedDeviation>>, Response> {
-    let deviations = state
+) -> Result<Json<DeviationListResponse>, Response> {
+    let limit = q.limit.or(Some(500));
+    let (deviations, total_count) = state
         .behavior_store
         .get_policy_deviations(
             q.status.as_deref(),
             q.mac.as_deref(),
             q.deviation_type.as_deref(),
-            q.limit.or(Some(500)),
+            limit,
         )
         .await
         .map_err(|e| internal_error("list deviations", e))?;
+    let truncated = limit.map(|l| total_count > l).unwrap_or(false);
 
     // Build MAC → hostname map from device profiles
     let macs: Vec<&str> = deviations.iter().map(|d| d.mac_address.as_str()).collect();
@@ -115,7 +125,11 @@ pub async fn list_deviations(
         })
         .collect();
 
-    Ok(Json(enriched))
+    Ok(Json(DeviationListResponse {
+        deviations: enriched,
+        total_count,
+        truncated,
+    }))
 }
 
 // ── GET /api/policy/deviations/device/{mac} ───────────────────────
@@ -170,53 +184,59 @@ pub async fn resolve_deviation(
 
     let status = match body.action.as_str() {
         "deny_all" => {
-            // Create a deny-all policy for this service/VLAN
-            if let Some(vlan) = deviation.vlan {
-                state.behavior_store.upsert_policy(
-                    service,
-                    protocol,
-                    port,
-                    &[],
-                    Some(&[vlan]),
-                    "admin_policy",
-                    "high",
-                    None,
-                ).await.map_err(|e| internal_error("create deny policy", e))?;
-            }
+            let vlan = deviation.vlan.ok_or_else(|| (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "cannot create policy for deviation without VLAN scope" })),
+            ).into_response())?;
+            state.behavior_store.upsert_policy(
+                service,
+                protocol,
+                port,
+                &[],
+                Some(&[vlan]),
+                "admin_policy",
+                "high",
+                None,
+            ).await.map_err(|e| internal_error("create deny policy", e))?;
             "resolved"
         }
         "authorize" => {
+            let vlan = deviation.vlan.ok_or_else(|| (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "cannot create policy for deviation without VLAN scope" })),
+            ).into_response())?;
             // Merge the observed target into the existing VLAN-scoped policy.
             // Only merge VLAN-specific policies — global policies are left separate
             // so future global changes propagate cleanly.
-            if let Some(vlan) = deviation.vlan {
-                let existing = state.behavior_store
-                    .get_policies_for_service(service, protocol, port, Some(vlan))
-                    .await
-                    .unwrap_or_default();
+            let existing = state.behavior_store
+                .get_policies_for_service(service, protocol, port, Some(vlan))
+                .await
+                .unwrap_or_default();
 
-                // Only include targets from VLAN-scoped policies, not global ones
-                let mut targets: Vec<String> = existing.iter()
-                    .filter(|p| p.vlan_scope.is_some())
-                    .flat_map(|p| p.authorized_targets.clone())
-                    .collect();
-                if !targets.contains(&deviation.actual) {
-                    targets.push(deviation.actual.clone());
-                }
-                targets.sort();
-                targets.dedup();
-
-                state.behavior_store.upsert_policy(
-                    service,
-                    protocol,
-                    port,
-                    &targets,
-                    Some(&[vlan]),
-                    "admin_policy",
-                    "medium",
-                    None,
-                ).await.map_err(|e| internal_error("create authorize policy", e))?;
+            // Only include targets from VLAN-scoped policies, not global ones.
+            // Cap at 1000 targets to prevent unbounded memory growth if extended
+            // to general port-based policies with many targets.
+            let mut targets: Vec<String> = existing.iter()
+                .filter(|p| p.vlan_scope.is_some())
+                .flat_map(|p| p.authorized_targets.clone())
+                .take(1000)
+                .collect();
+            if !targets.contains(&deviation.actual) {
+                targets.push(deviation.actual.clone());
             }
+            targets.sort();
+            targets.dedup();
+
+            state.behavior_store.upsert_policy(
+                service,
+                protocol,
+                port,
+                &targets,
+                Some(&[vlan]),
+                "admin_policy",
+                "medium",
+                None,
+            ).await.map_err(|e| internal_error("create authorize policy", e))?;
             "resolved"
         }
         "dismiss" => "dismissed",
