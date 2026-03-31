@@ -181,7 +181,12 @@ export function RouterPortGrid({ interfaces }: { interfaces: RouterInterface[] }
       {hoveredCell && (
         <div
           className="pointer-events-none fixed z-50 max-w-xs rounded-md border border-border bg-card p-3 shadow-lg"
-          style={{ left: tooltipPos.x + 14, top: tooltipPos.y + 14 }}
+          style={{
+            ...(tooltipPos.x > window.innerWidth * 0.85
+              ? { right: window.innerWidth - tooltipPos.x + 14 }
+              : { left: tooltipPos.x + 14 }),
+            top: tooltipPos.y + 14,
+          }}
         >
           <div className="mb-1.5 text-sm font-semibold text-foreground">
             {hoveredCell.name}
