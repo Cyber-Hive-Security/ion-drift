@@ -434,6 +434,32 @@ pub async fn compute_topology(
                 || plat_lower.contains("wap")
                 || plat_lower.contains("wireless");
 
+            // MAC-based dedup: if this neighbor's MAC resolves to a registered device,
+            // create a trunk edge to that device instead of a duplicate inferred node.
+            if let Some(resolved_dev) = neighbor_mac_upper
+                .as_deref()
+                .and_then(|mac| mac_to_device.get(mac))
+            {
+                let pair = if source_device < *resolved_dev {
+                    (source_device.clone(), resolved_dev.clone())
+                } else {
+                    (resolved_dev.clone(), source_device.clone())
+                };
+                if edge_set.insert(pair) {
+                    edges.push(TopologyEdge {
+                        source: source_device.clone(),
+                        target: resolved_dev.clone(),
+                        kind: EdgeKind::Trunk,
+                        source_port: Some(source_port.clone()),
+                        target_port: None,
+                        vlans: Vec::new(),
+                        speed_mbps: None,
+                        traffic_bps: None,
+                    });
+                }
+                continue;
+            }
+
             let inferred_id = nb
                 .identity
                 .clone()
