@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 
 use crate::device_manager::{DeviceManager, DeviceStatus};
 use crate::task_supervisor::TaskSupervisor;
+use ion_drift_storage::behavior::BehaviorStore;
 
 // ── Data structures ──────────────────────────────────────────────
 
@@ -75,6 +76,7 @@ pub struct TopologyNode {
     pub status: NodeStatus,
     pub confidence: f64,
     pub disposition: String,
+    pub baseline_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,7 +144,7 @@ fn resolve_vlan_config(
 }
 
 /// Sorted VLAN order for consistent horizontal layout.
-const VLAN_ORDER: &[u32] = &[2, 6, 10, 25, 30, 35, 40, 90, 99];
+// VLAN_ORDER removed — now derived from database VlanConfig at runtime.
 
 // ── Layout constants ─────────────────────────────────────────────
 
@@ -162,6 +164,7 @@ const SECTOR_PADDING: f64 = 40.0;
 pub async fn compute_topology(
     store: &SwitchStore,
     device_manager: &Arc<RwLock<DeviceManager>>,
+    behavior_store: &BehaviorStore,
     wan_interface: &str,
 ) -> anyhow::Result<NetworkTopology> {
     let now = std::time::SystemTime::now()
@@ -228,6 +231,7 @@ pub async fn compute_topology(
                 status,
                 confidence: 1.0,
                 disposition: "my_device".to_string(),
+                baseline_status: None,
             },
         );
     }
@@ -483,6 +487,7 @@ pub async fn compute_topology(
                         status: NodeStatus::Unknown,
                         confidence: 0.7,
                         disposition: "unknown".to_string(),
+                baseline_status: None,
                     },
                 );
             }
@@ -565,6 +570,7 @@ pub async fn compute_topology(
                     status: NodeStatus::Unknown,
                     confidence: 0.8,
                     disposition: "unknown".to_string(),
+                baseline_status: None,
                 },
             );
             tracing::debug!(device = %device_id, "created node from backbone link reference");
@@ -644,6 +650,7 @@ pub async fn compute_topology(
                     status: NodeStatus::Unknown,
                     confidence: 1.0,
                     disposition: "external".to_string(),
+                baseline_status: None,
                 },
             );
             edges.push(TopologyEdge {
@@ -956,6 +963,7 @@ pub async fn compute_topology(
                 status: NodeStatus::Unknown,
                 confidence: identity.confidence,
                 disposition: identity.disposition.clone(),
+                baseline_status: None,
             },
         );
 
@@ -985,9 +993,40 @@ pub async fn compute_topology(
         }
     }
 
+    // ── Stamp baseline status from behavior profiles ─────────────
+    {
+        let macs: Vec<&str> = nodes.values()
+            .filter_map(|n| n.mac.as_deref())
+            .collect();
+        if !macs.is_empty() {
+            if let Ok(profiles) = behavior_store.get_profiles_bulk(&macs).await {
+                for node in nodes.values_mut() {
+                    if let Some(mac) = &node.mac {
+                        if let Some(profile) = profiles.get(mac) {
+                            node.baseline_status = Some(profile.baseline_status.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Assign primary VLAN to single-VLAN infrastructure ───────
+    for node in nodes.values_mut() {
+        if node.is_infrastructure && node.vlan_id.is_none() && node.vlans_served.len() == 1 {
+            node.vlan_id = Some(node.vlans_served[0]);
+        }
+    }
+
     // ── Layout computation ───────────────────────────────────────
     // Returns (left_x, top_y, width, height) per VLAN sector
-    let sector_geometry = compute_layout(&mut nodes, &edges);
+    // Build ordered VLAN list from database config (sorted by VLAN ID)
+    let configured_vlans: Vec<u32> = {
+        let mut ids: Vec<u32> = vlan_config_map.keys().copied().collect();
+        ids.sort();
+        ids
+    };
+    let sector_geometry = compute_layout(&mut nodes, &edges, &configured_vlans);
 
     // Position WAN node to the left of the router
     if let Some(router_pos) = router_id
@@ -1132,9 +1171,10 @@ const SECTOR_HEADER_H: f64 = 50.0;
 fn compute_layout(
     nodes: &mut BTreeMap<String, TopologyNode>,
     _edges: &[TopologyEdge],
+    configured_vlans: &[u32],
 ) -> BTreeMap<u32, (f64, f64, f64, f64)> {
     // ── Collect VLANs and device counts ──────────────────────────
-    let mut active_vlans: Vec<u32> = VLAN_ORDER.to_vec();
+    let mut active_vlans: Vec<u32> = configured_vlans.to_vec();
     for node in nodes.values() {
         if let Some(vid) = node.vlan_id {
             if !active_vlans.contains(&vid) {
@@ -1145,7 +1185,11 @@ fn compute_layout(
 
     let mut vlan_endpoint_counts: HashMap<u32, usize> = HashMap::new();
     for node in nodes.values() {
-        if !node.is_infrastructure {
+        // Count endpoints AND single-VLAN infrastructure (APs, single-VLAN switches)
+        // so their VLAN sectors are sized correctly
+        let in_sector = !node.is_infrastructure
+            || (node.is_infrastructure && node.vlans_served.len() <= 1 && node.vlan_id.is_some());
+        if in_sector {
             if let Some(vid) = node.vlan_id {
                 *vlan_endpoint_counts.entry(vid).or_default() += 1;
             }
@@ -1153,7 +1197,8 @@ fn compute_layout(
     }
 
     // ── Balance VLANs across left/right columns ─────────────────
-    let side_vlans: Vec<u32> = active_vlans.iter().filter(|&&v| v != 2).copied().collect();
+    // All VLANs get sectors — the spine is reserved for multi-VLAN infrastructure only
+    let side_vlans: Vec<u32> = active_vlans.clone();
 
     // Sort by device count descending for greedy balancing
     let mut sorted_by_count: Vec<(u32, usize)> = side_vlans
@@ -1252,7 +1297,7 @@ fn compute_layout(
         cursor_y - SECTOR_V_GAP - TOP_MARGIN
     };
 
-    // VLAN 2 spine — spans the full height of the taller column
+    // Spine region — spans the full height, used for multi-VLAN infrastructure only
     let max_infra_layer = nodes
         .values()
         .filter(|n| n.is_infrastructure)
@@ -1260,16 +1305,17 @@ fn compute_layout(
         .max()
         .unwrap_or(0);
     let infra_bottom = TOP_MARGIN + max_infra_layer as f64 * LAYER_SPACING + LAYER_SPACING;
-    let spine_h = left_total_h
+    let _spine_h = left_total_h
         .max(right_total_h)
         .max(infra_bottom - TOP_MARGIN)
         .max(MIN_SECTOR_H);
-    sector_geom.insert(2, (spine_left, TOP_MARGIN, SPINE_WIDTH, spine_h));
 
     // ── Position infrastructure nodes (in center spine) ─────────
+    // Only multi-VLAN infrastructure goes on the spine; single-VLAN infra
+    // (e.g., APs serving one VLAN) goes in their VLAN sector below.
     let mut layers: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for (id, node) in nodes.iter() {
-        if node.is_infrastructure {
+        if node.is_infrastructure && (node.vlan_id.is_none() || node.vlans_served.len() > 1) {
             layers.entry(node.layer).or_default().push(id.clone());
         }
     }
@@ -1290,9 +1336,12 @@ fn compute_layout(
     }
 
     // ── Position endpoint nodes (within their VLAN sector) ──────
+    // Includes endpoints AND single-VLAN infrastructure (APs, etc.)
     let mut vlan_endpoints: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for (id, node) in nodes.iter() {
-        if !node.is_infrastructure {
+        let in_sector = !node.is_infrastructure
+            || (node.is_infrastructure && node.vlans_served.len() <= 1 && node.vlan_id.is_some());
+        if in_sector {
             if let Some(vid) = node.vlan_id {
                 vlan_endpoints.entry(vid).or_default().push(id.clone());
             }
@@ -1306,17 +1355,7 @@ fn compute_layout(
             let usable_w = (w - 2.0 * SECTOR_PADDING).max(NODE_SPACING);
             let cols = (usable_w / NODE_SPACING).floor().max(1.0) as usize;
 
-            // For VLAN 2 endpoints, start below infrastructure
-            let grid_start_y = if vid == 2 {
-                let max_iy = nodes
-                    .values()
-                    .filter(|n| n.is_infrastructure)
-                    .map(|n| n.y)
-                    .fold(TOP_MARGIN, f64::max);
-                max_iy + ENDPOINT_OFFSET
-            } else {
-                ty + SECTOR_HEADER_H + SECTOR_PADDING
-            };
+            let grid_start_y = ty + SECTOR_HEADER_H + SECTOR_PADDING;
 
             let grid_start_x = lx + SECTOR_PADDING + NODE_SPACING / 2.0;
 
@@ -1405,12 +1444,14 @@ pub fn spawn_topology_updater(
     supervisor: &TaskSupervisor,
     switch_store: Arc<SwitchStore>,
     device_manager: Arc<RwLock<DeviceManager>>,
+    behavior_store: Arc<BehaviorStore>,
     cache: Arc<RwLock<Option<NetworkTopology>>>,
     wan_interface: String,
 ) {
     supervisor.spawn("topology_updater", move || {
         let switch_store = switch_store.clone();
         let device_manager = device_manager.clone();
+        let behavior_store = behavior_store.clone();
         let cache = cache.clone();
         let wan_interface = wan_interface.clone();
         Box::pin(async move {
@@ -1421,7 +1462,7 @@ pub fn spawn_topology_updater(
         let mut interval = tokio::time::interval(Duration::from_secs(120));
 
         loop {
-            match compute_topology(&switch_store, &device_manager, &wan_interface).await {
+            match compute_topology(&switch_store, &device_manager, &behavior_store, &wan_interface).await {
                 Ok(topo) => {
                     tracing::info!(
                         nodes = topo.node_count,

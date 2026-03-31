@@ -35,7 +35,7 @@ pub async fn refresh_topology(
     RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    match crate::topology::compute_topology(&state.switch_store, &state.device_manager, &state.config.router.wan_interface).await {
+    match crate::topology::compute_topology(&state.switch_store, &state.device_manager, &state.behavior_store, &state.config.router.wan_interface).await {
         Ok(topo) => {
             let count = topo.node_count;
             let mut cache = state.topology_cache.write().await;

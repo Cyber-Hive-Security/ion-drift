@@ -138,14 +138,11 @@ export function createTopologyMapInstance(
   // ── All helpers scoped inside factory ──
 
   function nodeColor(node: TopologyNode): string {
-    if (node.kind === "router") return "#2FA4FF";
-    if (node.kind === "managed_switch") return "#00E5FF";
-    if (node.kind === "unmanaged_switch") return "#7A5CFF";
-    if (node.kind === "access_point") return "#7A5CFF";
-    if (node.kind === "server") return "#2FA4FF";
-    if (node.kind === "camera") return "#8A929D";
-    if (node.kind === "media_player") return "#FF4FD8";
+    // VLAN-first: color always reflects VLAN membership.
+    // Device type is communicated by the icon inside the hexagon.
     if (node.vlan_id != null && vlanColors[node.vlan_id]) return vlanColors[node.vlan_id];
+    // Multi-VLAN infrastructure (router, trunk switches) — no single VLAN
+    if (node.kind === "router") return "#2FA4FF";
     if (node.is_infrastructure) return "#00E5FF";
     return "#E6EDF3";
   }
@@ -387,6 +384,11 @@ export function createTopologyMapInstance(
     if (node.vlan_id != null) lines.push(`<span style="color:#8A929D">VLAN:</span> ${node.vlan_id}`);
     if (node.device_type) lines.push(`<span style="color:#8A929D">Type:</span> ${escHtml(node.device_type)}`);
     if (node.manufacturer) lines.push(`<span style="color:#8A929D">Mfg:</span> ${escHtml(node.manufacturer)}`);
+    if (node.baseline_status) {
+      const bsLabel: Record<string, string> = { baselined: "Baselined", learning: "Learning", sparse: "Sparse" };
+      const bsCol: Record<string, string> = { baselined: "#21D07A", learning: "#2FA4FF", sparse: "#FFAA00" };
+      lines.push(`<span style="color:#8A929D">Baseline:</span> <span style="color:${bsCol[node.baseline_status] || "#8A929D"}">${bsLabel[node.baseline_status] || node.baseline_status}</span>`);
+    }
     if (node.switch_port) {
       lines.push(`<span style="color:#8A929D">Port:</span> ${escHtml(node.switch_port)}`);
     } else if (node.parent_id) {
@@ -1001,6 +1003,24 @@ export function createTopologyMapInstance(
           .attr("font-size", 5)
           .attr("font-weight", "bold")
           .text("N");
+      }
+
+      // Baseline status indicator dot (bottom-right of hexagon)
+      if (node.baseline_status) {
+        const bsColors: Record<string, string> = {
+          baselined: "#21D07A",
+          learning: "#2FA4FF",
+          sparse: "#FFAA00",
+        };
+        const bsColor = bsColors[node.baseline_status] || "#8A929D";
+        g.append("circle")
+          .attr("class", "topo-baseline-dot")
+          .attr("cx", r * 0.65)
+          .attr("cy", r * 0.65)
+          .attr("r", 3.5)
+          .attr("fill", bsColor)
+          .attr("stroke", "#0D1117")
+          .attr("stroke-width", 1);
       }
 
       // Flagged device red ring

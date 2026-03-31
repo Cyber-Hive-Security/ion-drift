@@ -1253,6 +1253,7 @@ export interface TopologyNode {
   status: TopologyNodeStatus;
   confidence: number;
   disposition: DeviceDisposition;
+  baseline_status: string | null;
 }
 
 export interface TopologyEdge {

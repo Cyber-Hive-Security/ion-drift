@@ -76,6 +76,7 @@ function DetailPanel({
           )}
           {node.device_type && <Row label="Device Type" value={node.device_type} />}
           {node.manufacturer && <Row label="Manufacturer" value={node.manufacturer} />}
+          {node.baseline_status && <Row label="Baseline" value={node.baseline_status.charAt(0).toUpperCase() + node.baseline_status.slice(1)} />}
           {node.switch_port && <Row label="Switch Port" value={node.switch_port} />}
           {node.parent_id && <Row label="Connected To" value={node.parent_id} />}
           <Row label="Layer" value={String(node.layer)} />
@@ -107,8 +108,15 @@ function Row({ label, value }: { label: string; value: string }) {
 const LEGEND_NODES = [
   { color: "#2FA4FF", label: "Router" },
   { color: "#00E5FF", label: "Switch" },
-  { color: "#7A5CFF", label: "Access Point" },
-  { color: "#E6EDF3", label: "Endpoint" },
+  { color: "#00E5FF", label: "Access Point" },
+  { color: "#00E5FF", label: "Server" },
+  { color: "#E6EDF3", label: "Workstation" },
+  { color: "#E6EDF3", label: "Camera" },
+  { color: "#E6EDF3", label: "Phone" },
+  { color: "#E6EDF3", label: "IoT / Smart Home" },
+  { color: "#E6EDF3", label: "Media Player" },
+  { color: "#E6EDF3", label: "Printer" },
+  { color: "#E6EDF3", label: "Unknown" },
 ] as const;
 
 const LEGEND_SPEEDS = [
@@ -210,7 +218,10 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
       {!collapsed && (
         <div className="border-t px-3 py-2 text-[10px]" style={{ borderColor: "rgba(42, 50, 61, 0.5)", color: "#9AA6B2" }}>
           {/* Nodes */}
-          <LegendSection title="NODES">
+          <LegendSection title="DEVICE TYPES">
+            <div className="mb-1 text-[9px] italic" style={{ color: "#666" }}>
+              Color = VLAN &middot; Icon = type
+            </div>
             {LEGEND_NODES.map((n) => (
               <div key={n.label} className="flex items-center gap-2">
                 <svg width="14" height="12" viewBox="-7 -6 14 12">
@@ -282,6 +293,22 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
             <div className="flex items-center gap-2">
               <span className="text-[10px]">{"\uD83D\uDCCC"}</span>
               Pinned
+            </div>
+          </LegendSection>
+
+          {/* Baseline */}
+          <LegendSection title="BASELINE">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: "#21D07A" }} />
+              Baselined
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: "#2FA4FF" }} />
+              Learning
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: "#FFAA00" }} />
+              Sparse
             </div>
           </LegendSection>
 
