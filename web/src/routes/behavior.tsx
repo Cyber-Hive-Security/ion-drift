@@ -20,6 +20,7 @@ import {
   useInvestigationStats,
   useBehaviorAlerts,
   useAnomalyTrend,
+  useAllDeviceProfiles,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { BehaviorHelp } from "@/components/help-content";
@@ -32,6 +33,7 @@ import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import type {
   BehaviorOverview,
   DeviceAnomaly,
+  DeviceProfile,
   VlanBehaviorSummary,
   Investigation,
   InvestigationStats,
@@ -190,7 +192,38 @@ function InvestigationSummaryBar({ stats }: { stats: InvestigationStats | undefi
   );
 }
 
-function StatsRow({ data }: { data: BehaviorOverview }) {
+function StatsRow({ data, onStatusClick, activeStatus, onAnomaliesClick }: {
+  data: BehaviorOverview;
+  onStatusClick: (status: DeviceStatusFilter) => void;
+  activeStatus: DeviceStatusFilter;
+  onAnomaliesClick: () => void;
+}) {
+  const statusCard = (
+    label: string,
+    value: number,
+    status: DeviceStatusFilter,
+    icon: React.ReactNode,
+    colorClass: string,
+  ) => (
+    <button
+      onClick={() => onStatusClick(activeStatus === status ? "" : status)}
+      className="text-left"
+    >
+      <div className={cn(
+        "rounded-lg border border-border bg-card p-4 transition-colors",
+        activeStatus === status && `border-current/50 bg-current/5 ${colorClass}`,
+      )}>
+        <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          {icon}
+          {label}
+        </div>
+        <p className={cn("text-2xl font-bold", colorClass)}>
+          {value}
+        </p>
+      </div>
+    </button>
+  );
+
   return (
     <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-5">
       <div className="rounded-lg border border-border bg-card p-4">
@@ -200,47 +233,23 @@ function StatsRow({ data }: { data: BehaviorOverview }) {
         </div>
         <p className="text-2xl font-bold">{data.total_devices}</p>
       </div>
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <CheckCircle2 className="h-3.5 w-3.5 text-success" />
-          Baselined
+      {statusCard("Baselined", data.baselined_devices, "baselined",
+        <CheckCircle2 className="h-3.5 w-3.5 text-success" />, "text-success")}
+      {statusCard("Sparse", data.sparse_devices, "sparse",
+        <CircleDashed className="h-3.5 w-3.5 text-amber-400" />, "text-amber-400")}
+      {statusCard("Learning", data.learning_devices, "learning",
+        <Brain className="h-3.5 w-3.5 text-primary" />, "text-primary")}
+      <button onClick={onAnomaliesClick} className="text-left">
+        <div className="rounded-lg border border-border bg-card p-4 transition-colors">
+          <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <AlertTriangle className="h-3.5 w-3.5 text-warning" />
+            Pending Anomalies
+          </div>
+          <p className={cn("text-2xl font-bold", data.pending_anomalies > 0 ? "text-warning" : "text-success")}>
+            {data.pending_anomalies}
+          </p>
         </div>
-        <p className="text-2xl font-bold text-success">
-          {data.baselined_devices}
-        </p>
-      </div>
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <CircleDashed className="h-3.5 w-3.5 text-amber-400" />
-          Sparse
-        </div>
-        <p className="text-2xl font-bold text-amber-400">
-          {data.sparse_devices}
-        </p>
-      </div>
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Brain className="h-3.5 w-3.5 text-primary" />
-          Learning
-        </div>
-        <p className="text-2xl font-bold text-primary">
-          {data.learning_devices}
-        </p>
-      </div>
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <AlertTriangle className="h-3.5 w-3.5 text-warning" />
-          Pending Anomalies
-        </div>
-        <p
-          className={cn(
-            "text-2xl font-bold",
-            data.pending_anomalies > 0 ? "text-warning" : "text-success",
-          )}
-        >
-          {data.pending_anomalies}
-        </p>
-      </div>
+      </button>
     </div>
   );
 }
@@ -751,7 +760,8 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
 
 // ── Main Page ────────────────────────────────────────────────
 
-type TabMode = "overview" | "anomalies";
+type TabMode = "overview" | "anomalies" | "devices";
+type DeviceStatusFilter = "" | "baselined" | "learning" | "sparse";
 type AnomalyFilter = "all" | "pending" | "accepted" | "flagged" | "dismissed";
 
 // ── Anomaly Trend Chart ─────────────────────────────────────
@@ -834,12 +844,113 @@ function AnomalyTrendChart({ vlanNames, vlanColors }: { vlanNames: Record<number
   );
 }
 
+// ── Devices Tab ─────────────────────────────────────────────
+
+const STATUS_BADGE: Record<string, { label: string; color: string }> = {
+  baselined: { label: "Baselined", color: "bg-success/15 text-success" },
+  learning: { label: "Learning", color: "bg-primary/15 text-primary" },
+  sparse: { label: "Sparse", color: "bg-amber-400/15 text-amber-400" },
+};
+
+function DevicesTab({ statusFilter, vlanNames }: { statusFilter: DeviceStatusFilter; vlanNames: Record<number, string> }) {
+  const { data: profiles, isLoading } = useAllDeviceProfiles();
+
+  const filtered = useMemo(() => {
+    if (!profiles) return [];
+    if (!statusFilter) return profiles;
+    return profiles.filter((p) => p.baseline_status === statusFilter);
+  }, [profiles, statusFilter]);
+
+  if (isLoading) return <LoadingSpinner />;
+  if (!profiles || profiles.length === 0) {
+    return <p className="text-sm text-muted-foreground">No device profiles yet. The behavior engine creates profiles as it observes traffic.</p>;
+  }
+
+  const columns: Column<DeviceProfile>[] = [
+    {
+      key: "status",
+      header: "Status",
+      render: (r) => {
+        const badge = STATUS_BADGE[r.baseline_status] ?? { label: r.baseline_status, color: "bg-muted text-muted-foreground" };
+        return (
+          <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", badge.color)}>
+            {badge.label}
+          </span>
+        );
+      },
+      sortValue: (r) => r.baseline_status,
+    },
+    {
+      key: "mac",
+      header: "Device",
+      render: (r) => (
+        <div className="text-xs">
+          <DeviceLink mac={r.mac} className="font-mono text-xs" />
+          {r.hostname && <span className="ml-1.5 text-muted-foreground">({r.hostname})</span>}
+        </div>
+      ),
+      sortValue: (r) => r.hostname ?? r.mac,
+    },
+    {
+      key: "ip",
+      header: "IP",
+      render: (r) => <span className="font-mono text-xs">{r.current_ip ?? "—"}</span>,
+      sortValue: (r) => r.current_ip ?? "",
+    },
+    {
+      key: "vlan",
+      header: "VLAN",
+      render: (r) => <span className="text-xs">{r.current_vlan != null ? vlanLabel(r.current_vlan, vlanNames) : "—"}</span>,
+      sortValue: (r) => r.current_vlan ?? -1,
+    },
+    {
+      key: "manufacturer",
+      header: "Manufacturer",
+      render: (r) => <span className="text-xs text-muted-foreground truncate max-w-[160px] inline-block">{r.manufacturer ?? "—"}</span>,
+      sortValue: (r) => r.manufacturer ?? "",
+    },
+    {
+      key: "last_seen",
+      header: "Last Seen",
+      render: (r) => <span className="text-xs text-muted-foreground">{new Date(r.last_seen * 1000).toLocaleString()}</span>,
+      sortValue: (r) => r.last_seen,
+    },
+    {
+      key: "learning_until",
+      header: "Learning Until",
+      render: (r) => {
+        if (r.baseline_status !== "learning") return <span className="text-xs text-muted-foreground">—</span>;
+        return <span className="text-xs text-muted-foreground">{new Date(r.learning_until * 1000).toLocaleDateString()}</span>;
+      },
+      sortValue: (r) => r.learning_until,
+    },
+  ];
+
+  return (
+    <div>
+      <div className="mb-2 text-xs text-muted-foreground">
+        {filtered.length} of {profiles.length} devices
+        {statusFilter && ` — filtered to ${STATUS_BADGE[statusFilter]?.label ?? statusFilter}`}
+      </div>
+      <DataTable
+        columns={columns}
+        data={filtered}
+        rowKey={(r) => r.mac}
+        searchable
+        searchPlaceholder="Search devices..."
+        defaultSort={{ key: "last_seen", asc: false }}
+      />
+    </div>
+  );
+}
+
 export function BehaviorPage() {
   const search = useSearch({ from: "/behavior" });
   const macFilter = search.mac ?? null;
   const [tab, setTab] = useState<TabMode>(macFilter ? "anomalies" : "overview");
   const [anomalyFilter, setAnomalyFilter] = useState<AnomalyFilter>("pending");
   const [tierFilter, setTierFilter] = useState<number | null>(null);
+  const [deviceStatusFilter, setDeviceStatusFilter] = useState<DeviceStatusFilter>("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const vlan = useVlanLookup();
 
@@ -929,6 +1040,7 @@ export function BehaviorPage() {
   const tabs: { mode: TabMode; label: string }[] = [
     { mode: "overview", label: "Overview" },
     { mode: "anomalies", label: "Anomalies" },
+    { mode: "devices", label: "Devices" },
   ];
 
   const statusFilters: { mode: AnomalyFilter; label: string }[] = [
@@ -950,7 +1062,15 @@ export function BehaviorPage() {
       isRefreshing={overview.isFetching || anomaliesQuery.isFetching}
     >
       <AlertBanners data={data} />
-      <StatsRow data={data} />
+      <StatsRow
+        data={data}
+        activeStatus={deviceStatusFilter}
+        onStatusClick={(status) => {
+          setDeviceStatusFilter(status);
+          if (status) setTab("devices");
+        }}
+        onAnomaliesClick={() => setTab("anomalies")}
+      />
       <InvestigationSummaryBar stats={invStats} />
 
       <AnomalyTrendChart vlanNames={vlan.names} vlanColors={vlan.colors} />
@@ -1194,6 +1314,11 @@ export function BehaviorPage() {
             } : undefined}
           />
         </div>
+      )}
+
+      {/* Devices tab */}
+      {tab === "devices" && (
+        <DevicesTab statusFilter={deviceStatusFilter} vlanNames={vlan.names} />
       )}
     </PageShell>
   );

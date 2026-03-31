@@ -412,6 +412,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         // Behavior
         .route("/behavior/overview", get(behavior::overview))
         .route("/behavior/vlan/{vlan_id}", get(behavior::vlan_detail))
+        .route("/behavior/devices", get(behavior::all_devices))
         .route("/behavior/device/{mac}", get(behavior::device_detail))
         .route(
             "/behavior/anomalies",

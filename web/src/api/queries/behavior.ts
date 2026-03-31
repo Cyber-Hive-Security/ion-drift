@@ -5,6 +5,7 @@ import type {
   VlanBehaviorDetail,
   DeviceDetailResponse,
   DeviceAnomaly,
+  DeviceProfile,
   AlertCount,
   PortBaselineStatus,
 } from "../types";
@@ -16,6 +17,14 @@ export function useBehaviorOverview() {
     queryKey: ["behavior", "overview"],
     queryFn: () => apiFetch<BehaviorOverview>("/api/behavior/overview"),
     refetchInterval: 30_000,
+  });
+}
+
+export function useAllDeviceProfiles() {
+  return useQuery({
+    queryKey: ["behavior", "devices"],
+    queryFn: () => apiFetch<DeviceProfile[]>("/api/behavior/devices"),
+    refetchInterval: 60_000,
   });
 }
 

@@ -100,6 +100,19 @@ pub async fn vlan_detail(
     }))
 }
 
+/// GET /api/behavior/devices — all device profiles.
+pub async fn all_devices(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ion_drift_storage::behavior::DeviceProfile>>, Response> {
+    let profiles = state
+        .behavior_store
+        .get_all_profiles()
+        .await
+        .map_err(|e| internal_error("all device profiles", e))?;
+    Ok(Json(profiles))
+}
+
 /// GET /api/behavior/device/:mac
 pub async fn device_detail(
     RequireAuth(_session): RequireAuth,
