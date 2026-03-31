@@ -82,6 +82,19 @@ const SOURCE_COLORS: Record<string, string> = {
   none: "bg-muted text-muted-foreground border-border",
 };
 
+const SOURCE_LABELS: Record<string, string> = {
+  human: "Human",
+  lldp: "LLDP",
+  conntrack: "Conntrack",
+  traffic_pattern: "Traffic Pattern",
+  oui: "OUI",
+  none: "None",
+};
+
+function sourceLabel(source: string): string {
+  return SOURCE_LABELS[source] ?? source;
+}
+
 const DISPOSITION_OPTIONS: { value: DeviceDisposition; label: string; color: string }[] = [
   { value: "unknown", label: "Unknown", color: "bg-muted text-muted-foreground border-border" },
   { value: "my_device", label: "My Device", color: "bg-success/20 text-success border-success/30" },
@@ -653,11 +666,11 @@ export default function IdentityManagerPage() {
         return (
           <span
             className={cn(
-              "rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase",
+              "rounded-full border px-2 py-0.5 text-[10px] font-medium",
               SOURCE_COLORS[src] || SOURCE_COLORS.none
             )}
           >
-            {src}
+            {sourceLabel(src)}
           </span>
         );
       },
@@ -949,27 +962,39 @@ export default function IdentityManagerPage() {
         <StatCard title="Total Identities" icon={<Users className="h-4 w-4" />}>
           <div className="text-2xl font-bold">{stats?.total ?? "—"}</div>
         </StatCard>
-        <StatCard
-          title="Confirmed"
-          icon={<CheckCircle2 className="h-4 w-4 text-success" />}
+        <button
+          onClick={() => setFilterConfirmed(filterConfirmed === "confirmed" ? "" : "confirmed")}
+          className="text-left"
         >
-          <div className="text-2xl font-bold text-success">
-            {stats?.confirmed ?? "—"}
-            {stats && stats.total > 0 && (
-              <span className="ml-1 text-sm font-normal text-muted-foreground">
-                ({((stats.confirmed / stats.total) * 100).toFixed(0)}%)
-              </span>
-            )}
-          </div>
-        </StatCard>
-        <StatCard
-          title="Needs Review"
-          icon={<AlertCircle className="h-4 w-4 text-warning" />}
+          <StatCard
+            title="Confirmed"
+            icon={<CheckCircle2 className="h-4 w-4 text-success" />}
+            className={cn("transition-colors", filterConfirmed === "confirmed" && "border-success/50 bg-success/5")}
+          >
+            <div className="text-2xl font-bold text-success">
+              {stats?.confirmed ?? "—"}
+              {stats && stats.total > 0 && (
+                <span className="ml-1 text-sm font-normal text-muted-foreground">
+                  ({((stats.confirmed / stats.total) * 100).toFixed(0)}%)
+                </span>
+              )}
+            </div>
+          </StatCard>
+        </button>
+        <button
+          onClick={() => setFilterConfirmed(filterConfirmed === "unconfirmed" ? "" : "unconfirmed")}
+          className="text-left"
         >
-          <div className="text-2xl font-bold text-warning">
-            {stats?.unconfirmed ?? "—"}
-          </div>
-        </StatCard>
+          <StatCard
+            title="Needs Review"
+            icon={<AlertCircle className="h-4 w-4 text-warning" />}
+            className={cn("transition-colors", filterConfirmed === "unconfirmed" && "border-warning/50 bg-warning/5")}
+          >
+            <div className="text-2xl font-bold text-warning">
+              {stats?.unconfirmed ?? "—"}
+            </div>
+          </StatCard>
+        </button>
         <StatCard
           title="By Source"
           icon={<Fingerprint className="h-4 w-4" />}
@@ -979,15 +1004,17 @@ export default function IdentityManagerPage() {
               Object.entries(stats.by_source)
                 .sort(([, a], [, b]) => b - a)
                 .map(([source, count]) => (
-                  <span
+                  <button
                     key={source}
+                    onClick={() => setFilterSource(filterSource === source ? "" : source)}
                     className={cn(
-                      "rounded-full border px-2 py-0.5 text-[10px] font-medium",
-                      SOURCE_COLORS[source] || SOURCE_COLORS.none
+                      "rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors",
+                      SOURCE_COLORS[source] || SOURCE_COLORS.none,
+                      filterSource === source && "ring-1 ring-current"
                     )}
                   >
-                    {source}: {count}
-                  </span>
+                    {sourceLabel(source)}: {count}
+                  </button>
                 ))}
           </div>
         </StatCard>
