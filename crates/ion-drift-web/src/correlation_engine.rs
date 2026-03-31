@@ -553,6 +553,22 @@ async fn run_correlation(
         }
     }
 
+    // Collect MACs where inference is authoritative (Active mode with successful binding).
+    // Legacy binding below will skip these to avoid overwriting inference results.
+    let inference_bound_macs: HashSet<String> = if inference_mode == InferenceMode::Active {
+        store.get_all_attachment_states().await.unwrap_or_default()
+            .into_iter()
+            .filter(|s| {
+                s.current_device_id.is_some()
+                    && s.confidence > 0.3
+                    && s.state != "unknown"
+            })
+            .map(|s| s.mac_address.to_uppercase())
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
     // Build a map: MAC → best known info
     let mut identity_map: HashMap<String, IdentityBuilder> = HashMap::new();
 
@@ -604,9 +620,14 @@ async fn run_correlation(
             .entry(entry.mac_address.to_uppercase())
             .or_insert_with(IdentityBuilder::default);
 
+        // Skip switch binding for MACs where inference is authoritative
+        let mac_upper = entry.mac_address.to_uppercase();
+        let inference_owns = inference_bound_macs.contains(&mac_upper);
+
         // Only update switch binding if new priority strictly dominates.
         // Equal priority → no change (eliminates flapping between same-class ports).
-        if new_priority > builder.binding_priority {
+        // Inference-bound MACs keep their inference binding — legacy only updates VLAN.
+        if !inference_owns && new_priority > builder.binding_priority {
             builder.switch_device_id = Some(entry.device_id.clone());
             builder.switch_port = Some(canonical_port);
             builder.binding_priority = new_priority;
@@ -625,7 +646,8 @@ async fn run_correlation(
     // should not be attributed to the router.
     {
         let mut redirected = 0u32;
-        for builder in identity_map.values_mut() {
+        for (mac_key, builder) in identity_map.iter_mut() {
+            if inference_bound_macs.contains(mac_key) { continue; }
             let dev = builder.switch_device_id.clone();
             let port = builder.switch_port.clone();
             if let (Some(dev), Some(port)) = (dev, port) {
@@ -688,6 +710,7 @@ async fn run_correlation(
             let wireless_macs: Vec<String> = identity_map
                 .iter()
                 .filter_map(|(mac, b)| {
+                    if inference_bound_macs.contains(mac) { return None; }
                     match b.vlan_id {
                         Some(v) if wireless_vlans.contains(&v) => Some(mac.clone()),
                         _ => None,

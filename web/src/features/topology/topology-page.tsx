@@ -79,6 +79,12 @@ function DetailPanel({
           {node.device_type && <Row label="Device Type" value={node.device_type} />}
           {node.manufacturer && <Row label="Manufacturer" value={node.manufacturer} />}
           {node.baseline_status && <Row label="Baseline" value={node.baseline_status.charAt(0).toUpperCase() + node.baseline_status.slice(1)} />}
+          {node.binding_source && node.binding_source !== "unknown" && (
+            <Row label="Binding" value={`${node.binding_source}${node.binding_tier ? ` (${node.binding_tier})` : ""}`} />
+          )}
+          {node.attachment_state && node.attachment_state !== "unknown" && (
+            <Row label="Inference" value={node.attachment_state.charAt(0).toUpperCase() + node.attachment_state.slice(1)} />
+          )}
           {node.switch_port && <Row label="Switch Port" value={node.switch_port} />}
           {node.parent_id && <Row label="Connected To" value={node.parent_id} />}
           <Row label="Layer" value={String(node.layer)} />
@@ -321,6 +327,22 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
             <div className="flex items-center gap-2">
               <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: "#FFAA00" }} />
               Sparse
+            </div>
+          </LegendSection>
+
+          {/* Binding Source */}
+          <LegendSection title="BINDING">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-0 w-4 flex-shrink-0" style={{ borderTop: "1.5px solid #9AA6B2" }} />
+              Authoritative
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-0 w-4 flex-shrink-0" style={{ borderTop: "1.5px dashed #9AA6B2" }} />
+              Observed
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-0 w-4 flex-shrink-0" style={{ borderTop: "1.5px dotted #9AA6B2" }} />
+              Inferred
             </div>
           </LegendSection>
 

@@ -1254,6 +1254,9 @@ export interface TopologyNode {
   confidence: number;
   disposition: DeviceDisposition;
   baseline_status: string | null;
+  binding_source: string;
+  binding_tier: string | null;
+  attachment_state: string | null;
 }
 
 export interface TopologyEdge {

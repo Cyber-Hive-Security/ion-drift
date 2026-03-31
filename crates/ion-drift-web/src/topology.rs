@@ -77,6 +77,9 @@ pub struct TopologyNode {
     pub confidence: f64,
     pub disposition: String,
     pub baseline_status: Option<String>,
+    pub binding_source: String,
+    pub binding_tier: Option<String>,
+    pub attachment_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +185,9 @@ pub async fn compute_topology(
     let mut nodes: BTreeMap<String, TopologyNode> = BTreeMap::new();
     let mut edges: Vec<TopologyEdge> = Vec::new();
     let mut infra_ids: HashSet<String> = HashSet::new();
+    // MAC → node_id map for infrastructure dedup (prevents same physical device
+    // from appearing under different keys like LLDP identity vs device name)
+    let mut infra_mac_to_node_id: HashMap<String, String> = HashMap::new();
 
     // ── Layer 1: Infrastructure skeleton ─────────────────────────
 
@@ -206,6 +212,7 @@ pub async fn compute_topology(
             DeviceStatus::Unknown => NodeStatus::Unknown,
         };
 
+        let tier = if kind == NodeKind::Router { "router" } else { "ros_switch" };
         infra_ids.insert(id.clone());
         nodes.insert(
             id.clone(),
@@ -232,6 +239,9 @@ pub async fn compute_topology(
                 confidence: 1.0,
                 disposition: "my_device".to_string(),
                 baseline_status: None,
+                binding_source: "authoritative".to_string(),
+                binding_tier: Some(tier.to_string()),
+                attachment_state: None,
             },
         );
     }
@@ -324,6 +334,11 @@ pub async fn compute_topology(
             }
             _ => {}
         }
+    }
+
+    // Seed infra MAC dedup from mac_to_device (registered devices' neighbor MACs)
+    for (mac, dev_id) in &mac_to_device {
+        infra_mac_to_node_id.insert(mac.clone(), dev_id.clone());
     }
 
     // Track edges we've already created (both directions)
@@ -469,6 +484,31 @@ pub async fn compute_topology(
                         .unwrap_or_else(|| format!("unknown-{}-{}", nb.device_id, nb.interface))
                 });
 
+            // MAC-based dedup: if this MAC already has an infra node, create edge to it instead
+            if let Some(ref mac) = nb.mac_address {
+                let mac_upper = mac.to_uppercase();
+                if let Some(existing_node) = infra_mac_to_node_id.get(&mac_upper).cloned() {
+                    let pair = if source_device < existing_node {
+                        (source_device.clone(), existing_node.clone())
+                    } else {
+                        (existing_node.clone(), source_device.clone())
+                    };
+                    if edge_set.insert(pair) {
+                        edges.push(TopologyEdge {
+                            source: source_device.clone(),
+                            target: existing_node,
+                            kind: EdgeKind::Trunk,
+                            source_port: Some(source_port.clone()),
+                            target_port: None,
+                            vlans: Vec::new(),
+                            speed_mbps: None,
+                            traffic_bps: None,
+                        });
+                    }
+                    continue;
+                }
+            }
+
             if !infra_ids.contains(&inferred_id) && !nodes.contains_key(&inferred_id) {
                 let kind = if is_ap {
                     NodeKind::AccessPoint
@@ -519,8 +559,16 @@ pub async fn compute_topology(
                         confidence: 0.7,
                         disposition: "unknown".to_string(),
                 baseline_status: None,
+                binding_source: "observed".to_string(),
+                binding_tier: None,
+                attachment_state: None,
                     },
                 );
+
+                // Register MAC for dedup against future LLDP/backbone entries
+                if let Some(ref mac) = nb.mac_address {
+                    infra_mac_to_node_id.insert(mac.to_uppercase(), inferred_id.clone());
+                }
             }
 
             // Edge from managed device to inferred node
@@ -566,8 +614,19 @@ pub async fn compute_topology(
                 continue;
             }
 
-            // Look up from infrastructure identities for metadata
+            // MAC-based dedup for backbone endpoints
             let ident = infra_by_id.get(device_id);
+            if let Some(mac) = ident.map(|i| i.mac_address.to_uppercase()) {
+                if let Some(existing) = infra_mac_to_node_id.get(&mac).cloned() {
+                    // This backbone device is already in topology under a different key
+                    infra_ids.insert(device_id.clone());
+                    // Alias this device_id to the existing node for edge creation
+                    infra_mac_to_node_id.insert(device_id.clone(), existing);
+                    continue;
+                }
+            }
+
+            // Look up from infrastructure identities for metadata
             let kind = match ident.and_then(|i| i.device_type.as_deref()) {
                 Some("access_point") | Some("wap") => NodeKind::AccessPoint,
                 _ => NodeKind::UnmanagedSwitch,
@@ -610,9 +669,16 @@ pub async fn compute_topology(
                     confidence: 0.8,
                     disposition: "unknown".to_string(),
                 baseline_status: None,
+                binding_source: "observed".to_string(),
+                binding_tier: None,
+                attachment_state: None,
                 },
             );
             tracing::debug!(device = %device_id, "created node from backbone link reference");
+            // Register MAC for dedup
+            if let Some(mac) = ident.map(|i| i.mac_address.to_uppercase()) {
+                infra_mac_to_node_id.insert(mac, device_id.clone());
+            }
         }
 
         let pair = if link.device_a < link.device_b {
@@ -690,6 +756,9 @@ pub async fn compute_topology(
                     confidence: 1.0,
                     disposition: "external".to_string(),
                 baseline_status: None,
+                binding_source: "authoritative".to_string(),
+                binding_tier: Some("router".to_string()),
+                attachment_state: None,
                 },
             );
             edges.push(TopologyEdge {
@@ -1003,6 +1072,17 @@ pub async fn compute_topology(
                 confidence: identity.confidence,
                 disposition: identity.disposition.clone(),
                 baseline_status: None,
+                binding_source: match identity.switch_binding_source.as_str() {
+                    "human" => "authoritative",
+                    "inference" => "inferred",
+                    _ => "observed",
+                }.to_string(),
+                binding_tier: match identity.switch_binding_source.as_str() {
+                    "human" => Some("admin".to_string()),
+                    "inference" => Some("multi_signal".to_string()),
+                    _ => None,
+                },
+                attachment_state: None, // stamped in Phase 2
             },
         );
 
@@ -1044,6 +1124,25 @@ pub async fn compute_topology(
                         if let Some(profile) = profiles.get(mac) {
                             node.baseline_status = Some(profile.baseline_status.clone());
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Stamp attachment state from inference engine ──────────────
+    {
+        let attachment_rows = store.get_all_attachment_states().await.unwrap_or_default();
+        let attachment_by_mac: std::collections::HashMap<String, _> = attachment_rows
+            .into_iter()
+            .map(|r| (r.mac_address.to_uppercase(), r))
+            .collect();
+        for node in nodes.values_mut() {
+            if let Some(mac) = &node.mac {
+                if let Some(att) = attachment_by_mac.get(&mac.to_uppercase()) {
+                    node.attachment_state = Some(att.state.clone());
+                    if att.confidence > node.confidence {
+                        node.confidence = att.confidence;
                     }
                 }
             }

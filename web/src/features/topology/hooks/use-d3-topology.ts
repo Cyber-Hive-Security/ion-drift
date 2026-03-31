@@ -394,6 +394,13 @@ export function createTopologyMapInstance(
     } else if (node.parent_id) {
       lines.push(`<span style="color:#8A929D">Port:</span> <em style="color:#444B55">downstream of ${escHtml(node.parent_id)}</em>`);
     }
+    if (node.binding_source && node.binding_source !== "unknown") {
+      lines.push(`<span style="color:#8A929D">Binding:</span> ${escHtml(node.binding_source)}${node.binding_tier ? ` (${escHtml(node.binding_tier)})` : ""}`);
+    }
+    if (node.attachment_state && node.attachment_state !== "unknown") {
+      const stateColors: Record<string, string> = { stable: "#21D07A", probable: "#2FA4FF", candidate: "#FFAA00", roaming: "#FF4FD8", conflicted: "#FF4D4F", human_pinned: "#2FA4FF" };
+      lines.push(`<span style="color:#8A929D">Inference:</span> <span style="color:${stateColors[node.attachment_state] || "#8A929D"}">${escHtml(node.attachment_state)}</span>`);
+    }
     tip.innerHTML = lines.join("<br>");
     tip.style.display = "block";
     tip.style.left = `${event.clientX + 12}px`;
@@ -963,14 +970,20 @@ export function createTopologyMapInstance(
           .style("animation-delay", "1.5s");
       }
 
-      // Hexagonal shape
-      g.append("path")
+      // Hexagonal shape — border style reflects binding source (SoA)
+      const hexEl = g.append("path")
         .attr("class", "topo-hex")
         .attr("d", hexPath(r))
         .attr("fill", color)
         .attr("fill-opacity", node.is_infrastructure ? 0.1 : 0.06)
         .attr("stroke", color)
         .attr("stroke-width", node.is_infrastructure ? 1.5 : 1);
+      // SoA border style: solid=authoritative, dashed=observed, dotted=inferred
+      if (node.binding_source === "inferred") {
+        hexEl.attr("stroke-dasharray", "2,2");
+      } else if (node.binding_source === "observed") {
+        hexEl.attr("stroke-dasharray", "4,2");
+      }
 
       // Icon inside hexagon (infrastructure nodes only — endpoints are too small)
       if (node.is_infrastructure || r >= HEX_RADIUS_SM + 2) {
