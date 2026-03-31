@@ -10,6 +10,7 @@ import {
   useDevices,
   useCreateNeighborAlias,
   useSetDisposition,
+  useResetLayout,
 } from "@/api/queries";
 import type { TopologyNode, NetworkTopologyResponse, NetworkDevice } from "@/api/types";
 import {
@@ -32,6 +33,7 @@ import {
   Microscope,
   Activity,
   History,
+  RotateCcw,
 } from "lucide-react";
 
 // ─── Detail Panel ───────────────────────────────────────
@@ -105,18 +107,33 @@ function Row({ label, value }: { label: string; value: string }) {
 
 // ─── Legend ──────────────────────────────────────────────
 
-const LEGEND_NODES = [
-  { color: "#2FA4FF", label: "Router" },
-  { color: "#00E5FF", label: "Switch" },
-  { color: "#00E5FF", label: "Access Point" },
-  { color: "#00E5FF", label: "Server" },
-  { color: "#E6EDF3", label: "Workstation" },
-  { color: "#E6EDF3", label: "Camera" },
-  { color: "#E6EDF3", label: "Phone" },
-  { color: "#E6EDF3", label: "IoT / Smart Home" },
-  { color: "#E6EDF3", label: "Media Player" },
-  { color: "#E6EDF3", label: "Printer" },
-  { color: "#E6EDF3", label: "Unknown" },
+// Device type icon paths (same as ICON_PATHS in use-d3-topology.ts — duplicated for legend rendering)
+const LEGEND_ICON_PATHS: Record<string, string> = {
+  router: "M12,2C6.48,2,2,6.48,2,12s4.48,10,10,10,10-4.48,10-10S17.52,2,12,2Zm-1,17.93c-3.94-.49-7-3.85-7-7.93,0-.62.08-1.22.21-1.79L9,15v1a2,2,0,0,0,2,2Zm6.9-2.54A2,2,0,0,0,17,16H16V13a1,1,0,0,0-1-1H9V10h2a1,1,0,0,0,1-1V7h2a2,2,0,0,0,2-2v-.41A8,8,0,0,1,20,12,7.88,7.88,0,0,1,18.9,17.39Z",
+  switch: "M20,3H4A2,2,0,0,0,2,5V19a2,2,0,0,0,2,2H20a2,2,0,0,0,2-2V5A2,2,0,0,0,20,3ZM10,17H6V15h4Zm0-4H6V11h4Zm0-4H6V7h4Zm8,8H12V15h6Zm0-4H12V11h6Zm0-4H12V7h6Z",
+  ap: "M12,21L15.6,16.2C14.6,15.45,13.35,15,12,15C10.65,15,9.4,15.45,8.4,16.2L12,21M12,3C7.95,3,4.21,4.34,1.2,6.6L3,9C5.5,7.12,8.62,6,12,6C15.38,6,18.5,7.12,21,9L22.8,6.6C19.79,4.34,16.05,3,12,3M12,9C9.3,9,6.81,9.89,4.8,11.4L6.6,13.8C8.1,12.67,9.97,12,12,12C14.03,12,15.9,12.67,17.4,13.8L19.2,11.4C17.19,9.89,14.7,9,12,9Z",
+  server: "M4,1H20A1,1,0,0,1,21,2V22A1,1,0,0,1,20,23H4A1,1,0,0,1,3,22V2A1,1,0,0,1,4,1M5,3V21H19V3H5M12,17A1.5,1.5,0,1,1,13.5,15.5,1.5,1.5,0,0,1,12,17M8,7H16V13H8V7Z",
+  workstation: "M21,16H3V4H21M21,2H3C1.89,2,1,2.89,1,4V16A2,2,0,0,0,3,18H10V20H8V22H16V20H14V18H21A2,2,0,0,0,23,16V4C23,2.89,22.1,2,21,2Z",
+  camera: "M9,3V4H5V7H4V3H9M15,3H20V7H19V4H15V3M4,17V21H9V20H5V17H4M19,17V20H15V21H20V17H19M7,7H17V17H7V7M9,9V15H15V9H9Z",
+  phone: "M6.62,10.79C8.06,13.62 10.38,15.94 13.21,17.38L15.41,15.18C15.69,14.9 16.08,14.82 16.43,14.93C17.55,15.3 18.75,15.5 20,15.5A1,1 0,0,1,21,16.5V20A1,1,0,0,1,20,21A17,17,0,0,1,3,4A1,1,0,0,1,4,3H7.5A1,1,0,0,1,8.5,4C8.5,5.25,8.7,6.45,9.07,7.57C9.18,7.92,9.1,8.31,8.82,8.59L6.62,10.79Z",
+  iot: "M9,3V4H5V7H4V3H9M15,3H20V7H19V4H15V3M4,17V21H9V20H5V17H4M19,17V20H15V21H20V17H19M7,7H17V17H7V7M9,9V15H15V9H9Z",
+  media: "M8,5.14V19.14L19,12.14L8,5.14Z",
+  printer: "M18,3H6V7H18M19,12A1,1,0,0,1,18,11A1,1,0,0,1,19,10A1,1,0,0,1,20,11A1,1,0,0,1,19,12M16,19H8V14H16M19,8H5A3,3,0,0,0,2,11V17H6V21H18V17H22V11A3,3,0,0,0,19,8Z",
+  unknown: "M11,18H13V16H11V18M12,2A10,10,0,0,0,2,12A10,10,0,0,0,12,22A10,10,0,0,0,22,12A10,10,0,0,0,12,2M12,20C7.59,20,4,16.41,4,12C4,7.59,7.59,4,12,4C16.41,4,20,7.59,20,12C20,16.41,16.41,20,12,20M12,6A4,4,0,0,0,8,10H10A2,2,0,0,1,12,8A2,2,0,0,1,14,10C14,12,11,11.75,11,14H13C13,12.5,16,12.25,16,10A4,4,0,0,0,12,6Z",
+};
+
+const LEGEND_DEVICE_TYPES = [
+  { icon: "router", label: "Router", color: "#2FA4FF" },
+  { icon: "switch", label: "Switch", color: "#00E5FF" },
+  { icon: "ap", label: "Access Point", color: "#00E5FF" },
+  { icon: "server", label: "Server", color: "#00E5FF" },
+  { icon: "workstation", label: "Workstation", color: "#E6EDF3" },
+  { icon: "camera", label: "Camera", color: "#E6EDF3" },
+  { icon: "phone", label: "Phone", color: "#E6EDF3" },
+  { icon: "iot", label: "IoT / Smart Home", color: "#E6EDF3" },
+  { icon: "media", label: "Media Player", color: "#E6EDF3" },
+  { icon: "printer", label: "Printer", color: "#E6EDF3" },
+  { icon: "unknown", label: "Unknown", color: "#E6EDF3" },
 ] as const;
 
 const LEGEND_SPEEDS = [
@@ -217,20 +234,15 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
       </div>
       {!collapsed && (
         <div className="border-t px-3 py-2 text-[10px]" style={{ borderColor: "rgba(42, 50, 61, 0.5)", color: "#9AA6B2" }}>
-          {/* Nodes */}
+          {/* Device Types */}
           <LegendSection title="DEVICE TYPES">
             <div className="mb-1 text-[9px] italic" style={{ color: "#666" }}>
               Color = VLAN &middot; Icon = type
             </div>
-            {LEGEND_NODES.map((n) => (
+            {LEGEND_DEVICE_TYPES.map((n) => (
               <div key={n.label} className="flex items-center gap-2">
-                <svg width="14" height="12" viewBox="-7 -6 14 12">
-                  <polygon
-                    points="5.2,3 0,6 -5.2,3 -5.2,-3 0,-6 5.2,-3"
-                    fill={n.color + "20"}
-                    stroke={n.color}
-                    strokeWidth="1"
-                  />
+                <svg width="16" height="16" viewBox="0 0 24 24" className="flex-shrink-0">
+                  <path d={LEGEND_ICON_PATHS[n.icon]} fill={n.color} opacity={0.85} />
                 </svg>
                 {n.label}
               </div>
@@ -644,6 +656,7 @@ export function TopologyPage() {
 
   const topology = useNetworkTopology();
   const refreshMutation = useRefreshTopology();
+  const resetLayoutMutation = useResetLayout();
   const positionMutation = useUpdateNodePosition();
   const resetMutation = useResetNodePosition();
   const sectorPositionMutation = useUpdateSectorPosition();
@@ -845,6 +858,21 @@ export function TopologyPage() {
             className={`h-3.5 w-3.5 ${refreshMutation.isPending ? "animate-spin" : ""}`}
           />
           Refresh
+        </button>
+        <button
+          onClick={() => {
+            if (window.confirm("Reset all node and sector positions to auto-layout? This cannot be undone.")) {
+              resetLayoutMutation.mutate();
+            }
+          }}
+          disabled={resetLayoutMutation.isPending}
+          className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+          title="Clear all pinned positions and recompute layout"
+        >
+          <RotateCcw
+            className={`h-3.5 w-3.5 ${resetLayoutMutation.isPending ? "animate-spin" : ""}`}
+          />
+          Reset Layout
         </button>
       </div>
 

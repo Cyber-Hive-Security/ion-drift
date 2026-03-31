@@ -2288,6 +2288,18 @@ impl SwitchStore {
         Ok(affected > 0)
     }
 
+    /// Delete ALL node position overrides (reset entire layout).
+    pub async fn delete_all_topology_positions(&self) -> Result<usize, rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute("DELETE FROM topology_positions", [])
+    }
+
+    /// Delete ALL sector position overrides (reset all VLAN zones).
+    pub async fn delete_all_sector_positions(&self) -> Result<usize, rusqlite::Error> {
+        let db = self.db.lock().await;
+        db.execute("DELETE FROM topology_sector_positions", [])
+    }
+
     // ── Backbone links ──────────────────────────────────────────────
 
     /// Get all backbone links.

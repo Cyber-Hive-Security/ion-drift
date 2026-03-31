@@ -126,6 +126,32 @@ pub async fn reset_position(
     Ok(Json(serde_json::json!({ "removed": removed })))
 }
 
+/// DELETE /api/network/topology/reset-layout — clear ALL positions and sectors, recompute layout.
+pub async fn reset_layout(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let positions = state
+        .switch_store
+        .delete_all_topology_positions()
+        .await
+        .map_err(|e| internal_error("reset all positions", e))?;
+    let sectors = state
+        .switch_store
+        .delete_all_sector_positions()
+        .await
+        .map_err(|e| internal_error("reset all sectors", e))?;
+    // Trigger recompute
+    match crate::topology::compute_topology(&state.switch_store, &state.device_manager, &state.behavior_store, &state.config.router.wan_interface).await {
+        Ok(topo) => {
+            let mut cache = state.topology_cache.write().await;
+            *cache = Some(topo);
+        }
+        Err(e) => tracing::error!("topology recompute after reset failed: {e}"),
+    }
+    Ok(Json(serde_json::json!({ "positions_cleared": positions, "sectors_cleared": sectors })))
+}
+
 // ── Sector positions ──────────────────────────────────────────
 
 /// GET /api/network/topology/sectors — all sector position records.

@@ -677,6 +677,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             "/network/topology/sectors/{vlanId}",
             put(topology::update_sector).delete(topology::reset_sector),
         )
+        .route("/network/topology/reset-layout", delete(topology::reset_layout))
         // VLAN config
         .route("/network/vlan-config", get(vlans::list_vlan_configs))
         .route(

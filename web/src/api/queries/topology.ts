@@ -277,6 +277,20 @@ export function useResetNodePosition() {
   });
 }
 
+export function useResetLayout() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ positions_cleared: number; sectors_cleared: number }>(
+        "/api/network/topology/reset-layout",
+        { method: "DELETE" },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["network", "topology"] });
+    },
+  });
+}
+
 export function useSectorPositions() {
   return useQuery({
     queryKey: ["network", "topology", "sectors"],

@@ -467,7 +467,12 @@ pub async fn compute_topology(
                     inferred_id.clone(),
                     TopologyNode {
                         id: inferred_id.clone(),
-                        label: nb.identity.clone().unwrap_or_else(|| "Unknown Switch".to_string()),
+                        label: nb.identity.clone()
+                            .filter(|s| !s.is_empty() && s != "?")
+                            .or_else(|| nb.board.clone())
+                            .or_else(|| nb.address.clone())
+                            .or_else(|| nb.mac_address.clone())
+                            .unwrap_or_else(|| "Unknown Switch".to_string()),
                         ip: nb.address.clone(),
                         mac: nb.mac_address.clone(),
                         kind,
@@ -542,7 +547,15 @@ pub async fn compute_topology(
                 _ => NodeKind::UnmanagedSwitch,
             };
             let label = ident
-                .and_then(|i| i.human_label.clone().or(i.hostname.clone()))
+                .and_then(|i| {
+                    i.human_label.clone()
+                        .or(i.hostname.clone())
+                        .or(i.best_ip.clone())
+                        .or(i.manufacturer.as_ref().map(|m| {
+                            let short_mac = &i.mac_address[i.mac_address.len().saturating_sub(8)..];
+                            format!("{m} ({short_mac})")
+                        }))
+                })
                 .unwrap_or_else(|| device_id.clone());
 
             infra_ids.insert(device_id.clone());
