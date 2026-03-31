@@ -16,6 +16,7 @@ import { IdentityManagerHelp } from "@/components/help-content";
 import { StatCard } from "@/components/stat-card";
 import { DataTable, type Column } from "@/components/data-table";
 import { cn } from "@/lib/utils";
+import { DeviceLink } from "@/components/device-link";
 import {
   useNetworkIdentities,
   useIdentityStats,
@@ -604,7 +605,7 @@ export default function IdentityManagerPage() {
       key: "mac",
       header: "MAC Address",
       render: (row) => (
-        <span className="font-mono text-xs">{row.mac_address}</span>
+        <DeviceLink mac={row.mac_address} className="font-mono text-xs" />
       ),
       sortValue: (row) => row.mac_address,
     },

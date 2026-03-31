@@ -63,20 +63,34 @@ export function useConnectionsHistory(range: "24h" | "7d") {
   });
 }
 
-export function useConnectionHistory(params?: {
+export interface HistoryQueryParams {
   page?: number;
   per_page?: number;
+  src_ip?: string;
+  dst_ip?: string;
+  dst_port?: number;
   protocol?: string;
   country?: string;
+  after?: string;
+  before?: string;
+  flagged?: boolean;
   flagged_only?: boolean;
   external_only?: boolean;
   search?: string;
-}) {
+}
+
+export function useConnectionHistory(params?: HistoryQueryParams) {
   const qs = new URLSearchParams();
   if (params?.page != null) qs.set("page", String(params.page));
   if (params?.per_page != null) qs.set("per_page", String(params.per_page));
+  if (params?.src_ip) qs.set("src_ip", params.src_ip);
+  if (params?.dst_ip) qs.set("dst_ip", params.dst_ip);
+  if (params?.dst_port != null) qs.set("dst_port", String(params.dst_port));
   if (params?.protocol) qs.set("protocol", params.protocol);
   if (params?.country) qs.set("country", params.country);
+  if (params?.after) qs.set("after", params.after);
+  if (params?.before) qs.set("before", params.before);
+  if (params?.flagged) qs.set("flagged", "true");
   if (params?.flagged_only) qs.set("flagged_only", "true");
   if (params?.external_only) qs.set("external_only", "true");
   if (params?.search) qs.set("search", params.search);

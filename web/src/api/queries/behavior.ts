@@ -173,6 +173,21 @@ export function useResolveAnomalyLink() {
   });
 }
 
+export interface AnomalyTrendPoint {
+  date: string;
+  vlan: number;
+  count: number;
+}
+
+export function useAnomalyTrend(days = 7) {
+  return useQuery({
+    queryKey: ["behavior", "anomaly-trend", days],
+    queryFn: () =>
+      apiFetch<AnomalyTrendPoint[]>(`/api/behavior/anomaly-trend?days=${days}`),
+    refetchInterval: 60_000,
+  });
+}
+
 export function usePortBaselineStatus() {
   return useQuery({
     queryKey: ["behavior", "port-baseline"],

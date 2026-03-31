@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { PageShell } from "@/components/layout/page-shell";
+import { DeviceLink } from "@/components/device-link";
 import { DataTable, type Column } from "@/components/data-table";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
@@ -530,7 +531,9 @@ function deviationColumns(
       width: "180px",
       render: (r) => (
         <div className="text-xs">
-          {r.device_hostname && <div className="font-medium truncate" title={r.device_hostname}>{r.device_hostname}</div>}
+          {r.device_hostname && (
+            <DeviceLink mac={r.mac_address} className="font-medium truncate block" label={r.device_hostname} />
+          )}
           <div className="font-mono text-muted-foreground">{r.ip_address}</div>
         </div>
       ),
@@ -714,7 +717,19 @@ function PolicyDeviationsSection() {
     URL.revokeObjectURL(url);
   };
 
-  if (isLoading || !deviations || deviations.length === 0) return null;
+  if (isLoading || !deviations) return null;
+
+  if (deviations.length === 0) {
+    return (
+      <div className="mt-6">
+        <h2 className="text-lg font-semibold mb-2">Policy Deviations</h2>
+        <p className="text-xs text-muted-foreground">
+          No policy deviations detected. Detection is based on connection tracking (L3/L4).
+          Encrypted tunnels (DoH, VPN) are outside this visibility boundary.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <>

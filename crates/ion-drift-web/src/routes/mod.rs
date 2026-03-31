@@ -461,6 +461,7 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
             get(behavior::get_device_investigations),
         )
         .route("/investigations/stats", get(behavior::investigation_stats))
+        .route("/behavior/anomaly-trend", get(behavior::anomaly_trend))
         .route("/behavior/anomaly-links", get(behavior::anomaly_links))
         .route(
             "/behavior/anomaly-links/port/{protocol}/{port}",

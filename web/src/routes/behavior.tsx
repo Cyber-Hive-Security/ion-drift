@@ -1,6 +1,16 @@
 import { useState, useMemo } from "react";
 import { Link, useSearch } from "@tanstack/react-router";
 import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Legend,
+} from "recharts";
+import {
   useBehaviorOverview,
   useBehaviorAnomalies,
   useResolveAnomaly,
@@ -9,10 +19,12 @@ import {
   useInvestigations,
   useInvestigationStats,
   useBehaviorAlerts,
+  useAnomalyTrend,
 } from "@/api/queries";
 import { PageShell } from "@/components/layout/page-shell";
 import { BehaviorHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
+import { DeviceLink } from "@/components/device-link";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
 import { cn } from "@/lib/utils";
@@ -619,7 +631,7 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
       return (
         <span className="text-xs">
           {d.src_hostname && <span className="mr-1">{d.src_hostname}</span>}
-          <span className="font-mono text-muted-foreground">{r.mac}</span>
+          <DeviceLink mac={r.mac} className="font-mono text-muted-foreground" />
         </span>
       );
     },
@@ -742,6 +754,86 @@ function anomalyColumns(vlanNames: Record<number, string>, investigationMap: Map
 type TabMode = "overview" | "anomalies";
 type AnomalyFilter = "all" | "pending" | "accepted" | "flagged" | "dismissed";
 
+// ── Anomaly Trend Chart ─────────────────────────────────────
+
+const TREND_PALETTE = [
+  "rgb(239, 68, 68)",    // red
+  "rgb(250, 204, 21)",   // yellow
+  "rgb(34, 197, 94)",    // green
+  "rgb(59, 130, 246)",   // blue
+  "rgb(168, 85, 247)",   // purple
+  "rgb(249, 115, 22)",   // orange
+  "rgb(236, 72, 153)",   // pink
+  "rgb(20, 184, 166)",   // teal
+];
+
+function AnomalyTrendChart({ vlanNames, vlanColors }: { vlanNames: Record<number, string>; vlanColors: Record<number, string> }) {
+  const { data: trend } = useAnomalyTrend(7);
+
+  if (!trend || trend.length === 0) return null;
+
+  // Pivot: { date, vlan_X: count, vlan_Y: count, ... }
+  const vlanIds = [...new Set(trend.map((t) => t.vlan))].sort((a, b) => a - b);
+  const byDate = new Map<string, Record<string, string | number>>();
+  for (const t of trend) {
+    let row = byDate.get(t.date);
+    if (!row) {
+      row = { date: t.date } as Record<string, string | number>;
+      byDate.set(t.date, row);
+    }
+    row[`v${t.vlan}`] = t.count;
+  }
+  const chartData = [...byDate.values()];
+
+  return (
+    <div className="mb-4 rounded-lg border border-border bg-card p-4">
+      <h3 className="mb-2 text-sm font-medium text-muted-foreground">Anomaly Trend (7 days)</h3>
+      <ResponsiveContainer width="100%" height={200}>
+        <BarChart data={chartData}>
+          <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.3 0.015 285)" />
+          <XAxis
+            dataKey="date"
+            tick={{ fill: "oklch(0.65 0.01 285)", fontSize: 11 }}
+            tickFormatter={(d: string) => {
+              const parts = d.split("-");
+              return `${parts[1]}/${parts[2]}`;
+            }}
+          />
+          <YAxis
+            allowDecimals={false}
+            tick={{ fill: "oklch(0.65 0.01 285)", fontSize: 11 }}
+          />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "oklch(0.175 0.015 285)",
+              border: "1px solid oklch(0.3 0.015 285)",
+              borderRadius: "6px",
+              color: "oklch(0.95 0.01 285)",
+              fontSize: "12px",
+            }}
+          />
+          <Legend
+            formatter={(value: string) => {
+              const vid = Number(value.slice(1));
+              return vlanLabel(vid, vlanNames);
+            }}
+            wrapperStyle={{ fontSize: "11px" }}
+          />
+          {vlanIds.map((vid, i) => (
+            <Bar
+              key={vid}
+              dataKey={`v${vid}`}
+              stackId="a"
+              fill={vlanColors[vid] ?? TREND_PALETTE[i % TREND_PALETTE.length]}
+              name={`v${vid}`}
+            />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 export function BehaviorPage() {
   const search = useSearch({ from: "/behavior" });
   const macFilter = search.mac ?? null;
@@ -860,6 +952,8 @@ export function BehaviorPage() {
       <AlertBanners data={data} />
       <StatsRow data={data} />
       <InvestigationSummaryBar stats={invStats} />
+
+      <AnomalyTrendChart vlanNames={vlan.names} vlanColors={vlan.colors} />
 
       {/* Tabs */}
       <div className="mb-4 flex flex-wrap gap-2">

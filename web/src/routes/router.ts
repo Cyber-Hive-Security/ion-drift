@@ -107,9 +107,23 @@ const historyRoute = createRoute({
   path: "/history",
   component: HistoryPage,
   validateSearch: (search: Record<string, unknown>): {
+    src_ip?: string;
+    dst_ip?: string;
+    dst_port?: string;
+    protocol?: string;
     country?: string;
+    after?: string;
+    before?: string;
+    flagged?: string;
   } => ({
+    src_ip: (search.src_ip as string) || undefined,
+    dst_ip: (search.dst_ip as string) || undefined,
+    dst_port: (search.dst_port as string) || undefined,
+    protocol: (search.protocol as string) || undefined,
     country: (search.country as string) || undefined,
+    after: (search.after as string) || undefined,
+    before: (search.before as string) || undefined,
+    flagged: (search.flagged as string) || undefined,
   }),
 });
 

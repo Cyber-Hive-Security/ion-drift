@@ -13,6 +13,7 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { Badge } from "@/components/badge";
 import { cn } from "@/lib/utils";
+import { DeviceLink } from "@/components/device-link";
 import type { IpAddress, Route, ArpEntry, DhcpLeaseStatus, PoolUtilization } from "@/api/types";
 
 const addressColumns: Column<IpAddress>[] = [
@@ -73,7 +74,11 @@ const arpColumns: Column<ArpEntry>[] = [
     header: "MAC Address",
     render: (r) => (
       <div>
-        <span className="font-mono text-sm">{r.mac_address ?? "—"}</span>
+        {r.mac_address ? (
+          <DeviceLink mac={r.mac_address} className="font-mono text-sm" />
+        ) : (
+          <span className="font-mono text-sm">—</span>
+        )}
         {r.manufacturer && (
           <p className="text-[10px] text-muted-foreground">{r.manufacturer}</p>
         )}
@@ -139,7 +144,11 @@ const dhcpStatusColumns: Column<DhcpLeaseStatus>[] = [
     header: "MAC",
     render: (r) => (
       <div>
-        <span className="font-mono text-sm">{r.mac_address ?? "—"}</span>
+        {r.mac_address ? (
+          <DeviceLink mac={r.mac_address} className="font-mono text-sm" />
+        ) : (
+          <span className="font-mono text-sm">—</span>
+        )}
         {r.manufacturer && (
           <p className="text-[10px] text-muted-foreground">{r.manufacturer}</p>
         )}

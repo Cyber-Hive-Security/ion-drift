@@ -1839,6 +1839,36 @@ impl BehaviorStore {
         })
     }
 
+    /// Returns daily anomaly counts grouped by VLAN for the last `days` days.
+    pub async fn anomaly_trend(
+        &self,
+        days: i64,
+    ) -> Result<Vec<(String, i64, i64)>, String> {
+        let db = self.db.lock().await;
+        let cutoff = now_unix() - (days * 86400);
+        let mut stmt = db
+            .prepare(
+                "SELECT date(timestamp, 'unixepoch') AS day, vlan, COUNT(*) AS cnt
+                 FROM device_anomalies
+                 WHERE timestamp >= ?1
+                 GROUP BY day, vlan
+                 ORDER BY day, vlan",
+            )
+            .map_err(|e| format!("anomaly trend query failed: {e}"))?;
+        let rows: Vec<(String, i64, i64)> = stmt
+            .query_map(rusqlite::params![cutoff], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| format!("anomaly trend query failed: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     pub async fn resolve_anomaly(
         &self,
         id: i64,

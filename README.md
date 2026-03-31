@@ -258,6 +258,7 @@ For advanced configuration (OIDC, syslog, CertWarden, custom bind address), see 
 - [docs/correlation-engine-whitepaper.md](docs/correlation-engine-whitepaper.md) — Identity correlation engine
 - [docs/connection-store-whitepaper.md](docs/connection-store-whitepaper.md) — Connection tracking and GeoIP
 - [docs/policy-editor.md](docs/policy-editor.md) — Policy editor and deviation detection guide
+- [docs/deviation-limitations.md](docs/deviation-limitations.md) — Detection visibility boundaries and evasion techniques
 
 ## Security
 

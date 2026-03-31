@@ -37,6 +37,18 @@ pub struct BulkActionRequest {
     pub ids: Option<Vec<i64>>,
 }
 
+#[derive(Deserialize)]
+pub struct TrendParams {
+    pub days: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct AnomalyTrendPoint {
+    pub date: String,
+    pub vlan: i64,
+    pub count: i64,
+}
+
 #[derive(Serialize)]
 pub struct VlanBehaviorDetail {
     pub vlan: i64,
@@ -165,6 +177,25 @@ pub async fn anomalies(
         .await
         .map_err(|e| internal_error("behavior anomalies", e))?;
     Ok(Json(results))
+}
+
+/// GET /api/behavior/anomaly-trend?days=7
+pub async fn anomaly_trend(
+    RequireAuth(_session): RequireAuth,
+    State(state): State<AppState>,
+    Query(params): Query<TrendParams>,
+) -> Result<Json<Vec<AnomalyTrendPoint>>, Response> {
+    let days = params.days.unwrap_or(7).min(30);
+    let rows = state
+        .behavior_store
+        .anomaly_trend(days)
+        .await
+        .map_err(|e| internal_error("anomaly trend", e))?;
+    let points: Vec<AnomalyTrendPoint> = rows
+        .into_iter()
+        .map(|(date, vlan, count)| AnomalyTrendPoint { date, vlan, count })
+        .collect();
+    Ok(Json(points))
 }
 
 /// POST /api/behavior/anomalies/:id/resolve
