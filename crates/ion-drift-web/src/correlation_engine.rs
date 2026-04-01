@@ -1010,6 +1010,13 @@ async fn run_correlation(
         }
         drop(dm);
 
+        // Pre-load network identities for identity_overrides_lldp checks.
+        // If a MAC has a NetworkIdentity that says it's NOT infrastructure
+        // (e.g., a workstation broadcasting MNDP), skip creating an infra node.
+        let existing_identities = store.get_network_identities().await.unwrap_or_default();
+        let identity_by_mac: HashMap<String, &ion_drift_storage::switch::NetworkIdentity> =
+            existing_identities.iter().map(|i| (i.mac_address.to_uppercase(), i)).collect();
+
         // Resolve LLDP neighbors → infrastructure nodes + trunk edges
         // Track MAC→node_id for dedup (same device seen from multiple switches)
         let mut infra_mac_to_id: HashMap<String, String> = HashMap::new();
@@ -1062,7 +1069,18 @@ async fn run_correlation(
                 // Learn this resolution for future cycles
                 new_resolution.learn(nb, &resolved, now_secs);
             } else {
-                // Unregistered neighbor — create inferred infrastructure node
+                // Unregistered neighbor — check if identity says NOT infrastructure
+                // before creating an inferred node. Workstations, phones, cameras
+                // that happen to broadcast MNDP should not become infra nodes.
+                if let Some(ref mac) = nb.mac_address {
+                    if let Some(ident) = identity_by_mac.get(&mac.to_uppercase()) {
+                        if identity_overrides_lldp(ident) {
+                            continue;
+                        }
+                    }
+                }
+
+                // Create inferred infrastructure node
                 let inferred_id = nb
                     .identity
                     .as_deref()
@@ -1239,6 +1257,9 @@ async fn run_correlation(
                 }],
             });
         }
+
+        // Deduplicate bidirectional edges (A→B + B→A → single edge with both ports)
+        let edges = dedup_bidirectional_edges(edges);
 
         // Read the just-written identities for the snapshot
         let identities = store.get_network_identities().await.unwrap_or_default();
@@ -1710,4 +1731,76 @@ fn build_wap_children(
     children
 }
 
+/// Returns true if the device type string represents network infrastructure.
+fn is_infrastructure_type(dt: Option<&str>) -> bool {
+    matches!(
+        dt,
+        Some("router" | "switch" | "network_equipment" | "access_point" | "wap")
+    )
+}
 
+/// Check whether a network identity should block LLDP from creating an
+/// infrastructure node for the same MAC. Returns true when the identity
+/// data is authoritative enough to override LLDP inference.
+///
+/// Duplicated from topology.rs — will be consolidated in Phase 3.
+fn identity_overrides_lldp(ident: &ion_drift_storage::switch::NetworkIdentity) -> bool {
+    match ident.is_infrastructure {
+        Some(false) => return true,
+        Some(true) => return false,
+        None => {}
+    }
+    if ident.human_confirmed && !is_infrastructure_type(ident.device_type.as_deref()) {
+        return true;
+    }
+    if !ident.human_confirmed
+        && !is_infrastructure_type(ident.device_type.as_deref())
+        && ident.device_type.is_some()
+        && ident.device_type_confidence >= 0.5
+    {
+        return true;
+    }
+    false
+}
+
+/// Deduplicate bidirectional edges: A→B and B→A become a single edge.
+/// Keeps the first-seen edge and merges port info from the reverse.
+fn dedup_bidirectional_edges(edges: Vec<ResolvedEdge>) -> Vec<ResolvedEdge> {
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut result: Vec<ResolvedEdge> = Vec::new();
+
+    for mut edge in edges {
+        // Normalize the pair: always use (min, max) as the canonical key
+        let key = if edge.source_device <= edge.target_device {
+            (edge.source_device.clone(), edge.target_device.clone())
+        } else {
+            (edge.target_device.clone(), edge.source_device.clone())
+        };
+
+        if seen.contains(&key) {
+            // Reverse edge — try to fill in the target_port on the existing edge
+            if let Some(existing) = result.iter_mut().find(|e| {
+                let ek = if e.source_device <= e.target_device {
+                    (e.source_device.clone(), e.target_device.clone())
+                } else {
+                    (e.target_device.clone(), e.source_device.clone())
+                };
+                ek == key
+            }) {
+                // The reverse edge's source_port is the original edge's target_port
+                if existing.target_port.is_none() {
+                    existing.target_port = edge.source_port.take();
+                }
+                // Keep the higher confidence
+                if edge.confidence > existing.confidence {
+                    existing.confidence = edge.confidence;
+                }
+            }
+        } else {
+            seen.insert(key);
+            result.push(edge);
+        }
+    }
+
+    result
+}
