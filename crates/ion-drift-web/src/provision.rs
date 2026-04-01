@@ -219,7 +219,7 @@ pub async fn generate_plan(
     match existing_action {
         Some(action) => {
             let remote_matches = action.remote.as_deref() == Some(&config.syslog_host);
-            let port_matches = action.remote_port == Some(config.syslog_port);
+            let port_matches = action.remote_port == Some(config.syslog_port as u32);
             let src_matches = action.src_address.as_deref() == Some(&config.router_source_ip);
 
             if remote_matches && port_matches && src_matches {

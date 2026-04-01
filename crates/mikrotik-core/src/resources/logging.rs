@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::serde_helpers::ros_u32_opt;
 use crate::MikrotikClient;
 use crate::MikrotikError;
 
@@ -15,8 +16,8 @@ pub struct LoggingAction {
     pub target: String,
     #[serde(default)]
     pub remote: Option<String>,
-    #[serde(default)]
-    pub remote_port: Option<u16>,
+    #[serde(default, deserialize_with = "ros_u32_opt")]
+    pub remote_port: Option<u32>,
     #[serde(default)]
     pub src_address: Option<String>,
     #[serde(default)]
