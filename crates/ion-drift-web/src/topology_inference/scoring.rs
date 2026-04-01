@@ -45,18 +45,20 @@ pub struct ScoredCandidate {
     pub score: f64,
 }
 
-// ── Scoring weights (hardcoded per spec) ─────────────────────────
+// ── Scoring weights ─────────────────────────────────────────────
+// Transit/router penalties must dominate edge_likelihood to prevent
+// trunk ports (which see many MACs) from outscoring access ports.
 const W_EDGE_LIKELIHOOD: f64 = 2.0;
 const W_PERSISTENCE: f64 = 1.5;
 const W_VLAN_CONSISTENCY: f64 = 1.2;
-const W_DOWNSTREAM_PREFERENCE: f64 = 1.0;
+const W_DOWNSTREAM_PREFERENCE: f64 = 2.0;  // was 1.0 — strongly prefer leaf switches
 const W_RECENCY: f64 = 0.8;
 const W_GRAPH_DEPTH: f64 = 0.6;
 const W_DEVICE_CLASS_FIT: f64 = 0.6;
-const W_TRANSIT_PENALTY: f64 = -2.0;
+const W_TRANSIT_PENALTY: f64 = -4.0;       // was -2.0 — trunk ports must not win
 const W_CONTRADICTION_PENALTY: f64 = -1.5;
 // Workstream B
-const W_ROUTER_PENALTY: f64 = -3.0;
+const W_ROUTER_PENALTY: f64 = -5.0;        // was -3.0 — router should never be attachment
 // Workstream D
 const W_WIRELESS_ATTACHMENT: f64 = 1.3;
 const W_WAP_PATH_CONSISTENCY: f64 = 0.8;

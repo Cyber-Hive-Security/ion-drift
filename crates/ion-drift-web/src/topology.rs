@@ -509,6 +509,31 @@ pub async fn compute_topology(
                 }
             }
 
+            // Case-insensitive identity dedup: if inferred_id resolves to a registered
+            // device via identity_to_device, create a trunk edge instead of a duplicate node.
+            if let Some(resolved) = identity_to_device.get(&inferred_id.to_lowercase()).cloned() {
+                if nodes.contains_key(&resolved) || infra_ids.contains(&resolved) {
+                    let pair = if source_device < resolved {
+                        (source_device.clone(), resolved.clone())
+                    } else {
+                        (resolved.clone(), source_device.clone())
+                    };
+                    if edge_set.insert(pair) {
+                        edges.push(TopologyEdge {
+                            source: source_device.clone(),
+                            target: resolved,
+                            kind: EdgeKind::Trunk,
+                            source_port: Some(source_port.clone()),
+                            target_port: None,
+                            vlans: Vec::new(),
+                            speed_mbps: None,
+                            traffic_bps: None,
+                        });
+                    }
+                    continue;
+                }
+            }
+
             if !infra_ids.contains(&inferred_id) && !nodes.contains_key(&inferred_id) {
                 let kind = if is_ap {
                     NodeKind::AccessPoint
@@ -1144,6 +1169,16 @@ pub async fn compute_topology(
                     if att.confidence > node.confidence {
                         node.confidence = att.confidence;
                     }
+                    // If inference has an active binding, override binding_source.
+                    // This ensures topology reflects inference ownership even if the
+                    // DB identity still shows "auto" from pre-SoA correlation cycles.
+                    if att.current_device_id.is_some()
+                        && att.state != "unknown"
+                        && att.confidence > 0.3
+                    {
+                        node.binding_source = "inferred".to_string();
+                        node.binding_tier = Some("multi_signal".to_string());
+                    }
                 }
             }
         }
@@ -1556,11 +1591,14 @@ fn identity_overrides_lldp(ident: &NetworkIdentity) -> bool {
     if ident.human_confirmed && !is_infrastructure_type(ident.device_type.as_deref()) {
         return true;
     }
-    // High-confidence auto-detection as non-infrastructure → wins over MNDP
+    // Auto-detection as non-infrastructure → wins over MNDP/LLDP.
+    // Threshold lowered to 0.5: any reasonable signal that a device is an
+    // endpoint (workstation, phone, camera, etc.) should prevent it from
+    // being promoted to infrastructure by LLDP discovery.
     if !ident.human_confirmed
         && !is_infrastructure_type(ident.device_type.as_deref())
         && ident.device_type.is_some()
-        && ident.device_type_confidence >= 0.8
+        && ident.device_type_confidence >= 0.5
     {
         return true;
     }
