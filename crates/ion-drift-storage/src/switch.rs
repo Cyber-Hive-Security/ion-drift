@@ -77,7 +77,7 @@ pub struct NeighborEntry {
 }
 
 /// A unified network identity record (correlation output).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkIdentity {
     pub mac_address: String,
     pub best_ip: Option<String>,

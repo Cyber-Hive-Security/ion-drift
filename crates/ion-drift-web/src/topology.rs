@@ -1622,6 +1622,7 @@ pub fn spawn_topology_updater(
     device_manager: Arc<RwLock<DeviceManager>>,
     behavior_store: Arc<BehaviorStore>,
     cache: Arc<RwLock<Option<NetworkTopology>>>,
+    snapshot_state: Arc<tokio::sync::RwLock<crate::infrastructure_snapshot::InfrastructureSnapshotState>>,
     wan_interface: String,
 ) {
     supervisor.spawn("topology_updater", move || {
@@ -1629,6 +1630,7 @@ pub fn spawn_topology_updater(
         let device_manager = device_manager.clone();
         let behavior_store = behavior_store.clone();
         let cache = cache.clone();
+        let snapshot_state = snapshot_state.clone();
         let wan_interface = wan_interface.clone();
         Box::pin(async move {
         // Wait for correlation engine to populate data
@@ -1640,6 +1642,9 @@ pub fn spawn_topology_updater(
         loop {
             match compute_topology(&switch_store, &device_manager, &behavior_store, &wan_interface).await {
                 Ok(topo) => {
+                    // Shadow comparison: compare snapshot infra against topology's own resolution
+                    shadow_compare_snapshot(&topo, &snapshot_state).await;
+
                     tracing::info!(
                         nodes = topo.node_count,
                         edges = topo.edge_count,
@@ -1657,4 +1662,94 @@ pub fn spawn_topology_updater(
             interval.tick().await;
         }
     })});
+}
+
+/// Shadow comparison: compare the snapshot's infrastructure nodes/edges
+/// against topology's own resolution. Logs structured per-cycle metrics.
+///
+/// This is temporary validation for Phase 2. Will be removed after Phase 3 cutover.
+async fn shadow_compare_snapshot(
+    topo: &NetworkTopology,
+    snapshot_state: &Arc<tokio::sync::RwLock<crate::infrastructure_snapshot::InfrastructureSnapshotState>>,
+) {
+    let state = snapshot_state.read().await;
+    let snapshot = match state.best_available() {
+        Some(s) => s,
+        None => {
+            tracing::debug!("shadow compare: no snapshot available yet");
+            return;
+        }
+    };
+
+    // Collect infrastructure node IDs from both sides
+    let topo_infra: std::collections::HashSet<&str> = topo
+        .nodes
+        .iter()
+        .filter(|n| n.is_infrastructure)
+        .map(|n| n.id.as_str())
+        .collect();
+
+    let snap_infra: std::collections::HashSet<&str> = snapshot
+        .infrastructure
+        .iter()
+        .map(|n| n.device_id.as_str())
+        .collect();
+
+    let in_topo_only: Vec<&str> = topo_infra.difference(&snap_infra).copied().collect();
+    let in_snap_only: Vec<&str> = snap_infra.difference(&topo_infra).copied().collect();
+    let in_both = topo_infra.intersection(&snap_infra).count();
+
+    // Edge comparison (simplified: count trunk edges)
+    let topo_trunk_edges = topo
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Trunk)
+        .count();
+    let snap_edges = snapshot.edges.len();
+
+    // Count snapshot-specific metrics
+    let snap_registered = snapshot
+        .infrastructure
+        .iter()
+        .filter(|n| n.source == crate::infrastructure_snapshot::InfraNodeSource::Registered)
+        .count();
+    let snap_inferred = snapshot
+        .infrastructure
+        .iter()
+        .filter(|n| n.source == crate::infrastructure_snapshot::InfraNodeSource::InferredLldp)
+        .count();
+    let snap_backbone = snapshot
+        .infrastructure
+        .iter()
+        .filter(|n| n.source == crate::infrastructure_snapshot::InfraNodeSource::BackboneLink)
+        .count();
+    let snap_corroborated = snapshot
+        .edges
+        .iter()
+        .filter(|e| e.edge_source == crate::infrastructure_snapshot::EdgeSource::BackboneCorroborated)
+        .count();
+
+    tracing::info!(
+        snapshot_gen = snapshot.generation,
+        topo_infra = topo_infra.len(),
+        snap_infra = snap_infra.len(),
+        matching = in_both,
+        topo_only = in_topo_only.len(),
+        snap_only = in_snap_only.len(),
+        topo_trunk_edges = topo_trunk_edges,
+        snap_edges = snap_edges,
+        snap_registered,
+        snap_inferred,
+        snap_backbone,
+        snap_corroborated,
+        "shadow: snapshot vs topology comparison"
+    );
+
+    // Log individual divergences (capped at 10 to avoid log spam)
+    for id in in_topo_only.iter().take(5) {
+        tracing::debug!(device = %id, "shadow: in topology only (missing from snapshot)");
+    }
+    for id in in_snap_only.iter().take(5) {
+        tracing::debug!(device = %id, "shadow: in snapshot only (missing from topology)");
+    }
 }

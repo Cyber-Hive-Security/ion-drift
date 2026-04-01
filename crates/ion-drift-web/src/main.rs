@@ -10,8 +10,10 @@ mod connection_store;
 mod correlation_engine;
 pub mod demo;
 mod device_manager;
+mod device_resolution;
 mod dns;
 mod geo;
+mod infrastructure_snapshot;
 mod investigation;
 mod license;
 mod live_traffic;
@@ -794,6 +796,9 @@ async fn main() -> anyhow::Result<()> {
         login_limiter: auth::LoginRateLimiter::new(),
         attack_techniques: attack_techniques.clone(),
         router_queue,
+        infrastructure_snapshot: Arc::new(tokio::sync::RwLock::new(
+            infrastructure_snapshot::InfrastructureSnapshotState::new(),
+        )),
     };
 
     // Spawn all background tasks

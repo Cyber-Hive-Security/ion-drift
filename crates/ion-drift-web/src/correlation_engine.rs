@@ -10,8 +10,15 @@ use crate::topology_inference::graph::{DeviceResolutionMaps, InfrastructureGraph
 use crate::topology_inference::resolver::{self, InferenceMode};
 use tokio::sync::RwLock;
 
-use crate::device_manager::DeviceManager;
+use crate::device_manager::{DeviceManager, DeviceStatus};
+use crate::device_resolution::{self, DeviceResolutionMaps as NewResolutionMaps};
 use crate::dns::DnsResolver;
+use crate::infrastructure_snapshot::{
+    self, EvidenceAuthority, InfraNodeSource, InfrastructureSnapshotState,
+    ResolvedEdge, ResolvedInfraNode, ResolvedInfrastructureSnapshot, ResolutionEvidence,
+    ResolutionMethod, SnapshotStatus, SourceEpoch, EdgeSource, EdgeCorroboration,
+    SNAPSHOT_SCHEMA_VERSION, push_evidence,
+};
 use crate::oui::OuiDb;
 use crate::router_queue::{RouterQueue, Priority, QueuedRequest};
 use crate::task_supervisor::TaskSupervisor;
@@ -26,6 +33,7 @@ pub fn spawn_correlation_engine(
     device_manager: Arc<RwLock<DeviceManager>>,
     router_queue: RouterQueue,
     dns_resolver: Arc<dyn DnsResolver>,
+    snapshot_state: Arc<RwLock<InfrastructureSnapshotState>>,
     interval_secs: u64,
 ) {
     supervisor.spawn("correlation_engine", move || {
@@ -34,6 +42,7 @@ pub fn spawn_correlation_engine(
         let device_manager = device_manager.clone();
         let router_queue = router_queue.clone();
         let dns_resolver = dns_resolver.clone();
+        let snapshot_state = snapshot_state.clone();
         Box::pin(async move {
         // 90-second startup delay — let switch pollers collect initial data
         tokio::time::sleep(Duration::from_secs(90)).await;
@@ -41,9 +50,11 @@ pub fn spawn_correlation_engine(
 
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.tick().await;
+        let mut cycle_number: u64 = 0;
 
         loop {
             interval.tick().await;
+            cycle_number += 1;
 
             if let Err(e) = run_correlation(
                 &switch_store,
@@ -51,6 +62,9 @@ pub fn spawn_correlation_engine(
                 &device_manager,
                 &router_queue,
                 dns_resolver.as_ref(),
+                &snapshot_state,
+                cycle_number,
+                interval_secs,
             )
             .await
             {
@@ -66,6 +80,9 @@ async fn run_correlation(
     device_manager: &Arc<RwLock<DeviceManager>>,
     router_queue: &RouterQueue,
     dns_resolver: &dyn DnsResolver,
+    snapshot_state: &Arc<RwLock<InfrastructureSnapshotState>>,
+    cycle_number: u64,
+    interval_secs: u64,
 ) -> anyhow::Result<()> {
     // ── 0. Prune stale entries ──────────────────────────────────
     // Entries older than 1 hour are leftovers from port renames or
@@ -929,6 +946,342 @@ async fn run_correlation(
         } else {
             upserted += 1;
         }
+    }
+
+    // ── 4. Build and publish resolved infrastructure snapshot ────
+    {
+        let snapshot_start = std::time::Instant::now();
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        // Build new-style resolution maps from device manager
+        let dm = device_manager.read().await;
+        let mut new_resolution = NewResolutionMaps::build(&dm, None);
+        drop(dm);
+
+        // Populate MAC→device from neighbor records
+        new_resolution.populate_mac_from_neighbors(&all_neighbors);
+
+        // Resolve all LLDP neighbors and build infrastructure nodes + edges
+        let mut infra_nodes: Vec<ResolvedInfraNode> = Vec::new();
+        let mut edges: Vec<ResolvedEdge> = Vec::new();
+        let mut seen_device_ids: HashSet<String> = HashSet::new();
+        let mut wan_neighbor_count: u32 = 0;
+
+        // Add registered devices as infrastructure nodes
+        let dm = device_manager.read().await;
+        for entry in dm.all_devices() {
+            let id = entry.record.id.clone();
+            seen_device_ids.insert(id.clone());
+
+            let authority = if entry.record.device_type == "router" {
+                EvidenceAuthority::RouterPrimary
+            } else {
+                match &entry.client {
+                    crate::device_manager::DeviceClient::RouterOs(_) => EvidenceAuthority::RouterOsSwitch,
+                    crate::device_manager::DeviceClient::Snmp(_) => EvidenceAuthority::ManagedSwitchSnmp,
+                    crate::device_manager::DeviceClient::SwOs(_) => EvidenceAuthority::ManagedSwitchSnmp,
+                }
+            };
+
+            infra_nodes.push(ResolvedInfraNode {
+                device_id: id.clone(),
+                label: entry.record.name.clone(),
+                source: InfraNodeSource::Registered,
+                device_type: Some(entry.record.device_type.clone()),
+                mac: None,
+                ip: Some(entry.record.host.clone()),
+                manufacturer: None,
+                vlan_membership: Vec::new(),
+                confidence: 1.0,
+                resolution_method: ResolutionMethod::Authoritative,
+                evidence: vec![ResolutionEvidence {
+                    authority,
+                    source: format!("device_manager:{}", id),
+                    observation: format!("Registered device '{}'", entry.record.name),
+                    observed_at: now_secs,
+                }],
+                conflict: None,
+                first_seen: None,
+                last_seen: None,
+            });
+        }
+        drop(dm);
+
+        // Resolve LLDP neighbors → infrastructure nodes + trunk edges
+        // Track MAC→node_id for dedup (same device seen from multiple switches)
+        let mut infra_mac_to_id: HashMap<String, String> = HashMap::new();
+
+        for nb in &all_neighbors {
+            // Skip WAN-facing neighbors (ISP equipment)
+            if let Some(ref addr) = nb.address {
+                if !addr.starts_with("10.") && !addr.starts_with("172.") && !addr.starts_with("192.168.") {
+                    if !addr.starts_with("fe80") {
+                        wan_neighbor_count += 1;
+                        continue;
+                    }
+                }
+            }
+
+            let source_device = nb.device_id.clone();
+
+            // Try to resolve this neighbor to a known device
+            if let Some(resolved) = new_resolution.resolve_neighbor(nb) {
+                // Known device — create trunk edge
+                if !seen_device_ids.contains(&resolved.device_id) {
+                    // Shouldn't happen for registered devices, but defensive
+                    seen_device_ids.insert(resolved.device_id.clone());
+                }
+
+                let edge = ResolvedEdge {
+                    source_device: source_device.clone(),
+                    target_device: resolved.device_id.clone(),
+                    source_port: Some(nb.interface.clone()),
+                    target_port: None,
+                    vlans: Vec::new(),
+                    speed_mbps: None,
+                    traffic_bps: None,
+                    edge_source: EdgeSource::LldpObserved,
+                    corroboration: None,
+                    confidence: resolved.confidence,
+                    evidence: vec![ResolutionEvidence {
+                        authority: resolved.authority,
+                        source: format!("neighbor:{}:{}", source_device, nb.interface),
+                        observation: format!(
+                            "LLDP neighbor '{}' resolved via {:?}",
+                            nb.identity.as_deref().unwrap_or("?"),
+                            resolved.method,
+                        ),
+                        observed_at: now_secs,
+                    }],
+                };
+                edges.push(edge);
+
+                // Learn this resolution for future cycles
+                new_resolution.learn(nb, &resolved, now_secs);
+            } else {
+                // Unregistered neighbor — create inferred infrastructure node
+                let inferred_id = nb
+                    .identity
+                    .as_deref()
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_else(|| {
+                        nb.mac_address
+                            .as_deref()
+                            .map(|m| format!("unknown-{}", m.to_uppercase()))
+                            .unwrap_or_else(|| format!("unknown-{}-{}", source_device, nb.interface))
+                    });
+
+                // MAC-based dedup: if we've already created a node for this MAC, reuse it
+                if let Some(ref mac) = nb.mac_address {
+                    let mac_upper = mac.to_uppercase();
+                    if let Some(existing_id) = infra_mac_to_id.get(&mac_upper) {
+                        // Just add an edge to the existing node
+                        edges.push(ResolvedEdge {
+                            source_device: source_device.clone(),
+                            target_device: existing_id.clone(),
+                            source_port: Some(nb.interface.clone()),
+                            target_port: None,
+                            vlans: Vec::new(),
+                            speed_mbps: None,
+                            traffic_bps: None,
+                            edge_source: EdgeSource::LldpObserved,
+                            corroboration: None,
+                            confidence: 0.50,
+                            evidence: vec![ResolutionEvidence {
+                                authority: EvidenceAuthority::LldpObserved,
+                                source: format!("neighbor:{}:{}", source_device, nb.interface),
+                                observation: format!("Unresolved LLDP neighbor (dedup via MAC {})", mac_upper),
+                                observed_at: now_secs,
+                            }],
+                        });
+                        continue;
+                    }
+                    infra_mac_to_id.insert(mac_upper, inferred_id.clone());
+                }
+
+                if !seen_device_ids.contains(&inferred_id) {
+                    seen_device_ids.insert(inferred_id.clone());
+
+                    infra_nodes.push(ResolvedInfraNode {
+                        device_id: inferred_id.clone(),
+                        label: nb.identity.clone().unwrap_or_else(|| inferred_id.clone()),
+                        source: InfraNodeSource::InferredLldp,
+                        device_type: None,
+                        mac: nb.mac_address.clone(),
+                        ip: nb.address.clone(),
+                        manufacturer: nb.mac_address.as_deref().and_then(|m| oui_db.lookup(m).map(|s| s.to_string())),
+                        vlan_membership: Vec::new(),
+                        confidence: 0.50,
+                        resolution_method: ResolutionMethod::ManualDefinition,
+                        evidence: vec![ResolutionEvidence {
+                            authority: EvidenceAuthority::LldpObserved,
+                            source: format!("neighbor:{}:{}", source_device, nb.interface),
+                            observation: format!(
+                                "Unresolved LLDP neighbor '{}'",
+                                nb.identity.as_deref().unwrap_or("?"),
+                            ),
+                            observed_at: now_secs,
+                        }],
+                        conflict: None,
+                        first_seen: Some(nb.first_seen),
+                        last_seen: Some(nb.last_seen),
+                    });
+                }
+
+                edges.push(ResolvedEdge {
+                    source_device: source_device.clone(),
+                    target_device: inferred_id,
+                    source_port: Some(nb.interface.clone()),
+                    target_port: None,
+                    vlans: Vec::new(),
+                    speed_mbps: None,
+                    traffic_bps: None,
+                    edge_source: EdgeSource::LldpObserved,
+                    corroboration: None,
+                    confidence: 0.50,
+                    evidence: vec![ResolutionEvidence {
+                        authority: EvidenceAuthority::LldpObserved,
+                        source: format!("neighbor:{}:{}", source_device, nb.interface),
+                        observation: "Inferred infrastructure from LLDP".to_string(),
+                        observed_at: now_secs,
+                    }],
+                });
+            }
+        }
+
+        // Backbone links → edges + auto-create missing nodes
+        for link in &backbone_links {
+            // Check corroboration: does an LLDP-observed edge already exist between these devices?
+            let corroborated = edges.iter().any(|e| {
+                (e.source_device == link.device_a && e.target_device == link.device_b)
+                    || (e.source_device == link.device_b && e.target_device == link.device_a)
+            });
+
+            let (edge_source, corroboration) = if corroborated {
+                (
+                    EdgeSource::BackboneCorroborated,
+                    Some(EdgeCorroboration::Corroborated {
+                        evidence: "LLDP neighbor observation confirms this link".to_string(),
+                    }),
+                )
+            } else {
+                (
+                    EdgeSource::BackboneDefined,
+                    Some(EdgeCorroboration::Unobserved),
+                )
+            };
+
+            // Auto-create infrastructure nodes for backbone endpoints not yet in the snapshot
+            for device_id in [&link.device_a, &link.device_b] {
+                if !seen_device_ids.contains(device_id.as_str()) {
+                    seen_device_ids.insert(device_id.clone());
+
+                    // Try to get metadata from infrastructure identities
+                    let infra_identities = store.get_infrastructure_identities().await.unwrap_or_default();
+                    let ident = infra_identities.iter().find(|i| {
+                        i.hostname.as_deref() == Some(device_id.as_str())
+                            || i.mac_address == *device_id
+                    });
+
+                    infra_nodes.push(ResolvedInfraNode {
+                        device_id: device_id.clone(),
+                        label: ident
+                            .and_then(|i| i.hostname.clone())
+                            .unwrap_or_else(|| device_id.clone()),
+                        source: InfraNodeSource::BackboneLink,
+                        device_type: ident.and_then(|i| i.device_type.clone()),
+                        mac: ident.map(|i| i.mac_address.clone()),
+                        ip: ident.and_then(|i| i.best_ip.clone()),
+                        manufacturer: ident.and_then(|i| i.manufacturer.clone()),
+                        vlan_membership: Vec::new(),
+                        confidence: 0.70,
+                        resolution_method: ResolutionMethod::ManualDefinition,
+                        evidence: vec![ResolutionEvidence {
+                            authority: EvidenceAuthority::ManualBackbone,
+                            source: format!("backbone_link:{}", link.id),
+                            observation: format!(
+                                "Backbone link {} ↔ {}",
+                                link.device_a, link.device_b,
+                            ),
+                            observed_at: now_secs,
+                        }],
+                        conflict: None,
+                        first_seen: None,
+                        last_seen: None,
+                    });
+                }
+            }
+
+            edges.push(ResolvedEdge {
+                source_device: link.device_a.clone(),
+                target_device: link.device_b.clone(),
+                source_port: link.port_a.clone(),
+                target_port: link.port_b.clone(),
+                vlans: Vec::new(),
+                speed_mbps: link.speed_mbps,
+                traffic_bps: None,
+                edge_source,
+                corroboration,
+                confidence: if corroborated { 0.95 } else { 0.70 },
+                evidence: vec![ResolutionEvidence {
+                    authority: EvidenceAuthority::ManualBackbone,
+                    source: format!("backbone_link:{}", link.id),
+                    observation: format!(
+                        "Backbone: {} ↔ {} ({})",
+                        link.device_a,
+                        link.device_b,
+                        if corroborated { "corroborated" } else { "unobserved" },
+                    ),
+                    observed_at: now_secs,
+                }],
+            });
+        }
+
+        // Read the just-written identities for the snapshot
+        let identities = store.get_network_identities().await.unwrap_or_default();
+
+        // Build and publish the snapshot
+        let generation = {
+            let state = snapshot_state.read().await;
+            state.next_generation()
+        };
+
+        let snapshot = ResolvedInfrastructureSnapshot {
+            schema_version: SNAPSHOT_SCHEMA_VERSION,
+            generation,
+            computed_at: now_secs,
+            source_epoch: SourceEpoch {
+                window_start: now_secs - (interval_secs as i64),
+                window_end: now_secs,
+                cycle_number,
+            },
+            status: SnapshotStatus::Complete,
+            infrastructure: infra_nodes,
+            edges,
+            wan_neighbor_count,
+            identities,
+        };
+
+        let infra_count = snapshot.infrastructure.len();
+        let edge_count = snapshot.edges.len();
+
+        {
+            let mut state = snapshot_state.write().await;
+            state.publish(snapshot);
+        }
+
+        let elapsed = snapshot_start.elapsed();
+        tracing::info!(
+            generation,
+            infra_nodes = infra_count,
+            edges = edge_count,
+            wan = wan_neighbor_count,
+            elapsed_ms = elapsed.as_millis() as u64,
+            "infrastructure snapshot published"
+        );
     }
 
     // ── 5. Port binding enforcement ──────────────────────────────
