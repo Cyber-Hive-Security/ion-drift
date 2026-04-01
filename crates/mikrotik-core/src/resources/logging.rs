@@ -21,7 +21,9 @@ pub struct LoggingAction {
     #[serde(default)]
     pub src_address: Option<String>,
     #[serde(default)]
-    pub bsd_syslog: Option<String>,
+    pub remote_log_format: Option<String>,
+    #[serde(default)]
+    pub remote_protocol: Option<String>,
     #[serde(default)]
     pub syslog_facility: Option<String>,
     #[serde(default)]
@@ -40,8 +42,12 @@ pub struct CreateLoggingAction {
     pub remote_port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub src_address: Option<String>,
+    /// Log format: "default", "bsd-syslog", "syslog"
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bsd_syslog: Option<String>,
+    pub remote_log_format: Option<String>,
+    /// Protocol: "udp" or "tcp"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_protocol: Option<String>,
 }
 
 /// Logging rule — `/system/logging`

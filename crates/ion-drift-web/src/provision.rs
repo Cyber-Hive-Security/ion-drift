@@ -281,7 +281,7 @@ pub async fn generate_plan(
                     "remote": config.syslog_host,
                     "remote-port": config.syslog_port,
                     "src-address": config.router_source_ip,
-                    "bsd-syslog": "yes",
+                    "remote-log-format": "bsd-syslog",
                 }),
             });
         }
@@ -528,7 +528,8 @@ async fn apply_item(
                     remote: config.syslog_host.clone(),
                     remote_port: config.syslog_port,
                     src_address: Some(config.router_source_ip.clone()),
-                    bsd_syslog: Some("yes".to_string()),
+                    remote_log_format: Some("bsd-syslog".to_string()),
+                    remote_protocol: None,
                 })
                 .await?;
             Ok(())
