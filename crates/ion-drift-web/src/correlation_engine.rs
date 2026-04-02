@@ -1021,6 +1021,20 @@ async fn run_correlation(
         let identity_by_mac: HashMap<String, &ion_drift_storage::switch::NetworkIdentity> =
             existing_identities.iter().map(|i| (i.mac_address.to_uppercase(), i)).collect();
 
+        // Load neighbor aliases — "hide" entries suppress ISP/unwanted LLDP neighbors
+        let aliases = store.get_neighbor_aliases().await.unwrap_or_default();
+        let mut hidden_macs: HashSet<String> = HashSet::new();
+        let mut hidden_identities: HashSet<String> = HashSet::new();
+        for alias in &aliases {
+            if alias.action == "hide" {
+                match alias.match_type.as_str() {
+                    "mac" => { hidden_macs.insert(alias.match_value.to_uppercase()); }
+                    "identity" => { hidden_identities.insert(alias.match_value.to_lowercase()); }
+                    _ => {}
+                }
+            }
+        }
+
         // Resolve LLDP neighbors → infrastructure nodes + trunk edges
         // Track MAC→node_id for dedup (same device seen from multiple switches)
         let mut infra_mac_to_id: HashMap<String, String> = HashMap::new();
@@ -1043,6 +1057,14 @@ async fn run_correlation(
                     wan_neighbor_count += 1;
                     continue;
                 }
+            }
+
+            // Skip neighbors hidden via neighbor aliases
+            if let Some(ref mac) = nb.mac_address {
+                if hidden_macs.contains(&mac.to_uppercase()) { continue; }
+            }
+            if let Some(ref ident) = nb.identity {
+                if hidden_identities.contains(&ident.to_lowercase()) { continue; }
             }
 
             let source_device = nb.device_id.clone();
