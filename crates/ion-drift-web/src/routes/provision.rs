@@ -82,6 +82,33 @@ pub async fn apply(
     Ok(Json(result))
 }
 
+// ── GET /api/devices/{id}/provision/check ─────────────────────────
+
+/// Pre-check whether the API user has write permission for provisioning.
+/// Returns detailed permission info and setup commands if insufficient.
+pub async fn check_permissions(
+    RequireAdmin(_session): RequireAdmin,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let client = get_router_client(&state, &id).await?;
+
+    match client.check_provision_permission().await {
+        Ok(check) => Ok(Json(serde_json::to_value(check).unwrap_or_default())),
+        Err(e) => {
+            tracing::warn!("provision permission check failed: {e}");
+            Err((
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": format!("Could not check permissions: {e}"),
+                    "has_write": false,
+                })),
+            )
+                .into_response())
+        }
+    }
+}
+
 // ── GET /api/devices/{id}/provision/interfaces ─────────────────────
 
 pub async fn interfaces(

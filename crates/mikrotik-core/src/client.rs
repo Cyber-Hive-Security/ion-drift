@@ -123,6 +123,11 @@ pub struct MikrotikClient {
 }
 
 impl MikrotikClient {
+    /// The username this client authenticates with.
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
     /// Build a new client from the given config.
     ///
     /// This does **not** make any network requests. Call [`test_connection`](Self::test_connection)

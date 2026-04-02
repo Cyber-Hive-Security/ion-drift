@@ -562,6 +562,10 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         .route("/devices/{id}/provision/plan", post(provision::plan))
         .route("/devices/{id}/provision/apply", post(provision::apply))
         .route(
+            "/devices/{id}/provision/check",
+            get(provision::check_permissions),
+        )
+        .route(
             "/devices/{id}/provision/interfaces",
             get(provision::interfaces),
         )

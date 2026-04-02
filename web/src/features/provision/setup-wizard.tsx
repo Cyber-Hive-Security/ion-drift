@@ -721,12 +721,37 @@ export function SetupWizard() {
   const [planLoading, setPlanLoading] = useState(false);
   const [, setSelectedIds] = useState<string[]>([]);
 
+  const [permissionCheck, setPermissionCheck] = useState<{
+    has_write: boolean;
+    username: string;
+    group: string;
+    missing_policies: string[];
+    setup_commands: string | null;
+  } | null>(null);
+
   const handleConfigure = async (devId: string, cfg: ProvisionConfig) => {
     setDeviceId(devId);
     setConfig(cfg);
     setPlanLoading(true);
     setError(null);
+    setPermissionCheck(null);
     try {
+      // Pre-check: does the API user have write permission?
+      const check = await apiFetch<{
+        has_write: boolean;
+        username: string;
+        group: string;
+        policy: string;
+        missing_policies: string[];
+        setup_commands: string | null;
+      }>(`/api/devices/${encodeURIComponent(devId)}/provision/check`);
+
+      if (!check.has_write) {
+        setPermissionCheck(check);
+        setPlanLoading(false);
+        return;
+      }
+
       const planResult = await apiFetch<ProvisionPlan>(
         `/api/devices/${encodeURIComponent(devId)}/provision/plan`,
         {
@@ -799,12 +824,46 @@ export function SetupWizard() {
 
       {step === 0 && (
         <>
+          {permissionCheck && !permissionCheck.has_write && (
+            <div className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 p-5 space-y-3 max-w-2xl">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5 flex-shrink-0" />
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">
+                    Write Permission Required
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Your RouterOS API user <code className="text-xs bg-muted px-1 py-0.5 rounded">{permissionCheck.username}</code> (group: <code className="text-xs bg-muted px-1 py-0.5 rounded">{permissionCheck.group}</code>) does not have write permission.
+                    Provisioning needs to create mangle rules, syslog configuration, and firewall log rules on your router.
+                  </p>
+                  {permissionCheck.missing_policies.length > 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      Missing policies: {permissionCheck.missing_policies.map((p) => (
+                        <code key={p} className="text-xs bg-muted px-1 py-0.5 rounded mx-0.5">{p}</code>
+                      ))}
+                    </p>
+                  )}
+                  {permissionCheck.setup_commands && (
+                    <pre className="mt-3 text-xs bg-muted/50 border border-border rounded-md p-3 overflow-x-auto whitespace-pre-wrap font-mono text-foreground/80">
+                      {permissionCheck.setup_commands}
+                    </pre>
+                  )}
+                  <button
+                    onClick={() => setPermissionCheck(null)}
+                    className="text-xs text-primary hover:underline mt-2"
+                  >
+                    Dismiss and try again
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {planLoading ? (
             <div className="space-y-4 max-w-xl">
               <div className="rounded-lg border border-border bg-card p-5 text-center space-y-3">
                 <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
                 <p className="text-sm font-medium text-foreground">
-                  Generating provisioning plan...
+                  Checking permissions and generating plan...
                 </p>
                 <p className="text-xs text-muted-foreground">
                   Analyzing current router configuration and computing required changes.
