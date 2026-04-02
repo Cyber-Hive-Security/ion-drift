@@ -159,7 +159,6 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
     crate::topology::spawn_topology_updater(
         &state.task_supervisor,
         state.switch_store.clone(),
-        state.device_manager.clone(),
         state.behavior_store.clone(),
         state.topology_cache.clone(),
         state.infrastructure_snapshot.clone(),

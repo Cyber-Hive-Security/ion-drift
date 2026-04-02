@@ -35,7 +35,17 @@ pub async fn refresh_topology(
     RequireAdmin(_session): RequireAdmin,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    match crate::topology::compute_topology(&state.switch_store, &state.device_manager, &state.behavior_store, &state.config.router.wan_interface).await {
+    let snapshot = {
+        let snap_state = state.infrastructure_snapshot.read().await;
+        match snap_state.best_available() {
+            Some(s) => s.clone(),
+            None => return Err(internal_error(
+                "topology refresh",
+                anyhow::anyhow!("no infrastructure snapshot available yet — wait for first correlation cycle"),
+            )),
+        }
+    };
+    match crate::topology::compute_topology(&state.switch_store, &state.behavior_store, &snapshot, &state.config.router.wan_interface).await {
         Ok(topo) => {
             let count = topo.node_count;
             let mut cache = state.topology_cache.write().await;
@@ -142,7 +152,17 @@ pub async fn reset_layout(
         .await
         .map_err(|e| internal_error("reset all sectors", e))?;
     // Trigger recompute
-    match crate::topology::compute_topology(&state.switch_store, &state.device_manager, &state.behavior_store, &state.config.router.wan_interface).await {
+    let snapshot = {
+        let snap_state = state.infrastructure_snapshot.read().await;
+        match snap_state.best_available() {
+            Some(s) => s.clone(),
+            None => return Err(internal_error(
+                "topology reset",
+                anyhow::anyhow!("no infrastructure snapshot available yet"),
+            )),
+        }
+    };
+    match crate::topology::compute_topology(&state.switch_store, &state.behavior_store, &snapshot, &state.config.router.wan_interface).await {
         Ok(topo) => {
             let mut cache = state.topology_cache.write().await;
             *cache = Some(topo);

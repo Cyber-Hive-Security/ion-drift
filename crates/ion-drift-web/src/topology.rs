@@ -1,8 +1,11 @@
 //! Auto-generated network topology computation.
 //!
-//! Reads from `neighbor_discovery`, `network_identities`, `switch_port_roles`,
-//! and the `DeviceManager` to build a hierarchical network graph with deterministic
-//! layout. The result is cached in `AppState` and served via the topology API.
+//! Consumes a `ResolvedInfrastructureSnapshot` (produced by the correlation engine)
+//! for infrastructure nodes and edges, then adds endpoint placement, BFS layout,
+//! VLAN grouping, and sector positioning.
+//!
+//! **Rule:** No LLDP resolution, no neighbor matching, no infrastructure dedup
+//! happens here. Topology is a pure consumer of resolved truth.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -12,7 +15,10 @@ use ion_drift_storage::switch::{NetworkIdentity, SectorPosition, SwitchStore};
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-use crate::device_manager::{DeviceManager, DeviceStatus};
+use crate::device_manager::DeviceManager;
+use crate::infrastructure_snapshot::{
+    InfraNodeSource, InfrastructureSnapshotState, ResolvedInfrastructureSnapshot,
+};
 use crate::task_supervisor::TaskSupervisor;
 use ion_drift_storage::behavior::BehaviorStore;
 
@@ -166,8 +172,8 @@ const SECTOR_PADDING: f64 = 40.0;
 
 pub async fn compute_topology(
     store: &SwitchStore,
-    device_manager: &Arc<RwLock<DeviceManager>>,
     behavior_store: &BehaviorStore,
+    snapshot: &ResolvedInfrastructureSnapshot,
     wan_interface: &str,
 ) -> anyhow::Result<NetworkTopology> {
     let now = std::time::SystemTime::now()
@@ -185,574 +191,115 @@ pub async fn compute_topology(
     let mut nodes: BTreeMap<String, TopologyNode> = BTreeMap::new();
     let mut edges: Vec<TopologyEdge> = Vec::new();
     let mut infra_ids: HashSet<String> = HashSet::new();
-    // MAC → node_id map for infrastructure dedup (prevents same physical device
-    // from appearing under different keys like LLDP identity vs device name)
-    let mut infra_mac_to_node_id: HashMap<String, String> = HashMap::new();
 
-    // ── Layer 1: Infrastructure skeleton ─────────────────────────
-
-    // 1a. Registered devices (router + managed switches)
-    let dm = device_manager.read().await;
-    let all_devices = dm.all_devices();
+    // ── Layer 1: Infrastructure from snapshot ─────────────────────
+    //
+    // The correlation engine has already resolved all LLDP neighbors,
+    // built infrastructure nodes, and deduped edges. We just render them.
 
     let mut router_id: Option<String> = None;
 
-    for entry in &all_devices {
-        let id = entry.record.id.clone();
-        let kind = if entry.record.device_type == "router" {
-            router_id = Some(id.clone());
-            NodeKind::Router
+    // Build infrastructure nodes from the resolved snapshot.
+    // No LLDP resolution, no neighbor matching, no dedup — the correlation
+    // engine has already done all of that.
+    for infra_node in &snapshot.infrastructure {
+        let id = infra_node.device_id.clone();
+        let kind = match infra_node.device_type.as_deref() {
+            Some("router") => {
+                router_id = Some(id.clone());
+                NodeKind::Router
+            }
+            Some("access_point") | Some("wap") => NodeKind::AccessPoint,
+            Some("switch") | Some("network_equipment") => {
+                if infra_node.source == InfraNodeSource::Registered {
+                    NodeKind::ManagedSwitch
+                } else {
+                    NodeKind::UnmanagedSwitch
+                }
+            }
+            _ => {
+                if infra_node.source == InfraNodeSource::Registered {
+                    NodeKind::ManagedSwitch
+                } else {
+                    NodeKind::UnmanagedSwitch
+                }
+            }
+        };
+
+        let status = if infra_node.source == InfraNodeSource::Registered {
+            // Registered devices have live status — check via confidence as proxy
+            // (correlation sets confidence=1.0 for online registered devices)
+            if infra_node.confidence >= 1.0 {
+                NodeStatus::Online
+            } else {
+                NodeStatus::Unknown
+            }
         } else {
-            NodeKind::ManagedSwitch
+            NodeStatus::Unknown
         };
 
-        let status = match &entry.status {
-            DeviceStatus::Online { .. } => NodeStatus::Online,
-            DeviceStatus::Offline { .. } => NodeStatus::Offline,
-            DeviceStatus::Unknown => NodeStatus::Unknown,
+        let (binding_source, binding_tier) = match infra_node.source {
+            InfraNodeSource::Registered => {
+                let tier = if kind == NodeKind::Router { "router" } else { "ros_switch" };
+                ("authoritative".to_string(), Some(tier.to_string()))
+            }
+            _ => ("observed".to_string(), None),
         };
 
-        let tier = if kind == NodeKind::Router { "router" } else { "ros_switch" };
+        let disposition = match infra_node.source {
+            InfraNodeSource::Registered => "my_device".to_string(),
+            _ => "unknown".to_string(),
+        };
+
         infra_ids.insert(id.clone());
         nodes.insert(
             id.clone(),
             TopologyNode {
                 id: id.clone(),
-                label: entry.record.name.clone(),
-                ip: Some(entry.record.host.clone()),
-                mac: None,
+                label: infra_node.label.clone(),
+                ip: infra_node.ip.clone(),
+                mac: infra_node.mac.clone(),
                 kind,
                 vlan_id: None,
                 vlans_served: Vec::new(),
-                device_type: Some(entry.record.device_type.clone()),
-                manufacturer: entry.record.model.clone(),
+                device_type: infra_node.device_type.clone(),
+                manufacturer: infra_node.manufacturer.clone(),
                 is_infrastructure: true,
                 layer: 0,
                 x: 0.0,
                 y: 0.0,
                 position_source: "auto".to_string(),
-                first_seen: entry.record.created_at,
-                last_seen: now,
+                first_seen: infra_node.first_seen.unwrap_or(now),
+                last_seen: infra_node.last_seen.unwrap_or(now),
                 parent_id: None,
                 switch_port: None,
                 status,
-                confidence: 1.0,
-                disposition: "my_device".to_string(),
+                confidence: infra_node.confidence as f64,
+                disposition,
                 baseline_status: None,
-                binding_source: "authoritative".to_string(),
-                binding_tier: Some(tier.to_string()),
+                binding_source,
+                binding_tier,
                 attachment_state: None,
             },
         );
     }
-    drop(dm);
 
-    // ── Pre-load network identities for identity-first decisions ──
-    // Loaded early so LLDP neighbor processing can check whether a MAC
-    // has an authoritative identity before creating infrastructure nodes.
-    let identities = store.get_network_identities().await?;
-    let identity_by_mac: HashMap<String, &NetworkIdentity> = identities
-        .iter()
-        .map(|id| (id.mac_address.to_uppercase(), id))
-        .collect();
-
-    // 1b. LLDP/MNDP neighbors → trunk edges + inferred infrastructure
-    let neighbors = store.get_neighbors(None).await?;
-
-    // Build mappings: identity/name/IP/MAC → registered device ID
-    // Multiple keys can map to the same device to handle LLDP reporting
-    // alternate names (e.g. RouterOS identity vs registered name).
-    let dm = device_manager.read().await;
-    let mut identity_to_device: HashMap<String, String> = HashMap::new();
-    let mut ip_to_device: HashMap<String, String> = HashMap::new();
-    let mut mac_to_device: HashMap<String, String> = HashMap::new();
-    for entry in dm.all_devices() {
-        // Existing exact-match keys
-        identity_to_device.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
-        identity_to_device.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
-        ip_to_device.insert(entry.record.host.clone(), entry.record.id.clone());
-        // NEW: actual RouterOS identity from health check (exact MNDP broadcast string)
-        if let DeviceStatus::Online { ref identity } = entry.status {
-            identity_to_device.insert(identity.to_lowercase(), entry.record.id.clone());
-            identity_to_device.insert(normalize_identity(identity), entry.record.id.clone());
-        }
-        // NEW: normalized fuzzy keys for name/id
-        identity_to_device.insert(normalize_identity(&entry.record.name), entry.record.id.clone());
-        identity_to_device.insert(normalize_identity(&entry.record.id), entry.record.id.clone());
-    }
-    drop(dm);
-
-    // Also build MAC → device from neighbor records: if a neighbor was seen
-    // FROM a device and matches a registered device, record the neighbor MAC
-    // so we can dedup later even when identity names don't match.
-    for nb in &neighbors {
-        if let Some(ref mac) = nb.mac_address {
-            // If this neighbor's identity or IP resolves to a registered device,
-            // associate its MAC with that device too.
-            let resolved = nb
-                .identity
-                .as_deref()
-                .and_then(|id| identity_to_device.get(&id.to_lowercase()).cloned())
-                .or_else(|| {
-                    nb.address
-                        .as_deref()
-                        .and_then(|addr| ip_to_device.get(addr).cloned())
-                });
-            if let Some(dev_id) = resolved {
-                mac_to_device.insert(mac.to_uppercase(), dev_id);
-            }
-        }
+    // Build trunk edges from snapshot
+    for snap_edge in &snapshot.edges {
+        edges.push(TopologyEdge {
+            source: snap_edge.source_device.clone(),
+            target: snap_edge.target_device.clone(),
+            kind: EdgeKind::Trunk,
+            source_port: snap_edge.source_port.clone(),
+            target_port: snap_edge.target_port.clone(),
+            vlans: snap_edge.vlans.clone(),
+            speed_mbps: snap_edge.speed_mbps,
+            traffic_bps: snap_edge.traffic_bps,
+        });
     }
 
-    // ── Load neighbor aliases (alias → inject into maps, hide → skip set) ──
-    let aliases = store.get_neighbor_aliases().await.unwrap_or_default();
-    let mut hidden_macs: HashSet<String> = HashSet::new();
-    let mut hidden_identities: HashSet<String> = HashSet::new();
-
-    for alias in &aliases {
-        match alias.action.as_str() {
-            "alias" => {
-                if let Some(ref target) = alias.target_device_id {
-                    match alias.match_type.as_str() {
-                        "mac" => {
-                            mac_to_device.insert(alias.match_value.to_uppercase(), target.clone());
-                        }
-                        "identity" => {
-                            identity_to_device.insert(alias.match_value.to_lowercase(), target.clone());
-                            identity_to_device.insert(normalize_identity(&alias.match_value), target.clone());
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            "hide" => {
-                match alias.match_type.as_str() {
-                    "mac" => { hidden_macs.insert(alias.match_value.to_uppercase()); }
-                    "identity" => { hidden_identities.insert(alias.match_value.to_lowercase()); }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Seed infra MAC dedup from mac_to_device (registered devices' neighbor MACs)
-    for (mac, dev_id) in &mac_to_device {
-        infra_mac_to_node_id.insert(mac.clone(), dev_id.clone());
-    }
-
-    // Track edges we've already created (both directions)
-    let mut edge_set: HashSet<(String, String)> = HashSet::new();
-    let mut wan_neighbor_count = 0u32;
-
-    for nb in &neighbors {
-        let source_device = nb.device_id.clone();
-        let source_port = nb.interface.clone();
-
-        // Skip WAN-facing neighbors on the router — they are ISP/external equipment
-        // and will be collapsed into a single "WAN / ISP" node below.
-        if Some(&source_device) == router_id.as_ref()
-            && source_port == wan_interface
-        {
-            wan_neighbor_count += 1;
-            continue;
-        }
-
-        // Skip neighbors that are explicitly hidden via neighbor aliases
-        if let Some(ref mac) = nb.mac_address {
-            if hidden_macs.contains(&mac.to_uppercase()) { continue; }
-        }
-        if let Some(ref ident) = nb.identity {
-            if hidden_identities.contains(&ident.to_lowercase()) { continue; }
-        }
-
-        // Try to match neighbor to a registered device:
-        //   1. By LLDP identity name (exact lowercase, then fuzzy normalized)
-        //   2. By IP address (skip fe80:: link-local — useless for matching)
-        //   3. By MAC address (catches routers whose LLDP identity differs from registered name)
-        let remote_id = nb
-            .identity
-            .as_deref()
-            .and_then(|id| {
-                identity_to_device.get(&id.to_lowercase()).cloned()
-                    .or_else(|| identity_to_device.get(&normalize_identity(id)).cloned())
-            })
-            .or_else(|| {
-                nb.address
-                    .as_deref()
-                    .filter(|addr| !addr.starts_with("fe80:"))
-                    .and_then(|addr| ip_to_device.get(addr).cloned())
-            })
-            .or_else(|| {
-                nb.mac_address
-                    .as_deref()
-                    .and_then(|mac| mac_to_device.get(&mac.to_uppercase()).cloned())
-            });
-
-        // When we DO match, learn the identity name → device mapping so future
-        // lookups from other switches also match (e.g., "MT-4011-R-Office" → "rb4011").
-        if let Some(ref matched_id) = remote_id {
-            if let Some(ref ident) = nb.identity {
-                identity_to_device
-                    .entry(ident.to_lowercase())
-                    .or_insert_with(|| matched_id.clone());
-            }
-            if let Some(ref mac) = nb.mac_address {
-                mac_to_device
-                    .entry(mac.to_uppercase())
-                    .or_insert_with(|| matched_id.clone());
-            }
-        }
-
-        if let Some(ref target_id) = remote_id {
-            // Known registered device — trunk edge
-            let pair = if source_device < *target_id {
-                (source_device.clone(), target_id.clone())
-            } else {
-                (target_id.clone(), source_device.clone())
-            };
-
-            if edge_set.insert(pair) {
-                edges.push(TopologyEdge {
-                    source: source_device.clone(),
-                    target: target_id.clone(),
-                    kind: EdgeKind::Trunk,
-                    source_port: Some(source_port.clone()),
-                    target_port: None, // Will be filled if we find the reverse neighbor
-                    vlans: Vec::new(),
-                    speed_mbps: None,
-                    traffic_bps: None,
-                });
-            }
-        } else if let Some(ref platform) = nb.platform {
-            // Unregistered neighbor — create inferred infrastructure node,
-            // BUT only if network_identities doesn't override this MAC.
-            let neighbor_mac_upper = nb.mac_address.as_deref().map(|m| m.to_uppercase());
-
-            // Identity-first check: if this MAC has an authoritative identity
-            // that says it's NOT infrastructure, skip creating an infra node.
-            // Layer 2 (endpoint placement) will handle it correctly.
-            if let Some(ident) = neighbor_mac_upper
-                .as_deref()
-                .and_then(|mac| identity_by_mac.get(mac))
-            {
-                if identity_overrides_lldp(ident) {
-                    continue;
-                }
-            }
-
-            let plat_lower = platform.to_lowercase();
-            let is_mikrotik = plat_lower.contains("routeros")
-                || plat_lower.contains("mikrotik")
-                || plat_lower.contains("swos");
-            let is_ap = plat_lower.contains("cap")
-                || plat_lower.contains("wap")
-                || plat_lower.contains("wireless");
-
-            // MAC-based dedup: if this neighbor's MAC resolves to a registered device,
-            // create a trunk edge to that device instead of a duplicate inferred node.
-            if let Some(resolved_dev) = neighbor_mac_upper
-                .as_deref()
-                .and_then(|mac| mac_to_device.get(mac))
-            {
-                let pair = if source_device < *resolved_dev {
-                    (source_device.clone(), resolved_dev.clone())
-                } else {
-                    (resolved_dev.clone(), source_device.clone())
-                };
-                if edge_set.insert(pair) {
-                    edges.push(TopologyEdge {
-                        source: source_device.clone(),
-                        target: resolved_dev.clone(),
-                        kind: EdgeKind::Trunk,
-                        source_port: Some(source_port.clone()),
-                        target_port: None,
-                        vlans: Vec::new(),
-                        speed_mbps: None,
-                        traffic_bps: None,
-                    });
-                }
-                continue;
-            }
-
-            let inferred_id = nb
-                .identity
-                .clone()
-                .unwrap_or_else(|| {
-                    nb.mac_address
-                        .clone()
-                        .unwrap_or_else(|| format!("unknown-{}-{}", nb.device_id, nb.interface))
-                });
-
-            // MAC-based dedup: if this MAC already has an infra node, create edge to it instead
-            if let Some(ref mac) = nb.mac_address {
-                let mac_upper = mac.to_uppercase();
-                if let Some(existing_node) = infra_mac_to_node_id.get(&mac_upper).cloned() {
-                    let pair = if source_device < existing_node {
-                        (source_device.clone(), existing_node.clone())
-                    } else {
-                        (existing_node.clone(), source_device.clone())
-                    };
-                    if edge_set.insert(pair) {
-                        edges.push(TopologyEdge {
-                            source: source_device.clone(),
-                            target: existing_node,
-                            kind: EdgeKind::Trunk,
-                            source_port: Some(source_port.clone()),
-                            target_port: None,
-                            vlans: Vec::new(),
-                            speed_mbps: None,
-                            traffic_bps: None,
-                        });
-                    }
-                    continue;
-                }
-            }
-
-            // Case-insensitive identity dedup: if inferred_id resolves to a registered
-            // device via identity_to_device, create a trunk edge instead of a duplicate node.
-            if let Some(resolved) = identity_to_device.get(&inferred_id.to_lowercase()).cloned() {
-                if nodes.contains_key(&resolved) || infra_ids.contains(&resolved) {
-                    let pair = if source_device < resolved {
-                        (source_device.clone(), resolved.clone())
-                    } else {
-                        (resolved.clone(), source_device.clone())
-                    };
-                    if edge_set.insert(pair) {
-                        edges.push(TopologyEdge {
-                            source: source_device.clone(),
-                            target: resolved,
-                            kind: EdgeKind::Trunk,
-                            source_port: Some(source_port.clone()),
-                            target_port: None,
-                            vlans: Vec::new(),
-                            speed_mbps: None,
-                            traffic_bps: None,
-                        });
-                    }
-                    continue;
-                }
-            }
-
-            if !infra_ids.contains(&inferred_id) && !nodes.contains_key(&inferred_id) {
-                let kind = if is_ap {
-                    NodeKind::AccessPoint
-                } else if is_mikrotik {
-                    NodeKind::UnmanagedSwitch
-                } else {
-                    NodeKind::UnmanagedSwitch
-                };
-
-                tracing::info!(
-                    inferred_id = %inferred_id,
-                    identity = ?nb.identity,
-                    mac = ?nb.mac_address,
-                    platform = %platform,
-                    seen_by = %source_device,
-                    port = %source_port,
-                    "creating inferred infrastructure node from LLDP neighbor"
-                );
-
-                infra_ids.insert(inferred_id.clone());
-                nodes.insert(
-                    inferred_id.clone(),
-                    TopologyNode {
-                        id: inferred_id.clone(),
-                        label: nb.identity.clone()
-                            .filter(|s| !s.is_empty() && s != "?")
-                            .or_else(|| nb.board.clone())
-                            .or_else(|| nb.address.clone())
-                            .or_else(|| nb.mac_address.clone())
-                            .unwrap_or_else(|| "Unknown Switch".to_string()),
-                        ip: nb.address.clone(),
-                        mac: nb.mac_address.clone(),
-                        kind,
-                        vlan_id: None,
-                        vlans_served: Vec::new(),
-                        device_type: Some("network_equipment".to_string()),
-                        manufacturer: nb.board.clone(),
-                        is_infrastructure: true,
-                        layer: 0,
-                        x: 0.0,
-                        y: 0.0,
-                        position_source: "auto".to_string(),
-                        first_seen: nb.first_seen,
-                        last_seen: nb.last_seen,
-                        parent_id: None,
-                        switch_port: None,
-                        status: NodeStatus::Unknown,
-                        confidence: 0.7,
-                        disposition: "unknown".to_string(),
-                baseline_status: None,
-                binding_source: "observed".to_string(),
-                binding_tier: None,
-                attachment_state: None,
-                    },
-                );
-
-                // Register MAC for dedup against future LLDP/backbone entries
-                if let Some(ref mac) = nb.mac_address {
-                    infra_mac_to_node_id.insert(mac.to_uppercase(), inferred_id.clone());
-                }
-            }
-
-            // Edge from managed device to inferred node
-            let pair = if source_device < inferred_id {
-                (source_device.clone(), inferred_id.clone())
-            } else {
-                (inferred_id.clone(), source_device.clone())
-            };
-            if edge_set.insert(pair) {
-                edges.push(TopologyEdge {
-                    source: source_device.clone(),
-                    target: inferred_id,
-                    kind: EdgeKind::Trunk,
-                    source_port: Some(source_port),
-                    target_port: None,
-                    vlans: Vec::new(),
-                    speed_mbps: None,
-                    traffic_bps: None,
-                });
-            }
-        }
-    }
-
-    // ── Backbone links → trunk edges + auto-create missing nodes ──
-    // Manual switch-to-switch connections for non-LLDP devices.
-    // If a backbone link references a device that doesn't have a node yet
-    // (e.g. WAPs, SwOS switches without LLDP), create an infrastructure
-    // node so the edge renders in the topology.
-    let backbone_links = store.get_backbone_links().await.unwrap_or_default();
-    let infra_identities = store.get_infrastructure_identities().await.unwrap_or_default();
-    let infra_by_id: HashMap<String, &ion_drift_storage::switch::NetworkIdentity> = infra_identities
-        .iter()
-        .filter_map(|i| {
-            let key = i.hostname.clone().unwrap_or_else(|| i.mac_address.clone());
-            Some((key, i))
-        })
-        .collect();
-
-    for link in &backbone_links {
-        // Auto-create nodes for backbone link endpoints that don't exist yet
-        for device_id in [&link.device_a, &link.device_b] {
-            if nodes.contains_key(device_id) || infra_ids.contains(device_id) {
-                continue;
-            }
-
-            // MAC-based dedup for backbone endpoints
-            let ident = infra_by_id.get(device_id);
-            if let Some(mac) = ident.map(|i| i.mac_address.to_uppercase()) {
-                if let Some(existing) = infra_mac_to_node_id.get(&mac).cloned() {
-                    // This backbone device is already in topology under a different key
-                    infra_ids.insert(device_id.clone());
-                    // Alias this device_id to the existing node for edge creation
-                    infra_mac_to_node_id.insert(device_id.clone(), existing);
-                    continue;
-                }
-            }
-
-            // Look up from infrastructure identities for metadata
-            let kind = match ident.and_then(|i| i.device_type.as_deref()) {
-                Some("access_point") | Some("wap") => NodeKind::AccessPoint,
-                _ => NodeKind::UnmanagedSwitch,
-            };
-            let label = ident
-                .and_then(|i| {
-                    i.human_label.clone()
-                        .or(i.hostname.clone())
-                        .or(i.best_ip.clone())
-                        .or(i.manufacturer.as_ref().map(|m| {
-                            let short_mac = &i.mac_address[i.mac_address.len().saturating_sub(8)..];
-                            format!("{m} ({short_mac})")
-                        }))
-                })
-                .unwrap_or_else(|| device_id.clone());
-
-            infra_ids.insert(device_id.clone());
-            nodes.insert(
-                device_id.clone(),
-                TopologyNode {
-                    id: device_id.clone(),
-                    label,
-                    ip: ident.and_then(|i| i.best_ip.clone()),
-                    mac: ident.map(|i| i.mac_address.clone()),
-                    kind,
-                    vlan_id: None,
-                    vlans_served: Vec::new(),
-                    device_type: ident.and_then(|i| i.device_type.clone()),
-                    manufacturer: ident.and_then(|i| i.manufacturer.clone()),
-                    is_infrastructure: true,
-                    layer: 0,
-                    x: 0.0,
-                    y: 0.0,
-                    position_source: "auto".to_string(),
-                    first_seen: now,
-                    last_seen: now,
-                    parent_id: None,
-                    switch_port: None,
-                    status: NodeStatus::Unknown,
-                    confidence: 0.8,
-                    disposition: "unknown".to_string(),
-                baseline_status: None,
-                binding_source: "observed".to_string(),
-                binding_tier: None,
-                attachment_state: None,
-                },
-            );
-            tracing::debug!(device = %device_id, "created node from backbone link reference");
-            // Register MAC for dedup
-            if let Some(mac) = ident.map(|i| i.mac_address.to_uppercase()) {
-                infra_mac_to_node_id.insert(mac, device_id.clone());
-            }
-        }
-
-        let pair = if link.device_a < link.device_b {
-            (link.device_a.clone(), link.device_b.clone())
-        } else {
-            (link.device_b.clone(), link.device_a.clone())
-        };
-        if edge_set.insert(pair.clone()) {
-            // New edge — create it
-            edges.push(TopologyEdge {
-                source: link.device_a.clone(),
-                target: link.device_b.clone(),
-                kind: EdgeKind::Trunk,
-                source_port: link.port_a.clone(),
-                target_port: link.port_b.clone(),
-                vlans: Vec::new(),
-                speed_mbps: link.speed_mbps,
-                traffic_bps: None,
-            });
-        } else {
-            // Edge already exists (from LLDP) — merge backbone link data into it.
-            // Backbone ports and speed override LLDP-discovered values.
-            if let Some(existing) = edges.iter_mut().find(|e| {
-                let ep = if e.source < e.target {
-                    (&e.source, &e.target)
-                } else {
-                    (&e.target, &e.source)
-                };
-                ep == (&pair.0, &pair.1)
-            }) {
-                if link.port_a.is_some() {
-                    // Figure out which direction the existing edge uses
-                    if existing.source == link.device_a {
-                        existing.source_port = link.port_a.clone();
-                        existing.target_port = existing.target_port.clone().or(link.port_b.clone());
-                    } else {
-                        existing.target_port = link.port_a.clone();
-                        existing.source_port = existing.source_port.clone().or(link.port_b.clone());
-                    }
-                }
-                if link.speed_mbps.is_some() {
-                    existing.speed_mbps = link.speed_mbps;
-                }
-            }
-        }
-    }
-
-    // Create a single WAN/ISP placeholder if any WAN-facing neighbors were seen
-    if wan_neighbor_count > 0 {
+    // WAN placeholder from snapshot
+    if snapshot.wan_neighbor_count > 0 {
         if let Some(ref rid) = router_id {
             let wan_id = "WAN".to_string();
             infra_ids.insert(wan_id.clone());
@@ -760,7 +307,7 @@ pub async fn compute_topology(
                 wan_id.clone(),
                 TopologyNode {
                     id: wan_id.clone(),
-                    label: format!("WAN / ISP ({})", wan_neighbor_count),
+                    label: format!("WAN / ISP ({})", snapshot.wan_neighbor_count),
                     ip: None,
                     mac: None,
                     kind: NodeKind::Router,
@@ -780,10 +327,10 @@ pub async fn compute_topology(
                     status: NodeStatus::Unknown,
                     confidence: 1.0,
                     disposition: "external".to_string(),
-                baseline_status: None,
-                binding_source: "authoritative".to_string(),
-                binding_tier: Some("router".to_string()),
-                attachment_state: None,
+                    baseline_status: None,
+                    binding_source: "authoritative".to_string(),
+                    binding_tier: Some("router".to_string()),
+                    attachment_state: None,
                 },
             );
             edges.push(TopologyEdge {
@@ -793,35 +340,13 @@ pub async fn compute_topology(
                 source_port: Some(wan_interface.to_string()),
                 target_port: None,
                 vlans: Vec::new(),
-                speed_mbps: Some(1000), // WAN — 1Gbps fiber
+                speed_mbps: Some(1000),
                 traffic_bps: None,
             });
         }
     }
 
-    // Fill in reverse port labels on trunk edges
-    for edge in &mut edges {
-        if edge.target_port.is_none() && edge.kind == EdgeKind::Trunk {
-            // Find reverse neighbor entry
-            for nb in &neighbors {
-                let remote_match = nb
-                    .identity
-                    .as_deref()
-                    .map(|id| identity_to_device.get(&id.to_lowercase()).cloned())
-                    .flatten();
-
-                if nb.device_id == edge.target
-                    && remote_match.as_deref() == Some(edge.source.as_str())
-                {
-                    edge.target_port = Some(nb.interface.clone());
-                    break;
-                }
-            }
-        }
-    }
-
     // ── Resolve edge speeds from port metrics ─────────────────────
-    // Collect all device IDs that have edges with ports, then batch-query speeds.
     {
         let mut device_ids_with_edges: HashSet<String> = HashSet::new();
         for edge in &edges {
@@ -832,88 +357,49 @@ pub async fn compute_topology(
                 device_ids_with_edges.insert(edge.target.clone());
             }
         }
-
-        // Build a map of device_id → (port_name → speed_mbps)
         let mut speed_map: HashMap<String, HashMap<String, u32>> = HashMap::new();
         for dev_id in &device_ids_with_edges {
             if let Ok(speeds) = store.get_port_speeds(dev_id).await {
                 if !speeds.is_empty() {
-                    tracing::debug!(device = %dev_id, ports = ?speeds, "port speeds loaded");
                     speed_map.insert(dev_id.clone(), speeds);
-                } else {
-                    tracing::debug!(device = %dev_id, "no port speed data available");
                 }
             }
         }
-
-        // Fill in speed_mbps on edges that don't already have one (manual override takes priority)
-        // Port names in speed_map are lowercased for case-insensitive matching.
         for edge in &mut edges {
-            if edge.speed_mbps.is_some() {
-                tracing::debug!(
-                    src = %edge.source, tgt = %edge.target,
-                    speed = ?edge.speed_mbps,
-                    "edge already has speed (manual override)"
-                );
-                continue;
-            }
-            let src_speed = edge
-                .source_port
-                .as_deref()
+            if edge.speed_mbps.is_some() { continue; }
+            let src_speed = edge.source_port.as_deref()
                 .and_then(|p| speed_map.get(&edge.source).and_then(|m| m.get(&p.to_lowercase())))
                 .copied();
-            let tgt_speed = edge
-                .target_port
-                .as_deref()
+            let tgt_speed = edge.target_port.as_deref()
                 .and_then(|p| speed_map.get(&edge.target).and_then(|m| m.get(&p.to_lowercase())))
                 .copied();
             edge.speed_mbps = match (src_speed, tgt_speed) {
-                (Some(a), Some(b)) => Some(a.min(b)), // bottleneck speed
+                (Some(a), Some(b)) => Some(a.min(b)),
                 (Some(a), None) => Some(a),
                 (None, Some(b)) => Some(b),
                 (None, None) => None,
             };
-            tracing::debug!(
-                src = %edge.source, tgt = %edge.target,
-                src_port = ?edge.source_port, tgt_port = ?edge.target_port,
-                src_speed = ?src_speed, tgt_speed = ?tgt_speed,
-                resolved = ?edge.speed_mbps,
-                "edge speed resolution"
-            );
         }
     }
 
-    // 1b-2. Resolve traffic rates on edges from port metrics
+    // ── Resolve traffic rates on edges ────────────────────────────
     {
         let mut traffic_map: HashMap<String, HashMap<String, u64>> = HashMap::new();
         let mut device_ids_with_edges: HashSet<String> = HashSet::new();
         for edge in &edges {
-            if edge.source_port.is_some() {
-                device_ids_with_edges.insert(edge.source.clone());
-            }
-            if edge.target_port.is_some() {
-                device_ids_with_edges.insert(edge.target.clone());
-            }
+            if edge.source_port.is_some() { device_ids_with_edges.insert(edge.source.clone()); }
+            if edge.target_port.is_some() { device_ids_with_edges.insert(edge.target.clone()); }
         }
         for dev_id in &device_ids_with_edges {
             if let Ok(traffic) = store.get_port_traffic_bps(dev_id).await {
-                if !traffic.is_empty() {
-                    traffic_map.insert(dev_id.clone(), traffic);
-                }
+                if !traffic.is_empty() { traffic_map.insert(dev_id.clone(), traffic); }
             }
         }
         for edge in &mut edges {
-            let src_bps = edge
-                .source_port
-                .as_deref()
-                .and_then(|p| traffic_map.get(&edge.source).and_then(|m| m.get(&p.to_lowercase())))
-                .copied();
-            let tgt_bps = edge
-                .target_port
-                .as_deref()
-                .and_then(|p| traffic_map.get(&edge.target).and_then(|m| m.get(&p.to_lowercase())))
-                .copied();
-            // Use the higher of the two (same traffic seen from both sides)
+            let src_bps = edge.source_port.as_deref()
+                .and_then(|p| traffic_map.get(&edge.source).and_then(|m| m.get(&p.to_lowercase()))).copied();
+            let tgt_bps = edge.target_port.as_deref()
+                .and_then(|p| traffic_map.get(&edge.target).and_then(|m| m.get(&p.to_lowercase()))).copied();
             edge.traffic_bps = match (src_bps, tgt_bps) {
                 (Some(a), Some(b)) => Some(a.max(b)),
                 (Some(a), None) => Some(a),
@@ -923,73 +409,61 @@ pub async fn compute_topology(
         }
     }
 
-    // 1c. BFS layer assignment from router
+    // ── BFS layer assignment from router ──────────────────────────
     if let Some(ref rid) = router_id {
         let mut visited: HashSet<String> = HashSet::new();
         let mut queue: VecDeque<(String, u32)> = VecDeque::new();
         queue.push_back((rid.clone(), 0));
         visited.insert(rid.clone());
-
         while let Some((node_id, layer)) = queue.pop_front() {
-            if let Some(node) = nodes.get_mut(&node_id) {
-                node.layer = layer;
-            }
-
-            // Find connected infrastructure nodes via trunk edges
+            if let Some(node) = nodes.get_mut(&node_id) { node.layer = layer; }
             for edge in &edges {
-                if edge.kind != EdgeKind::Trunk {
-                    continue;
-                }
-                let neighbor = if edge.source == node_id {
-                    &edge.target
-                } else if edge.target == node_id {
-                    &edge.source
-                } else {
-                    continue;
-                };
-
+                if edge.kind != EdgeKind::Trunk { continue; }
+                let neighbor = if edge.source == node_id { &edge.target }
+                    else if edge.target == node_id { &edge.source }
+                    else { continue };
                 if !visited.contains(neighbor) && infra_ids.contains(neighbor) {
                     visited.insert(neighbor.clone());
                     queue.push_back((neighbor.clone(), layer + 1));
                 }
             }
         }
-
-        // Any unvisited infrastructure gets max_layer + 1
-        let max_layer = nodes
-            .values()
-            .filter(|n| n.is_infrastructure)
-            .map(|n| n.layer)
-            .max()
-            .unwrap_or(0);
+        let max_layer = nodes.values().filter(|n| n.is_infrastructure).map(|n| n.layer).max().unwrap_or(0);
         for node in nodes.values_mut() {
-            if node.is_infrastructure && !visited.contains(&node.id) {
-                node.layer = max_layer + 1;
-            }
+            if node.is_infrastructure && !visited.contains(&node.id) { node.layer = max_layer + 1; }
         }
     }
+    if let Some(wan) = nodes.get_mut("WAN") { wan.layer = 0; }
 
-    // WAN node sits alongside the router at layer 0 (BFS doesn't traverse Uplink edges)
-    if let Some(wan) = nodes.get_mut("WAN") {
-        wan.layer = 0;
-    }
-
-    // Compute VLANs served by each infrastructure node (from VLAN membership)
+    // Compute VLANs served by each infrastructure node
     for infra_id in &infra_ids {
         let memberships = store.get_vlan_membership(infra_id).await.unwrap_or_default();
-        let mut vlans: HashSet<u32> = HashSet::new();
-        for m in &memberships {
-            vlans.insert(m.vlan_id);
-        }
-        let mut vlan_list: Vec<u32> = vlans.into_iter().collect();
+        let mut vlan_list: Vec<u32> = memberships.iter().map(|m| m.vlan_id).collect();
         vlan_list.sort();
-        if let Some(node) = nodes.get_mut(infra_id) {
-            node.vlans_served = vlan_list;
+        vlan_list.dedup();
+        if let Some(node) = nodes.get_mut(infra_id) { node.vlans_served = vlan_list; }
+    }
+
+    // Derive helper maps for endpoint placement from snapshot data
+    let identities = &snapshot.identities;
+    let identity_by_mac: HashMap<String, &NetworkIdentity> = identities
+        .iter()
+        .map(|id| (id.mac_address.to_uppercase(), id))
+        .collect();
+
+    // Build ip_to_device and mac_to_device from infra nodes for endpoint filtering
+    let mut ip_to_device: HashMap<String, String> = HashMap::new();
+    let mut mac_to_device: HashMap<String, String> = HashMap::new();
+    for infra_node in &snapshot.infrastructure {
+        if let Some(ref ip) = infra_node.ip {
+            ip_to_device.insert(ip.clone(), infra_node.device_id.clone());
+        }
+        if let Some(ref mac) = infra_node.mac {
+            mac_to_device.insert(mac.to_uppercase(), infra_node.device_id.clone());
         }
     }
 
     // ── Layer 2: Endpoint placement ─────────────────────────────
-    // (identities already loaded above for identity-first LLDP decisions)
 
     let endpoint_layer = nodes
         .values()
@@ -999,27 +473,14 @@ pub async fn compute_topology(
         .unwrap_or(0)
         + 1;
 
-    // Build MAC → infra_id mapping for infrastructure nodes
+    // Build infra MAC set from snapshot infrastructure nodes
     let mut infra_macs: HashSet<String> = HashSet::new();
-    for nb in &neighbors {
-        if let Some(ref mac) = nb.mac_address {
-            let mac_upper = mac.to_uppercase();
-            // If this neighbor MAC is associated with a registered device, skip as endpoint
-            if let Some(ref ident) = nb.identity {
-                if identity_to_device.contains_key(&ident.to_lowercase()) {
-                    infra_macs.insert(mac_upper);
-                    continue;
-                }
-            }
-            // Also mark as infra if the neighbor created an infra node above
-            if let Some(ref ident) = nb.identity {
-                if infra_ids.contains(ident) {
-                    infra_macs.insert(mac_upper);
-                }
-            }
+    for infra_node in &snapshot.infrastructure {
+        if let Some(ref mac) = infra_node.mac {
+            infra_macs.insert(mac.to_uppercase());
         }
     }
-    // Also add any MAC that appears as an infra node's mac field
+    // Also add any MAC from the rendered infra nodes
     for node in nodes.values() {
         if node.is_infrastructure {
             if let Some(ref mac) = node.mac {
@@ -1027,8 +488,7 @@ pub async fn compute_topology(
             }
         }
     }
-    // Remove human-confirmed non-infrastructure MACs from infra_macs.
-    // This prevents Layer 2 from skipping them — identity overrides LLDP.
+    // Remove human-confirmed non-infrastructure MACs from infra_macs
     infra_macs.retain(|mac| {
         if let Some(ident) = identity_by_mac.get(mac.as_str()) {
             !identity_overrides_lldp(ident)
@@ -1037,7 +497,7 @@ pub async fn compute_topology(
         }
     });
 
-    for identity in &identities {
+    for identity in identities {
         let mac = identity.mac_address.to_uppercase();
 
         // Skip infrastructure MACs
@@ -1619,38 +1079,46 @@ fn normalize_identity(s: &str) -> String {
 pub fn spawn_topology_updater(
     supervisor: &TaskSupervisor,
     switch_store: Arc<SwitchStore>,
-    device_manager: Arc<RwLock<DeviceManager>>,
     behavior_store: Arc<BehaviorStore>,
     cache: Arc<RwLock<Option<NetworkTopology>>>,
-    snapshot_state: Arc<tokio::sync::RwLock<crate::infrastructure_snapshot::InfrastructureSnapshotState>>,
+    snapshot_state: Arc<tokio::sync::RwLock<InfrastructureSnapshotState>>,
     wan_interface: String,
 ) {
     supervisor.spawn("topology_updater", move || {
         let switch_store = switch_store.clone();
-        let device_manager = device_manager.clone();
         let behavior_store = behavior_store.clone();
         let cache = cache.clone();
         let snapshot_state = snapshot_state.clone();
         let wan_interface = wan_interface.clone();
         Box::pin(async move {
-        // Wait for correlation engine to populate data
-        tokio::time::sleep(Duration::from_secs(120)).await;
-        tracing::info!("topology updater starting (120s interval)");
+        tracing::info!("topology updater starting (120s interval, snapshot-driven)");
 
         let mut interval = tokio::time::interval(Duration::from_secs(120));
 
         loop {
-            match compute_topology(&switch_store, &device_manager, &behavior_store, &wan_interface).await {
-                Ok(topo) => {
-                    // Shadow comparison: compare snapshot infra against topology's own resolution
-                    shadow_compare_snapshot(&topo, &snapshot_state).await;
+            interval.tick().await;
 
+            // Read the best available snapshot — no snapshot means no topology yet
+            let snapshot = {
+                let state = snapshot_state.read().await;
+                match state.best_available() {
+                    Some(s) => s.clone(),
+                    None => {
+                        tracing::debug!("topology: no snapshot available yet, skipping");
+                        continue;
+                    }
+                }
+            };
+
+            match compute_topology(&switch_store, &behavior_store, &snapshot, &wan_interface).await {
+                Ok(topo) => {
                     tracing::info!(
+                        snapshot_gen = snapshot.generation,
                         nodes = topo.node_count,
                         edges = topo.edge_count,
                         infra = topo.infrastructure_count,
                         endpoints = topo.endpoint_count,
-                        "topology recomputed"
+                        "topology recomputed from snapshot"
                     );
                     let mut w = cache.write().await;
                     *w = Some(topo);
@@ -1659,97 +1127,7 @@ pub fn spawn_topology_updater(
                     tracing::warn!("topology computation failed: {e}");
                 }
             }
-            interval.tick().await;
         }
     })});
 }
 
-/// Shadow comparison: compare the snapshot's infrastructure nodes/edges
-/// against topology's own resolution. Logs structured per-cycle metrics.
-///
-/// This is temporary validation for Phase 2. Will be removed after Phase 3 cutover.
-async fn shadow_compare_snapshot(
-    topo: &NetworkTopology,
-    snapshot_state: &Arc<tokio::sync::RwLock<crate::infrastructure_snapshot::InfrastructureSnapshotState>>,
-) {
-    let state = snapshot_state.read().await;
-    let snapshot = match state.best_available() {
-        Some(s) => s,
-        None => {
-            tracing::debug!("shadow compare: no snapshot available yet");
-            return;
-        }
-    };
-
-    // Collect infrastructure node IDs from both sides
-    let topo_infra: std::collections::HashSet<&str> = topo
-        .nodes
-        .iter()
-        .filter(|n| n.is_infrastructure)
-        .map(|n| n.id.as_str())
-        .collect();
-
-    let snap_infra: std::collections::HashSet<&str> = snapshot
-        .infrastructure
-        .iter()
-        .map(|n| n.device_id.as_str())
-        .collect();
-
-    let in_topo_only: Vec<&str> = topo_infra.difference(&snap_infra).copied().collect();
-    let in_snap_only: Vec<&str> = snap_infra.difference(&topo_infra).copied().collect();
-    let in_both = topo_infra.intersection(&snap_infra).count();
-
-    // Edge comparison (simplified: count trunk edges)
-    let topo_trunk_edges = topo
-        .edges
-        .iter()
-        .filter(|e| e.kind == EdgeKind::Trunk)
-        .count();
-    let snap_edges = snapshot.edges.len();
-
-    // Count snapshot-specific metrics
-    let snap_registered = snapshot
-        .infrastructure
-        .iter()
-        .filter(|n| n.source == crate::infrastructure_snapshot::InfraNodeSource::Registered)
-        .count();
-    let snap_inferred = snapshot
-        .infrastructure
-        .iter()
-        .filter(|n| n.source == crate::infrastructure_snapshot::InfraNodeSource::InferredLldp)
-        .count();
-    let snap_backbone = snapshot
-        .infrastructure
-        .iter()
-        .filter(|n| n.source == crate::infrastructure_snapshot::InfraNodeSource::BackboneLink)
-        .count();
-    let snap_corroborated = snapshot
-        .edges
-        .iter()
-        .filter(|e| e.edge_source == crate::infrastructure_snapshot::EdgeSource::BackboneCorroborated)
-        .count();
-
-    tracing::info!(
-        snapshot_gen = snapshot.generation,
-        topo_infra = topo_infra.len(),
-        snap_infra = snap_infra.len(),
-        matching = in_both,
-        topo_only = in_topo_only.len(),
-        snap_only = in_snap_only.len(),
-        topo_trunk_edges = topo_trunk_edges,
-        snap_edges = snap_edges,
-        snap_registered,
-        snap_inferred,
-        snap_backbone,
-        snap_corroborated,
-        "shadow: snapshot vs topology comparison"
-    );
-
-    // Log individual divergences (capped at 10 to avoid log spam)
-    for id in in_topo_only.iter().take(5) {
-        tracing::debug!(device = %id, "shadow: in topology only (missing from snapshot)");
-    }
-    for id in in_snap_only.iter().take(5) {
-        tracing::debug!(device = %id, "shadow: in snapshot only (missing from topology)");
-    }
-}
