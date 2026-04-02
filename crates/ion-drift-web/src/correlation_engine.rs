@@ -1927,6 +1927,23 @@ fn dedup_bidirectional_edges(edges: Vec<ResolvedEdge>) -> Vec<ResolvedEdge> {
                 if edge.confidence > existing.confidence {
                     existing.confidence = edge.confidence;
                 }
+                // Merge speed — backbone-defined speed overrides LLDP (which has None)
+                if existing.speed_mbps.is_none() && edge.speed_mbps.is_some() {
+                    existing.speed_mbps = edge.speed_mbps;
+                }
+                // Merge traffic
+                if existing.traffic_bps.is_none() && edge.traffic_bps.is_some() {
+                    existing.traffic_bps = edge.traffic_bps;
+                }
+                // Upgrade edge source if backbone corroborates LLDP
+                if existing.edge_source == EdgeSource::LldpObserved
+                    && edge.edge_source == EdgeSource::BackboneDefined
+                {
+                    existing.edge_source = EdgeSource::BackboneCorroborated;
+                    existing.corroboration = Some(EdgeCorroboration::Corroborated {
+                        evidence: "LLDP + backbone link both confirm this edge".to_string(),
+                    });
+                }
             }
         } else {
             seen.insert(key);
