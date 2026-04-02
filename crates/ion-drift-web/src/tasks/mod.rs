@@ -153,6 +153,7 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.router_queue.clone(),
         dns_resolver,
         state.infrastructure_snapshot.clone(),
+        state.config.router.wan_interface.clone(),
         state.config.polling.correlation_interval_secs,
     );
     crate::topology::spawn_topology_updater(

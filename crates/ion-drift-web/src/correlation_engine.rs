@@ -34,6 +34,7 @@ pub fn spawn_correlation_engine(
     router_queue: RouterQueue,
     dns_resolver: Arc<dyn DnsResolver>,
     snapshot_state: Arc<RwLock<InfrastructureSnapshotState>>,
+    wan_interface: String,
     interval_secs: u64,
 ) {
     supervisor.spawn("correlation_engine", move || {
@@ -43,6 +44,7 @@ pub fn spawn_correlation_engine(
         let router_queue = router_queue.clone();
         let dns_resolver = dns_resolver.clone();
         let snapshot_state = snapshot_state.clone();
+        let wan_interface = wan_interface.clone();
         Box::pin(async move {
         // 90-second startup delay — let switch pollers collect initial data
         tokio::time::sleep(Duration::from_secs(90)).await;
@@ -65,6 +67,7 @@ pub fn spawn_correlation_engine(
                 &snapshot_state,
                 cycle_number,
                 interval_secs,
+                &wan_interface,
             )
             .await
             {
@@ -83,6 +86,7 @@ async fn run_correlation(
     snapshot_state: &Arc<RwLock<InfrastructureSnapshotState>>,
     cycle_number: u64,
     interval_secs: u64,
+    wan_interface: &str,
 ) -> anyhow::Result<()> {
     // ── 0. Prune stale entries ──────────────────────────────────
     // Entries older than 1 hour are leftovers from port renames or
@@ -1021,14 +1025,23 @@ async fn run_correlation(
         // Track MAC→node_id for dedup (same device seen from multiple switches)
         let mut infra_mac_to_id: HashMap<String, String> = HashMap::new();
 
+        // Find the router device_id for WAN neighbor filtering.
+        // Topology filters WAN neighbors by checking source_port == wan_interface.
+        // We match that: neighbors from the router on the WAN port are ISP equipment.
+        let router_device_id = {
+            let dm = device_manager.read().await;
+            dm.all_devices().into_iter()
+                .find(|d| d.record.device_type == "router")
+                .map(|r| r.record.id.clone())
+        };
+
         for nb in &all_neighbors {
-            // Skip WAN-facing neighbors (ISP equipment)
-            if let Some(ref addr) = nb.address {
-                if !addr.starts_with("10.") && !addr.starts_with("172.") && !addr.starts_with("192.168.") {
-                    if !addr.starts_with("fe80") {
-                        wan_neighbor_count += 1;
-                        continue;
-                    }
+            // Skip WAN-facing neighbors: same logic as topology.rs — neighbors
+            // reported by the router on the WAN interface are ISP/external equipment.
+            if let Some(ref rid) = router_device_id {
+                if nb.device_id == *rid && nb.interface == wan_interface {
+                    wan_neighbor_count += 1;
+                    continue;
                 }
             }
 
@@ -1080,17 +1093,14 @@ async fn run_correlation(
                     }
                 }
 
-                // Create inferred infrastructure node
-                let inferred_id = nb
-                    .identity
-                    .as_deref()
-                    .map(|s| s.to_lowercase())
-                    .unwrap_or_else(|| {
-                        nb.mac_address
-                            .as_deref()
-                            .map(|m| format!("unknown-{}", m.to_uppercase()))
-                            .unwrap_or_else(|| format!("unknown-{}-{}", source_device, nb.interface))
-                    });
+                // Create inferred infrastructure node.
+                // Preserve original case for the ID to match topology's behavior.
+                // Skip neighbors with no identity AND no MAC — they produce empty IDs.
+                let inferred_id = match (nb.identity.as_deref(), nb.mac_address.as_deref()) {
+                    (Some(id), _) if !id.is_empty() => id.to_string(),
+                    (_, Some(mac)) if !mac.is_empty() => format!("unknown-{}", mac.to_uppercase()),
+                    _ => continue, // No identity, no MAC — skip entirely
+                };
 
                 // MAC-based dedup: if we've already created a node for this MAC, reuse it
                 if let Some(ref mac) = nb.mac_address {
