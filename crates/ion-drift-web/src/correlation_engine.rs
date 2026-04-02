@@ -1104,6 +1104,16 @@ async fn run_correlation(
                 // Learn this resolution for future cycles
                 new_resolution.learn(nb, &resolved, now_secs);
             } else {
+                // Debug: why didn't this neighbor resolve?
+                tracing::debug!(
+                    source = %nb.device_id,
+                    interface = %nb.interface,
+                    identity = ?nb.identity,
+                    address = ?nb.address,
+                    mac = ?nb.mac_address,
+                    "snapshot: unresolved LLDP neighbor — creating inferred node"
+                );
+
                 // Unregistered neighbor — check if identity says NOT infrastructure
                 // before creating an inferred node. Workstations, phones, cameras
                 // that happen to broadcast MNDP should not become infra nodes.
