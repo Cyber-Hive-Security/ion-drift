@@ -64,7 +64,7 @@ pub struct ApplyItemResult {
 // ── Constants ──────────────────────────────────────────────────────
 
 const COMMENT_PREFIX: &str = "ion-drift-flow:";
-const ACTION_NAME: &str = "ion-drift";
+const ACTION_NAME: &str = "iondrift";
 const LOG_PREFIX: &str = "ION";
 const FW_COMMENT: &str = "ion-drift syslog capture";
 
