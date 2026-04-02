@@ -2045,6 +2045,19 @@ impl SwitchStore {
         Ok(affected)
     }
 
+    /// Prune stale neighbor discovery entries not seen within the given age (seconds).
+    /// Removes old LLDP/MNDP entries from devices that have been moved, renamed,
+    /// or had discovery disabled.
+    pub async fn prune_stale_neighbors(&self, max_age_secs: i64) -> Result<usize, rusqlite::Error> {
+        let cutoff = now_unix() - max_age_secs;
+        let db = self.db.lock().await;
+        let affected = db.execute(
+            "DELETE FROM neighbor_discovery WHERE last_seen < ?1",
+            params![cutoff],
+        )?;
+        Ok(affected)
+    }
+
     /// Prune port metrics for port names that no longer appear in recent data.
     /// When a port is renamed, old-name entries stop being inserted but linger
     /// until the general 7-day cleanup. This removes them earlier so the switch

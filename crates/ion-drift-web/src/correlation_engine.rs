@@ -106,6 +106,14 @@ async fn run_correlation(
         Err(e) => tracing::warn!("port roles prune failed: {e}"),
         _ => {}
     }
+    // Neighbor entries use a longer TTL (4 hours) — MNDP broadcasts every 60s,
+    // so a neighbor not seen in 4 hours is definitively gone. This cleans up
+    // entries from devices that have been moved, renamed, or had MNDP disabled.
+    match store.prune_stale_neighbors(4 * 3600).await {
+        Ok(n) if n > 0 => tracing::info!(count = n, "pruned stale neighbor entries"),
+        Err(e) => tracing::warn!("neighbor prune failed: {e}"),
+        _ => {}
+    }
 
     // ── 0b. Fetch router data in a single batch ─────────────────
     // Bridge hosts, VLAN interfaces, IP addresses, ARP table, and DHCP leases
