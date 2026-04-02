@@ -133,14 +133,28 @@ impl InfrastructureGraph {
             }
         }
 
-        // Build undirected adjacency from backbone links + trunk peers
-        for link in backbone_links {
-            graph.adjacency.entry(link.device_a.clone()).or_default().insert(link.device_b.clone());
-            graph.adjacency.entry(link.device_b.clone()).or_default().insert(link.device_a.clone());
-        }
-        for ((dev_id, _port), peer_id) in &graph.trunk_peers {
-            graph.adjacency.entry(dev_id.clone()).or_default().insert(peer_id.clone());
-            graph.adjacency.entry(peer_id.clone()).or_default().insert(dev_id.clone());
+        // Build undirected adjacency for BFS depth computation.
+        //
+        // When backbone links exist, use ONLY backbone links for adjacency.
+        // MNDP/LLDP neighbors on shared VLANs (e.g., management VLAN) create
+        // false adjacencies — a switch two hops away on the same VLAN appears
+        // directly connected, corrupting the depth map and binding priorities.
+        //
+        // Backbone links define the physical wiring. MNDP confirms reachability
+        // but not physical topology.
+        //
+        // Fall back to trunk peers only if no backbone links exist (unconfigured
+        // network where LLDP is the only topology source).
+        if !backbone_links.is_empty() {
+            for link in backbone_links {
+                graph.adjacency.entry(link.device_a.clone()).or_default().insert(link.device_b.clone());
+                graph.adjacency.entry(link.device_b.clone()).or_default().insert(link.device_a.clone());
+            }
+        } else {
+            for ((dev_id, _port), peer_id) in &graph.trunk_peers {
+                graph.adjacency.entry(dev_id.clone()).or_default().insert(peer_id.clone());
+                graph.adjacency.entry(peer_id.clone()).or_default().insert(dev_id.clone());
+            }
         }
 
         // BFS from router to compute depth + parent/child maps
