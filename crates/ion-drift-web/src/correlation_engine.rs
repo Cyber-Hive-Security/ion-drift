@@ -1039,6 +1039,18 @@ async fn run_correlation(
         // Track MAC→node_id for dedup (same device seen from multiple switches)
         let mut infra_mac_to_id: HashMap<String, String> = HashMap::new();
 
+        // Pre-seed MAC→device from neighbors that resolve to registered devices.
+        // This enables the MAC fallback in the unresolved path below to catch
+        // devices seen with a generic identity (e.g., "MikroTik") from one switch
+        // but a real identity from another.
+        for nb in &all_neighbors {
+            if let Some(ref mac) = nb.mac_address {
+                if let Some(resolved) = new_resolution.resolve_neighbor(nb) {
+                    infra_mac_to_id.insert(mac.to_uppercase(), resolved.device_id);
+                }
+            }
+        }
+
         // Find the router device_id for WAN neighbor filtering.
         // Topology filters WAN neighbors by checking source_port == wan_interface.
         // We match that: neighbors from the router on the WAN port are ISP equipment.
@@ -1104,19 +1116,9 @@ async fn run_correlation(
                 // Learn this resolution for future cycles
                 new_resolution.learn(nb, &resolved, now_secs);
             } else {
-                // Debug: why didn't this neighbor resolve?
-                tracing::debug!(
-                    source = %nb.device_id,
-                    interface = %nb.interface,
-                    identity = ?nb.identity,
-                    address = ?nb.address,
-                    mac = ?nb.mac_address,
-                    "snapshot: unresolved LLDP neighbor — creating inferred node"
-                );
+                // Unresolved neighbor — try additional resolution before creating an inferred node.
 
-                // Unregistered neighbor — check if identity says NOT infrastructure
-                // before creating an inferred node. Workstations, phones, cameras
-                // that happen to broadcast MNDP should not become infra nodes.
+                // Check if identity says NOT infrastructure (workstations, phones, cameras)
                 if let Some(ref mac) = nb.mac_address {
                     if let Some(ident) = identity_by_mac.get(&mac.to_uppercase()) {
                         if identity_overrides_lldp(ident) {
@@ -1125,13 +1127,101 @@ async fn run_correlation(
                     }
                 }
 
+                // Skip neighbors with empty identity AND no platform — these are
+                // endpoints that happen to show up in the neighbor table, not infrastructure.
+                let has_identity = nb.identity.as_deref().map_or(false, |s| !s.is_empty());
+                if !has_identity {
+                    // No identity at all — only keep if we can identify it via MAC
+                    // as a known infrastructure device from identities
+                    let is_known_infra = nb.mac_address.as_deref().map_or(false, |mac| {
+                        identity_by_mac.get(&mac.to_uppercase()).map_or(false, |ident| {
+                            ident.is_infrastructure == Some(true)
+                                || is_infrastructure_type(ident.device_type.as_deref())
+                        })
+                    });
+                    if !is_known_infra {
+                        continue;
+                    }
+                }
+
+                // Last-chance resolution: try to match by MAC against registered infra MACs
+                // that we've already collected. Also try IP match against identity store.
+                if let Some(ref mac) = nb.mac_address {
+                    if let Some(existing) = infra_mac_to_id.get(&mac.to_uppercase()) {
+                        // Already have an infra node for this MAC — just add edge
+                        edges.push(ResolvedEdge {
+                            source_device: source_device.clone(),
+                            target_device: existing.clone(),
+                            source_port: Some(nb.interface.clone()),
+                            target_port: None,
+                            vlans: Vec::new(),
+                            speed_mbps: None,
+                            traffic_bps: None,
+                            edge_source: EdgeSource::LldpObserved,
+                            corroboration: None,
+                            confidence: 0.60,
+                            evidence: vec![ResolutionEvidence {
+                                authority: EvidenceAuthority::LldpObserved,
+                                source: format!("neighbor:{}:{}", source_device, nb.interface),
+                                observation: format!("Matched via MAC to existing infra node {}", existing),
+                                observed_at: now_secs,
+                            }],
+                        });
+                        continue;
+                    }
+                }
+
+                // Try IP match against network identities — catches devices on
+                // management VLANs whose VLAN IP differs from the registered host IP
+                if let Some(ref addr) = nb.address {
+                    if !addr.starts_with("fe80") {
+                        let ip_match = existing_identities.iter().find(|ident| {
+                            ident.best_ip.as_deref() == Some(addr.as_str())
+                                && ident.switch_device_id.is_some()
+                        });
+                        if let Some(ident) = ip_match {
+                            if let Some(ref dev_id) = ident.switch_device_id {
+                                if seen_device_ids.contains(dev_id) {
+                                    edges.push(ResolvedEdge {
+                                        source_device: source_device.clone(),
+                                        target_device: dev_id.clone(),
+                                        source_port: Some(nb.interface.clone()),
+                                        target_port: None,
+                                        vlans: Vec::new(),
+                                        speed_mbps: None,
+                                        traffic_bps: None,
+                                        edge_source: EdgeSource::LldpObserved,
+                                        corroboration: None,
+                                        confidence: 0.65,
+                                        evidence: vec![ResolutionEvidence {
+                                            authority: EvidenceAuthority::LldpObserved,
+                                            source: format!("neighbor:{}:{}", source_device, nb.interface),
+                                            observation: format!("Matched via IP {} to identity {}", addr, dev_id),
+                                            observed_at: now_secs,
+                                        }],
+                                    });
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                tracing::debug!(
+                    source = %nb.device_id,
+                    interface = %nb.interface,
+                    identity = ?nb.identity,
+                    address = ?nb.address,
+                    mac = ?nb.mac_address,
+                    "snapshot: creating inferred infrastructure node"
+                );
+
                 // Create inferred infrastructure node.
                 // Preserve original case for the ID to match topology's behavior.
-                // Skip neighbors with no identity AND no MAC — they produce empty IDs.
                 let inferred_id = match (nb.identity.as_deref(), nb.mac_address.as_deref()) {
                     (Some(id), _) if !id.is_empty() => id.to_string(),
                     (_, Some(mac)) if !mac.is_empty() => format!("unknown-{}", mac.to_uppercase()),
-                    _ => continue, // No identity, no MAC — skip entirely
+                    _ => continue,
                 };
 
                 // MAC-based dedup: if we've already created a node for this MAC, reuse it
