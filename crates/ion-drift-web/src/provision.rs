@@ -281,7 +281,7 @@ pub async fn generate_plan(
                     "remote": config.syslog_host,
                     "remote-port": config.syslog_port,
                     "src-address": config.router_source_ip,
-                    "remote-log-format": "bsd-syslog",
+                    "remote-log-format": "syslog",
                 }),
             });
         }
@@ -527,8 +527,17 @@ async fn apply_item(
                     target: "remote".to_string(),
                     remote: config.syslog_host.clone(),
                     remote_port: config.syslog_port,
-                    src_address: Some(config.router_source_ip.clone()),
-                    remote_log_format: Some("bsd-syslog".to_string()),
+                    src_address: if config.router_source_ip.parse::<std::net::IpAddr>().is_ok() {
+                        Some(config.router_source_ip.clone())
+                    } else {
+                        // RouterOS requires an IP address, not a hostname
+                        tracing::warn!(
+                            "skipping src-address '{}' — not a valid IP (RouterOS requires IP, not hostname)",
+                            config.router_source_ip
+                        );
+                        None
+                    },
+                    remote_log_format: Some("syslog".to_string()),
                     remote_protocol: None,
                 })
                 .await?;
