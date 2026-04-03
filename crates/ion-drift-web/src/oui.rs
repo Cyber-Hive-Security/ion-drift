@@ -115,7 +115,9 @@ impl OuiDb {
         // Computers / workstations
         if matches_any(&lower, &[
             "dell", "lenovo", "asustek", "asus", "acer", "msi",
-            "intel corporate", "gigabyte", "supermicro", "hewlett-packard",
+            "intel corporate", "gigabyte", "super micro", "supermicro",
+            "hewlett-packard", "cloud network technology", "ugreen",
+            "realtek semiconductor",
         ]) {
             return Some(("computer", 0.5));
         }
@@ -128,12 +130,12 @@ impl OuiDb {
         }
 
         // NAS / storage
-        if matches_any(&lower, &["synology", "qnap", "western digital", "buffalo"]) {
+        if matches_any(&lower, &["synology", "qnap", "western digital", "buffalo", "netapp"]) {
             return Some(("storage", 0.6));
         }
 
-        // Servers / hypervisors
-        if matches_any(&lower, &["vmware", "proxmox"]) {
+        // Servers / hypervisors / VMs
+        if matches_any(&lower, &["vmware", "proxmox", "xensource", "xen"]) {
             return Some(("server", 0.6));
         }
 
