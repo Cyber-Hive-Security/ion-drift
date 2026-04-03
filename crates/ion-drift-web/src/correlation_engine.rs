@@ -678,6 +678,22 @@ async fn run_correlation(
         // Only update switch binding if new priority strictly dominates.
         // Equal priority → no change (eliminates flapping between same-class ports).
         // Inference-bound MACs keep their inference binding — legacy only updates VLAN.
+        // Debug: trace binding decisions for specific MACs
+        if mac_upper.starts_with("BC:24:11:DB") {
+            tracing::debug!(
+                mac = %mac_upper,
+                device = %entry.device_id,
+                port = %canonical_port,
+                is_backbone = is_backbone_port,
+                is_trunk = is_trunk,
+                depth = ?known_depth,
+                new_priority,
+                current_priority = builder.binding_priority,
+                current_switch = ?builder.switch_device_id,
+                wins = new_priority > builder.binding_priority,
+                "binding trace: hcs-docker"
+            );
+        }
         if !inference_owns && new_priority > builder.binding_priority {
             builder.switch_device_id = Some(entry.device_id.clone());
             builder.switch_port = Some(canonical_port);
@@ -957,6 +973,15 @@ async fn run_correlation(
         // Compute a simple confidence score based on how many fields we have
         let confidence = builder.confidence_score();
 
+        if mac.starts_with("BC:24:11:DB") {
+            tracing::debug!(
+                mac = %mac,
+                switch = ?builder.switch_device_id,
+                port = ?builder.switch_port,
+                priority = builder.binding_priority,
+                "upsert trace: hcs-docker final binding"
+            );
+        }
         if let Err(e) = store
             .upsert_network_identity(
                 mac,
