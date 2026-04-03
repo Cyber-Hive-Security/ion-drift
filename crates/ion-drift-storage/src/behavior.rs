@@ -1400,9 +1400,15 @@ impl BehaviorStore {
 
     /// Minimum distinct baseline entries for a device to be considered "baselined".
     /// Below this threshold, the device is promoted to "sparse" instead.
-    const MIN_BASELINE_ENTRIES: i64 = 3;
-    /// Minimum total observation count for a device to be considered "baselined".
-    const MIN_OBSERVATION_COUNT: i64 = 50;
+    const MIN_BASELINE_ENTRIES: i64 = 10;
+    /// Minimum total observation count for "baselined" promotion after learning period.
+    const MIN_OBSERVATION_COUNT: i64 = 200;
+    /// Observation count that triggers early "baselined" promotion before learning_until.
+    /// Active servers and workstations hit this in 3-4 days.
+    const FAST_TRACK_OBSERVATION_COUNT: i64 = 5000;
+    /// Devices with fewer than this many baseline observations after the learning
+    /// period are promoted to "sparse" — not enough data for meaningful baselines.
+    const SPARSE_THRESHOLD: i64 = 50;
 
     /// Recompute baselines for a single device from its observations.
     /// Does NOT handle promotion — use `promote_eligible_devices()` instead.
@@ -1466,10 +1472,15 @@ impl BehaviorStore {
 
     /// Promote eligible devices from `learning` to `baselined` or `sparse`.
     ///
-    /// A device is eligible when `learning_until <= now`. It is promoted to:
-    /// - `baselined` if it has >= MIN_BASELINE_ENTRIES distinct baselines
-    ///   and >= MIN_OBSERVATION_COUNT total observations
-    /// - `sparse` otherwise (still monitored, but novelty anomalies are treated cautiously)
+    /// Dual-threshold promotion:
+    /// 1. **Time-gated:** `learning_until <= now` AND observation_count >= MIN_OBSERVATION_COUNT
+    ///    → promoted to `baselined` (normal 7-day graduation)
+    /// 2. **Fast-tracked:** observation_count >= FAST_TRACK_OBSERVATION_COUNT regardless of time
+    ///    → promoted to `baselined` (active devices graduate early)
+    /// 3. **Sparse:** time expired AND observation_count < SPARSE_THRESHOLD
+    ///    → promoted to `sparse` (barely active, thin baseline)
+    /// 4. **Stays learning:** time expired but observations between SPARSE_THRESHOLD and
+    ///    MIN_OBSERVATION_COUNT → learning_until extended by 3 days (needs more data)
     ///
     /// This is decoupled from baseline recomputation so it can run on a
     /// short cadence (e.g. every 5 minutes) independent of nightly maintenance.
@@ -1477,15 +1488,15 @@ impl BehaviorStore {
         let db = self.db.lock().await;
         let now = now_unix();
 
-        // Find all learning devices past their learning_until
+        // Find all learning devices — both time-expired and potential fast-tracks
         let mut stmt = db
             .prepare(
-                "SELECT mac FROM device_profiles
-                 WHERE baseline_status = 'learning' AND learning_until <= ?1",
+                "SELECT mac, learning_until FROM device_profiles
+                 WHERE baseline_status = 'learning'",
             )
             .map_err(|e| format!("prepare failed: {e}"))?;
-        let eligible_macs: Vec<String> = stmt
-            .query_map(params![now], |row| row.get(0))
+        let learning_devices: Vec<(String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(|e| format!("query failed: {e}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("collect failed: {e}"))?;
@@ -1493,7 +1504,9 @@ impl BehaviorStore {
         let mut promoted_baselined = 0usize;
         let mut promoted_sparse = 0usize;
 
-        for mac in &eligible_macs {
+        for (mac, learning_until) in &learning_devices {
+            let time_expired = *learning_until <= now;
+
             // Count distinct baseline entries
             let baseline_count: i64 = db
                 .query_row(
@@ -1512,14 +1525,39 @@ impl BehaviorStore {
                 )
                 .map_err(|e| format!("observation count failed: {e}"))?;
 
-            let new_status = if baseline_count >= Self::MIN_BASELINE_ENTRIES
-                && obs_count >= Self::MIN_OBSERVATION_COUNT
-            {
+            // Fast-track: very active devices graduate early regardless of time
+            let fast_track = obs_count >= Self::FAST_TRACK_OBSERVATION_COUNT
+                && baseline_count >= Self::MIN_BASELINE_ENTRIES;
+
+            let new_status = if fast_track {
                 promoted_baselined += 1;
                 "baselined"
-            } else {
+            } else if time_expired && baseline_count >= Self::MIN_BASELINE_ENTRIES
+                && obs_count >= Self::MIN_OBSERVATION_COUNT
+            {
+                // Normal graduation: time expired + sufficient data
+                promoted_baselined += 1;
+                "baselined"
+            } else if time_expired && obs_count < Self::SPARSE_THRESHOLD {
+                // Barely active device — sparse
                 promoted_sparse += 1;
                 "sparse"
+            } else if time_expired {
+                // Time expired but between sparse and baselined thresholds —
+                // extend learning by 3 days to collect more data
+                let extended = now + 3 * 86400;
+                db.execute(
+                    "UPDATE device_profiles SET learning_until = ?2 WHERE mac = ?1",
+                    params![mac, extended],
+                )
+                .map_err(|e| format!("extend learning failed: {e}"))?;
+                tracing::debug!(
+                    mac = %mac, obs_count, baseline_count,
+                    "learning extended 3 days — insufficient data for baseline"
+                );
+                continue; // Don't update baseline_status
+            } else {
+                continue; // Still within learning period, not fast-tracked
             };
 
             db.execute(
