@@ -405,6 +405,20 @@ async fn run_correlation(
     let trunk_peer = &infra_graph.trunk_peers;
     let switch_depths = &infra_graph.depth;
 
+    // Build set of backbone-defined ports (distinct from classified trunks).
+    // A backbone port is a real infrastructure link (switch-to-switch).
+    // A classified trunk (vlan_count > 1 but not in backbone) is likely a
+    // multi-VLAN access port to a server (e.g., PVE node with mgmt + data VLANs).
+    let mut backbone_ports: HashSet<(String, String)> = HashSet::new();
+    for link in &backbone_links {
+        if let Some(ref port) = link.port_a {
+            backbone_ports.insert((link.device_a.clone(), canonicalize_port_name(port)));
+        }
+        if let Some(ref port) = link.port_b {
+            backbone_ports.insert((link.device_b.clone(), canonicalize_port_name(port)));
+        }
+    }
+
     if infra_graph.depth.len() > 1 {
         let depth_summary: Vec<String> = infra_graph.depth
             .iter()
@@ -614,31 +628,39 @@ async fn run_correlation(
 
         let canonical_port = canonicalize_port_name(&entry.port_name);
         let is_trunk = trunk_ports.contains(&(entry.device_id.clone(), canonical_port.clone()));
+        let is_backbone_port = backbone_ports.contains(&(entry.device_id.clone(), canonical_port.clone()));
         let is_router = entry.device_id == router_id;
         let known_depth = switch_depths.get(&entry.device_id).copied();
         // Priority formula:
-        //   Router:       100         — always lowest, sees every MAC via bridge
-        //   Switch trunk: 200+depth*10 — deeper trunk = closer to device (correct)
-        //   Access port:  400-depth*10 — shallower access = more trustworthy
-        //   Unknown depth: 250        — switches not in topology get neutral priority
+        //   Router:              100          — always lowest, sees every MAC via bridge
+        //   Backbone trunk:      200+depth*10 — infrastructure link, deeper = closer to device
+        //   Classified trunk:    350+depth*10 — multi-VLAN access port (server with mgmt+data VLANs)
+        //                                      treated like access — deeper = more likely correct
+        //   Access port:         400+depth*10 — access port, deeper = closer to device
+        //   Unknown depth:       250          — neutral
         //
-        // Why invert depth for access? A MAC can appear on "access" ports of
-        // multiple switches when a deeper switch's uplink is misclassified
-        // (e.g. SwOS port name doesn't match backbone link). The shallower
-        // switch's access port is more likely the genuine connection.
-        // Access always beats trunk (min 310 vs max ~240).
+        // Key insight: a "classified trunk" (vlan_count > 1 but NOT in backbone_links)
+        // is usually a server port carrying management + data VLANs, not a switch-to-switch
+        // link. These should be prioritized like access ports, not deprioritized like
+        // real infrastructure trunks.
         //
-        // Unknown-depth switches (not reachable from router via backbone/LLDP)
-        // get a neutral score of 250 — lower than any known access port (min 310)
-        // but higher than trunk ports at depth <=4. This prevents unregistered
-        // switches from stealing MACs from known topology positions.
+        // Backbone trunks are real switch-to-switch uplinks — MACs on these are
+        // aggregated from downstream and should have low priority.
+        //
+        // Access ports and classified trunks at deeper switches win over shallower ones
+        // because the deepest switch with direct port visibility is closest to the device.
         let new_priority: u32 = if is_router {
             100
         } else if let Some(depth) = known_depth {
-            if is_trunk {
+            if is_backbone_port {
+                // Real infrastructure trunk — low priority, deeper is slightly better
                 200 + depth * 10
+            } else if is_trunk {
+                // Classified trunk (multi-VLAN but not backbone) — treat like access
+                350 + depth * 10
             } else {
-                400_u32.saturating_sub(depth * 10)
+                // Access port — highest priority, deeper = closer to device
+                400 + depth * 10
             }
         } else {
             // Switch not in backbone topology — use neutral priority
