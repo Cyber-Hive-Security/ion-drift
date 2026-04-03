@@ -26,7 +26,7 @@ See [FEATURES.md](FEATURES.md) for the full feature list.
 ## Screenshots
 
 ### Network Topology
-Auto-discovered network topology with VLAN grouping, device classification, and switch-level attachment inference.
+Auto-discovered network topology driven by a resolved infrastructure snapshot from the correlation engine. VLAN grouping, device classification, and switch-level attachment inference with unified LLDP device resolution (6-step precedence) and evidence chains.
 
 ![Topology](caps/ion-drift-topology.png)
 
@@ -259,6 +259,7 @@ For advanced configuration (OIDC, syslog, CertWarden, custom bind address), see 
 - [docs/connection-store-whitepaper.md](docs/connection-store-whitepaper.md) — Connection tracking and GeoIP
 - [docs/policy-editor.md](docs/policy-editor.md) — Policy editor and deviation detection guide
 - [docs/deviation-limitations.md](docs/deviation-limitations.md) — Detection visibility boundaries and evasion techniques
+- [docs/router-setup.md](docs/router-setup.md) — MNDP configuration, API user setup, and provisioning overview
 
 ## Security
 

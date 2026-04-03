@@ -94,6 +94,48 @@ The commented code was already removed. The reviewer was working from an older s
 
 All cryptographic and session random generation now uses `OsRng.try_fill_bytes()` instead of `rand::random()` (ThreadRng). 13 call sites across 6 files updated.
 
+### [MEDIUM] Syslog Provisioning: Invalid `bsd-syslog` Field
+**Source:** Internal testing 2026-04-01
+**Fixed:** v0.4.0
+
+Syslog provisioning used a `bsd-syslog` field that doesn't exist in RouterOS. Changed to `remote-log-format: syslog`. Additionally, the action name `ion-drift` contained a hyphen which RouterOS rejects (alphanumeric only); changed to `iondrift`.
+
+### [MEDIUM] `remote_port` Deserialization Failure
+**Source:** Internal testing 2026-04-01
+**Fixed:** v0.4.0
+
+RouterOS returns the syslog `remote_port` value as a string, but the deserializer expected an integer. Added `ros_u32_opt` deserializer to handle string-to-integer conversion.
+
+### [MEDIUM] Syslog `src-address` Accepted Hostname
+**Source:** Internal testing 2026-04-01
+**Fixed:** v0.4.0
+
+Syslog provisioning was sending a hostname for `src-address`, but RouterOS requires an IP address. Fixed to send the resolved IP.
+
+### [MEDIUM] Topology Ghost Nodes from Switch Interface MACs
+**Source:** Internal testing 2026-04-01
+**Fixed:** v0.4.0
+
+Switch interface MACs were appearing as phantom endpoint nodes in the topology. Added switch-local MAC filtering to exclude them.
+
+### [MEDIUM] MNDP Stale Neighbor Persistence
+**Source:** Internal testing 2026-04-01
+**Fixed:** v0.4.0
+
+Stale MNDP entries persisted indefinitely, creating ghost neighbors in topology. Added 4-hour TTL neighbor pruning.
+
+### [MEDIUM] False BFS Adjacency via Management VLAN MNDP
+**Source:** Internal testing 2026-04-01
+**Fixed:** v0.4.0
+
+MNDP on the management VLAN created false direct paths between non-adjacent devices. BFS depth calculation now uses backbone links only for adjacency.
+
+### [MEDIUM] Stale Inference Bindings Not Overwritten
+**Source:** Internal testing 2026-04-01
+**Fixed:** v0.4.0
+
+Inference binding results were not pre-populating the identity builder, so stale bindings persisted even after new inference data was available. Inference results now pre-populate the identity builder.
+
 ## Accepted
 
 ### [LOW] Default Router Credentials in Library (client.rs)

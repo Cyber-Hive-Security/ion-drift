@@ -1,6 +1,6 @@
 # ion-drift — Feature List
 
-> **Last updated:** 2026-03-30
+> **Last updated:** 2026-04-03
 
 ## Overview
 
@@ -55,7 +55,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 ## Security Analytics
 
-- Behavioral anomaly detection with per-device learned baselines (delta-based byte tracking)
+- Behavioral anomaly detection with per-device learned baselines (delta-based byte tracking) and dual-threshold baseline promotion (fast-track at 5000+ observations, normal at 7 days + 200 observations, sparse mode at <50, extended learning for borderline cases)
 - Five anomaly types: new destination, new port, new protocol, volume spike, blocked attempt
 - Three-stage volume spike validation (absolute floor, baseline comparison, multi-window persistence)
 - Tiered anomaly architecture: Tier 1 (alerts), Tier 2 (digests), Tier 3 (telemetry)
@@ -91,6 +91,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - VLAN sector grouping with color-coded subnets and drag-to-reposition
 - Backbone link management for manual switch interconnects
 - Neighbor alias management (alias LLDP/CDP neighbors to known devices or hide them)
+- **Snapshot-driven architecture** — topology builder consumes a `ResolvedInfrastructureSnapshot` published by the correlation engine, with versioned schema, evidence chains, conflict state, and SoA authority hierarchy. Single shared LLDP device resolver with 6-step precedence replaces 3 independent implementations.
 - Topology inference engine with scored candidate evaluation, confidence tracking, and divergence detection
 - Sankey flow diagrams: network overview, per-VLAN device flows, per-device protocol/destination breakdown, conversation drill-down
 - World map with GeoIP-enriched connection visualization (country and city summaries)
@@ -153,9 +154,9 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Settings management for map configuration, monitored regions, and GeoIP database updates
 - Secrets management UI showing encryption status, key currency, and per-secret metadata
 - TLS certificate status monitoring with auto-renewal support
-- Device CRUD with connection testing and provisioning wizard
+- Device CRUD with connection testing and provisioning wizard (with permission pre-check: queries RouterOS user/group and shows setup commands if write access is missing)
 - VLAN configuration (name, subnet, color, media type, sensitivity level) stored in database
-- Router provisioning planner: generates and applies mangle rules, syslog config, and firewall rules
+- Router provisioning planner: generates and applies mangle rules, syslog config, and firewall rules. See [docs/router-setup.md](docs/router-setup.md) for MNDP configuration, API user setup, and provisioning overview
 - Demo mode with automatic PII sanitization on all API responses
 - About section in Settings → System showing version, license, and publisher
 - Health check endpoint for container orchestration

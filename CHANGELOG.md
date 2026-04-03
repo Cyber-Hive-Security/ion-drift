@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-04-03
+
+### Added
+
+- **Resolved Infrastructure Snapshot** — new `infrastructure_snapshot.rs` introduces `ResolvedInfrastructureSnapshot` with versioned schema, evidence chains, conflict state, and SoA authority hierarchy. The correlation engine now produces and publishes snapshots after each cycle.
+- **Unified LLDP device resolver** — new `device_resolution.rs` replaces 3 independent LLDP-to-device resolution implementations with a single shared resolver. 6-step precedence: exact match, RouterOS lookup, fuzzy match, IP match, MAC match, learned match. Learning with guardrails prevents phantom entries.
+- **Provisioning permission pre-check** — queries RouterOS user/group before attempting provisioning. Shows setup commands if write permission is missing, instead of failing with cryptic errors.
+- **Dual-threshold baseline promotion** — behavior engine now uses tiered promotion: fast-track at 5000+ observations, normal at 7 days + 200 observations, sparse mode at <50 observations, extended learning for borderline cases.
+- **OUI device type mappings** — added Super Micro Computer, Xensource (VMs), REALTEK SEMICONDUCTOR, CLOUD NETWORK TECHNOLOGY, Ugreen, NetApp.
+- **Router setup guide** — `docs/router-setup.md` covers MNDP configuration, API user setup, and provisioning overview.
+- **USE-AGREEMENT v2.0** — 60-day satisfaction guarantee, dispute resolution, full provisioning disclosure (mangle + syslog + firewall log rules).
+
+### Changed
+
+- **Topology builder consumes snapshot** — topology.rs no longer performs its own LLDP resolution. It consumes the `ResolvedInfrastructureSnapshot` published by the correlation engine, reducing topology.rs from 1,661 to 1,133 lines (-528 lines deleted).
+- **Snapshot readiness gate replaces startup delay** — removed the 120-second startup delay. Topology builder now waits for the first valid snapshot from the correlation engine before producing topology.
+- **Shadow validation** — snapshot-driven topology ran in shadow mode for 86+ cycles before cutover, validating output parity with the old implementation.
+- **Neighbor pruning** — stale MNDP entries are pruned after a 4-hour TTL, preventing ghost neighbors from persisting indefinitely.
+- **BFS depth uses backbone links only** — adjacency calculation now uses backbone links only. MNDP on management VLAN previously created false direct paths between non-adjacent devices.
+- **Binding priority refinement** — backbone trunks assigned low priority; classified trunks and multi-VLAN access ports assigned high priority.
+- **Inference pre-population** — inference binding results now pre-populate the identity builder, ensuring stale bindings are overwritten instead of persisting.
+- **Switch-local MAC filtering** — switch interface MACs are now filtered out, preventing them from appearing as phantom endpoint nodes in the topology.
+
+### Fixed
+
+- **Syslog provisioning: invalid field** — `bsd-syslog` field doesn't exist in RouterOS. Changed to `remote-log-format: syslog`.
+- **Syslog action name: invalid characters** — RouterOS only allows alphanumeric characters in action names. Changed from `ion-drift` to `iondrift`.
+- **`remote_port` deserialization** — RouterOS returns port as a string. Added `ros_u32_opt` deserializer to handle string-to-integer conversion.
+- **`src-address` must be IP** — syslog provisioning was sending a hostname for `src-address`; RouterOS requires an IP address.
+
 ## [0.3.8]
 
 ### Added
