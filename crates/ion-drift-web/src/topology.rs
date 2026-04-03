@@ -488,6 +488,14 @@ pub async fn compute_topology(
             }
         }
     }
+    // Add switch-local MACs (the switch's own interface MACs). These appear
+    // in other switches' MAC tables as regular learned MACs but should never
+    // become endpoint nodes. Without this, CRS310's sfp and bridge MACs
+    // show up as phantom "Routerboardcom" endpoints.
+    let local_macs = store.get_local_macs().await.unwrap_or_default();
+    for mac in &local_macs {
+        infra_macs.insert(mac.to_uppercase());
+    }
     // Remove human-confirmed non-infrastructure MACs from infra_macs
     infra_macs.retain(|mac| {
         if let Some(ident) = identity_by_mac.get(mac.as_str()) {

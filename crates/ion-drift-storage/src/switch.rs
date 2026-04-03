@@ -2045,6 +2045,21 @@ impl SwitchStore {
         Ok(affected)
     }
 
+    /// Get all switch-local MACs (is_local = true) across all devices.
+    /// These are the switch's own interface MACs and should be excluded
+    /// from endpoint node creation in the topology.
+    pub async fn get_local_macs(&self) -> Result<Vec<String>, rusqlite::Error> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT DISTINCT mac_address FROM switch_mac_table WHERE is_local = 1",
+        )?;
+        let macs = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(macs)
+    }
+
     /// Prune stale neighbor discovery entries not seen within the given age (seconds).
     /// Removes old LLDP/MNDP entries from devices that have been moved, renamed,
     /// or had discovery disabled.
