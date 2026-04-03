@@ -615,6 +615,27 @@ async fn run_correlation(
     // Build a map: MAC → best known info
     let mut identity_map: HashMap<String, IdentityBuilder> = HashMap::new();
 
+    // Pre-populate inference-owned MACs with their binding so the identity
+    // upsert writes the correct switch/port. Without this, inference-owned
+    // MACs get switch_device_id=None in the builder (because legacy binding
+    // skips them), and the SQL COALESCE preserves stale values.
+    if inference_mode == InferenceMode::Active {
+        let attachment_states = store.get_all_attachment_states().await.unwrap_or_default();
+        for att in &attachment_states {
+            if let Some(ref dev_id) = att.current_device_id {
+                if att.confidence > 0.3 && att.state != "unknown" {
+                    let mac = att.mac_address.to_uppercase();
+                    let builder = identity_map
+                        .entry(mac)
+                        .or_insert_with(IdentityBuilder::default);
+                    builder.switch_device_id = Some(dev_id.clone());
+                    builder.switch_port = att.current_port_name.clone();
+                    builder.binding_priority = 500; // Inference priority — highest
+                }
+            }
+        }
+    }
+
     // From MAC table — priority-based binding.
     // Access port (directly connected) beats switch trunk (downstream aggregation)
     // which beats router trunk (sees everything via ARP gateway).
