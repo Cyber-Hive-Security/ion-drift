@@ -112,12 +112,13 @@ impl OuiDb {
             return Some(("phone", 0.5)); // Samsung makes TVs too, so lower confidence
         }
 
-        // Computers / workstations
+        // Computers / workstations / mini PCs
         if matches_any(&lower, &[
             "dell", "lenovo", "asustek", "asus", "acer", "msi",
             "intel corporate", "gigabyte", "super micro", "supermicro",
             "hewlett-packard", "cloud network technology", "ugreen",
-            "realtek semiconductor",
+            "realtek semiconductor", "asrock", "maxtang", "azw technology",
+            "fn-link", "winstars",
         ]) {
             return Some(("computer", 0.5));
         }
