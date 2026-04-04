@@ -974,6 +974,8 @@ async fn run_correlation(
     }
 
     // Enrich with OUI manufacturer + device type inference
+    let mut oui_typed = 0u32;
+    let mut oui_untyped = 0u32;
     for (mac, builder) in &mut identity_map {
         if let Some(manufacturer) = oui_db.lookup(mac) {
             builder.manufacturer = Some(manufacturer.to_string());
@@ -981,11 +983,28 @@ async fn run_correlation(
             if let Some((device_type, confidence)) =
                 OuiDb::device_type_from_manufacturer(manufacturer)
             {
-                builder.device_type = Some(device_type.to_string());
-                builder.device_type_source = Some("oui".to_string());
-                builder.device_type_confidence = confidence;
+                // Only set if OUI confidence beats existing (or no existing type)
+                if builder.device_type.is_none()
+                    || confidence > builder.device_type_confidence
+                {
+                    builder.device_type = Some(device_type.to_string());
+                    builder.device_type_source = Some("oui".to_string());
+                    builder.device_type_confidence = confidence;
+                    oui_typed += 1;
+                }
+            } else if builder.device_type.is_none() {
+                oui_untyped += 1;
+                // Debug: log unmatched manufacturers for the first cycle
+                tracing::debug!(
+                    mac = %mac,
+                    manufacturer = %manufacturer,
+                    "OUI: no device_type mapping for manufacturer"
+                );
             }
         }
+    }
+    if oui_typed > 0 || oui_untyped > 0 {
+        tracing::info!(typed = oui_typed, untyped = oui_untyped, "OUI device type enrichment");
     }
 
     // Write all identities
