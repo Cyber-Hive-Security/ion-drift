@@ -26,7 +26,7 @@ See [FEATURES.md](FEATURES.md) for the full feature list.
 ## Screenshots
 
 ### Network Topology
-Auto-discovered network topology driven by a resolved infrastructure snapshot from the correlation engine. VLAN grouping, device classification, and switch-level attachment inference with unified LLDP device resolution (6-step precedence) and evidence chains.
+Auto-discovered network topology driven by a resolved infrastructure snapshot from the correlation engine. VLAN grouping, device classification, and switch-level attachment inference with unified LLDP device resolution (6-step precedence) and evidence chains. Endpoints progress visually from hexagons (learning/unknown) to device icons once baselined and typed.
 
 ![Topology](caps/ion-drift-topology.png)
 

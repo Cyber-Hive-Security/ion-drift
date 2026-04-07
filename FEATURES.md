@@ -35,6 +35,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Passive service discovery from observed connection patterns (no active scanning required)
 - Device fingerprinting via OUI manufacturer lookup and traffic pattern classification
 - Automatic device type inference (camera, printer, server, phone, smart home, computer, media server) from behavioral heuristics
+- Expanded OUI device type classification covering ASRock, Maxtang, AZW, FN-LINK, Winstars, Super Micro, Xensource, Realtek, Cloud Network Technology, Ugreen, and NetApp
 - Network identity correlation combining DHCP, ARP, switch MAC tables, LLDP/CDP neighbors, and nmap results
 - Identity confidence scoring with human confirmation override
 - Device disposition management (unknown, my_device, external, ignored, flagged)
@@ -92,6 +93,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Backbone link management for manual switch interconnects
 - Neighbor alias management (alias LLDP/CDP neighbors to known devices or hide them)
 - **Snapshot-driven architecture** — topology builder consumes a `ResolvedInfrastructureSnapshot` published by the correlation engine, with versioned schema, evidence chains, conflict state, and SoA authority hierarchy. Single shared LLDP device resolver with 6-step precedence replaces 3 independent implementations.
+- Visual progression: hexagons for learning/unknown endpoints, device icons for baselined + typed endpoints
 - Topology inference engine with scored candidate evaluation, confidence tracking, and divergence detection
 - Sankey flow diagrams: network overview, per-VLAN device flows, per-device protocol/destination breakdown, conversation drill-down
 - World map with GeoIP-enriched connection visualization (country and city summaries)

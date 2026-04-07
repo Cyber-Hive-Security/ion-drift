@@ -12,7 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Unified LLDP device resolver** — new `device_resolution.rs` replaces 3 independent LLDP-to-device resolution implementations with a single shared resolver. 6-step precedence: exact match, RouterOS lookup, fuzzy match, IP match, MAC match, learned match. Learning with guardrails prevents phantom entries.
 - **Provisioning permission pre-check** — queries RouterOS user/group before attempting provisioning. Shows setup commands if write permission is missing, instead of failing with cryptic errors.
 - **Dual-threshold baseline promotion** — behavior engine now uses tiered promotion: fast-track at 5000+ observations, normal at 7 days + 200 observations, sparse mode at <50 observations, extended learning for borderline cases.
-- **OUI device type mappings** — added Super Micro Computer, Xensource (VMs), REALTEK SEMICONDUCTOR, CLOUD NETWORK TECHNOLOGY, Ugreen, NetApp.
+- **OUI device type mappings** — added ASRock, Maxtang, AZW, FN-LINK, Winstars, Super Micro Computer, Xensource (VMs), REALTEK SEMICONDUCTOR, CLOUD NETWORK TECHNOLOGY, Ugreen, NetApp.
+- **Baselined endpoint icons** — baselined endpoints with a known device type now render as device icons instead of hexagons. Visual progression: hexagon = learning/unknown, icon = baselined + typed.
 - **Router setup guide** — `docs/router-setup.md` covers MNDP configuration, API user setup, and provisioning overview.
 - **USE-AGREEMENT v2.0** — 60-day satisfaction guarantee, dispute resolution, full provisioning disclosure (mangle + syslog + firewall log rules).
 
