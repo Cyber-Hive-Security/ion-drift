@@ -1,21 +1,35 @@
 Cyber Hive Security Use Agreement
-Version 1.0 | March 2026
+Version 2.0 | April 2026
 
-This agreement supplements the PolyForm Shield 1.0.0 license
-and defines who may use this software without a commercial license.
+This agreement ("Agreement") supplements the PolyForm Shield
+1.0.0 license and governs your use of Ion Drift software
+("Software") published by Cyber Hive Security LLC ("Licensor",
+"we", "us"). By downloading, installing, or using the Software,
+you ("Customer", "you") agree to be bound by this Agreement.
 
-FREE USE
+If you do not agree to these terms, do not download, install,
+or use the Software.
 
-You may use this software free of charge if ALL of the following
-are true:
+========================================================
+1. FREE USE
+========================================================
 
-  1. You are an individual (not an organization)
-  2. You are using the software on your personal home network
-  3. Your use is for personal, non-commercial purposes only
+You may use this Software free of charge if ALL of the
+following are true:
+
+  a. You are an individual (not an organization)
+  b. You are using the Software on your personal home network
+  c. Your use is for personal, non-commercial purposes only
      (including hobby projects, self-education, homelab
      experimentation, and home network monitoring)
 
-COMMERCIAL LICENSE REQUIRED
+Free use is subject to the PolyForm Shield 1.0.0 license terms
+including all warranty disclaimers and liability limitations in
+this Agreement.
+
+========================================================
+2. COMMERCIAL LICENSE REQUIRED
+========================================================
 
 All other use requires a commercial license from Cyber Hive
 Security LLC, including but not limited to use by:
@@ -24,22 +38,427 @@ Security LLC, including but not limited to use by:
   - Managed service providers (MSPs)
   - Government agencies and institutions
   - Educational institutions (discounted rates available)
-  - Nonprofit and charitable organizations (discounted rates available)
+  - Nonprofit and charitable organizations (discounted rates
+    available)
   - Any use in a professional or organizational capacity
 
-COMPETING USE PROHIBITED
+========================================================
+3. FREE EVALUATION PERIOD
+========================================================
+
+Commercial customers may evaluate the Software free of charge
+for thirty (30) calendar days beginning on the date the
+Software is first installed or activated ("Evaluation Start
+Date").
+
+During the Evaluation Period:
+
+  a. The Software is provided for evaluation and testing
+     purposes only. You may not use the Software to monitor
+     production networks or rely on it for operational
+     decisions.
+  b. The Software is provided "AS IS" without warranty of
+     any kind. All disclaimers and liability limitations in
+     this Agreement apply during the Evaluation Period.
+  c. You are bound by all terms of this Agreement, including
+     the Competing Use and Acceptable Use provisions.
+At the end of the Evaluation Period:
+
+  e. Your right to use the Software terminates automatically
+     unless you purchase a commercial license.
+  f. You must uninstall the Software and delete all copies
+     in your possession within seven (7) days of the
+     Evaluation Period ending.
+  g. Any data collected by the Software during evaluation
+     remains yours. We have no access to it and no
+     obligation to preserve it.
+
+To purchase a commercial license after evaluation, visit
+https://www.mycyberhive.com/ion-drift or contact
+scott@mycyberhive.com.
+
+========================================================
+4. COMPETING USE PROHIBITED
+========================================================
 
 The PolyForm Shield license prohibits developing or providing
-any product or service that competes with this software or any
+any product or service that competes with this Software or any
 product or service offered by Cyber Hive Security LLC. This
 prohibition applies regardless of whether the competing product
-is sold or offered free of charge. See the PolyForm Shield 1.0.0
-license for full details.
+is sold or offered free of charge. See the PolyForm Shield
+1.0.0 license for full details.
 
-COMMERCIAL LICENSES
+========================================================
+5. 60-DAY SATISFACTION GUARANTEE
+========================================================
 
-Purchase at: https://www.mycyberhive.com/license
-Contact: scott@mycyberhive.com
+Commercial license purchases include a sixty (60) calendar day
+satisfaction guarantee. The guarantee period begins on the date
+payment is successfully processed ("Purchase Date").
+
+  a. REQUESTING A REFUND. If you are not satisfied with the
+     Software for any reason within the guarantee period,
+     submit a refund request to scott@mycyberhive.com. You
+     must include your order number or license key in the
+     request.
+
+  b. REFUND AMOUNT. You will receive a full refund of the
+     license fee paid, returned to the original payment
+     method within fourteen (14) business days of approval.
+
+  c. LICENSE TERMINATION ON REFUND. Upon receiving a refund,
+     your commercial license terminates immediately. You
+     must uninstall the Software and delete all copies in
+     your possession within seven (7) days of the refund
+     being issued.
+
+  d. AFTER THE GUARANTEE PERIOD. All license sales are final
+     after the sixty (60) day guarantee period. No refunds
+     will be issued for licenses beyond the guarantee period.
+
+  e. CHARGEBACKS. Filing a chargeback or payment dispute with
+     your payment provider without first contacting Cyber Hive
+     Security LLC constitutes a material breach of this
+     Agreement and results in immediate termination of your
+     license. We encourage you to contact us first — we will
+     work to resolve any billing issue promptly.
+
+========================================================
+6. SUBSCRIPTION AND RENEWAL TERMS
+========================================================
+
+Commercial licenses are sold as annual subscriptions.
+
+  a. Subscriptions renew automatically at the end of each
+     annual billing period unless you cancel before the
+     renewal date.
+  b. We will provide at least thirty (30) days written notice
+     before any price increase takes effect on your next
+     renewal.
+  c. You may cancel your subscription at any time. Cancellation
+     takes effect at the end of the current annual period.
+     No partial-period refunds are issued for cancellations
+     outside the 60-day guarantee window.
+  d. Upon cancellation or non-renewal, your license terminates
+     at the end of the paid period. You must uninstall the
+     Software and delete all copies within seven (7) days of
+     termination.
+  e. Promotional or introductory pricing, if offered, applies
+     only for the period specified at the time of purchase.
+     Renewal pricing reverts to the then-current standard
+     rate unless otherwise stated in writing.
+
+========================================================
+7. ACCEPTABLE USE
+========================================================
+
+You represent and warrant that:
+
+  a. You have lawful authority to monitor any network on which
+     you install or operate the Software.
+  b. Your use of the Software complies with all applicable
+     local, state, federal, and international laws, including
+     privacy and data protection laws.
+  c. You will not use the Software to monitor networks or
+     devices without the knowledge and consent of the
+     network owner.
+  d. You will not attempt to reverse engineer, decompile, or
+     disassemble the Software except to the extent expressly
+     permitted by applicable law.
+
+========================================================
+8. DATA OWNERSHIP AND PRIVACY
+========================================================
+
+  a. YOUR DATA. All data collected, generated, or stored by
+     the Software on your systems ("Customer Data") is and
+     remains your property. This includes device inventories,
+     network telemetry, behavioral profiles, topology maps,
+     connection logs, and any other information the Software
+     gathers from your network.
+
+  b. NO PHONE-HOME. The Software does not transmit any data
+     to Cyber Hive Security LLC or any third party. There is
+     no telemetry, no usage tracking, no analytics, and no
+     network callbacks of any kind. The Software operates
+     entirely on your infrastructure. We cannot see your
+     network, your devices, or your traffic.
+
+  c. HONOR SYSTEM. Licensing compliance is based on the honor
+     system. The Software does not contain license enforcement
+     mechanisms, phone-home verification, or usage reporting.
+     Your compliance with the terms of this Agreement is your
+     responsibility.
+
+  d. THIRD-PARTY DATA. The Software includes a built-in GeoIP
+     database for IP geolocation, attributed within the
+     Software. You may optionally configure the Software to
+     download and use the MaxMind GeoLite2 database, which is
+     subject to MaxMind's own End User License Agreement
+     (https://www.maxmind.com/en/geolite2/eula). Cyber Hive
+     Security LLC is not affiliated with MaxMind and makes no
+     warranties regarding the accuracy, availability, or
+     continued availability of any third-party data. Your use
+     of third-party data is governed by the respective third
+     party's terms, not this Agreement.
+
+  e. DATA ON TERMINATION. Upon termination of your license
+     for any reason, your Customer Data remains on your
+     systems. We have no access to it and no obligation to
+     preserve or delete it. You are solely responsible for
+     your Customer Data at all times.
+
+========================================================
+9. INTELLECTUAL PROPERTY
+========================================================
+
+This Agreement grants you a license to use the Software. It
+does not transfer any ownership of, or intellectual property
+rights in, the Software. All right, title, and interest in
+the Software (including all modifications, improvements, and
+derivative works) remain with Cyber Hive Security LLC.
+
+You may not sublicense, lease, rent, or transfer your license
+to any third party without prior written consent.
+
+========================================================
+10. WARRANTY DISCLAIMER
+========================================================
+
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT
+WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+CYBER HIVE SECURITY LLC DOES NOT WARRANT THAT THE SOFTWARE
+WILL BE UNINTERRUPTED, ERROR-FREE, OR SECURE, OR THAT
+DEFECTS WILL BE CORRECTED. THE SOFTWARE IS DESIGNED FOR
+MIKROTIK ROUTEROS ENVIRONMENTS AND IS NOT WARRANTED TO
+FUNCTION WITH OTHER NETWORK EQUIPMENT.
+
+THE SOFTWARE IS PRIMARILY OBSERVATIONAL. IT MONITORS AND
+REPORTS ON NETWORK STATE. WITH THE EXCEPTION OF OPTIONAL,
+USER-APPROVED PROVISIONING (PASSTHROUGH MANGLE RULES FOR
+TRAFFIC COUNTING, SYSLOG CONFIGURATION FOR CONNECTION
+TRACKING, AND LOG-ONLY FIREWALL RULES — NONE OF WHICH ALTER
+PACKET FLOW), THE SOFTWARE DOES NOT MODIFY YOUR NETWORK
+CONFIGURATION. THE SOFTWARE DOES NOT PREVENT, BLOCK,
+MITIGATE, OR REMEDIATE CYBERATTACKS, DATA EXFILTRATION,
+UNAUTHORIZED ACCESS, OR ANY OTHER SECURITY THREAT. THE
+SOFTWARE IS NOT A FIREWALL, INTRUSION PREVENTION SYSTEM,
+ENDPOINT PROTECTION PLATFORM, OR SECURITY CONTROL OF ANY
+KIND. CYBER HIVE SECURITY LLC MAKES NO CLAIMS AND PROVIDES
+NO GUARANTEES REGARDING THE DETECTION OR PREVENTION OF ANY
+SECURITY INCIDENT.
+
+NO ORAL OR WRITTEN INFORMATION OR ADVICE GIVEN BY CYBER HIVE
+SECURITY LLC OR ITS REPRESENTATIVES SHALL CREATE A WARRANTY.
+
+YOU ASSUME ALL RISK FOR THE SELECTION, INSTALLATION, AND USE
+OF THE SOFTWARE AND FOR THE RESULTS OBTAINED FROM IT. YOU ARE
+SOLELY RESPONSIBLE FOR YOUR OWN NETWORK SECURITY.
+
+========================================================
+11. LIMITATION OF LIABILITY
+========================================================
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW:
+
+  a. IN NO EVENT SHALL CYBER HIVE SECURITY LLC BE LIABLE FOR
+     ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR
+     PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO LOSS OF
+     PROFITS, DATA, BUSINESS OPPORTUNITY, OR GOODWILL,
+     ARISING OUT OF OR RELATED TO THIS AGREEMENT OR YOUR USE
+     OF THE SOFTWARE, REGARDLESS OF THE THEORY OF LIABILITY
+     (CONTRACT, TORT, STRICT LIABILITY, OR OTHERWISE), EVEN
+     IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+  b. CYBER HIVE SECURITY LLC'S TOTAL CUMULATIVE LIABILITY
+     UNDER THIS AGREEMENT SHALL NOT EXCEED THE TOTAL AMOUNT
+     YOU ACTUALLY PAID FOR THE SOFTWARE LICENSE IN THE TWELVE
+     (12) MONTHS PRECEDING THE CLAIM. FOR FREE AND EVALUATION
+     USERS, TOTAL LIABILITY SHALL NOT EXCEED ZERO DOLLARS
+     ($0.00).
+
+  c. THE SOFTWARE IS PRIMARILY OBSERVATIONAL AND DOES NOT
+     PREVENT, BLOCK, OR REMEDIATE ANY SECURITY THREAT OR
+     NETWORK CONDITION. CYBER HIVE SECURITY LLC IS NOT
+     LIABLE FOR NETWORK OUTAGES, SECURITY BREACHES,
+     CYBERATTACKS, DATA EXFILTRATION, DATA LOSS, OR ANY
+     OTHER LOSS OR DAMAGE ON YOUR NETWORK, WHETHER OR NOT
+     THE SOFTWARE DETECTED OR FAILED TO DETECT THE
+     UNDERLYING CONDITION. YOU BEAR SOLE RESPONSIBILITY
+     FOR YOUR NETWORK SECURITY AND FOR ANY LOSSES ARISING
+     FROM SECURITY INCIDENTS, REGARDLESS OF WHETHER THE
+     SOFTWARE WAS IN USE AT THE TIME.
+
+  d. THE OPTIONAL PROVISIONING FEATURE CREATES PASSTHROUGH
+     MANGLE RULES, SYSLOG CONFIGURATION, AND LOG-ONLY
+     FIREWALL RULES ON YOUR ROUTER AS DESCRIBED IN SECTION
+     15. THESE CHANGES ARE MADE ONLY WITH YOUR EXPLICIT
+     APPROVAL. CYBER HIVE SECURITY LLC IS NOT LIABLE FOR
+     ANY IMPACT TO NETWORK PERFORMANCE, ROUTING BEHAVIOR,
+     OR SERVICE AVAILABILITY ARISING FROM PROVISIONED RULES
+     OR THEIR INTERACTION WITH YOUR EXISTING CONFIGURATION.
+     YOU ARE RESPONSIBLE FOR REVIEWING AND APPROVING ALL
+     CHANGES BEFORE THEY ARE APPLIED.
+
+========================================================
+12. INDEMNIFICATION
+========================================================
+
+You agree to indemnify, defend, and hold harmless Cyber Hive
+Security LLC, its officers, directors, employees, and agents
+from and against any claims, damages, losses, liabilities,
+costs, and expenses (including reasonable attorneys' fees)
+arising out of or related to:
+
+  a. Your use of the Software
+  b. Your violation of this Agreement
+  c. Your violation of any applicable law
+  d. Your monitoring of any network or device without proper
+     authorization
+  e. Any claim by a third party related to your use of the
+     Software
+
+========================================================
+13. DISPUTE RESOLUTION
+========================================================
+
+  a. GOOD FAITH NEGOTIATION. Any dispute arising from or
+     relating to this Agreement or your use of the Software
+     shall first be addressed through good-faith negotiation
+     by contacting scott@mycyberhive.com.
+
+  b. BINDING ARBITRATION. If the dispute cannot be resolved
+     within thirty (30) days of initial contact, either party
+     may pursue binding arbitration in accordance with the
+     rules of the American Arbitration Association, with
+     proceedings conducted in Davis County, Utah.
+
+  c. CLASS ACTION WAIVER. You agree that any dispute resolution
+     proceedings will be conducted on an individual basis only,
+     and not as a class, consolidated, or representative action.
+
+  d. SMALL CLAIMS. Notwithstanding the above, either party may
+     bring an individual action in small claims court in Davis
+     County, Utah, if the claim falls within the court's
+     jurisdictional limits.
+
+========================================================
+14. GOVERNING LAW
+========================================================
+
+This Agreement shall be governed by and construed in accordance
+with the laws of the State of Utah, without regard to its
+conflict of laws provisions. The United Nations Convention on
+Contracts for the International Sale of Goods does not apply.
+
+========================================================
+15. SERVICE DESCRIPTION
+========================================================
+
+Ion Drift is an open-source network monitoring and management
+platform for MikroTik RouterOS environments. The source code is
+publicly available under the PolyForm Shield 1.0.0 license. The
+Software provides real-time device discovery, behavioral
+analysis, topology mapping, connection tracking, policy
+deviation detection, alerting, and reporting capabilities as
+described at https://www.mycyberhive.com.
+
+The Software is primarily observational. It reads data from
+your network equipment via API and SNMP. The Software does
+not modify NAT rules, routing tables, bridge configurations,
+DHCP settings, DNS settings, or any traffic-altering
+configuration.
+
+The Software includes an optional provisioning feature that,
+with your explicit approval, creates the following on your
+MikroTik router:
+
+  a. MANGLE RULES. Passthrough mangle rules to count
+     inter-VLAN and WAN traffic flows. These are passthrough
+     counters only — they do not filter, redirect, drop, or
+     alter packet flow in any way.
+
+  b. SYSLOG ACTION. A remote logging action that directs
+     firewall log messages to the Software's syslog listener
+     for connection tracking analysis.
+
+  c. LOGGING RULE. A logging rule that routes the "firewall"
+     log topic to the syslog action created above.
+
+  d. FIREWALL LOG RULES. Firewall filter rules in the
+     "forward" and "input" chains with action "log" that
+     log new connections with an identifying prefix. These
+     rules log only — they do not filter, drop, reject, or
+     alter any traffic. They are appended to the end of
+     their respective chains.
+
+Provisioning is never automatic. It requires the user to:
+(1) explicitly trigger a scan; (2) review the proposed
+changes in detail, including the exact JSON payloads that
+will be sent to the router; and (3) approve each change
+before it is applied. All provisioned rules and actions are
+identified with an "iondrift" or "ion-drift" label and can
+be removed at any time through your router's management
+interface. The Software does not modify or delete existing
+router rules or configuration.
+
+Feature availability depends on network hardware, configuration,
+and the specific license tier purchased. Cyber Hive Security LLC
+does not guarantee compatibility with all network environments
+or hardware configurations.
+
+========================================================
+16. GENERAL PROVISIONS
+========================================================
+
+  a. ENTIRE AGREEMENT. This Agreement, together with the
+     PolyForm Shield 1.0.0 license, constitutes the entire
+     agreement between you and Cyber Hive Security LLC
+     regarding the Software. It supersedes all prior or
+     contemporaneous oral or written communications,
+     proposals, and representations.
+
+  b. AMENDMENTS. We may update this Agreement from time to
+     time. Material changes will be communicated via email
+     or through the Software. Continued use of the Software
+     after notice constitutes acceptance of the updated terms.
+
+  c. SEVERABILITY. If any provision of this Agreement is held
+     to be unenforceable or invalid, that provision shall be
+     modified to the minimum extent necessary to make it
+     enforceable, and all remaining provisions shall continue
+     in full force and effect.
+
+  d. WAIVER. Failure to enforce any provision of this Agreement
+     shall not constitute a waiver of that provision or any
+     other provision.
+
+  e. ASSIGNMENT. You may not assign or transfer this Agreement
+     or your license without prior written consent from Cyber
+     Hive Security LLC. We may assign this Agreement freely
+     in connection with a merger, acquisition, or sale of
+     assets.
+
+  f. NOTICES. All notices under this Agreement shall be sent
+     to scott@mycyberhive.com. Notices to you will be sent
+     to the email address associated with your license.
+
+  g. EXPORT COMPLIANCE. You agree to comply with all
+     applicable export control laws and regulations.
+
+========================================================
+17. CONTACT
+========================================================
 
 Cyber Hive Security LLC
 Ogden, Utah
+
+Purchase licenses: https://www.mycyberhive.com/ion-drift
+Support and inquiries: scott@mycyberhive.com
+
+========================================================
+
+Effective Date: April 1, 2026

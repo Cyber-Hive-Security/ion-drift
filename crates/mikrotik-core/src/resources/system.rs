@@ -94,7 +94,8 @@ pub struct ProvisionPermissionCheck {
     pub username: String,
     /// The user's group name.
     pub group: String,
-    /// The group's full policy string.
+    /// The group's full policy string (internal use only, not exposed to frontend).
+    #[serde(skip_serializing)]
     pub policy: String,
     /// Which required policies are missing.
     pub missing_policies: Vec<String>,

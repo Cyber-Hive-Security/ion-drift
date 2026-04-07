@@ -138,6 +138,17 @@ Inference binding results were not pre-populating the identity builder, so stale
 
 ## Accepted
 
+### [MEDIUM] Baseline Poisoning During Learning Window (behavior.rs)
+**Source:** External security review 2026-04-07
+
+If an attacker has persistent access to a device during its learning period, low-volume malicious traffic (beaconing, slow exfil) will be incorporated into the device's baseline. After graduation, the anomaly detector treats that traffic as normal. This is an inherent limitation of behavioral baselining shared by all NDR products (Darktrace, Vectra, ExtraHop). Mitigation: reset a device's baseline via `DELETE /api/behavior/{mac}/baseline` if compromise is suspected during or after the learning window.
+
+### [MEDIUM] Router Policy String in Permission Pre-check Response (system.rs)
+**Source:** External security review 2026-04-07
+**Fixed:** v0.4.1
+
+The provisioning permission pre-check endpoint returned the raw RouterOS policy string (e.g., `read,write,api,!ftp`) to the frontend. While the endpoint is admin-only, this exposes the API user's exact router capabilities if an admin session is compromised. Fixed by adding `#[serde(skip_serializing)]` to the `policy` field — the frontend only needs `has_write` and `missing_policies`.
+
 ### [LOW] Default Router Credentials in Library (client.rs)
 **Source:** External security review 2026-03-25
 
