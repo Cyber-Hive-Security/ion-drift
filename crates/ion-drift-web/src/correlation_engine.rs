@@ -1022,6 +1022,17 @@ async fn run_correlation(
                 "upsert trace: hcs-docker final binding"
             );
         }
+        // Debug: trace device_type for specific MACs that should have OUI types
+        if mac == "3C:EC:EF:D0:85:6A" || mac == "00:16:3E:1F:05:EC" || mac == "00:E0:4C:68:00:43" {
+            tracing::debug!(
+                mac = %mac,
+                device_type = ?builder.device_type,
+                device_type_source = ?builder.device_type_source,
+                device_type_confidence = builder.device_type_confidence,
+                manufacturer = ?builder.manufacturer,
+                "OUI trace: upsert parameters for untyped device"
+            );
+        }
         if let Err(e) = store
             .upsert_network_identity(
                 mac,
