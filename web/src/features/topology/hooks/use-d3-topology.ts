@@ -970,33 +970,66 @@ export function createTopologyMapInstance(
           .style("animation-delay", "1.5s");
       }
 
-      // Hexagonal shape — border style reflects binding source (SoA)
-      const hexEl = g.append("path")
-        .attr("class", "topo-hex")
-        .attr("d", hexPath(r))
-        .attr("fill", color)
-        .attr("fill-opacity", node.is_infrastructure ? 0.1 : 0.06)
-        .attr("stroke", color)
-        .attr("stroke-width", node.is_infrastructure ? 1.5 : 1);
-      // SoA border style: solid=authoritative, dashed=observed, dotted=inferred
-      if (node.binding_source === "inferred") {
-        hexEl.attr("stroke-dasharray", "2,2");
-      } else if (node.binding_source === "observed") {
-        hexEl.attr("stroke-dasharray", "4,2");
-      }
+      // Determine if this endpoint should render as an icon instead of a hexagon.
+      // Baselined endpoints with a known device type get their icon as the node shape.
+      // Learning/sparse/untyped endpoints keep the hexagon.
+      // Infrastructure always gets hexagon + icon overlay.
+      const iconKey = kindToIcon(node.kind);
+      const hasIcon = iconKey !== "unknown";
+      const isBaselinedEndpoint = !node.is_infrastructure
+        && node.baseline_status === "baselined"
+        && hasIcon;
 
-      // Icon inside hexagon (infrastructure nodes only — endpoints are too small)
-      if (node.is_infrastructure || r >= HEX_RADIUS_SM + 2) {
-        const iconKey = kindToIcon(node.kind);
+      if (isBaselinedEndpoint) {
+        // Baselined endpoint with known type — render icon directly as the node
         const iconPath = ICON_PATHS[iconKey] || ICON_PATHS.unknown;
-        const iconScale = (r / HEX_RADIUS) * 0.75;
+        const iconScale = (r / HEX_RADIUS) * 1.1;
+
+        // Subtle circular background for click target and glow
+        g.append("circle")
+          .attr("cx", 0).attr("cy", 0)
+          .attr("r", r * 0.9)
+          .attr("fill", color)
+          .attr("fill-opacity", 0.08)
+          .attr("stroke", color)
+          .attr("stroke-width", 0.5)
+          .attr("stroke-opacity", 0.3);
+
         g.append("g")
           .attr("class", "topo-node-icon")
           .attr("transform", `translate(${-12 * iconScale}, ${-12 * iconScale}) scale(${iconScale})`)
           .append("path")
           .attr("d", iconPath)
           .attr("fill", color)
-          .attr("opacity", 0.85);
+          .attr("opacity", 0.9);
+      } else {
+        // Hexagonal shape — border style reflects binding source (SoA)
+        const hexEl = g.append("path")
+          .attr("class", "topo-hex")
+          .attr("d", hexPath(r))
+          .attr("fill", color)
+          .attr("fill-opacity", node.is_infrastructure ? 0.1 : 0.06)
+          .attr("stroke", color)
+          .attr("stroke-width", node.is_infrastructure ? 1.5 : 1);
+        // SoA border style: solid=authoritative, dashed=observed, dotted=inferred
+        if (node.binding_source === "inferred") {
+          hexEl.attr("stroke-dasharray", "2,2");
+        } else if (node.binding_source === "observed") {
+          hexEl.attr("stroke-dasharray", "4,2");
+        }
+
+        // Icon inside hexagon (infrastructure nodes + large endpoints)
+        if (node.is_infrastructure || r >= HEX_RADIUS_SM + 2) {
+          const iconPath = ICON_PATHS[iconKey] || ICON_PATHS.unknown;
+          const iconScale = (r / HEX_RADIUS) * 0.75;
+          g.append("g")
+            .attr("class", "topo-node-icon")
+            .attr("transform", `translate(${-12 * iconScale}, ${-12 * iconScale}) scale(${iconScale})`)
+            .append("path")
+            .attr("d", iconPath)
+            .attr("fill", color)
+            .attr("opacity", 0.85);
+        }
       }
 
       // "NEW" badge
