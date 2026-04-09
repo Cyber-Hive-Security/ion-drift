@@ -30,7 +30,6 @@ pub fn spawn_behavior_collector(
         tokio::time::sleep(Duration::from_secs(180)).await;
         tracing::info!("behavior collector starting (interval={interval_secs}s)");
 
-        let spike_candidates = behavior_engine::SpikeCandidates::new();
         let investigation_engine = Arc::new(InvestigationEngine::new(
             store.clone(),
             connection_store,
@@ -76,7 +75,6 @@ pub fn spawn_behavior_collector(
             let fw_rules = firewall_cache.read().await.0.clone();
             match behavior_engine::detect_anomalies(
                 &store,
-                &spike_candidates,
                 &registry,
                 &fw_rules,
                 &geo_cache,
@@ -150,8 +148,6 @@ pub fn spawn_behavior_collector(
                     )
                 }
             }
-
-            let _ = &spike_candidates; // placeholder for future spike candidate tracking
 
             // Promote eligible devices every 10 minutes (10 × 60s cycles)
             if cycle_count % 10 == 0 {

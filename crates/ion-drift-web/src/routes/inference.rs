@@ -263,22 +263,20 @@ pub async fn inference_mac_detail(
         .unwrap_or_default();
 
     let all_devs = dm.all_devices();
-    let resolution = crate::topology_inference::graph::DeviceResolutionMaps {
-        identity_to_device: {
-            let mut m = HashMap::new();
-            for entry in &all_devs {
-                m.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
-                m.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
-            }
-            m
-        },
-        ip_to_device: {
-            let mut m = HashMap::new();
-            for entry in &all_devs {
-                m.insert(entry.record.host.clone(), entry.record.id.clone());
-            }
-            m
-        },
+    let identity_to_device: HashMap<String, String> = {
+        let mut m = HashMap::new();
+        for entry in &all_devs {
+            m.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
+            m.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
+        }
+        m
+    };
+    let ip_to_device: HashMap<String, String> = {
+        let mut m = HashMap::new();
+        for entry in &all_devs {
+            m.insert(entry.record.host.clone(), entry.record.id.clone());
+        }
+        m
     };
     drop(dm);
 
@@ -305,7 +303,8 @@ pub async fn inference_mac_detail(
         &neighbors,
         &backbone_links,
         &port_role_tuples,
-        &resolution,
+        &identity_to_device,
+        &ip_to_device,
     );
 
     // Build AP feeder map for wireless attribution

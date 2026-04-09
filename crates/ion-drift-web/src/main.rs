@@ -13,6 +13,7 @@ mod device_manager;
 mod device_resolution;
 mod dns;
 mod geo;
+mod identity_utils;
 mod infrastructure_snapshot;
 mod investigation;
 mod license;

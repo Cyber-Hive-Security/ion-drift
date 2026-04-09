@@ -41,26 +41,22 @@ pub struct InfrastructureGraph {
     pub max_depth: u32,
 }
 
-/// Device identity resolution maps, used to match LLDP neighbors to device IDs.
-pub struct DeviceResolutionMaps {
-    /// LLDP identity (lowercase) → device_id
-    pub identity_to_device: HashMap<String, String>,
-    /// IP address → device_id
-    pub ip_to_device: HashMap<String, String>,
-}
-
 impl InfrastructureGraph {
     /// Build the infrastructure graph from available data sources.
     ///
     /// This consolidates the trunk port detection, peer resolution, and BFS
     /// depth computation that was previously scattered through the correlation engine.
+    ///
+    /// `identity_to_device` maps LLDP identity (lowercase) → device_id.
+    /// `ip_to_device` maps IP address → device_id.
     pub fn build(
         device_ids: &[String],
         router_id: &str,
         neighbors: &[NeighborEntry],
         backbone_links: &[BackboneLink],
         port_roles: &[(String, String, String)], // (device_id, port_name, role)
-        resolution: &DeviceResolutionMaps,
+        identity_to_device: &HashMap<String, String>,
+        ip_to_device: &HashMap<String, String>,
     ) -> Self {
         let mut graph = Self {
             router_id: router_id.to_string(),
@@ -104,11 +100,11 @@ impl InfrastructureGraph {
             let resolved = nb
                 .identity
                 .as_deref()
-                .and_then(|id| resolution.identity_to_device.get(&id.to_lowercase()).cloned())
+                .and_then(|id| identity_to_device.get(&id.to_lowercase()).cloned())
                 .or_else(|| {
                     nb.address
                         .as_deref()
-                        .and_then(|addr| resolution.ip_to_device.get(addr).cloned())
+                        .and_then(|addr| ip_to_device.get(addr).cloned())
                 });
             if let Some(peer_id) = resolved {
                 let port = nb.interface.split(',').next().unwrap_or(&nb.interface);

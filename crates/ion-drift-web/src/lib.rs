@@ -13,6 +13,7 @@ pub mod device_manager;
 pub mod device_resolution;
 pub mod dns;
 pub mod geo;
+pub mod identity_utils;
 pub mod infrastructure_snapshot;
 pub mod investigation;
 pub mod license;

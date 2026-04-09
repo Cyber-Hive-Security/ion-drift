@@ -20,17 +20,6 @@ use crate::log_parser;
 use crate::oui::OuiDb;
 use crate::router_queue::{Priority, QueuedRequest, RouterQueue};
 
-/// Placeholder for volume spike candidate tracking (currently unused —
-/// multi-window persistence uses `count_elevated_observations` instead).
-#[derive(Default)]
-pub struct SpikeCandidates;
-
-impl SpikeCandidates {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 /// Normalize RouterOS protocol numbers to names.
 fn normalize_protocol(proto: &str) -> &'static str {
     match proto {
@@ -321,7 +310,6 @@ pub async fn collect_observations(
 /// Called after each observation collection.
 pub async fn detect_anomalies(
     store: &BehaviorStore,
-    spike_candidates: &SpikeCandidates,
     registry: &VlanRegistry,
     firewall_rules: &[FilterRule],
     geo_cache: &GeoCache,
@@ -544,7 +532,7 @@ pub async fn detect_anomalies(
                     }
                 } else {
                     // Not spiking this cycle — no action needed
-                    let _ = spike_candidates; // suppress unused warning
+                    // No action needed — not spiking this cycle
                 }
             } else {
                 // New behavior — not in any baseline

@@ -6,7 +6,8 @@ use std::time::Duration;
 use ion_drift_storage::SwitchStore;
 use ion_drift_storage::switch::{BackboneLink, MacTableEntry, PortRoleProbability};
 use crate::topology_inference::canonicalize_port_name;
-use crate::topology_inference::graph::{DeviceResolutionMaps, InfrastructureGraph};
+use crate::identity_utils::{identity_overrides_lldp, is_infrastructure_type};
+use crate::topology_inference::graph::InfrastructureGraph;
 use crate::topology_inference::resolver::{self, InferenceMode};
 use tokio::sync::RwLock;
 
@@ -357,22 +358,20 @@ async fn run_correlation(
     let port_roles = store.get_port_roles(None).await.unwrap_or_default();
 
     let dm_read = device_manager.read().await;
-    let resolution = DeviceResolutionMaps {
-        identity_to_device: {
-            let mut m = HashMap::new();
-            for entry in dm_read.all_devices() {
-                m.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
-                m.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
-            }
-            m
-        },
-        ip_to_device: {
-            let mut m = HashMap::new();
-            for entry in dm_read.all_devices() {
-                m.insert(entry.record.host.clone(), entry.record.id.clone());
-            }
-            m
-        },
+    let identity_to_device: HashMap<String, String> = {
+        let mut m = HashMap::new();
+        for entry in dm_read.all_devices() {
+            m.insert(entry.record.name.to_lowercase(), entry.record.id.clone());
+            m.insert(entry.record.id.to_lowercase(), entry.record.id.clone());
+        }
+        m
+    };
+    let ip_to_device: HashMap<String, String> = {
+        let mut m = HashMap::new();
+        for entry in dm_read.all_devices() {
+            m.insert(entry.record.host.clone(), entry.record.id.clone());
+        }
+        m
     };
     drop(dm_read);
 
@@ -387,7 +386,8 @@ async fn run_correlation(
         &all_neighbors,
         &backbone_links,
         &port_role_tuples,
-        &resolution,
+        &identity_to_device,
+        &ip_to_device,
     );
 
     // Force backbone-linked ports to trunk role in the store
@@ -699,22 +699,6 @@ async fn run_correlation(
         // Only update switch binding if new priority strictly dominates.
         // Equal priority → no change (eliminates flapping between same-class ports).
         // Inference-bound MACs keep their inference binding — legacy only updates VLAN.
-        // Debug: trace binding decisions for specific MACs
-        if mac_upper.starts_with("BC:24:11:DB") {
-            tracing::debug!(
-                mac = %mac_upper,
-                device = %entry.device_id,
-                port = %canonical_port,
-                is_backbone = is_backbone_port,
-                is_trunk = is_trunk,
-                depth = ?known_depth,
-                new_priority,
-                current_priority = builder.binding_priority,
-                current_switch = ?builder.switch_device_id,
-                wins = new_priority > builder.binding_priority,
-                "binding trace: hcs-docker"
-            );
-        }
         if !inference_owns && new_priority > builder.binding_priority {
             builder.switch_device_id = Some(entry.device_id.clone());
             builder.switch_port = Some(canonical_port);
@@ -1013,26 +997,6 @@ async fn run_correlation(
         // Compute a simple confidence score based on how many fields we have
         let confidence = builder.confidence_score();
 
-        if mac.starts_with("BC:24:11:DB") {
-            tracing::debug!(
-                mac = %mac,
-                switch = ?builder.switch_device_id,
-                port = ?builder.switch_port,
-                priority = builder.binding_priority,
-                "upsert trace: hcs-docker final binding"
-            );
-        }
-        // Debug: trace device_type for specific MACs that should have OUI types
-        if mac == "3C:EC:EF:D0:85:6A" || mac == "00:16:3E:1F:05:EC" || mac == "00:E0:4C:68:00:43" {
-            tracing::debug!(
-                mac = %mac,
-                device_type = ?builder.device_type,
-                device_type_source = ?builder.device_type_source,
-                device_type_confidence = builder.device_type_confidence,
-                manufacturer = ?builder.manufacturer,
-                "OUI trace: upsert parameters for untyped device"
-            );
-        }
         if let Err(e) = store
             .upsert_network_identity(
                 mac,
@@ -1967,38 +1931,6 @@ fn build_wap_children(
         }
     }
     children
-}
-
-/// Returns true if the device type string represents network infrastructure.
-fn is_infrastructure_type(dt: Option<&str>) -> bool {
-    matches!(
-        dt,
-        Some("router" | "switch" | "network_equipment" | "access_point" | "wap")
-    )
-}
-
-/// Check whether a network identity should block LLDP from creating an
-/// infrastructure node for the same MAC. Returns true when the identity
-/// data is authoritative enough to override LLDP inference.
-///
-/// Duplicated from topology.rs — will be consolidated in Phase 3.
-fn identity_overrides_lldp(ident: &ion_drift_storage::switch::NetworkIdentity) -> bool {
-    match ident.is_infrastructure {
-        Some(false) => return true,
-        Some(true) => return false,
-        None => {}
-    }
-    if ident.human_confirmed && !is_infrastructure_type(ident.device_type.as_deref()) {
-        return true;
-    }
-    if !ident.human_confirmed
-        && !is_infrastructure_type(ident.device_type.as_deref())
-        && ident.device_type.is_some()
-        && ident.device_type_confidence >= 0.5
-    {
-        return true;
-    }
-    false
 }
 
 /// Deduplicate bidirectional edges: A→B and B→A become a single edge.

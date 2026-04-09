@@ -6,65 +6,14 @@
 
 use std::time::Duration;
 
+pub use ion_drift_storage::alerting::{AlertRule, AlertHistoryEntry, AlertStatus, DeliveryChannelConfig};
 use ion_drift_storage::behavior::VlanRegistry;
 use ion_drift_storage::{BehaviorStore, SwitchStore};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::connection_store::ConnectionStore;
 use crate::state::AppState;
 use crate::task_supervisor::TaskSupervisor;
-
-// ── Data types ──────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AlertRule {
-    pub id: i64,
-    pub name: String,
-    pub enabled: bool,
-    pub event_type: String,
-    pub severity_filter: Option<String>,
-    pub vlan_filter: Option<String>,
-    pub disposition_filter: Option<String>,
-    pub verdict_filter: Option<String>,
-    pub cooldown_seconds: i64,
-    pub delivery_channels: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AlertHistoryEntry {
-    pub id: i64,
-    pub rule_id: i64,
-    pub event_type: String,
-    pub severity: String,
-    pub device_mac: Option<String>,
-    pub device_hostname: Option<String>,
-    pub device_ip: Option<String>,
-    pub vlan_id: Option<i64>,
-    pub title: String,
-    pub body: String,
-    pub channels_attempted: String,
-    pub channels_succeeded: String,
-    pub fired_at: String,
-    pub anomaly_id: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AlertStatus {
-    pub enabled_rules: i64,
-    pub total_rules: i64,
-    pub last_check: Option<String>,
-    pub alerts_fired_today: i64,
-    pub unread_count_24h: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeliveryChannelConfig {
-    pub channel: String,
-    pub enabled: bool,
-    pub config_json: serde_json::Value,
-}
 
 struct PendingAlert {
     rule_id: i64,
@@ -85,80 +34,14 @@ struct PendingAlert {
     investigation_summary: Option<String>,
 }
 
-// ── Alert store helpers ─────────────────────────────────────────
+// ── Alert store helpers (delegating to SwitchStore methods) ────
 
 pub async fn get_alert_rules(store: &SwitchStore) -> Result<Vec<AlertRule>, String> {
-    let db = store.db().await;
-    let mut stmt = db
-        .prepare(
-            "SELECT id, name, enabled, event_type, severity_filter, vlan_filter,
-                    disposition_filter, verdict_filter, cooldown_seconds,
-                    delivery_channels, created_at, updated_at
-             FROM alert_rules ORDER BY id",
-        )
-        .map_err(|e| format!("prepare failed: {e}"))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(AlertRule {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                enabled: row.get::<_, i32>(2)? != 0,
-                event_type: row.get(3)?,
-                severity_filter: row.get(4)?,
-                vlan_filter: row.get(5)?,
-                disposition_filter: row.get(6)?,
-                verdict_filter: row.get(7)?,
-                cooldown_seconds: row.get(8)?,
-                delivery_channels: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
-            })
-        })
-        .map_err(|e| format!("query failed: {e}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("collect failed: {e}"))
+    store.get_alert_rules().await
 }
 
 pub async fn get_alert_status(store: &SwitchStore) -> Result<AlertStatus, String> {
-    let db = store.db().await;
-    let enabled: i64 = db
-        .query_row(
-            "SELECT COUNT(*) FROM alert_rules WHERE enabled = 1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("count failed: {e}"))?;
-    let total: i64 = db
-        .query_row("SELECT COUNT(*) FROM alert_rules", [], |row| row.get(0))
-        .map_err(|e| format!("count failed: {e}"))?;
-    let last_check: Option<String> = db
-        .query_row(
-            "SELECT value FROM alert_state_cache WHERE key = 'engine:last_check'",
-            [],
-            |row| row.get(0),
-        )
-        .ok();
-    let today: i64 = db
-        .query_row(
-            "SELECT COUNT(*) FROM alert_history WHERE fired_at >= datetime('now', '-1 day')",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("count failed: {e}"))?;
-    let unread_24h: i64 = db
-        .query_row(
-            "SELECT COUNT(*) FROM alert_history WHERE fired_at >= datetime('now', '-24 hours')",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("count failed: {e}"))?;
-    Ok(AlertStatus {
-        enabled_rules: enabled,
-        total_rules: total,
-        last_check,
-        alerts_fired_today: today,
-        unread_count_24h: unread_24h,
-    })
+    store.get_alert_status().await
 }
 
 pub async fn get_alert_history(
@@ -166,63 +49,15 @@ pub async fn get_alert_history(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<AlertHistoryEntry>, String> {
-    let db = store.db().await;
-    let mut stmt = db
-        .prepare(
-            "SELECT id, rule_id, event_type, severity, device_mac, device_hostname,
-                    device_ip, vlan_id, title, body, channels_attempted,
-                    channels_succeeded, fired_at, anomaly_id
-             FROM alert_history ORDER BY fired_at DESC LIMIT ?1 OFFSET ?2",
-        )
-        .map_err(|e| format!("prepare failed: {e}"))?;
-    let rows = stmt
-        .query_map(rusqlite::params![limit, offset], |row| {
-            Ok(AlertHistoryEntry {
-                id: row.get(0)?,
-                rule_id: row.get(1)?,
-                event_type: row.get(2)?,
-                severity: row.get(3)?,
-                device_mac: row.get(4)?,
-                device_hostname: row.get(5)?,
-                device_ip: row.get(6)?,
-                vlan_id: row.get(7)?,
-                title: row.get(8)?,
-                body: row.get(9)?,
-                channels_attempted: row.get(10)?,
-                channels_succeeded: row.get(11)?,
-                fired_at: row.get(12)?,
-                anomaly_id: row.get(13)?,
-            })
-        })
-        .map_err(|e| format!("query failed: {e}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("collect failed: {e}"))
+    store.get_alert_history(limit, offset).await
 }
 
 pub async fn clear_alert_history(store: &SwitchStore) -> Result<usize, String> {
-    let db = store.db().await;
-    db.execute("DELETE FROM alert_history", [])
-        .map_err(|e| format!("delete failed: {e}"))
+    store.clear_alert_history().await
 }
 
 pub async fn get_delivery_channels(store: &SwitchStore) -> Result<Vec<DeliveryChannelConfig>, String> {
-    let db = store.db().await;
-    let mut stmt = db
-        .prepare("SELECT channel, enabled, config_json FROM alert_delivery_config ORDER BY channel")
-        .map_err(|e| format!("prepare failed: {e}"))?;
-    let rows = stmt
-        .query_map([], |row| {
-            let config_str: String = row.get(2)?;
-            let config_json = serde_json::from_str(&config_str).unwrap_or(serde_json::Value::Null);
-            Ok(DeliveryChannelConfig {
-                channel: row.get(0)?,
-                enabled: row.get::<_, i32>(1)? != 0,
-                config_json,
-            })
-        })
-        .map_err(|e| format!("query failed: {e}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("collect failed: {e}"))
+    store.get_delivery_channels().await
 }
 
 // ── Rule CRUD helpers ────────────────────────────────────────────
@@ -253,172 +88,87 @@ pub struct UpdateRuleRequest {
 }
 
 pub async fn create_rule(store: &SwitchStore, req: CreateRuleRequest) -> Result<AlertRule, String> {
-    let db = store.db().await;
-    let enabled = req.enabled.unwrap_or(true) as i32;
+    let enabled = req.enabled.unwrap_or(true);
     let cooldown = req.cooldown_seconds.unwrap_or(300);
     let channels = req.delivery_channels.as_deref().unwrap_or(r#"["ntfy"]"#);
 
-    db.execute(
-        "INSERT INTO alert_rules (name, enabled, event_type, severity_filter, vlan_filter,
-         disposition_filter, verdict_filter, cooldown_seconds, delivery_channels)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        rusqlite::params![
-            req.name, enabled, req.event_type, req.severity_filter,
-            req.vlan_filter, req.disposition_filter, req.verdict_filter, cooldown, channels
-        ],
-    ).map_err(|e| format!("insert failed: {e}"))?;
+    let id = store
+        .create_alert_rule(
+            &req.name,
+            enabled,
+            &req.event_type,
+            req.severity_filter.as_deref(),
+            req.vlan_filter.as_deref(),
+            req.disposition_filter.as_deref(),
+            req.verdict_filter.as_deref(),
+            cooldown,
+            channels,
+        )
+        .await?;
 
-    let id = db.last_insert_rowid();
-    drop(db);
-    // Return the created rule
-    let rules = get_alert_rules(store).await?;
+    let rules = store.get_alert_rules().await?;
     rules.into_iter().find(|r| r.id == id).ok_or("rule not found after insert".into())
 }
 
 pub async fn update_rule(store: &SwitchStore, id: i64, req: UpdateRuleRequest) -> Result<(), String> {
-    let db = store.db().await;
-    let mut sets = Vec::new();
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-    if let Some(ref name) = req.name {
-        sets.push("name = ?");
-        params.push(Box::new(name.clone()));
-    }
-    if let Some(enabled) = req.enabled {
-        sets.push("enabled = ?");
-        params.push(Box::new(enabled as i32));
-    }
-    if let Some(ref sf) = req.severity_filter {
-        sets.push("severity_filter = ?");
-        params.push(Box::new(sf.clone()));
-    }
-    if let Some(ref vf) = req.vlan_filter {
-        sets.push("vlan_filter = ?");
-        params.push(Box::new(vf.clone()));
-    }
-    if let Some(ref df) = req.disposition_filter {
-        sets.push("disposition_filter = ?");
-        params.push(Box::new(df.clone()));
-    }
-    if let Some(ref vf) = req.verdict_filter {
-        sets.push("verdict_filter = ?");
-        params.push(Box::new(vf.clone()));
-    }
-    if let Some(cooldown) = req.cooldown_seconds {
-        sets.push("cooldown_seconds = ?");
-        params.push(Box::new(cooldown));
-    }
-    if let Some(ref channels) = req.delivery_channels {
-        sets.push("delivery_channels = ?");
-        params.push(Box::new(channels.clone()));
-    }
-
-    if sets.is_empty() {
-        return Ok(());
-    }
-
-    sets.push("updated_at = datetime('now')");
-    let sql = format!("UPDATE alert_rules SET {} WHERE id = ?", sets.join(", "));
-    params.push(Box::new(id));
-
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-    db.execute(&sql, param_refs.as_slice())
-        .map_err(|e| format!("update failed: {e}"))?;
-    Ok(())
+    store
+        .update_alert_rule(
+            id,
+            req.name.as_deref(),
+            req.enabled,
+            req.severity_filter.as_deref(),
+            req.vlan_filter.as_deref(),
+            req.disposition_filter.as_deref(),
+            req.verdict_filter.as_deref(),
+            req.cooldown_seconds,
+            req.delivery_channels.as_deref(),
+        )
+        .await
 }
 
 pub async fn delete_rule(store: &SwitchStore, id: i64) -> Result<(), String> {
-    let db = store.db().await;
-
-    // Check if it's a default rule (id <= 10 are default-seeded)
-    if id <= 10 {
-        return Err("cannot delete default rules".into());
-    }
-
-    let affected = db.execute("DELETE FROM alert_rules WHERE id = ?1", rusqlite::params![id])
-        .map_err(|e| format!("delete failed: {e}"))?;
-    if affected == 0 {
-        return Err("rule not found".into());
-    }
-    Ok(())
+    store.delete_alert_rule(id).await
 }
 
 // ── State cache helpers ─────────────────────────────────────────
 
 async fn get_state(store: &SwitchStore, key: &str) -> Option<String> {
-    let db = store.db().await;
-    db.query_row(
-        "SELECT value FROM alert_state_cache WHERE key = ?1",
-        rusqlite::params![key],
-        |row| row.get(0),
-    )
-    .ok()
+    store.get_alert_state(key).await
 }
 
 async fn set_state(store: &SwitchStore, key: &str, value: &str) {
-    let db = store.db().await;
-    if let Err(e) = db.execute(
-        "INSERT INTO alert_state_cache (key, value, updated_at) VALUES (?1, ?2, datetime('now'))
-         ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = datetime('now')",
-        rusqlite::params![key, value],
-    ) {
-        tracing::error!("failed to set alert state '{key}': {e}");
-    }
+    store.set_alert_state(key, value).await
 }
 
 // ── Cooldown check ──────────────────────────────────────────────
 
 async fn is_cooled_down(store: &SwitchStore, rule_id: i64, subject: &str, cooldown_secs: i64) -> bool {
-    let db = store.db().await;
-    let count: i64 = db
-        .query_row(
-            "SELECT COUNT(*) FROM alert_cooldowns
-             WHERE rule_id = ?1 AND subject = ?2
-               AND last_fired_at > datetime('now', ?3)",
-            rusqlite::params![rule_id, subject, format!("-{cooldown_secs} seconds")],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    count == 0
+    store.is_alert_cooled_down(rule_id, subject, cooldown_secs).await
 }
 
 async fn update_cooldown(store: &SwitchStore, rule_id: i64, subject: &str) {
-    let db = store.db().await;
-    if let Err(e) = db.execute(
-        "INSERT INTO alert_cooldowns (rule_id, subject, last_fired_at) VALUES (?1, ?2, datetime('now'))
-         ON CONFLICT(rule_id, subject) DO UPDATE SET last_fired_at = datetime('now')",
-        rusqlite::params![rule_id, subject],
-    ) {
-        tracing::error!("failed to update alert cooldown for rule {rule_id}: {e}");
-    }
+    store.update_alert_cooldown(rule_id, subject).await
 }
 
 // ── Record alert history ────────────────────────────────────────
 
 async fn record_alert(store: &SwitchStore, alert: &PendingAlert, attempted: &[String], succeeded: &[String]) {
-    let db = store.db().await;
-    if let Err(e) = db.execute(
-        "INSERT INTO alert_history
-            (rule_id, event_type, severity, device_mac, device_hostname, device_ip,
-             vlan_id, title, body, channels_attempted, channels_succeeded, anomaly_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        rusqlite::params![
+    store
+        .record_alert_history(
             alert.rule_id,
-            alert.event_type,
-            alert.severity,
-            alert.device_mac,
-            alert.device_hostname,
-            alert.device_ip,
+            &alert.event_type,
+            &alert.severity,
+            alert.device_mac.as_deref(),
+            alert.device_hostname.as_deref(),
+            alert.device_ip.as_deref(),
             alert.vlan_id,
-            alert.title,
-            alert.body,
-            serde_json::to_string(attempted).unwrap_or_default(),
-            serde_json::to_string(succeeded).unwrap_or_default(),
+            &alert.title,
+            &alert.body,
+            &serde_json::to_string(attempted).unwrap_or_default(),
+            &serde_json::to_string(succeeded).unwrap_or_default(),
             alert.anomaly_id,
-        ],
-    ) {
-        tracing::error!("failed to record alert history: {e}");
-    }
+        )
+        .await
 }
 
 // ── ntfy delivery ───────────────────────────────────────────────
@@ -622,26 +372,13 @@ pub async fn update_channel_config(
     enabled: Option<bool>,
     config_json: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    let db = store.db().await;
-
-    if let Some(en) = enabled {
-        db.execute(
-            "UPDATE alert_delivery_config SET enabled = ?1 WHERE channel = ?2",
-            rusqlite::params![en as i32, channel],
-        )
-        .map_err(|e| format!("update enabled: {e}"))?;
-    }
-
-    if let Some(cfg) = config_json {
-        let json_str = serde_json::to_string(&cfg).map_err(|e| format!("json encode: {e}"))?;
-        db.execute(
-            "UPDATE alert_delivery_config SET config_json = ?1 WHERE channel = ?2",
-            rusqlite::params![json_str, channel],
-        )
-        .map_err(|e| format!("update config: {e}"))?;
-    }
-
-    Ok(())
+    let json_str = config_json
+        .map(|cfg| serde_json::to_string(&cfg))
+        .transpose()
+        .map_err(|e| format!("json encode: {e}"))?;
+    store
+        .update_delivery_channel(channel, enabled, json_str.as_deref())
+        .await
 }
 
 /// Send a test notification to a channel.
