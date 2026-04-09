@@ -1,12 +1,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mikrotik_core::MikrotikClient;
 use ion_drift_storage::SwitchStore;
 use ion_drift_storage::switch::{PortMetricEntry, VlanMembershipEntry};
+use mikrotik_core::MikrotikClient;
+use mikrotik_core::MikrotikError;
+use serde_json::Value;
 use tokio::sync::{watch, RwLock};
 
 use crate::device_manager::{DeviceClient, DeviceManager, DeviceStatus};
+use crate::device_queue_registry::DeviceQueueRegistry;
+use crate::router_queue::{Priority, QueuedRequest, RouterQueue};
 use crate::task_supervisor::TaskSupervisor;
 
 /// Spawn switch pollers for all enabled RouterOS devices (switches + router).
@@ -19,11 +23,13 @@ pub fn spawn_switch_pollers(
     device_manager: Arc<RwLock<DeviceManager>>,
     switch_store: Arc<SwitchStore>,
     poller_registry: Arc<RwLock<crate::poller_registry::PollerRegistry>>,
+    device_queues: Arc<RwLock<DeviceQueueRegistry>>,
 ) {
     supervisor.spawn("switch_pollers", move || {
         let device_manager = device_manager.clone();
         let switch_store = switch_store.clone();
         let poller_registry = poller_registry.clone();
+        let device_queues = device_queues.clone();
         Box::pin(async move {
     let dm = device_manager.clone();
         // 30-second startup delay to let the server stabilize
@@ -43,9 +49,15 @@ pub fn spawn_switch_pollers(
         }
 
         let mut registry = poller_registry.write().await;
+        let mut dq = device_queues.write().await;
         for entry in routeros_devices {
-            registry.start_poller(entry, device_manager.clone(), switch_store.clone());
+            let queue = match &entry.client {
+                DeviceClient::RouterOs(client) => Some(dq.get_or_create(&entry.record.id, client)),
+                _ => None,
+            };
+            registry.start_poller(entry, device_manager.clone(), switch_store.clone(), queue);
         }
+        drop(dq);
         drop(registry);
         drop(dm_read);
 
@@ -59,10 +71,11 @@ pub fn spawn_switch_pollers(
 
 /// Run the polling loop for a single RouterOS switch device.
 ///
-/// Called by the PollerRegistry. Exits when the cancellation signal is received.
+/// Called by the PollerRegistry. All API calls are serialized through the
+/// per-device RouterQueue to prevent session accumulation on the switch.
 pub async fn run_switch_poller(
     device_id: String,
-    client: MikrotikClient,
+    queue: RouterQueue,
     store: Arc<SwitchStore>,
     dm: Arc<RwLock<DeviceManager>>,
     poll_interval: u64,
@@ -77,48 +90,102 @@ pub async fn run_switch_poller(
                 break;
             }
             _ = interval.tick() => {
-                poll_switch(&device_id, &client, &store, &dm).await;
+                poll_switch(&device_id, &queue, &store, &dm).await;
             }
         }
     }
 }
 
+/// Deserialize a single batch result into a typed struct.
+fn deserialize_result<T: serde::de::DeserializeOwned>(
+    result: &Result<Value, MikrotikError>,
+) -> Result<T, String> {
+    match result {
+        Ok(value) => serde_json::from_value(value.clone()).map_err(|e| format!("deserialize: {e}")),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Run one poll cycle for a switch device.
+///
+/// All requests are submitted as a single batch through the device's RouterQueue,
+/// ensuring sequential execution through one connection.
 async fn poll_switch(
     device_id: &str,
-    client: &MikrotikClient,
+    queue: &RouterQueue,
     store: &SwitchStore,
     dm: &Arc<RwLock<DeviceManager>>,
 ) {
-    // Test connectivity and update status
-    match client.test_connection().await {
-        Ok(identity) => {
-            let mut dm_w = dm.write().await;
-            dm_w.set_status(device_id, DeviceStatus::Online { identity });
+    // Test connectivity via queue (single request, High priority)
+    let poller_id = format!("switch_health:{device_id}");
+    let identity_result = queue
+        .submit(&poller_id, Priority::High, vec![QueuedRequest::get("system/identity")])
+        .await;
+
+    match identity_result {
+        Ok(results) if !results.is_empty() => {
+            match &results[0] {
+                Ok(val) => {
+                    let identity = val
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or(device_id)
+                        .to_string();
+                    let mut dm_w = dm.write().await;
+                    dm_w.set_status(device_id, DeviceStatus::Online { identity });
+                }
+                Err(e) => {
+                    tracing::warn!(device = %device_id, error = %e, "switch poll: connectivity failed");
+                    let mut dm_w = dm.write().await;
+                    dm_w.set_status(device_id, DeviceStatus::Offline { error: e.to_string() });
+                    return;
+                }
+            }
         }
+        Ok(_) => return,
         Err(e) => {
-            tracing::warn!(device = %device_id, error = %e, "switch poll: connectivity failed");
+            tracing::warn!(device = %device_id, error = %e, "switch poll: queue submit failed");
             let mut dm_w = dm.write().await;
-            dm_w.set_status(
-                device_id,
-                DeviceStatus::Offline {
-                    error: e.to_string(),
-                },
-            );
-            return; // Skip data collection if device is unreachable
+            dm_w.set_status(device_id, DeviceStatus::Offline { error: e.to_string() });
+            return;
         }
     }
 
-    // Collect data concurrently
-    let (ethernet_res, monitor_res, bridge_hosts_res, bridge_ports_res, bridge_vlans_res, neighbors_res) =
-        tokio::join!(
-            client.ethernet_interfaces(),
-            client.monitor_ethernet(),
-            client.bridge_hosts(),
-            client.bridge_ports(),
-            client.bridge_vlans(),
-            client.ip_neighbors(),
-        );
+    // Submit all data-collection requests as a single serialized batch
+    let poller_id = format!("switch_poll:{device_id}");
+    let results = match queue
+        .submit(
+            &poller_id,
+            Priority::Normal,
+            vec![
+                QueuedRequest::get("interface/ethernet"),
+                QueuedRequest::post("interface/ethernet/monitor", serde_json::json!({})),
+                QueuedRequest::get("interface/bridge/host"),
+                QueuedRequest::get("interface/bridge/port"),
+                QueuedRequest::get("interface/bridge/vlan"),
+                QueuedRequest::get("ip/neighbor"),
+            ],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(device = %device_id, "switch poll batch failed: {e}");
+            return;
+        }
+    };
+
+    // Deserialize each result
+    use mikrotik_core::resources::bridge::{BridgeHost, BridgePort, BridgeVlan};
+    use mikrotik_core::resources::ethernet::{EthernetInterface, EthernetMonitorEntry};
+    use mikrotik_core::resources::neighbor::IpNeighbor;
+
+    let ethernet_res: Result<Vec<EthernetInterface>, _> = deserialize_result(&results[0]);
+    let monitor_res: Result<Vec<EthernetMonitorEntry>, _> = deserialize_result(&results[1]);
+    let bridge_hosts_res: Result<Vec<BridgeHost>, _> = deserialize_result(&results[2]);
+    let bridge_ports_res: Result<Vec<BridgePort>, _> = deserialize_result(&results[3]);
+    let bridge_vlans_res: Result<Vec<BridgeVlan>, _> = deserialize_result(&results[4]);
+    let neighbors_res: Result<Vec<IpNeighbor>, _> = deserialize_result(&results[5]);
 
     // ── Ethernet / port metrics ───────────────────────────────────
     // Build a map of actual negotiated speeds from monitor endpoint

@@ -10,6 +10,7 @@ mod connection_store;
 mod correlation_engine;
 pub mod demo;
 mod device_manager;
+mod device_queue_registry;
 mod device_resolution;
 mod dns;
 mod geo;
@@ -765,6 +766,13 @@ async fn main() -> anyhow::Result<()> {
         std::time::Duration::from_secs(config.polling.queue_gap_secs),
     );
 
+    // Per-device API queue registry for managed switches
+    let device_queues = Arc::new(tokio::sync::RwLock::new(
+        device_queue_registry::DeviceQueueRegistry::new(
+            std::time::Duration::from_secs(config.polling.queue_gap_secs),
+        ),
+    ));
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),
@@ -797,6 +805,7 @@ async fn main() -> anyhow::Result<()> {
         login_limiter: auth::LoginRateLimiter::new(),
         attack_techniques: attack_techniques.clone(),
         router_queue,
+        device_queues: device_queues.clone(),
         infrastructure_snapshot: Arc::new(tokio::sync::RwLock::new(
             infrastructure_snapshot::InfrastructureSnapshotState::new(),
         )),

@@ -20,6 +20,7 @@ use crate::secrets::SecretsManager;
 use crate::stats_store::StatsStore;
 use crate::attack_techniques::AttackTechniqueDb;
 use crate::infrastructure_snapshot::InfrastructureSnapshotState;
+use crate::device_queue_registry::DeviceQueueRegistry;
 use crate::router_queue::RouterQueue;
 use crate::task_supervisor::TaskSupervisor;
 use crate::topology::NetworkTopology;
@@ -78,6 +79,8 @@ pub struct AppState {
     pub attack_techniques: Arc<AttackTechniqueDb>,
     /// Serialized request queue for router API access (background pollers).
     pub router_queue: RouterQueue,
+    /// Per-device API queues for managed switches (RouterOS).
+    pub device_queues: Arc<RwLock<DeviceQueueRegistry>>,
     /// Resolved infrastructure snapshot — platform's canonical view of network truth.
     /// Produced by correlation engine, consumed by topology builder and others.
     pub infrastructure_snapshot: Arc<RwLock<InfrastructureSnapshotState>>,

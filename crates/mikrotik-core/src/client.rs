@@ -152,6 +152,7 @@ impl MikrotikClient {
         }
 
         let http = builder
+            .pool_max_idle_per_host(1)
             .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(std::time::Duration::from_secs(30))
             .build()

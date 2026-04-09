@@ -449,11 +449,19 @@ pub async fn create_device(
     // Start the poller for this device immediately (no server restart needed)
     if let Some(entry) = dm.get_device(&req.device.id) {
         if entry.record.enabled {
+            let ros_queue = match &entry.client {
+                crate::device_manager::DeviceClient::RouterOs(client) => {
+                    let mut dq = state.device_queues.write().await;
+                    Some(dq.get_or_create(&req.device.id, client))
+                }
+                _ => None,
+            };
             let mut registry = state.poller_registry.write().await;
             registry.start_poller(
                 entry,
                 state.device_manager.clone(),
                 state.switch_store.clone(),
+                ros_queue,
             );
         }
     }
@@ -528,10 +536,18 @@ pub async fn update_device(
             if !entry.record.enabled {
                 registry.stop_poller(&id);
             } else {
+                let ros_queue = match &entry.client {
+                    crate::device_manager::DeviceClient::RouterOs(client) => {
+                        let mut dq = state.device_queues.write().await;
+                        Some(dq.get_or_create(&id, client))
+                    }
+                    _ => None,
+                };
                 registry.start_poller(
                     entry,
                     state.device_manager.clone(),
                     state.switch_store.clone(),
+                    ros_queue,
                 );
             }
         } else {

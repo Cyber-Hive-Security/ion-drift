@@ -30,6 +30,7 @@ impl PollerRegistry {
         entry: &DeviceEntry,
         device_manager: Arc<RwLock<DeviceManager>>,
         switch_store: Arc<SwitchStore>,
+        ros_queue: Option<crate::router_queue::RouterQueue>,
     ) {
         let device_id = entry.record.id.clone();
 
@@ -39,8 +40,8 @@ impl PollerRegistry {
         let (cancel_tx, cancel_rx) = watch::channel(false);
 
         let handle = match &entry.client {
-            DeviceClient::RouterOs(client) => {
-                let client = client.clone();
+            DeviceClient::RouterOs(_client) => {
+                let queue = ros_queue.expect("RouterOS device requires a queue — caller must provide one");
                 let device_id = device_id.clone();
                 let poll_interval = entry.record.poll_interval_secs as u64;
                 let device_name = entry.record.name.clone();
@@ -49,13 +50,13 @@ impl PollerRegistry {
                     id = %device_id,
                     name = %device_name,
                     interval_secs = poll_interval,
-                    "starting switch poller (dynamic)"
+                    "starting switch poller (queued)"
                 );
 
                 tokio::spawn(async move {
                     crate::switch_poller::run_switch_poller(
                         device_id,
-                        client,
+                        queue,
                         switch_store,
                         device_manager,
                         poll_interval,

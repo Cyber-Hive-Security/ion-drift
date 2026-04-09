@@ -123,6 +123,7 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.device_manager.clone(),
         state.switch_store.clone(),
         state.poller_registry.clone(),
+        state.device_queues.clone(),
     );
     crate::switch_poller::spawn_neighbor_poller(
         &state.task_supervisor,

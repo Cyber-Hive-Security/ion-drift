@@ -32,15 +32,28 @@ pub enum Priority {
     Low = 2,    // topology, discovery, policy sync
 }
 
+/// HTTP method for a queued request.
+#[derive(Debug, Clone, Default)]
+pub enum RequestMethod {
+    #[default]
+    Get,
+    Post,
+}
+
 /// A single API request within a batch.
 #[derive(Debug, Clone)]
 pub struct QueuedRequest {
     pub path: String,
+    pub method: RequestMethod,
+    pub body: Option<Value>,
 }
 
 impl QueuedRequest {
     pub fn get(path: &str) -> Self {
-        Self { path: path.to_string() }
+        Self { path: path.to_string(), method: RequestMethod::Get, body: None }
+    }
+    pub fn post(path: &str, body: Value) -> Self {
+        Self { path: path.to_string(), method: RequestMethod::Post, body: Some(body) }
     }
 }
 
@@ -417,11 +430,16 @@ async fn queue_worker(
 
         for req in &batch.requests {
             let req_start = Instant::now();
-            let result = tokio::time::timeout(
-                Duration::from_secs(10),
-                client.get::<Value>(&req.path),
-            )
-            .await;
+            let api_future = async {
+                match req.method {
+                    RequestMethod::Get => client.get::<Value>(&req.path).await,
+                    RequestMethod::Post => {
+                        let body = req.body.as_ref().cloned().unwrap_or(Value::Null);
+                        client.post::<Value, _>(&req.path, &body).await
+                    }
+                }
+            };
+            let result = tokio::time::timeout(Duration::from_secs(10), api_future).await;
 
             let result = match result {
                 Ok(r) => r,

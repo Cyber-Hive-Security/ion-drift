@@ -35,7 +35,7 @@ pub fn spawn_snmp_pollers(
 
         let mut registry = poller_registry.write().await;
         for entry in switches {
-            registry.start_poller(entry, device_manager.clone(), switch_store.clone());
+            registry.start_poller(entry, device_manager.clone(), switch_store.clone(), None);
         }
         drop(registry);
         drop(dm_read);
