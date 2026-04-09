@@ -19,7 +19,6 @@ import type {
   SankeyVlanResponse,
   SankeyDeviceResponse,
   Investigation,
-  DeviceAnomaly,
 } from "@/api/types";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
