@@ -12,12 +12,14 @@ import {
   useSankeyDestinationPeers,
   useSankeyConversation,
   useDeviceInvestigations,
+  useBehaviorAnomalies,
 } from "@/api/queries";
 import { apiFetch } from "@/api/client";
 import type {
   SankeyVlanResponse,
   SankeyDeviceResponse,
   Investigation,
+  DeviceAnomaly,
 } from "@/api/types";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -479,6 +481,10 @@ function VlanDetail({
   onSelectDevice: (mac: string) => void;
 }) {
   const { data, isLoading, error, refetch } = useSankeyVlan(vlanId, range, destVlan, country);
+  const vlanNum = Number(vlanId);
+  const { data: anomalies } = useBehaviorAnomalies(
+    !isNaN(vlanNum) ? { vlan: vlanNum, status: "pending", limit: 20 } : undefined,
+  );
   const queryClient = useQueryClient();
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; mac: string; hostname?: string; ip?: string } | null>(null);
 
@@ -532,6 +538,53 @@ function VlanDetail({
 
       {data.devices.length === 0 && data.flows.length === 0 && (
         <EmptyState message="No devices or flows found in this VLAN for the selected time range." />
+      )}
+
+      {/* Anomalies */}
+      {anomalies && anomalies.length > 0 && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5">
+          <div className="border-b border-destructive/30 p-3 flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-destructive" />
+            <h3 className="text-sm font-semibold text-destructive">
+              Anomalies ({anomalies.length})
+            </h3>
+          </div>
+          <div className="divide-y divide-border max-h-64 overflow-y-auto">
+            {anomalies.map((a) => (
+              <button
+                key={a.id}
+                className="w-full flex items-center gap-3 px-4 py-2 text-left hover:bg-accent/50"
+                onClick={() => onSelectDevice(a.mac)}
+              >
+                <span
+                  className={cn(
+                    "text-[10px] font-bold uppercase w-14 text-center rounded px-1 py-0.5",
+                    a.severity === "critical"
+                      ? "bg-red-500/20 text-red-400"
+                      : a.severity === "alert"
+                        ? "bg-orange-500/20 text-orange-400"
+                        : a.severity === "warning"
+                          ? "bg-amber-500/20 text-amber-400"
+                          : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {a.severity}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium truncate">
+                    {a.anomaly_type.replace(/_/g, " ")}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground truncate">
+                    {a.mac} — {a.description}
+                  </div>
+                </div>
+                <div className="text-[10px] text-muted-foreground whitespace-nowrap">
+                  {formatTimeAgoUnix(a.timestamp)}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Devices */}
