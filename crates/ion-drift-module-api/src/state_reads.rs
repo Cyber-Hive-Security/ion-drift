@@ -88,6 +88,13 @@ pub struct ConnectionRef {
 }
 
 /// Read-only view of the connection store.
+///
+/// **v1.0 status:** the trait exists but the host does not yet wire a
+/// concrete implementation. Modules that declare
+/// [`crate::StateReads::connection`] will receive `None` from
+/// [`crate::ModuleContext::connection`] until a host-backed implementation
+/// lands in a future minor bump. Treat this trait as forward-compatible
+/// scaffolding, not a working accessor.
 pub trait ConnectionRead: Send + Sync {
     /// Return connections involving a device, most recent first.
     fn for_device<'a>(
@@ -106,6 +113,12 @@ pub struct SnapshotNodeRef {
 }
 
 /// Read-only view of the resolved infrastructure snapshot.
+///
+/// **v1.0 status:** the trait exists but the host does not yet wire a
+/// concrete implementation. Modules that declare
+/// [`crate::StateReads::snapshot`] will receive `None` from
+/// [`crate::ModuleContext::snapshot`] until a host-backed implementation
+/// lands in a future minor bump.
 pub trait SnapshotRead: Send + Sync {
     /// Current snapshot generation number.
     fn generation<'a>(&'a self) -> BoxFuture<'a, u64>;
@@ -125,6 +138,12 @@ pub struct DeviceRef {
 }
 
 /// Read-only view of the device manager.
+///
+/// **v1.0 status:** the trait exists but the host does not yet wire a
+/// concrete implementation. Modules that declare
+/// [`crate::StateReads::devices`] will receive `None` from
+/// [`crate::ModuleContext::devices`] until a host-backed implementation
+/// lands in a future minor bump.
 pub trait DeviceManagerRead: Send + Sync {
     /// All devices currently managed.
     fn list<'a>(&'a self) -> BoxFuture<'a, Vec<DeviceRef>>;

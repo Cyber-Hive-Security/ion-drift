@@ -1563,7 +1563,7 @@ dependencies = [
 
 [[package]]
 name = "ion-drift-cli"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1578,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "ion-drift-module-api"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1593,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "ion-drift-module-host"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1612,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "ion-drift-storage"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "ion-drift-module-api",
  "rusqlite",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "ion-drift-web"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1910,7 +1910,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "mikrotik-core"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "md5",
  "rand 0.8.5",

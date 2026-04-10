@@ -164,3 +164,25 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Health check endpoint for container orchestration
 - Security headers (X-Frame-Options, CSP, X-Content-Type-Options, X-XSS-Protection)
 - CORS configuration derived from OIDC redirect URI
+
+## Module API (v1.0)
+
+Stable plugin contract for extending Drift core with custom modules. Modules run in-process via an explicit compile-time list, registered in `crates/ion-drift-web/src/modules.rs`. The default OSS list is empty; downstream builds compose modules via a build-time file overlay.
+
+- **`ion-drift-module-api`** — stable trait/type contract crate (semver 1.0). Module authors depend only on this; the runtime host can evolve without forcing recompiles.
+- **`ion-drift-module-host`** — runtime registry, event bus, storage backend, panic guard. Internal to Drift.
+- **Single `Module` trait** with native `async fn` (Rust 1.75+, no `async-trait` crate). Adapter pattern in the host crate handles dyn-compat for `Arc<dyn Module>`.
+- **Capability-scoped runtime gating** — modules declare a `Capabilities` struct; the host builds a `ModuleContext` whose handles correspond exactly to declared capabilities. Undeclared state reads return `None`; undeclared events return `EventError::NotDeclared`.
+- **Per-kind event channels** — `tokio::sync::broadcast` per `EventKind` with internal forwarder tasks merging into a unified `EventReceiver::recv()` API. High-rate topics cannot lag low-rate subscribers.
+- **Versioned event payloads** — `DriftEvent` is `#[non_exhaustive]`, payload structs are suffixed `V1` (with `V2` etc. for additive changes), so adding fields or variants is a minor bump.
+- **Host-stamped event provenance** — `DriftEvent::ModuleCustom` events have their `source` field populated by the host with the publishing module's actual name. The plain `publish()` rejects `ModuleCustom` to prevent spoofing; modules must use `publish_custom(kind, payload)`.
+- **Read-only state traits** — `BehaviorRead` and `SwitchRead` are wired in v1.0. `ConnectionRead`, `SnapshotRead`, `DeviceManagerRead` are scaffolded but not yet wired (return `None`). The trait surface has no mutation methods, so modules cannot accidentally or intentionally write to Drift's stores.
+- **Isolated SQLite per module** — each module that declares `StorageNeed::Isolated` gets its own file at `${data_dir}/modules/<name>.db`. Module-owned schema and migrations, tracked in a `__migrations` metadata table. All writes run through `tokio::task::spawn_blocking` so long queries do not stall the runtime.
+- **Namespace-scoped secrets** — declared secret names must start with `MODULE_<UPPER_NAME>_*` where `UPPER_NAME` is the module name uppercased with hyphens converted to underscores. Modules attempting to declare names outside their prefix are rejected at registration. Prevents exfiltration of Drift core secrets.
+- **Panic-isolated lifecycle** — `Module::init` and `Module::shutdown` are wrapped in `catch_unwind`. Module HTTP handlers are wrapped in a tower panic guard that returns HTTP 500. A misbehaving module is marked `Disabled` and Drift continues running.
+- **Graceful shutdown** — SIGTERM cancels the module shutdown signal, drains the axum serve future, and calls `shutdown_all` on the registry with a 5-second bounded timeout. Modules that hang are left behind so the host can exit.
+- **Test harness in the API crate** — `MockContextBuilder` plus `MockBehaviorRead`, `MockSwitchRead`, `MockConnectionRead`, `MockSnapshotRead`, `MockDeviceManagerRead`. Module authors can unit-test in isolation by enabling the `testing` feature on `ion-drift-module-api` as a dev dependency.
+- **Module registry endpoint** — `GET /api/system/modules` returns the list of loaded modules with name, version, API version, status (`running` / `disabled`), and reason. Authenticated route.
+- **Vendor-neutral OSS surface** — the OSS Drift repo contains no references to any specific external module, vendor, or product. The default `modules::load()` returns an empty `Vec`. Mechanically verified by grep in the verification pass.
+
+See [docs/module-developer-guide.md](docs/module-developer-guide.md) for the complete walkthrough.

@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-04-10
+
+### Added
+
+- **Module API v1.0** — stable plugin contract for extending Drift core with custom modules. Two new workspace crates: `ion-drift-module-api` (1.0.0, path-only, the stable trait/type contract) and `ion-drift-module-host` (runtime registry, event bus, storage backend, panic guard). Single `Module` trait with native `async fn` and an `ErasedModule` adapter for dyn-compat. See [docs/module-developer-guide.md](docs/module-developer-guide.md).
+- **Capability-scoped module runtime** — modules declare a `Capabilities` struct (storage, events, state reads, secrets); the host builds a `ModuleContext` whose handles correspond exactly to declared capabilities. Undeclared state reads return `None`; undeclared events return `EventError::NotDeclared`.
+- **Per-kind event channels** — `tokio::sync::broadcast` per `EventKind` with internal forwarder tasks merging into a unified `EventReceiver::recv()` API. High-rate topics cannot lag low-rate subscribers.
+- **Host-stamped event provenance** — `DriftEvent::ModuleCustom` events have their `source` field populated by the host from the publishing module's actual name. The plain `publish()` rejects `ModuleCustom`; modules must use `publish_custom(kind, payload)`. Prevents spoofing.
+- **Namespace-scoped module secrets** — declared secret names must start with `MODULE_<UPPER_NAME>_*`. Modules attempting to declare names outside their prefix are rejected at registration, preventing exfiltration of Drift core secrets.
+- **Isolated SQLite per module** — each module that declares `StorageNeed::Isolated` gets its own file at `${data_dir}/modules/<name>.db`. Module-owned schema and migrations, tracked in a `__migrations` metadata table. All writes run through `tokio::task::spawn_blocking`.
+- **Panic-isolated module lifecycle** — `Module::init` and `Module::shutdown` are wrapped in `catch_unwind`. Module HTTP handlers are wrapped in a tower panic guard that returns HTTP 500. A misbehaving module is marked `Disabled` and Drift continues running.
+- **Module test harness** — `MockContextBuilder` plus `MockBehaviorRead`, `MockSwitchRead`, `MockConnectionRead`, `MockSnapshotRead`, `MockDeviceManagerRead`. Module authors can unit-test in isolation by enabling the `testing` feature on `ion-drift-module-api`.
+- **Module registry endpoint** — `GET /api/system/modules` returns the list of loaded modules with name, version, API version, status, and reason. Authenticated route.
+- **Per-device router queue** — RouterOS managed switches now each get their own `RouterQueue` instance, serializing all API calls through a single connection per device. Fixes CRS326 crashes caused by 80+ accumulated REST sessions from concurrent `tokio::join!` polling. Extended `QueuedRequest` with POST support.
+- **Inline VLAN anomalies** — clicking a VLAN row showing anomalies on the Investigation page now renders them in a red-bordered section with severity badge, type, device MAC, and time-ago; clicking drills into the device trace.
+
+### Changed
+
+- **Engine consolidation (Phase 1)** — extracted shared identity helpers into `identity_utils.rs` (`is_infrastructure_type`, `identity_overrides_lldp`); removed duplicates from `correlation_engine.rs` and `topology.rs`. Removed `SpikeCandidates` empty placeholder and 3 hardcoded MAC debug trace blocks.
+- **Engine consolidation (Phase 2)** — consolidated `DeviceResolutionMaps`: removed the duplicate struct from `topology_inference/graph.rs`; `InfrastructureGraph::build` now takes two `&HashMap` params directly.
+- **Engine consolidation (Phase 3)** — alerting SQL moved to the storage crate: new `ion-drift-storage/src/alerting.rs` with 14 `SwitchStore` methods replacing raw `store.db()` free functions. Alert types now live in the storage crate.
+- **Event payload versioning** — `DriftEvent` is `#[non_exhaustive]`, payload structs are suffixed `V1` (with `V2` etc. for additive changes), so adding fields or variants is a minor bump.
+- **`ApiVersion::CURRENT`** — now computed from `CARGO_PKG_VERSION_MAJOR`/`MINOR` at compile time via a `const fn` parser. Will no longer drift from Cargo.toml.
+- **Module listing at startup** — host logs loaded module list (count + names) after `ModuleRegistry::load`, so operators can tell at a glance which modules a binary was built with.
+
+### Fixed
+
+- **Auth bypass on `/api/system/modules` and `/api/modules/*`** — module routes were nested onto the outer router AFTER `api_routes` middleware was applied. Moved inside `api_routes` BEFORE the auth/CSRF/demo-sanitize layer stack. Listing route now uses the `RequireAuth` extractor.
+- **Module `init`/`shutdown` panic escapes** — previously a `panic!` inside a module's lifecycle propagated up and crashed Drift. Now wrapped in `AssertUnwindSafe + catch_unwind`; panicking modules are marked `Disabled` with the panic message and Drift continues running.
+- **SQLite blocking the Tokio runtime** — `SqliteBackend::write_any` held an `async` mutex and ran `rusqlite` calls inline on worker threads. Now uses `std::sync::Mutex` + `tokio::task::spawn_blocking` for all queries and migrations.
+- **Event bus noisy-neighbor lag** — single broadcast channel + client-side filtering meant a high-rate topic could advance the channel head past a low-rate topic, causing low-rate subscribers to miss events. Per-kind channels eliminate the cross-topic lag path.
+- **Nullable VLAN in `read_traits::recent_anomalies`** — `row.get::<_, i64>(4)` returned a rusqlite error on SQL NULL. Fixed to `Option<i64>`.
+- **Shutdown signal wiring** — `ModuleRegistry::shutdown_all` existed but was never called; `module_shutdown.cancel()` was never triggered. Drift now wires these into the SIGTERM path via `axum::serve.with_graceful_shutdown` with a 5-second bounded timeout.
+- **`MockContextBuilder::with_secret`** — secrets were stored in the mock resolver but `declared_secret_names` was hardcoded to empty, so `SecretsHandle::resolve` always returned `None` and the test harness silently lied.
+
+### Removed
+
+- **`Module::health`, `HealthEndpoint`, `MetricsCollector`, `MetricsHandle`** — dropped from the v1.0 contract per YAGNI. They were placeholder shapes with no host implementation; freezing them into a stable contract would have created a semver trap. Health and metrics will return as additive minor bumps in 1.x once the host has a real implementation.
+- **Unenforced capability bools** — `routes`, `tasks`, `health`, `metrics` flags removed from `Capabilities`. The host never checked them. Final shape: `storage`, `events`, `state_reads`, `secrets` — every field corresponds to something the host actually grants or denies.
+
 ## [0.4.0] - 2026-04-03
 
 ### Added

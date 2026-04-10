@@ -238,6 +238,25 @@ docker compose -f docker-compose.build.yml up -d
 
 > **Note:** If building fails or the process is killed, your host likely doesn't have enough resources. Use the pre-built image instead — just run `docker compose up -d`. See [Quick Start](#quick-start).
 
+## Module API
+
+Ion Drift includes a stable plugin contract for extending the core with custom modules. Modules are self-contained Rust crates that plug into Drift via a single trait, run inside the Drift process, and can register HTTP routes, spawn supervised background tasks, read core state through narrow trait objects, publish and subscribe to events on the per-kind event bus, and own isolated SQLite storage.
+
+The contract crate is `ion-drift-module-api` (currently `1.0.0`, path-only). Modules depend only on the API crate; the runtime host (`ion-drift-module-host`) can evolve without forcing module recompiles.
+
+Highlights:
+
+- **Capability-scoped runtime gating** — modules declare what they need; the host gives them exactly that. Undeclared state reads, secrets, and event subscriptions are absent from the context handle, not just guarded at call time.
+- **Isolated storage per module** — each module gets its own SQLite file at `${data_dir}/modules/<name>.db` with module-owned schema and migrations. No cross-module joins, no schema collisions, no risk of corrupting Drift core state.
+- **Per-kind event channels** — `tokio::sync::broadcast` per `EventKind`, so a high-rate topic cannot lag a low-rate subscriber. Modules see a single unified `EventReceiver::recv()` API.
+- **Host-stamped event provenance** — `DriftEvent::ModuleCustom` events have their `source` field populated by the host from the publishing module's actual name. Modules cannot spoof origin.
+- **Namespace-scoped secrets** — modules declare named secrets that must start with `MODULE_<UPPER_NAME>_*`. The host rejects modules attempting to declare names outside their prefix at registration, preventing exfiltration of Drift core secrets.
+- **Panic-isolated lifecycle** — `Module::init` and `Module::shutdown` are wrapped in `catch_unwind`. Module HTTP handlers are wrapped in a tower panic guard. A misbehaving module is marked `Disabled` and Drift continues running.
+- **Test harness in the API crate** — `MockContextBuilder` plus full mocks for every read trait. Module authors can unit-test in isolation without spinning up a real Drift instance.
+- **Vendor-neutral by design** — the OSS Drift repo contains no references to any specific module, vendor, or commercial product. The default module list is empty. Composing additional modules into a Drift build is done by replacing a single stub file at build time.
+
+For a complete walkthrough including a hello-world example, capability declarations, event handling, testing, and a list of v1.0 known limitations, see the [**Module Developer Guide**](docs/module-developer-guide.md).
+
 ## Configuration
 
 Configuration is optional for getting started. The setup wizard handles initial setup.
@@ -260,6 +279,8 @@ For advanced configuration (OIDC, syslog, CertWarden, custom bind address), see 
 - [docs/policy-editor.md](docs/policy-editor.md) — Policy editor and deviation detection guide
 - [docs/deviation-limitations.md](docs/deviation-limitations.md) — Detection visibility boundaries and evasion techniques
 - [docs/router-setup.md](docs/router-setup.md) — MNDP configuration, API user setup, and provisioning overview
+- [docs/module-developer-guide.md](docs/module-developer-guide.md) — Module API developer guide (Module trait, capabilities, events, storage, testing, hello-world example)
+- [ROADMAP.md](ROADMAP.md) — Product roadmap and milestones to v1.0
 
 ## Security
 

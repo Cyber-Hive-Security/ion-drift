@@ -166,11 +166,12 @@ impl ModuleContext {
 
     /// Spawn a long-lived background task under the host supervisor.
     ///
-    /// The task runs inside the module's tracing span. Panics are caught by
-    /// the supervisor and restarted with exponential backoff. Because the
-    /// supervisor may call the factory multiple times (on restart), `f` must
-    /// be `Fn`, not `FnOnce`. The future should honor the [`ShutdownSignal`]
-    /// for cooperative shutdown.
+    /// Available to every module — there is no separate `tasks` capability
+    /// in v1.0. The task runs inside the module's tracing span. Panics are
+    /// caught by the supervisor and restarted with exponential backoff.
+    /// Because the supervisor may call the factory multiple times (on
+    /// restart), `f` must be `Fn`, not `FnOnce`. The future should honor
+    /// the [`ShutdownSignal`] for cooperative shutdown.
     pub fn spawn_task<F, Fut>(&self, name: &str, f: F)
     where
         F: Fn(ModuleContext) -> Fut + Send + Sync + 'static,
@@ -396,8 +397,24 @@ impl EventHandle {
     }
 }
 
-/// Receiver for events the module subscribed to. Internally backed by an
-/// mpsc fed by per-kind forwarder tasks.
+/// Receiver for events the module subscribed to.
+///
+/// Internally backed by a `tokio::sync::mpsc::Receiver` fed by per-kind
+/// forwarder tasks. Each forwarder task pulls from a single per-kind
+/// broadcast channel and pushes events into the module's mpsc.
+///
+/// # Lag handling
+///
+/// **In v1.0, lag is silently dropped at the forwarder boundary.** If a
+/// per-kind broadcast channel overflows because the forwarder is too slow,
+/// the forwarder logs and continues — modules do NOT see
+/// [`EventError::Lagged`] from `recv()`. The variant exists in the public
+/// enum for forward compatibility (a future minor bump may surface
+/// per-kind lag through diagnostic counters or a separate channel).
+///
+/// If your module is sensitive to missed events, treat `recv()` as
+/// best-effort and reconcile state from the authoritative stores
+/// (via `cx.behavior()` etc.) on a periodic timer.
 pub struct EventReceiver {
     inner: tokio::sync::mpsc::Receiver<DriftEvent>,
 }
@@ -406,7 +423,7 @@ impl EventReceiver {
     /// Await the next event matching the module's subscribe set.
     ///
     /// Returns `Err(EventError::Closed)` if all upstream forwarders have
-    /// exited (typically because the bus is shutting down).
+    /// exited (typically because the host is shutting down).
     pub async fn recv(&mut self) -> Result<DriftEvent, EventError> {
         match self.inner.recv().await {
             Some(event) => Ok(event),

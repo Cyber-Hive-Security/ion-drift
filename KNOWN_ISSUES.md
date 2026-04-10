@@ -138,6 +138,26 @@ Inference binding results were not pre-populating the identity builder, so stale
 
 ## Accepted
 
+### [LOW] Module API v1.0 — Connection / Snapshot / DeviceManager state reads not yet wired
+**Source:** Internal review 2026-04-10
+
+The `ConnectionRead`, `SnapshotRead`, and `DeviceManagerRead` traits are defined in `ion-drift-module-api` and modules can declare `StateReads::connection`, `.snapshot`, and `.devices` capabilities. However, the host currently passes `None` for these handles in `main.rs` — the corresponding `cx.connection()`, `cx.snapshot()`, and `cx.devices()` accessors return `None` even when the capability is declared. The traits exist as forward-compatible scaffolding; concrete host-backed implementations will land in a future minor bump (1.1+). Modules that need this data should treat the traits as not-yet-wired and reach into the authoritative stores via their own host integration (which is not stable across Drift versions). Documented in `docs/module-developer-guide.md` and in the trait doc comments.
+
+### [LOW] Module API v1.0 — Event lag silently dropped at forwarder boundary
+**Source:** External review 2026-04-09
+
+The per-kind event bus runs an internal forwarder task per declared subscription kind that pulls from the kind's `tokio::sync::broadcast` channel and pushes events into a per-handle mpsc. If a forwarder cannot keep up (the broadcast channel overflows), the lag is silently dropped — modules do NOT see `EventError::Lagged` from `EventReceiver::recv()`. The error variant exists in the public enum for forward compatibility. Modules that are sensitive to missed events should reconcile state from authoritative stores (`cx.behavior()` etc.) on a periodic timer rather than relying on event delivery. A future minor bump may surface per-kind lag through diagnostic counters or a separate channel.
+
+### [LOW] Module API v1.0 — No `Module::health` or metrics surface
+**Source:** External review 2026-04-09 (R1) — dropped from v1.0 per YAGNI
+
+The `Module::health` lifecycle method, `HealthEndpoint`, `MetricsCollector`, and `MetricsHandle` types were intentionally removed from the v1.0 contract. They were placeholder shapes with no host implementation, and freezing them into a stable contract would have created a semver trap. Modules can use `tracing` for diagnostics. Health and metrics will return as additive minor bumps in 1.x once the host has a real implementation (e.g. a Prometheus endpoint). Until then, the `/api/system/modules` listing endpoint returns module status but no per-module liveness probe.
+
+### [LOW] Module API v1.0 — Modules run in-process, no hard sandbox
+**Source:** Internal review 2026-04-10
+
+Modules execute in the same process as Drift core. The capability handle pattern, namespace-scoped secrets, isolated SQLite, panic guards, and read-only state traits are defense-in-depth boundaries — they protect against accidents and misconfiguration, not against modules that want to break out via `unsafe`, filesystem access, network calls, or arbitrary process state. Operators should treat composed module binaries with the same trust they extend to any first-party Drift binary. There is no plan to add a true sandbox in the 1.x line; multi-tenant or untrusted-module deployments are explicitly out of scope.
+
 ### [MEDIUM] Baseline Poisoning During Learning Window (behavior.rs)
 **Source:** External security review 2026-04-07
 

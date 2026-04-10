@@ -16,8 +16,10 @@
 //! # Writing a module
 //!
 //! Implement the [`Module`] trait, declare required [`Capabilities`], and
-//! return a [`ModuleRegistration`] from `init`. The host grants only the
-//! capabilities declared — anything else is unavailable at compile time.
+//! return a [`ModuleRegistration`] from `init`. The host gives the module a
+//! [`ModuleContext`] containing handles only for the capabilities it
+//! declared — undeclared state reads, secrets, and event subscriptions are
+//! absent from the context at runtime.
 //!
 //! ```rust,ignore
 //! use ion_drift_module_api::*;
@@ -33,12 +35,38 @@
 //!     }
 //!
 //!     async fn init(&self, _cx: ModuleContext) -> Result<ModuleRegistration, ModuleError> {
+//!         // ModuleRegistration is #[non_exhaustive], so use struct update syntax
+//!         // for forward compatibility.
 //!         Ok(ModuleRegistration {
 //!             router: Some(axum::Router::new()),
+//!             ..Default::default()
 //!         })
 //!     }
 //! }
 //! ```
+//!
+//! See `docs/module-developer-guide.md` in the workspace for a longer
+//! walkthrough including capabilities, storage, events, testing, and a
+//! complete hello-world example.
+//!
+//! # Capability model
+//!
+//! Modules are gated by a **runtime capability handle pattern**, not a
+//! compile-time type system. The mechanism is:
+//!
+//! 1. The module returns a [`Capabilities`] struct from `capabilities()`.
+//! 2. The host builds a [`ModuleContext`] whose handle fields are populated
+//!    only for the capabilities the module asked for. Other fields are
+//!    `None` or absent (`cx.behavior()` returns `None` if the module did
+//!    not declare `state_reads.behavior = true`).
+//! 3. Methods that take a kind argument (like
+//!    [`crate::EventHandle::publish`]) check the declared list at runtime
+//!    and return an error variant on violations.
+//!
+//! This is a defense-in-depth boundary, not a hard sandbox. Modules run in
+//! the same process as the host; the boundary protects against accidents
+//! and misconfiguration, not against modules that genuinely want to break
+//! out (e.g. by going through `unsafe` or filesystem APIs).
 //!
 //! # Stability
 //!
@@ -47,6 +75,9 @@
 //! enum is `#[non_exhaustive]` so new variants are minor bumps. Modules target
 //! a specific [`ApiVersion`] and the host rejects incompatible modules at
 //! startup.
+//!
+//! [`ModuleRegistration`] is also `#[non_exhaustive]` — construct it with
+//! `..Default::default()` so future field additions don't break your module.
 
 pub mod capabilities;
 pub mod context;
