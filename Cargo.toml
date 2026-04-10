@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/mikrotik-core",
     "crates/ion-drift-storage",
+    "crates/ion-drift-module-api",
+    "crates/ion-drift-module-host",
     "crates/ion-drift-cli",
     "crates/ion-drift-web",
 ]

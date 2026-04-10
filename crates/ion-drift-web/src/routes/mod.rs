@@ -314,7 +314,11 @@ async fn demo_sanitize_layer(
 ///
 /// `web_dist` is the path to the SPA's built assets (e.g. `web/dist`).
 /// If the directory doesn't exist, the fallback serves a plain 404.
-pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<Router> {
+pub fn router(
+    state: AppState,
+    web_dist: std::path::PathBuf,
+    module_router: Router,
+) -> anyhow::Result<Router> {
     // SPA fallback: serve static files from web/dist/,
     // fall back to index.html for client-side routing.
     // Hashed assets (/assets/*) get immutable cache headers.
@@ -761,9 +765,23 @@ pub fn router(state: AppState, web_dist: std::path::PathBuf) -> anyhow::Result<R
         app
     };
 
+    // Module registry listing endpoint and nested module routers.
+    // The listing returns the set of currently-loaded modules with status.
+    // Individual modules' routers are mounted under /api/modules/<name>/.
+    let modules_listing = Router::new().route(
+        "/",
+        get(|axum::extract::State(s): axum::extract::State<AppState>| async move {
+            let reg = s.module_registry.read().await;
+            axum::Json(reg.summary())
+        }),
+    );
+
     Ok(app
         // Nest all API routes under /api with global auth layer
         .nest("/api", api_routes)
+        // Module registry: listing at /api/system/modules, individual modules at /api/modules/<name>/
+        .nest("/api/system/modules", modules_listing.with_state(state.clone()))
+        .nest_service("/api/modules", module_router)
         // Hashed static assets with immutable cache headers
         .merge(assets_with_cache)
         // SPA static files (fallback for all non-API routes)

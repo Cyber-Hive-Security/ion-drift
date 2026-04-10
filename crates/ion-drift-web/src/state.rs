@@ -23,6 +23,9 @@ use crate::infrastructure_snapshot::InfrastructureSnapshotState;
 use crate::device_queue_registry::DeviceQueueRegistry;
 use crate::router_queue::RouterQueue;
 use crate::task_supervisor::TaskSupervisor;
+use ion_drift_module_api::ShutdownSignal;
+use ion_drift_module_host::registry::ModuleRegistry;
+use ion_drift_module_host::EventBus;
 use crate::topology::NetworkTopology;
 
 /// Shared application state, passed to all Axum handlers via `State<AppState>`.
@@ -81,6 +84,12 @@ pub struct AppState {
     pub router_queue: RouterQueue,
     /// Per-device API queues for managed switches (RouterOS).
     pub device_queues: Arc<RwLock<DeviceQueueRegistry>>,
+    /// Event bus for internal and module event publication.
+    pub event_bus: EventBus,
+    /// Registry of loaded modules and their merged HTTP routes.
+    pub module_registry: Arc<RwLock<ModuleRegistry>>,
+    /// Cooperative shutdown signal shared with modules and background tasks.
+    pub module_shutdown: ShutdownSignal,
     /// Resolved infrastructure snapshot — platform's canonical view of network truth.
     /// Produced by correlation engine, consumed by topology builder and others.
     pub infrastructure_snapshot: Arc<RwLock<InfrastructureSnapshotState>>,

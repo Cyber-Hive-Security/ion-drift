@@ -1577,9 +1577,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "ion-drift-module-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "ion-drift-module-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures",
+ "ion-drift-module-api",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "ion-drift-storage"
 version = "0.1.0"
 dependencies = [
+ "ion-drift-module-api",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1609,6 +1644,8 @@ dependencies = [
  "hickory-resolver",
  "hmac",
  "http-body-util",
+ "ion-drift-module-api",
+ "ion-drift-module-host",
  "ion-drift-storage",
  "jsonwebtoken",
  "lettre",
@@ -2588,6 +2625,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "regex"
+version = "1.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]

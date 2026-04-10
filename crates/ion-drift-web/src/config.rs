@@ -21,6 +21,30 @@ pub struct ServerConfig {
     pub syslog: SyslogSection,
     #[serde(default)]
     pub polling: PollingConfig,
+    #[serde(default)]
+    pub arc: ArcProxySection,
+    /// Per-module TOML configuration tables keyed by module name.
+    /// Modules access their section via `ctx.config::<T>()`.
+    #[serde(default)]
+    pub modules: toml::Table,
+}
+
+/// Ion Arc reverse proxy configuration.
+/// When `url` is set, Drift proxies `/api/arc/*` requests to the Arc backend.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ArcProxySection {
+    /// Base URL of the Arc backend (e.g., "http://ion-arc:3001").
+    /// If empty, Arc proxy is disabled and the frontend shows Arc as unavailable.
+    #[serde(default)]
+    pub url: String,
+}
+
+impl Default for ArcProxySection {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+        }
+    }
 }
 
 /// Background poller interval configuration. All intervals are in seconds.

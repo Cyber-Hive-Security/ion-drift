@@ -755,6 +755,11 @@ pub struct BehaviorStore {
 }
 
 impl BehaviorStore {
+    /// Acquire a lock on the underlying database connection.
+    pub async fn db(&self) -> tokio::sync::MutexGuard<'_, Connection> {
+        self.db.lock().await
+    }
+
     /// Public timestamp helper for use by the behavior engine.
     pub fn now_unix_pub() -> i64 {
         now_unix()

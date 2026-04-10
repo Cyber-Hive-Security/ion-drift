@@ -21,6 +21,8 @@ mod license;
 mod live_traffic;
 mod log_parser;
 mod middleware;
+mod module_adapters;
+mod modules;
 mod oui;
 mod passive_discovery;
 mod poller_registry;
@@ -773,6 +775,34 @@ async fn main() -> anyhow::Result<()> {
         ),
     ));
 
+    // Module infrastructure: event bus, shutdown signal, and the registry
+    // populated from the empty default module list. With no modules loaded,
+    // this is essentially a no-op — zero runtime overhead beyond allocating
+    // the broadcast channel.
+    let event_bus = ion_drift_module_host::EventBus::new(1024);
+    let module_shutdown = ion_drift_module_api::ShutdownSignal::new();
+
+    let task_spawner: std::sync::Arc<dyn ion_drift_module_api::context::TaskSpawner> =
+        std::sync::Arc::new(module_adapters::SupervisorSpawner::new(supervisor.clone()));
+    let secret_resolver: std::sync::Arc<
+        dyn ion_drift_module_api::context::SecretResolver,
+    > = std::sync::Arc::new(module_adapters::EnvSecretResolver);
+
+    let host_deps = ion_drift_module_host::registry::HostDeps {
+        data_dir: data_dir.clone(),
+        event_bus: event_bus.clone(),
+        task_spawner,
+        secret_resolver,
+        shutdown: module_shutdown.clone(),
+        state_reads: ion_drift_module_api::context::StateReadHandles::default(),
+        modules_config: config.modules.clone(),
+    };
+
+    let mut module_registry_value =
+        ion_drift_module_host::ModuleRegistry::load(modules::load(), host_deps).await;
+    let module_router = module_registry_value.build_router();
+    let module_registry = Arc::new(tokio::sync::RwLock::new(module_registry_value));
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),
@@ -806,6 +836,9 @@ async fn main() -> anyhow::Result<()> {
         attack_techniques: attack_techniques.clone(),
         router_queue,
         device_queues: device_queues.clone(),
+        event_bus: event_bus.clone(),
+        module_registry: module_registry.clone(),
+        module_shutdown: module_shutdown.clone(),
         infrastructure_snapshot: Arc::new(tokio::sync::RwLock::new(
             infrastructure_snapshot::InfrastructureSnapshotState::new(),
         )),
@@ -836,7 +869,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Build router and start server
-    let app = routes::router(app_state, web_dist)?;
+    let app = routes::router(app_state, web_dist, module_router)?;
     let bind_addr = format!(
         "{}:{}",
         config.server.listen_addr, config.server.listen_port

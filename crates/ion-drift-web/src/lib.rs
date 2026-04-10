@@ -21,6 +21,8 @@ pub mod license;
 pub mod live_traffic;
 pub mod log_parser;
 pub mod middleware;
+pub mod module_adapters;
+pub mod modules;
 pub mod oui;
 pub mod passive_discovery;
 pub mod poller_registry;
