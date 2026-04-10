@@ -4,19 +4,32 @@
 //! modules, constructs contexts, calls `init` on each, collects the returned
 //! routers, and exposes a unified Axum `Router` to the host.
 
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
+use futures::future::FutureExt;
 use ion_drift_module_api::context::{
-    BoxFuture, EventHandle, MetricsHandle, ModuleConfigHandle, ModuleContext, SecretResolver,
-    SecretsHandle, ShutdownSignal, StateReadHandles, TaskSpawner, TaskSupervisorHandle,
+    BoxFuture, ModuleConfigHandle, ModuleContext, SecretResolver, SecretsHandle, ShutdownSignal,
+    StateReadHandles, TaskSpawner, TaskSupervisorHandle,
 };
 use ion_drift_module_api::storage::StorageBackend;
 use ion_drift_module_api::{
     ApiVersion, Capabilities, Module, ModuleError, ModuleStorage, StorageNeed,
 };
 use regex::Regex;
+
+/// Extract a human-readable message from a panic payload.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<opaque panic payload>".to_string()
+    }
+}
 
 use crate::event_bus::EventBus;
 use crate::panic_guard::PanicGuardLayer;
@@ -28,7 +41,7 @@ pub enum ModuleStatus {
     /// Initialized successfully and has routes/health/etc.
     Running,
     /// Init failed; module is not active. The string is the human-readable
-    /// reason shown in `/api/v1/modules`.
+    /// reason shown in `/api/system/modules`.
     Disabled { reason: String },
 }
 
@@ -189,6 +202,43 @@ impl ModuleRegistry {
 
             let capabilities = module.capabilities();
 
+            // Validate declared secret names match the per-module namespace.
+            // Names MUST be `MODULE_<UPPER_NAME>_*` where UPPER_NAME is the
+            // module name with hyphens converted to underscores, uppercased.
+            // This prevents modules from declaring secret names belonging to
+            // Drift core (e.g. DRIFT_SESSION_SECRET) and exfiltrating them.
+            let upper_name = name.replace('-', "_").to_uppercase();
+            let required_prefix = format!("MODULE_{upper_name}_");
+            let mut secret_violation: Option<&'static str> = None;
+            for secret_name in &capabilities.secrets {
+                if !secret_name.starts_with(&required_prefix) {
+                    secret_violation = Some(secret_name);
+                    break;
+                }
+            }
+            if let Some(bad) = secret_violation {
+                tracing::error!(
+                    module = %name,
+                    secret = %bad,
+                    required_prefix = %required_prefix,
+                    "module declared a secret name outside its required namespace; refusing to load"
+                );
+                loaded.push(LoadedModule {
+                    name,
+                    version,
+                    api_version,
+                    status: ModuleStatus::Disabled {
+                        reason: format!(
+                            "secret name '{bad}' must start with '{required_prefix}'"
+                        ),
+                    },
+                    router: None,
+                    context: None,
+                    module: module.clone(),
+                });
+                continue;
+            }
+
             // Check enabled flag in config
             let module_config_value = deps
                 .modules_config
@@ -241,8 +291,11 @@ impl ModuleRegistry {
                 }
             };
 
-            // Build event handle scoped to declared publish/subscribe sets
+            // Build event handle scoped to declared publish/subscribe sets.
+            // The module name is passed so the host can stamp it onto any
+            // ModuleCustom events published through this handle.
             let events = deps.event_bus.handle_for(
+                name,
                 capabilities.events.publish.clone(),
                 capabilities.events.subscribe.clone(),
             );
@@ -285,18 +338,24 @@ impl ModuleRegistry {
                 events,
                 task_handle,
                 secrets,
-                MetricsHandle::new(),
                 deps.shutdown.clone(),
             );
 
-            // Call init inside the module's tracing span
-            let init_result = {
-                let _entered = span.enter();
-                module.init(cx.clone()).await
-            };
+            // Call init inside the module's tracing span, with panic catching.
+            // A panic in init MUST NOT crash Drift — the module is marked
+            // Disabled and the rest of the load() pass continues.
+            let cx_for_init = cx.clone();
+            let module_for_init = module.clone();
+            let span_for_init = span.clone();
+            let init_result = AssertUnwindSafe(async move {
+                let _entered = span_for_init.enter();
+                module_for_init.init(cx_for_init).await
+            })
+            .catch_unwind()
+            .await;
 
             match init_result {
-                Ok(registration) => {
+                Ok(Ok(registration)) => {
                     tracing::info!(module = %name, version = %version, "module loaded");
                     loaded.push(LoadedModule {
                         name,
@@ -308,7 +367,7 @@ impl ModuleRegistry {
                         module,
                     });
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!(module = %name, error = %e, "module init failed");
                     loaded.push(LoadedModule {
                         name,
@@ -316,6 +375,21 @@ impl ModuleRegistry {
                         api_version,
                         status: ModuleStatus::Disabled {
                             reason: format!("init failed: {e}"),
+                        },
+                        router: None,
+                        context: None,
+                        module,
+                    });
+                }
+                Err(panic_payload) => {
+                    let msg = panic_message(&panic_payload);
+                    tracing::error!(module = %name, panic = %msg, "module init panicked");
+                    loaded.push(LoadedModule {
+                        name,
+                        version,
+                        api_version,
+                        status: ModuleStatus::Disabled {
+                            reason: format!("init panicked: {msg}"),
                         },
                         router: None,
                         context: None,
@@ -346,7 +420,7 @@ impl ModuleRegistry {
     }
 
     /// Return a JSON-serializable summary of loaded modules, suitable for
-    /// `GET /api/v1/modules`.
+    /// `GET /api/system/modules`.
     pub fn summary(&self) -> Vec<serde_json::Value> {
         self.modules
             .iter()
@@ -366,14 +440,187 @@ impl ModuleRegistry {
             .collect()
     }
 
-    /// Call shutdown on every running module. Best-effort; errors are
-    /// logged but not propagated.
+    /// Number of modules currently loaded (including disabled ones).
+    pub fn len(&self) -> usize {
+        self.modules.len()
+    }
+
+    /// True if no modules are loaded at all.
+    pub fn is_empty(&self) -> bool {
+        self.modules.is_empty()
+    }
+
+    /// Find a loaded module by name (including disabled ones).
+    pub fn get(&self, name: &str) -> Option<&LoadedModule> {
+        self.modules.iter().find(|m| m.name == name)
+    }
+
+    /// Call shutdown on every running module. Best-effort; errors and panics
+    /// are logged but never propagated. A panicking module's shutdown will
+    /// not stop the host from shutting down other modules.
     pub async fn shutdown_all(&self) {
         for m in &self.modules {
             if let (ModuleStatus::Running, Some(cx)) = (&m.status, m.context.as_ref()) {
-                let _entered = cx.tracing_span().clone().entered();
-                m.module.shutdown(cx).await;
+                let module = m.module.clone();
+                let cx_clone = cx.clone();
+                let span = cx.tracing_span().clone();
+                let result = AssertUnwindSafe(async move {
+                    let _entered = span.enter();
+                    module.shutdown(&cx_clone).await;
+                })
+                .catch_unwind()
+                .await;
+                if let Err(payload) = result {
+                    let msg = panic_message(&payload);
+                    tracing::error!(module = %m.name, panic = %msg, "module shutdown panicked");
+                }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ion_drift_module_api::{
+        Capabilities, Module, ModuleContext, ModuleError, ModuleRegistration,
+    };
+
+    /// A trivial module used for testing the registry. Does nothing on init.
+    struct EmptyModule {
+        name: &'static str,
+        secrets: Vec<&'static str>,
+    }
+
+    impl Module for EmptyModule {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0"
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                secrets: self.secrets.clone(),
+                ..Capabilities::default()
+            }
+        }
+        async fn init(
+            &self,
+            _cx: ModuleContext,
+        ) -> Result<ModuleRegistration, ModuleError> {
+            Ok(ModuleRegistration::default())
+        }
+    }
+
+    /// A module whose `init` panics.
+    struct PanickingModule;
+
+    impl Module for PanickingModule {
+        fn name(&self) -> &'static str {
+            "panicking"
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0"
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+        async fn init(
+            &self,
+            _cx: ModuleContext,
+        ) -> Result<ModuleRegistration, ModuleError> {
+            panic!("intentional panic for test");
+        }
+    }
+
+    fn build_test_deps() -> HostDeps {
+        struct NoopSpawner;
+        impl ion_drift_module_api::context::TaskSpawner for NoopSpawner {
+            fn spawn(
+                &self,
+                _name: &str,
+                _factory: Box<
+                    dyn Fn() -> ion_drift_module_api::context::BoxFuture<'static, ()>
+                        + Send
+                        + Sync
+                        + 'static,
+                >,
+            ) {
+            }
+        }
+        struct NoopResolver;
+        impl ion_drift_module_api::context::SecretResolver for NoopResolver {
+            fn resolve(&self, _name: &str) -> Option<String> {
+                None
+            }
+        }
+        HostDeps {
+            data_dir: std::env::temp_dir().join("ion-drift-test"),
+            event_bus: crate::EventBus::new(64),
+            task_spawner: Arc::new(NoopSpawner),
+            secret_resolver: Arc::new(NoopResolver),
+            shutdown: ShutdownSignal::new(),
+            state_reads: StateReadHandles::default(),
+            modules_config: toml::map::Map::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn module_with_disallowed_secret_prefix_is_rejected() {
+        let module: Arc<dyn ModuleErased> = Arc::new(EmptyModule {
+            name: "alpha",
+            secrets: vec!["DRIFT_SESSION_SECRET"],
+        });
+        let registry = ModuleRegistry::load(vec![module], build_test_deps()).await;
+        assert_eq!(registry.len(), 1);
+        let m = registry.get("alpha").unwrap();
+        match &m.status {
+            ModuleStatus::Disabled { reason } => {
+                assert!(
+                    reason.contains("must start with 'MODULE_ALPHA_'"),
+                    "expected prefix violation reason, got: {reason}"
+                );
+            }
+            _ => panic!("expected Disabled status, got {:?}", m.status),
+        }
+    }
+
+    #[tokio::test]
+    async fn module_with_allowed_secret_prefix_loads() {
+        let module: Arc<dyn ModuleErased> = Arc::new(EmptyModule {
+            name: "alpha",
+            secrets: vec!["MODULE_ALPHA_API_KEY"],
+        });
+        let registry = ModuleRegistry::load(vec![module], build_test_deps()).await;
+        let m = registry.get("alpha").unwrap();
+        assert!(matches!(m.status, ModuleStatus::Running));
+    }
+
+    #[tokio::test]
+    async fn panicking_init_does_not_crash_registry() {
+        let module: Arc<dyn ModuleErased> = Arc::new(PanickingModule);
+        let registry = ModuleRegistry::load(vec![module], build_test_deps()).await;
+        let m = registry.get("panicking").unwrap();
+        match &m.status {
+            ModuleStatus::Disabled { reason } => {
+                assert!(
+                    reason.contains("init panicked"),
+                    "expected init panicked reason, got: {reason}"
+                );
+            }
+            _ => panic!("expected Disabled status, got {:?}", m.status),
+        }
+    }
+
+    #[tokio::test]
+    async fn hyphen_in_module_name_normalizes_for_secret_prefix() {
+        let module: Arc<dyn ModuleErased> = Arc::new(EmptyModule {
+            name: "hello-world",
+            secrets: vec!["MODULE_HELLO_WORLD_API_KEY"],
+        });
+        let registry = ModuleRegistry::load(vec![module], build_test_deps()).await;
+        let m = registry.get("hello-world").unwrap();
+        assert!(matches!(m.status, ModuleStatus::Running));
     }
 }

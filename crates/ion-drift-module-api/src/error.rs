@@ -59,6 +59,12 @@ pub enum EventError {
     #[error("event kind not declared for publish: {0:?}")]
     NotDeclared(crate::event::EventKind),
 
+    /// Module tried to publish a `DriftEvent::ModuleCustom` via the plain
+    /// `publish` method. Use `publish_custom(kind, payload)` instead so the
+    /// source field is host-stamped and cannot be spoofed.
+    #[error("DriftEvent::ModuleCustom must be published via publish_custom")]
+    CustomMustUsePublishCustom,
+
     /// The event bus was closed (host is shutting down).
     #[error("event bus closed")]
     Closed,

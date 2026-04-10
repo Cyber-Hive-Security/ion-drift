@@ -70,7 +70,7 @@ impl BehaviorRead for BehaviorStore {
                         device_mac: row.get(1)?,
                         severity: row.get(2)?,
                         anomaly_type: row.get(3)?,
-                        vlan: Some(row.get::<_, i64>(4)?),
+                        vlan: row.get::<_, Option<i64>>(4)?,
                         timestamp_unix: row.get(5)?,
                     })
                 },

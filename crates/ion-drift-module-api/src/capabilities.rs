@@ -11,15 +11,14 @@ use crate::event::EventKind;
 /// What a module declares it needs from the host.
 ///
 /// Default is "nothing" — the empty module. Set specific fields to opt in.
+///
+/// Every field on `Capabilities` corresponds to something the host actively
+/// grants or denies. There are deliberately no purely-advisory bool flags:
+/// `routes` and `tasks` are not declared because their use is observable
+/// at the right time anyway (a router is returned from `init`, a task is
+/// spawned via the supervisor).
 #[derive(Debug, Clone, Default)]
 pub struct Capabilities {
-    /// True if the module returns an Axum router from `init`.
-    /// The router will be mounted at `/api/modules/<name>/`.
-    pub routes: bool,
-
-    /// True if the module will spawn background tasks via `ctx.spawn_task`.
-    pub tasks: bool,
-
     /// What kind of storage the module needs.
     pub storage: StorageNeed,
 
@@ -29,18 +28,19 @@ pub struct Capabilities {
     /// Which host state stores the module wants read access to.
     pub state_reads: StateReads,
 
-    /// Named secrets the module needs (env var or keyring keys).
+    /// Named secrets the module needs.
     ///
-    /// Only listed secrets will be resolvable via `ctx.secrets`. Empty by
-    /// default. Names are arbitrary but should be screaming snake case
-    /// (e.g. `"MY_MODULE_API_KEY"`).
+    /// Names MUST be prefixed with `MODULE_<UPPER_NAME>_` where `UPPER_NAME`
+    /// is the module's [`crate::Module::name`] with hyphens converted to
+    /// underscores and uppercased. Modules with secret names that don't
+    /// match this prefix are rejected at registration with `Disabled`
+    /// status. This prevents modules from declaring secret names belonging
+    /// to Drift core (e.g. `DRIFT_SESSION_SECRET`) and reading them via
+    /// `ctx.secret(...)`.
+    ///
+    /// Example: a module named `"hello-world"` can declare
+    /// `secrets: vec!["MODULE_HELLO_WORLD_API_KEY"]`.
     pub secrets: Vec<&'static str>,
-
-    /// True if the module registers metrics via `ctx.metrics`.
-    pub metrics: bool,
-
-    /// True if the module provides a [`crate::HealthEndpoint`] in registration.
-    pub health: bool,
 }
 
 /// How much persistent storage the module wants.

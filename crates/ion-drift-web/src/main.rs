@@ -788,19 +788,48 @@ async fn main() -> anyhow::Result<()> {
         dyn ion_drift_module_api::context::SecretResolver,
     > = std::sync::Arc::new(module_adapters::EnvSecretResolver);
 
+    // Wire real read-only trait objects for the state stores modules can read.
+    // BehaviorStore and SwitchStore are wired in v1.0; Connection / Snapshot /
+    // DeviceManager remain None until cache-backed implementations land.
+    let state_reads = ion_drift_module_api::context::StateReadHandles {
+        behavior: Some(behavior_store.clone()
+            as std::sync::Arc<dyn ion_drift_module_api::BehaviorRead>),
+        switch: Some(switch_store.clone()
+            as std::sync::Arc<dyn ion_drift_module_api::SwitchRead>),
+        connection: None,
+        snapshot: None,
+        devices: None,
+    };
+
     let host_deps = ion_drift_module_host::registry::HostDeps {
         data_dir: data_dir.clone(),
         event_bus: event_bus.clone(),
         task_spawner,
         secret_resolver,
         shutdown: module_shutdown.clone(),
-        state_reads: ion_drift_module_api::context::StateReadHandles::default(),
+        state_reads,
         modules_config: config.modules.clone(),
     };
 
     let mut module_registry_value =
         ion_drift_module_host::ModuleRegistry::load(modules::load(), host_deps).await;
     let module_router = module_registry_value.build_router();
+
+    // Log the loaded module list at startup so operators can tell which
+    // modules a binary was built with at a glance.
+    {
+        let summary = module_registry_value.summary();
+        let names: Vec<&str> = summary
+            .iter()
+            .filter_map(|m| m.get("name").and_then(|v| v.as_str()))
+            .collect();
+        tracing::info!(
+            count = summary.len(),
+            modules = ?names,
+            "module registry initialized"
+        );
+    }
+
     let module_registry = Arc::new(tokio::sync::RwLock::new(module_registry_value));
 
     // Build AppState
@@ -868,6 +897,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("DEMO MODE ACTIVE — all API responses will have sensitive data sanitized");
     }
 
+    // Hold clones of the module shutdown signal and registry handle so we
+    // can drive graceful shutdown after the serve future returns.
+    let shutdown_for_graceful = module_shutdown.clone();
+    let registry_for_graceful = module_registry.clone();
+
     // Build router and start server
     let app = routes::router(app_state, web_dist, module_router)?;
     let bind_addr = format!(
@@ -877,8 +911,43 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(version = routes::version(), "ion-drift web server listening on {bind_addr}");
 
-    axum::serve(listener, app).await?;
+    // Wait for ctrl-c (or SIGTERM via tokio::signal). On signal, drive a
+    // graceful shutdown: serve future returns, then we cancel module tasks
+    // and call shutdown_all on the registry with a bounded timeout.
+    let shutdown_for_serve = shutdown_for_graceful.clone();
+    let shutdown_signal = async move {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!(error = %e, "failed to listen for ctrl-c; falling back to forever");
+            std::future::pending::<()>().await;
+        }
+        tracing::info!("shutdown signal received; draining server");
+        shutdown_for_serve.cancel();
+    };
 
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+
+    // Server has stopped accepting requests. Now signal modules and call
+    // shutdown_all with a bounded timeout so a stuck module cannot block exit.
+    shutdown_for_graceful.cancel();
+    let shutdown_timeout = std::time::Duration::from_secs(5);
+    tracing::info!(
+        timeout_secs = shutdown_timeout.as_secs(),
+        "calling module registry shutdown_all"
+    );
+    let shutdown_fut = async {
+        let registry = registry_for_graceful.read().await;
+        registry.shutdown_all().await;
+    };
+    if tokio::time::timeout(shutdown_timeout, shutdown_fut)
+        .await
+        .is_err()
+    {
+        tracing::warn!("module shutdown timed out; exiting anyway");
+    }
+
+    tracing::info!("ion-drift shutdown complete");
     Ok(())
 }
 

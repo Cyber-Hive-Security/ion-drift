@@ -95,8 +95,13 @@ pub enum DriftEvent {
     ConnectionStateChanged(ConnectionStateChangedV1),
 
     /// Escape hatch for module-to-module communication without touching the
-    /// core event enum. Payload is a JSON value; the source module and kind
-    /// string are identifiers.
+    /// core event enum. The `source` field is **host-populated** with the
+    /// publishing module's actual name — modules cannot spoof it. Payload is
+    /// an arbitrary JSON value; `kind` is a free-form identifier the
+    /// publishing module chooses to discriminate its own custom events.
+    ///
+    /// Use [`crate::EventHandle::publish_custom`] to publish; the plain
+    /// `publish` method rejects this variant for that reason.
     ModuleCustom {
         source: &'static str,
         kind: &'static str,
@@ -108,7 +113,6 @@ pub enum DriftEvent {
 
 /// Payload for [`DriftEvent::AnomalyDetected`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct AnomalyDetectedV1 {
     pub anomaly_id: i64,
     pub device_mac: String,
@@ -120,7 +124,6 @@ pub struct AnomalyDetectedV1 {
 
 /// Payload for [`DriftEvent::BehaviorBaselineUpdated`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct BehaviorBaselineUpdatedV1 {
     pub device_mac: String,
     pub status: String,
@@ -130,7 +133,6 @@ pub struct BehaviorBaselineUpdatedV1 {
 
 /// Payload for [`DriftEvent::InvestigationStarted`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct InvestigationStartedV1 {
     pub investigation_id: i64,
     pub anomaly_id: Option<i64>,
@@ -140,7 +142,6 @@ pub struct InvestigationStartedV1 {
 
 /// Payload for [`DriftEvent::InvestigationCompleted`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct InvestigationCompletedV1 {
     pub investigation_id: i64,
     pub anomaly_id: Option<i64>,
@@ -151,7 +152,6 @@ pub struct InvestigationCompletedV1 {
 
 /// Payload for [`DriftEvent::InfrastructureSnapshotUpdated`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct InfrastructureSnapshotUpdatedV1 {
     pub generation: u64,
     pub node_count: usize,
@@ -161,7 +161,6 @@ pub struct InfrastructureSnapshotUpdatedV1 {
 
 /// Payload for [`DriftEvent::DeviceAdded`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct DeviceAddedV1 {
     pub device_id: String,
     pub name: String,
@@ -172,7 +171,6 @@ pub struct DeviceAddedV1 {
 
 /// Payload for [`DriftEvent::DeviceRemoved`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct DeviceRemovedV1 {
     pub device_id: String,
     pub timestamp_unix: i64,
@@ -180,7 +178,6 @@ pub struct DeviceRemovedV1 {
 
 /// Payload for [`DriftEvent::DeviceUnreachable`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct DeviceUnreachableV1 {
     pub device_id: String,
     pub error: String,
@@ -189,7 +186,6 @@ pub struct DeviceUnreachableV1 {
 
 /// Payload for [`DriftEvent::SwitchTopologyChanged`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct SwitchTopologyChangedV1 {
     pub device_id: String,
     pub port_count: usize,
@@ -198,7 +194,6 @@ pub struct SwitchTopologyChangedV1 {
 
 /// Payload for [`DriftEvent::ConnectionStateChanged`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct ConnectionStateChangedV1 {
     pub src_mac: Option<String>,
     pub dst_ip: String,

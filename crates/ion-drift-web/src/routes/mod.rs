@@ -736,6 +736,21 @@ pub fn router(
         .route("/stats/page-view", post(stats::record_page_view))
         .route("/stats/page-views", get(stats::get_page_views))
         .route("/stats/report", get(stats::diagnostic_report))
+        // Module registry listing — requires auth via RequireAuth extractor
+        // and is also covered by the require_auth_layer below.
+        .route(
+            "/system/modules",
+            get(
+                |crate::middleware::RequireAuth(_): crate::middleware::RequireAuth,
+                 axum::extract::State(s): axum::extract::State<AppState>| async move {
+                    let reg = s.module_registry.read().await;
+                    axum::Json(reg.summary())
+                },
+            ),
+        )
+        // Nested module subrouter — covered by the auth/CSRF layer stack below
+        // because nest_service is added before .layer() calls.
+        .nest_service("/modules", module_router)
         // Demo mode sanitization (outermost — runs after response is built)
         .layer(middleware::from_fn(demo_sanitize_layer))
         // Global auth middleware for all API routes
@@ -765,23 +780,10 @@ pub fn router(
         app
     };
 
-    // Module registry listing endpoint and nested module routers.
-    // The listing returns the set of currently-loaded modules with status.
-    // Individual modules' routers are mounted under /api/modules/<name>/.
-    let modules_listing = Router::new().route(
-        "/",
-        get(|axum::extract::State(s): axum::extract::State<AppState>| async move {
-            let reg = s.module_registry.read().await;
-            axum::Json(reg.summary())
-        }),
-    );
-
     Ok(app
         // Nest all API routes under /api with global auth layer
+        // (includes /api/system/modules and /api/modules/<name>/* — both auth-gated)
         .nest("/api", api_routes)
-        // Module registry: listing at /api/system/modules, individual modules at /api/modules/<name>/
-        .nest("/api/system/modules", modules_listing.with_state(state.clone()))
-        .nest_service("/api/modules", module_router)
         // Hashed static assets with immutable cache headers
         .merge(assets_with_cache)
         // SPA static files (fallback for all non-API routes)

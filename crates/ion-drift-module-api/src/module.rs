@@ -3,7 +3,7 @@
 use crate::capabilities::Capabilities;
 use crate::context::ModuleContext;
 use crate::error::ModuleError;
-use crate::registration::{Health, ModuleRegistration};
+use crate::registration::ModuleRegistration;
 
 /// A semantic version pair for the module API contract itself.
 ///
@@ -20,9 +20,31 @@ pub struct ApiVersion {
     pub minor: u16,
 }
 
+/// Const-fn parser for the version env vars (`CARGO_PKG_VERSION_MAJOR`,
+/// `CARGO_PKG_VERSION_MINOR`). Cargo emits these as ASCII decimal strings.
+const fn parse_u16_from_env(s: &str) -> u16 {
+    let bytes = s.as_bytes();
+    let mut acc: u16 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        assert!(b >= b'0' && b <= b'9', "non-digit in version env var");
+        acc = acc * 10 + (b - b'0') as u16;
+        i += 1;
+    }
+    acc
+}
+
 impl ApiVersion {
     /// The API version this crate currently implements.
-    pub const CURRENT: Self = Self { major: 1, minor: 0 };
+    ///
+    /// Computed at compile time from `CARGO_PKG_VERSION_MAJOR` and
+    /// `CARGO_PKG_VERSION_MINOR`, so it tracks the crate version
+    /// automatically — no manual updates required when bumping.
+    pub const CURRENT: Self = Self {
+        major: parse_u16_from_env(env!("CARGO_PKG_VERSION_MAJOR")),
+        minor: parse_u16_from_env(env!("CARGO_PKG_VERSION_MINOR")),
+    };
 
     /// Returns true if a module targeting `self` is compatible with a host at `host`.
     pub fn is_compatible_with(&self, host: ApiVersion) -> bool {
@@ -63,14 +85,14 @@ pub trait Module: Send + Sync + 'static {
     /// Used as a URL prefix (`/api/modules/<name>/`), a TOML config table key,
     /// and a storage file name. Must match `^[a-z][a-z0-9_-]{1,31}$` — lowercase
     /// letters, digits, hyphens, and underscores, starting with a letter, length
-    /// 2–32. The host validates this at registration and panics on violation
-    /// (dev error, not runtime).
+    /// 2–32. The host validates this at registration; modules with invalid
+    /// names are marked Disabled and skipped (non-fatal to other modules).
     fn name(&self) -> &'static str;
 
     /// Semantic version of the module itself (not the API).
     ///
     /// Typically `env!("CARGO_PKG_VERSION")`. Used for diagnostics and the
-    /// `GET /api/v1/modules` listing.
+    /// `GET /api/system/modules` listing.
     fn version(&self) -> &'static str;
 
     /// Which API version this module was compiled against.
@@ -93,27 +115,17 @@ pub trait Module: Send + Sync + 'static {
     /// One-time initialization.
     ///
     /// Called exactly once, after the host has built the context. Returns a
-    /// [`ModuleRegistration`] describing static artifacts (router, health,
-    /// metrics). Dynamic hooks (tasks, event subscriptions) are registered via
-    /// methods on `cx` during this call.
+    /// [`ModuleRegistration`] describing the module's HTTP router, if any.
+    /// Dynamic hooks (tasks, event subscriptions) are registered via methods
+    /// on `cx` during this call.
     ///
     /// Errors are non-fatal to Drift: the host logs, marks the module
-    /// disabled, and continues with other modules.
+    /// disabled, and continues with other modules. Panics in `init` are
+    /// also caught and have the same effect.
     fn init(
         &self,
         cx: ModuleContext,
     ) -> impl std::future::Future<Output = Result<ModuleRegistration, ModuleError>> + Send;
-
-    /// Optional liveness probe for health aggregation endpoints.
-    ///
-    /// The default returns `Health::ok()`. Modules that track internal state
-    /// (e.g., connection to a remote service) should override this.
-    fn health(
-        &self,
-        _cx: &ModuleContext,
-    ) -> impl std::future::Future<Output = Health> + Send {
-        async { Health::ok() }
-    }
 
     /// Optional cooperative shutdown hook.
     ///

@@ -29,18 +29,12 @@
 //!     fn version(&self) -> &'static str { env!("CARGO_PKG_VERSION") }
 //!
 //!     fn capabilities(&self) -> Capabilities {
-//!         Capabilities {
-//!             routes: true,
-//!             tasks: false,
-//!             ..Capabilities::default()
-//!         }
+//!         Capabilities::default()
 //!     }
 //!
 //!     async fn init(&self, _cx: ModuleContext) -> Result<ModuleRegistration, ModuleError> {
 //!         Ok(ModuleRegistration {
 //!             router: Some(axum::Router::new()),
-//!             health: None,
-//!             metrics: None,
 //!         })
 //!     }
 //! }
@@ -69,8 +63,8 @@ pub mod testing;
 // Re-exports: the flat public surface module authors use.
 pub use capabilities::{Capabilities, EventSubscriptions, StateReads, StorageNeed};
 pub use context::{
-    EventHandle, EventReceiver, MetricsHandle, ModuleConfigHandle, ModuleContext,
-    SecretsHandle, ShutdownSignal, StateReadHandles, TaskSupervisorHandle,
+    EventHandle, EventReceiver, ModuleConfigHandle, ModuleContext, SecretsHandle,
+    ShutdownSignal, StateReadHandles, TaskSupervisorHandle,
 };
 pub use error::{EventError, ModuleError, StorageError};
 pub use event::{
@@ -80,7 +74,7 @@ pub use event::{
     SwitchTopologyChangedV1,
 };
 pub use module::{ApiVersion, Module};
-pub use registration::{Health, HealthEndpoint, MetricsCollector, ModuleRegistration};
+pub use registration::ModuleRegistration;
 pub use state_reads::{
     BehaviorRead, ConnectionRead, DeviceManagerRead, SnapshotRead, SwitchRead,
 };
