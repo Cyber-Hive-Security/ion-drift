@@ -1189,6 +1189,15 @@ impl BehaviorStore {
     /// Fetch profiles for multiple MACs in a single query.
     /// Returns a HashMap keyed by MAC address.
     pub async fn get_profiles_bulk(&self, macs: &[&str]) -> Result<HashMap<String, DeviceProfile>, String> {
+        // Cap to bound query memory and SQLite parameter count.
+        const MAX_BULK_MACS: usize = 10_000;
+        if macs.len() > MAX_BULK_MACS {
+            return Err(format!(
+                "get_profiles_bulk: {} MACs exceeds cap of {}",
+                macs.len(),
+                MAX_BULK_MACS
+            ));
+        }
         if macs.is_empty() {
             return Ok(HashMap::new());
         }
