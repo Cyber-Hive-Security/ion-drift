@@ -14,6 +14,8 @@
 //! protects `oidc_client_secret` and `router_password` and live in the
 //! same `secrets.db` file.
 
+pub mod service;
 pub mod store;
 
+pub use service::{validate_manifest, ModuleRegistryService, RegisterRequest};
 pub use store::{ModuleRegistryStore, NewModuleRegistration, RegisteredModule};
