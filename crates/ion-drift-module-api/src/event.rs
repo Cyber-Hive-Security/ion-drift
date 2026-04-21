@@ -22,7 +22,8 @@ use std::sync::Arc;
 /// Modules declare what they want to subscribe to and publish using
 /// `EventKind` values rather than full payloads. The host filters the bus
 /// accordingly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum EventKind {
     AnomalyDetected,
@@ -112,7 +113,7 @@ pub enum DriftEvent {
 // ── v1 payloads ──────────────────────────────────────────────────────
 
 /// Payload for [`DriftEvent::AnomalyDetected`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AnomalyDetectedV1 {
     pub anomaly_id: i64,
     pub device_mac: String,
@@ -123,7 +124,7 @@ pub struct AnomalyDetectedV1 {
 }
 
 /// Payload for [`DriftEvent::BehaviorBaselineUpdated`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BehaviorBaselineUpdatedV1 {
     pub device_mac: String,
     pub status: String,
@@ -132,7 +133,7 @@ pub struct BehaviorBaselineUpdatedV1 {
 }
 
 /// Payload for [`DriftEvent::InvestigationStarted`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InvestigationStartedV1 {
     pub investigation_id: i64,
     pub anomaly_id: Option<i64>,
@@ -141,7 +142,7 @@ pub struct InvestigationStartedV1 {
 }
 
 /// Payload for [`DriftEvent::InvestigationCompleted`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InvestigationCompletedV1 {
     pub investigation_id: i64,
     pub anomaly_id: Option<i64>,
@@ -151,7 +152,7 @@ pub struct InvestigationCompletedV1 {
 }
 
 /// Payload for [`DriftEvent::InfrastructureSnapshotUpdated`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InfrastructureSnapshotUpdatedV1 {
     pub generation: u64,
     pub node_count: usize,
@@ -160,7 +161,7 @@ pub struct InfrastructureSnapshotUpdatedV1 {
 }
 
 /// Payload for [`DriftEvent::DeviceAdded`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DeviceAddedV1 {
     pub device_id: String,
     pub name: String,
@@ -170,14 +171,14 @@ pub struct DeviceAddedV1 {
 }
 
 /// Payload for [`DriftEvent::DeviceRemoved`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DeviceRemovedV1 {
     pub device_id: String,
     pub timestamp_unix: i64,
 }
 
 /// Payload for [`DriftEvent::DeviceUnreachable`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DeviceUnreachableV1 {
     pub device_id: String,
     pub error: String,
@@ -185,7 +186,7 @@ pub struct DeviceUnreachableV1 {
 }
 
 /// Payload for [`DriftEvent::SwitchTopologyChanged`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SwitchTopologyChangedV1 {
     pub device_id: String,
     pub port_count: usize,
@@ -193,7 +194,7 @@ pub struct SwitchTopologyChangedV1 {
 }
 
 /// Payload for [`DriftEvent::ConnectionStateChanged`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ConnectionStateChangedV1 {
     pub src_mac: Option<String>,
     pub dst_ip: String,

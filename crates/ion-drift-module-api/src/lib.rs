@@ -87,6 +87,7 @@ pub mod module;
 pub mod registration;
 pub mod state_reads;
 pub mod storage;
+pub mod wire;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -110,3 +111,6 @@ pub use state_reads::{
     BehaviorRead, ConnectionRead, DeviceManagerRead, SnapshotRead, SwitchRead,
 };
 pub use storage::{Migration, ModuleStorage};
+pub use wire::{
+    DriftEventWire, EventEnvelope, Manifest, ModuleCustomWireV1, ProtocolVariant, RouteDescriptor,
+};
