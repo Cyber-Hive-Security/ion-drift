@@ -319,7 +319,6 @@ async fn demo_sanitize_layer(
 pub fn router(
     state: AppState,
     web_dist: std::path::PathBuf,
-    module_router: Router,
 ) -> anyhow::Result<Router> {
     // SPA fallback: serve static files from web/dist/,
     // fall back to index.html for client-side routing.
@@ -750,9 +749,43 @@ pub fn router(
                 },
             ),
         )
-        // Nested module subrouter — covered by the auth/CSRF layer stack below
-        // because nest_service is added before .layer() calls.
-        .nest_service("/modules", module_router)
+        ;
+
+    // External-module registry routes (Module API v1.1).
+    // Mounted only when the secrets bootstrap has completed and the
+    // registry store/service were constructed in main.rs. Each nested
+    // subrouter applies its own RequireAdmin layer so non-admin
+    // callers are rejected even though the parent `/api` scope is
+    // only user-authenticated.
+    let api_routes = if let (Some(service), Some(store)) = (
+        state.module_registry_service.clone(),
+        state.module_registry_store.clone(),
+    ) {
+        let admin_mw = middleware::from_fn_with_state(
+            state.clone(),
+            require_admin_passthrough,
+        );
+        api_routes
+            .nest_service(
+                "/modules",
+                crate::routes::module_proxy::module_proxy_router(
+                    crate::routes::module_proxy::ModuleProxyState {
+                        store,
+                        http: state.http_client.clone(),
+                    },
+                )
+                .route_layer(admin_mw.clone()),
+            )
+            .nest_service(
+                "/admin/modules",
+                crate::routes::admin_modules::admin_modules_router(service)
+                    .route_layer(admin_mw),
+            )
+    } else {
+        api_routes
+    };
+
+    let api_routes = api_routes
         // Demo mode sanitization (outermost — runs after response is built)
         .layer(middleware::from_fn(demo_sanitize_layer))
         // Global auth middleware for all API routes
@@ -814,4 +847,25 @@ pub fn router(
             HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'"),
         ))
         .with_state(state))
+}
+
+/// Middleware adapter that runs the [`RequireAdmin`] extractor on the
+/// request and rejects with 401/403 if it fails. Used as a
+/// `route_layer` on the external-module subrouters so admin-only
+/// access is enforced even though the subrouters have their own
+/// state types.
+async fn require_admin_passthrough(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::extract::FromRequestParts;
+    let (mut parts, body) = req.into_parts();
+    match crate::middleware::RequireAdmin::from_request_parts(&mut parts, &state).await {
+        Ok(_) => {
+            let req = axum::extract::Request::from_parts(parts, body);
+            next.run(req).await
+        }
+        Err(rej) => rej,
+    }
 }

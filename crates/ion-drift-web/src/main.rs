@@ -812,9 +812,12 @@ async fn main() -> anyhow::Result<()> {
         modules_config: config.modules.clone(),
     };
 
+    // The `modules::load()` pathway is retained as infrastructure only —
+    // it always returns `Vec::new()`. External modules are loaded at
+    // runtime via the ModuleRegistryStore (Module API v1.1), not
+    // compiled in. See docs/ai/arch/modules.md.
     let mut module_registry_value =
         ion_drift_module_host::ModuleRegistry::load(modules::load(), host_deps).await;
-    let module_router = module_registry_value.build_router();
 
     // Log the loaded module list at startup so operators can tell which
     // modules a binary was built with at a glance.
@@ -832,6 +835,42 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let module_registry = Arc::new(tokio::sync::RwLock::new(module_registry_value));
+
+    // External-module registry (Module API v1.1). Shares secrets.db
+    // with SecretsManager so both use the same KEK.
+    let (module_registry_store, module_registry_service, module_event_dispatcher): (
+        Option<Arc<modules_registry::ModuleRegistryStore>>,
+        Option<Arc<modules_registry::ModuleRegistryService>>,
+        Option<Arc<modules_registry::EventDispatcher>>,
+    ) = if let Some(sm_lock) = &secrets_manager {
+        let kek = sm_lock.read().await.kek().clone();
+        let db_path = data_dir.join("secrets.db");
+        match modules_registry::ModuleRegistryStore::new(&db_path, kek) {
+            Ok(store) => {
+                let store = Arc::new(store);
+                let service = modules_registry::ModuleRegistryService::new(Arc::clone(&store))
+                    .map(Arc::new)
+                    .map_err(|e| {
+                        tracing::warn!(error = %e, "module registry service init failed");
+                        e
+                    })
+                    .ok();
+                let dispatcher = modules_registry::EventDispatcher::new(
+                    Arc::clone(&store),
+                    http_client.clone(),
+                    modules_registry::DispatcherConfig::default(),
+                );
+                tracing::info!("external module registry ready");
+                (Some(store), service, Some(dispatcher))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "module registry store init failed");
+                (None, None, None)
+            }
+        }
+    } else {
+        (None, None, None)
+    };
 
     // Build AppState
     let app_state = AppState {
@@ -853,6 +892,9 @@ async fn main() -> anyhow::Result<()> {
             std::time::Instant::now(),
         ))),
         secrets_manager: secrets_manager.clone(),
+        module_registry_store: module_registry_store.clone(),
+        module_registry_service: module_registry_service.clone(),
+        module_event_dispatcher: module_event_dispatcher.clone(),
         device_manager: device_manager.clone(),
         switch_store: switch_store.clone(),
         topology_cache: Arc::new(tokio::sync::RwLock::new(None)),
@@ -876,6 +918,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn all background tasks
     tasks::spawn_all(&app_state, dns_resolver);
+
+    // Start the module event dispatcher loop if the registry came up.
+    if let Some(dispatcher) = app_state.module_event_dispatcher.clone() {
+        modules_registry::spawn_dispatcher_loop(dispatcher, app_state.event_bus.clone());
+    }
 
     // Resolve web/dist path relative to the config file's parent (project root)
     let web_dist = config_file
@@ -904,7 +951,7 @@ async fn main() -> anyhow::Result<()> {
     let registry_for_graceful = module_registry.clone();
 
     // Build router and start server
-    let app = routes::router(app_state, web_dist, module_router)?;
+    let app = routes::router(app_state, web_dist)?;
     let bind_addr = format!(
         "{}:{}",
         config.server.listen_addr, config.server.listen_port
