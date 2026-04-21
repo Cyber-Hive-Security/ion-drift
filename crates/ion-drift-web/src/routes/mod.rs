@@ -1,3 +1,4 @@
+pub mod admin_modules;
 pub mod alerts;
 pub mod arp;
 pub mod backbone;
