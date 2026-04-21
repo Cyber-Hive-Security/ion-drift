@@ -46,7 +46,11 @@ export function AdminModulesPage() {
         )}
 
         {isLoading && <LoadingSpinner />}
-        {error && <ErrorDisplay error={error} />}
+        {error && (
+          <ErrorDisplay
+            message={error instanceof Error ? error.message : String(error)}
+          />
+        )}
         {data && data.modules.length === 0 && !showForm && (
           <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
             No modules registered yet. Click{" "}
