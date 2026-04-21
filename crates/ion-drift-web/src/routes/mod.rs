@@ -13,6 +13,7 @@ pub mod license;
 pub mod ip;
 pub mod logs;
 pub mod metrics;
+pub mod module_proxy;
 pub mod neighbor_aliases;
 pub mod network_map_status;
 pub mod policy;
