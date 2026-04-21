@@ -296,6 +296,46 @@ pub fn sign_bytes(secret: &str, timestamp: i64, body: &[u8]) -> String {
     hex::encode(mac.finalize().into_bytes())
 }
 
+/// Subscribe the dispatcher to every `EventKind` on the in-process
+/// [`ion_drift_module_host::EventBus`] and spawn a tokio task that
+/// drives `dispatch()` on each received event.
+///
+/// Returns the `JoinHandle` so the caller can await it on shutdown if
+/// desired.
+pub fn spawn_dispatcher_loop(
+    dispatcher: Arc<EventDispatcher>,
+    event_bus: ion_drift_module_host::EventBus,
+) -> tokio::task::JoinHandle<()> {
+    use ion_drift_module_api::EventKind;
+    let kinds = vec![
+        EventKind::AnomalyDetected,
+        EventKind::BehaviorBaselineUpdated,
+        EventKind::InvestigationStarted,
+        EventKind::InvestigationCompleted,
+        EventKind::InfrastructureSnapshotUpdated,
+        EventKind::DeviceAdded,
+        EventKind::DeviceRemoved,
+        EventKind::DeviceUnreachable,
+        EventKind::SwitchTopologyChanged,
+        EventKind::ConnectionStateChanged,
+    ];
+    tokio::spawn(async move {
+        let handle = event_bus.handle_for("event-dispatcher", Vec::new(), kinds);
+        let mut rx = handle.subscribe();
+        info!("module event dispatcher started");
+        loop {
+            match rx.recv().await {
+                Ok(event) => dispatcher.dispatch(&event).await,
+                Err(ion_drift_module_api::EventError::Lagged(n)) => {
+                    warn!(skipped = n, "dispatcher event receiver lagged");
+                }
+                Err(_) => break,
+            }
+        }
+        info!("module event dispatcher stopped");
+    })
+}
+
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

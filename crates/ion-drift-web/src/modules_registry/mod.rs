@@ -19,7 +19,8 @@ pub mod service;
 pub mod store;
 
 pub use dispatcher::{
-    sign_bytes, DeliveryStats, DispatcherConfig, EventDispatcher, SIGNATURE_HEADER,
+    sign_bytes, spawn_dispatcher_loop, DeliveryStats, DispatcherConfig, EventDispatcher,
+    SIGNATURE_HEADER,
 };
 pub use service::{validate_manifest, ModuleRegistryService, RegisterRequest};
 pub use store::{ModuleRegistryStore, NewModuleRegistration, RegisteredModule};

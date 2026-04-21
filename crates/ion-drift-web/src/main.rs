@@ -23,6 +23,7 @@ mod log_parser;
 mod middleware;
 mod module_adapters;
 mod modules;
+mod modules_registry;
 mod oui;
 mod passive_discovery;
 mod poller_registry;

@@ -155,6 +155,13 @@ impl SecretsManager {
         })
     }
 
+    /// Borrow the KEK so sibling stores (e.g. `ModuleRegistryStore`)
+    /// can encrypt with the same key without the caller having to
+    /// route it around separately.
+    pub(crate) fn kek(&self) -> &Key<Aes256Gcm> {
+        &self.kek
+    }
+
     /// Encrypt a value with the KEK, using the secret name as AAD.
     /// Returns (ciphertext, nonce_bytes).
     fn encrypt_value(&self, name: &str, plaintext: &str) -> anyhow::Result<(Vec<u8>, [u8; 12])> {
