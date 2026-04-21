@@ -25,6 +25,7 @@ pub mod module_adapters;
 pub mod modules;
 pub mod oui;
 pub mod passive_discovery;
+pub mod modules_registry;
 pub mod poller_registry;
 pub mod provision;
 pub mod router_queue;
