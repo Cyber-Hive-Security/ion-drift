@@ -17,6 +17,7 @@ import {
   Search,
   FileCheck,
   BarChart3,
+  Plug,
 } from "lucide-react";
 
 const navItems = [
@@ -162,6 +163,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       <div className="border-t border-border p-3 space-y-0.5">
         {[
           { to: "/statistics", label: "Statistics", icon: BarChart3 },
+          { to: "/admin/modules", label: "Modules", icon: Plug },
           { to: "/settings", label: "Settings", icon: Settings },
         ].map(({ to, label, icon: Icon }) => {
           const active = currentPath.startsWith(to);

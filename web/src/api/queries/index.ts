@@ -1,3 +1,4 @@
+export * from './admin-modules';
 export * from './auth';
 export * from './network';
 export * from './firewall';
