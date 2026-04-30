@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ion_drift_module_host::EventBus;
 use mikrotik_core::resources::firewall::FilterRule;
 use tokio::sync::RwLock;
 
@@ -23,6 +24,7 @@ pub fn spawn_behavior_collector(
     connection_store: Arc<connection_store::ConnectionStore>,
     firewall_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
     vlan_registry: Arc<RwLock<ion_drift_storage::behavior::VlanRegistry>>,
+    event_bus: EventBus,
     interval_secs: u64,
 ) {
     tokio::spawn(async move {
@@ -78,6 +80,7 @@ pub fn spawn_behavior_collector(
                 &registry,
                 &fw_rules,
                 &geo_cache,
+                &event_bus,
             )
             .await
             {
@@ -91,7 +94,7 @@ pub fn spawn_behavior_collector(
 
             // Detect blocked attempts
             match behavior_engine::detect_blocked_attempts(
-                &queue, &store, &oui_db, &geo_cache, &registry,
+                &queue, &store, &oui_db, &geo_cache, &registry, &event_bus,
             )
             .await
             {

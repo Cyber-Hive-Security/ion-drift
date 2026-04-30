@@ -63,6 +63,7 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.connection_store.clone(),
         state.firewall_rules_cache.clone(),
         state.vlan_registry.clone(),
+        state.event_bus.clone(),
         state.config.polling.behavior_interval_secs,
     );
     behavior::spawn_behavior_maintenance(
@@ -80,6 +81,7 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.connection_store.clone(),
         state.behavior_store.clone(),
         state.vlan_registry.clone(),
+        state.event_bus.clone(),
         state.config.polling.correlation_interval_secs,
     );
 

@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use ion_drift_module_api::{AnomalyDetectedV1, DriftEvent};
+use ion_drift_module_host::EventBus;
 use ion_drift_storage::behavior::{
     self, BehaviorStore, DeviceObservation, NewAnomaly, VlanRegistry, compute_confidence,
 };
@@ -19,6 +21,14 @@ use crate::geo::GeoCache;
 use crate::log_parser;
 use crate::oui::OuiDb;
 use crate::router_queue::{Priority, QueuedRequest, RouterQueue};
+
+/// Current unix timestamp in seconds (for event payloads).
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// Normalize RouterOS protocol numbers to names.
 fn normalize_protocol(proto: &str) -> &'static str {
@@ -313,6 +323,7 @@ pub async fn detect_anomalies(
     registry: &VlanRegistry,
     firewall_rules: &[FilterRule],
     geo_cache: &GeoCache,
+    event_bus: &EventBus,
 ) -> Result<usize, String> {
     let profiles = store.get_all_profiles().await?;
     let mut anomaly_count = 0;
@@ -492,6 +503,7 @@ pub async fn detect_anomalies(
                                 "elevated_observation_count": elevated_count,
                                 "dst_country": dst_geo,
                             });
+                            let event_severity = severity.clone();
                             let anomaly_id = store.record_anomaly(&NewAnomaly {
                                     mac: profile.mac.clone(),
                                     anomaly_type: "volume_spike".to_string(),
@@ -520,6 +532,14 @@ pub async fn detect_anomalies(
                                     dedup_key: Some(dedup_key.clone()),
                                 })
                                 .await?;
+                            event_bus.publish(DriftEvent::AnomalyDetected(AnomalyDetectedV1 {
+                                anomaly_id,
+                                device_mac: profile.mac.clone(),
+                                severity: event_severity,
+                                anomaly_type: "volume_spike".to_string(),
+                                vlan: Some(vlan),
+                                timestamp_unix: now_unix(),
+                            }));
                             if let Some(action) = suppression_action.as_deref() {
                                 if action == "dismissed" || action == "accepted" {
                                     let _ = store
@@ -642,6 +662,7 @@ pub async fn detect_anomalies(
                         "destination_zone": destination_zone,
                         "dst_country": dst_geo,
                     });
+                    let event_severity = severity.clone();
                     let anomaly_id = store
                         .record_anomaly(&NewAnomaly {
                             mac: profile.mac.clone(),
@@ -671,6 +692,14 @@ pub async fn detect_anomalies(
                             dedup_key: Some(dedup_key.clone()),
                         })
                         .await?;
+                    event_bus.publish(DriftEvent::AnomalyDetected(AnomalyDetectedV1 {
+                        anomaly_id,
+                        device_mac: profile.mac.clone(),
+                        severity: event_severity,
+                        anomaly_type: anomaly_type.to_string(),
+                        vlan: Some(vlan),
+                        timestamp_unix: now_unix(),
+                    }));
                     if let Some(action) = suppression_action.as_deref() {
                         if action == "dismissed" || action == "accepted" {
                             let _ = store
@@ -697,6 +726,7 @@ pub async fn detect_blocked_attempts(
     oui_db: &OuiDb,
     geo_cache: &GeoCache,
     registry: &VlanRegistry,
+    event_bus: &EventBus,
 ) -> Result<usize, String> {
     // Fetch log, ARP, and DHCP as a single batch through the queue
     let results = queue
@@ -875,7 +905,14 @@ pub async fn detect_blocked_attempts(
                         dedup_key: Some(wan_dedup_key),
                     })
                     .await?;
-                let _ = anomaly_id; // used for potential future resolution
+                event_bus.publish(DriftEvent::AnomalyDetected(AnomalyDetectedV1 {
+                    anomaly_id,
+                    device_mac: mac.clone(),
+                    severity: "alert".to_string(),
+                    anomaly_type: "wan_targeted_probe".to_string(),
+                    vlan: Some(vlan),
+                    timestamp_unix: now_unix(),
+                }));
                 anomaly_count += 1;
             } else {
                 // Non-sensitive port -> aggregate into WAN scan pressure bucket
@@ -966,6 +1003,7 @@ pub async fn detect_blocked_attempts(
             "source_zone": source_zone,
             "destination_zone": destination_zone,
         });
+        let event_severity = severity.clone();
         let anomaly_id = store
             .record_anomaly(&NewAnomaly {
                 mac: mac.clone(),
@@ -990,6 +1028,14 @@ pub async fn detect_blocked_attempts(
                 dedup_key: Some(dedup_key.clone()),
             })
             .await?;
+        event_bus.publish(DriftEvent::AnomalyDetected(AnomalyDetectedV1 {
+            anomaly_id,
+            device_mac: mac.clone(),
+            severity: event_severity,
+            anomaly_type: "blocked_attempt".to_string(),
+            vlan: Some(vlan),
+            timestamp_unix: now_unix(),
+        }));
         if let Some(action) = suppression_action.as_deref() {
             if action == "dismissed" || action == "accepted" {
                 let _ = store
