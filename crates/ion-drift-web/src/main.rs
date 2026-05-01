@@ -665,6 +665,10 @@ async fn main() -> anyhow::Result<()> {
         ion_drift_storage::BehaviorStore::new(&data_dir.join("behavior.db"))
             .map_err(|e| anyhow::anyhow!("failed to init behavior store: {e}"))?,
     );
+    let findings_store = Arc::new(
+        ion_drift_storage::FindingsStore::new(&data_dir.join("findings.db"))
+            .map_err(|e| anyhow::anyhow!("failed to init findings store: {e}"))?,
+    );
     let stats_store = Arc::new(
         stats_store::StatsStore::new(&data_dir.join("stats.db"))
             .map_err(|e| anyhow::anyhow!("failed to init stats store: {e}"))?,
@@ -887,6 +891,7 @@ async fn main() -> anyhow::Result<()> {
         connection_store: connection_store.clone(),
         network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
         behavior_store: behavior_store.clone(),
+        findings_store: findings_store.clone(),
         firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((
             Vec::new(),
             std::time::Instant::now(),
@@ -895,6 +900,7 @@ async fn main() -> anyhow::Result<()> {
         module_registry_store: module_registry_store.clone(),
         module_registry_service: module_registry_service.clone(),
         module_event_dispatcher: module_event_dispatcher.clone(),
+        nonce_cache: Arc::new(crate::modules_registry::NonceCache::new()),
         device_manager: device_manager.clone(),
         switch_store: switch_store.clone(),
         topology_cache: Arc::new(tokio::sync::RwLock::new(None)),

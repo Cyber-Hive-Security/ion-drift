@@ -242,6 +242,7 @@ mod tests {
             protocol: ProtocolVariant::Http,
             description: None,
             subscribed_events: vec![EventKind::AnomalyDetected],
+            declared_publish: vec![],
             exposed_routes: vec![RouteDescriptor {
                 path: "/watchlist".into(),
                 method: "GET".into(),

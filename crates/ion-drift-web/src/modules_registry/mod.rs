@@ -15,12 +15,15 @@
 //! same `secrets.db` file.
 
 pub mod dispatcher;
+pub mod hmac;
+pub mod inbound;
 pub mod service;
 pub mod store;
 
 pub use dispatcher::{
-    sign_bytes, spawn_dispatcher_loop, DeliveryStats, DispatcherConfig, EventDispatcher,
-    SIGNATURE_HEADER,
+    spawn_dispatcher_loop, DeliveryStats, DispatcherConfig, EventDispatcher, SIGNATURE_HEADER,
 };
+pub use hmac::{sign_bytes, verify_signature, VerifyError};
+pub use inbound::{inbound_router, NonceCache};
 pub use service::{validate_manifest, ModuleRegistryService, RegisterRequest};
 pub use store::{ModuleRegistryStore, NewModuleRegistration, RegisteredModule};

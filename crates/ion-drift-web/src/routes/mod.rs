@@ -5,6 +5,7 @@ pub mod backbone;
 pub mod behavior;
 pub mod connections;
 pub mod devices;
+pub mod findings;
 pub mod firewall;
 pub mod history;
 pub mod identity;
@@ -447,6 +448,12 @@ pub fn router(
         )
         .route("/behavior/alerts", get(behavior::alerts))
         .route("/behavior/wan-scan-pressure", get(behavior::wan_scan_pressure))
+        // Findings (module-emitted)
+        .route("/findings", get(findings::list))
+        .route("/findings/summary", get(findings::summary))
+        .route("/findings/{id}", get(findings::detail))
+        .route("/findings/{id}/acknowledge", post(findings::acknowledge))
+        .route("/findings/{id}/resolve", post(findings::resolve))
         // Policy
         .route("/policy", get(policy::policy_overview).post(policy::create_policy))
         .route("/policy/{id}", put(policy::update_policy).delete(policy::delete_policy))
@@ -815,10 +822,18 @@ pub fn router(
         app
     };
 
+    // Inbound module event publish endpoint
+    // (`POST /api/v1/modules/{name}/events`). Mounted at the top level
+    // because it does its own auth via HMAC + URL-path module identity
+    // and must NOT pick up the session-cookie auth layer below.
+    let inbound = crate::modules_registry::inbound_router();
+
     Ok(app
         // Nest all API routes under /api with global auth layer
         // (includes /api/system/modules and /api/modules/<name>/* — both auth-gated)
         .nest("/api", api_routes)
+        // Inbound module event publish (separate trust path).
+        .merge(inbound)
         // Hashed static assets with immutable cache headers
         .merge(assets_with_cache)
         // SPA static files (fallback for all non-API routes)

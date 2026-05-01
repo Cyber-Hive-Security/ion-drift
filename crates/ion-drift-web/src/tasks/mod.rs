@@ -1,6 +1,7 @@
 mod behavior;
 mod cert;
 mod connections;
+mod findings;
 mod metrics;
 mod policy_deviation_detector;
 mod policy_sync;
@@ -76,6 +77,10 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.behavior_store.clone(),
         state.vlan_registry.clone(),
     );
+    // Module-emitted findings: persistence + lifecycle
+    findings::spawn_findings_consumer(state.findings_store.clone(), state.event_bus.clone());
+    findings::spawn_findings_auto_resolver(state.findings_store.clone());
+
     crate::anomaly_correlator::spawn_anomaly_correlator(
         &state.task_supervisor,
         state.connection_store.clone(),

@@ -223,6 +223,16 @@ pub fn validate_manifest(m: &Manifest) -> anyhow::Result<()> {
              in-process module-to-module communication only"
         ));
     }
+    if m
+        .declared_publish
+        .iter()
+        .any(|k| matches!(k, EventKind::ModuleCustom))
+    {
+        return Err(anyhow!(
+            "declared_publish cannot include ModuleCustom; that variant is for \
+             in-process module-to-module communication only"
+        ));
+    }
     Ok(())
 }
 
@@ -275,12 +285,20 @@ mod tests {
             protocol: ProtocolVariant::Http,
             description: None,
             subscribed_events: vec![EventKind::AnomalyDetected],
+            declared_publish: vec![],
             exposed_routes: vec![RouteDescriptor {
                 path: "/watchlist".into(),
                 method: "GET".into(),
                 description: None,
             }],
         }
+    }
+
+    #[test]
+    fn manifest_validation_rejects_module_custom_publish() {
+        let mut m = sample_manifest("m");
+        m.declared_publish.push(EventKind::ModuleCustom);
+        assert!(validate_manifest(&m).is_err());
     }
 
     async fn spawn_mock(manifest: Option<Manifest>) -> String {

@@ -49,6 +49,7 @@ impl EventBus {
             EventKind::DeviceUnreachable,
             EventKind::SwitchTopologyChanged,
             EventKind::ConnectionStateChanged,
+            EventKind::Finding,
             EventKind::ModuleCustom,
         ] {
             let (sender, _) = broadcast::channel(capacity);
@@ -133,7 +134,8 @@ impl Default for EventBus {
 mod tests {
     use super::*;
     use ion_drift_module_api::{
-        AnomalyDetectedV1, ConnectionStateChangedV1, DriftEvent, EventKind,
+        AnomalyDetectedV1, ConnectionStateChangedV1, DriftEvent, EventKind, FindingSeverity,
+        FindingV1,
     };
 
     /// A high-rate publisher of `ConnectionStateChanged` events must NOT
@@ -194,6 +196,43 @@ mod tests {
                 assert_eq!(payload.anomaly_id, 42);
             }
             other => panic!("expected AnomalyDetected, got {other:?}"),
+        }
+    }
+
+    /// Verifies the bus preallocates a channel for `EventKind::Finding`
+    /// (added in Module API v1.2) and that publish/subscribe round-trips
+    /// it cleanly. Regression guard against silently dropping the kind
+    /// from `EventBus::new()`'s prealloc array — that would surface as a
+    /// confusing "no subscribers" instead of a build error.
+    #[tokio::test]
+    async fn finding_channel_preallocated_and_round_trips() {
+        let bus = EventBus::new(64);
+        let handle = bus.handle_for("findings-test", vec![], vec![EventKind::Finding]);
+        let mut rx = handle.subscribe();
+
+        tokio::task::yield_now().await;
+
+        bus.publish(DriftEvent::Finding(FindingV1 {
+            finding_id: "f-1".into(),
+            title: "test".into(),
+            narrative: "round-trip".into(),
+            severity: FindingSeverity::Medium,
+            category: "test".into(),
+            recommended_actions: vec![],
+            evidence: vec![],
+            device_macs: vec![],
+            timestamp_unix: 0,
+            metadata: None,
+        }));
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("recv must not time out");
+        match received {
+            Ok(DriftEvent::Finding(payload)) => {
+                assert_eq!(payload.finding_id, "f-1");
+            }
+            other => panic!("expected Finding, got {other:?}"),
         }
     }
 }

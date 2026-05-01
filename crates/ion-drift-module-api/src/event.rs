@@ -36,6 +36,7 @@ pub enum EventKind {
     DeviceUnreachable,
     SwitchTopologyChanged,
     ConnectionStateChanged,
+    Finding,
     ModuleCustom,
 }
 
@@ -52,6 +53,7 @@ impl EventKind {
             DriftEvent::DeviceUnreachable(_) => Self::DeviceUnreachable,
             DriftEvent::SwitchTopologyChanged(_) => Self::SwitchTopologyChanged,
             DriftEvent::ConnectionStateChanged(_) => Self::ConnectionStateChanged,
+            DriftEvent::Finding(_) => Self::Finding,
             DriftEvent::ModuleCustom { .. } => Self::ModuleCustom,
         }
     }
@@ -94,6 +96,13 @@ pub enum DriftEvent {
 
     /// A tracked connection changed state (new, closed, reclassified).
     ConnectionStateChanged(ConnectionStateChangedV1),
+
+    /// A high-level finding emitted by a module — narrative + severity +
+    /// evidence pointers + recommended actions. Drift persists these and
+    /// surfaces them in the operator UI; payload semantics are owned by the
+    /// emitting module. The `module_name` is host-stamped at the inbound
+    /// boundary, never trusted from the wire.
+    Finding(FindingV1),
 
     /// Escape hatch for module-to-module communication without touching the
     /// core event enum. The `source` field is **host-populated** with the
@@ -201,4 +210,56 @@ pub struct ConnectionStateChangedV1 {
     pub dst_port: Option<u16>,
     pub state: String,
     pub timestamp_unix: i64,
+}
+
+/// Payload for [`DriftEvent::Finding`].
+///
+/// `module_name` is **not** part of this payload — Drift host-stamps it at
+/// the inbound boundary from the URL path identity, so a module cannot
+/// claim to be a different module.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FindingV1 {
+    /// Stable identifier assigned by the emitting module (UUID or
+    /// module-local sequence). Drift dedups on `(module_name, finding_id)`,
+    /// so re-emitting an existing id refines the prior finding rather than
+    /// creating a duplicate.
+    pub finding_id: String,
+    pub title: String,
+    pub narrative: String,
+    pub severity: FindingSeverity,
+    /// Free-form classifier owned by the emitting module
+    /// (e.g. `"geographic"`, `"certificate"`, `"dns_anomaly"`).
+    pub category: String,
+    pub recommended_actions: Vec<String>,
+    pub evidence: Vec<FindingEvidence>,
+    /// Affected device MAC addresses (0..N).
+    pub device_macs: Vec<String>,
+    pub timestamp_unix: i64,
+    /// Module-specific blob, opaque to Drift. Surfaced in the UI as
+    /// collapsible JSON.
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingSeverity {
+    Critical,
+    High,
+    Medium,
+    Low,
+    Info,
+}
+
+/// Evidence cited by a finding. Native Drift records (anomalies,
+/// connections) are referenced by id; module-owned evidence rides as a
+/// labeled JSON blob.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FindingEvidence {
+    Anomaly { anomaly_id: i64 },
+    Connection { connection_id: i64 },
+    Custom {
+        label: String,
+        payload: serde_json::Value,
+    },
 }

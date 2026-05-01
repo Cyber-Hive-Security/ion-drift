@@ -4,6 +4,7 @@ export * from './network';
 export * from './firewall';
 export * from './connections';
 export * from './behavior';
+export * from './findings';
 export * from './identity';
 export * from './topology';
 export * from './sankey';

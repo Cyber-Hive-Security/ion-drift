@@ -32,22 +32,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use hmac::{Hmac, Mac};
 use ion_drift_module_api::{
     ApiVersion, DriftEvent, DriftEventWire, EventEnvelope, EventKind,
 };
 use secrecy::ExposeSecret;
 use serde::Serialize;
-use sha2::Sha256;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+use super::hmac::sign_bytes;
 use super::store::{ModuleRegistryStore, RegisteredModule};
 
-type HmacSha256 = Hmac<Sha256>;
-
 /// Header Drift sets on every outbound event POST.
-pub const SIGNATURE_HEADER: &str = "X-IonDrift-Signature";
+pub use super::hmac::SIGNATURE_HEADER;
 
 /// Tunables for the dispatcher.
 #[derive(Clone)]
@@ -286,16 +283,6 @@ impl EventDispatcher {
     }
 }
 
-/// Stripe-style HMAC-SHA256 over `<timestamp>.<body>`. Returns hex.
-pub fn sign_bytes(secret: &str, timestamp: i64, body: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("hmac can take any key length");
-    mac.update(timestamp.to_string().as_bytes());
-    mac.update(b".");
-    mac.update(body);
-    hex::encode(mac.finalize().into_bytes())
-}
-
 /// Subscribe the dispatcher to every `EventKind` on the in-process
 /// [`ion_drift_module_host::EventBus`] and spawn a tokio task that
 /// drives `dispatch()` on each received event.
@@ -388,6 +375,7 @@ mod tests {
             protocol: ProtocolVariant::Http,
             description: None,
             subscribed_events: subs,
+            declared_publish: vec![],
             exposed_routes: vec![RouteDescriptor {
                 path: "/watchlist".into(),
                 method: "GET".into(),

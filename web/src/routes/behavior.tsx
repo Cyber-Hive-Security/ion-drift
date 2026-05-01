@@ -29,6 +29,10 @@ import { DeviceLink } from "@/components/device-link";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
 import { cn } from "@/lib/utils";
+import {
+  anomalySeverityBg as severityBg,
+  anomalySeverityColor as severityColor,
+} from "@/lib/severity";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import type {
   BehaviorOverview,
@@ -84,37 +88,7 @@ function parseDetails(details: string | null): Record<string, any> {
   }
 }
 
-// ── Severity styling ─────────────────────────────────────────
-
-function severityColor(severity: string): string {
-  switch (severity) {
-    case "critical":
-      return "text-destructive";
-    case "alert":
-      return "text-orange-500";
-    case "warning":
-      return "text-warning";
-    case "info":
-      return "text-primary";
-    default:
-      return "text-muted-foreground";
-  }
-}
-
-function severityBg(severity: string): string {
-  switch (severity) {
-    case "critical":
-      return "bg-destructive/10 border-destructive/30";
-    case "alert":
-      return "bg-orange-500/10 border-orange-500/30";
-    case "warning":
-      return "bg-warning/10 border-warning/30";
-    case "info":
-      return "bg-primary/10 border-primary/30";
-    default:
-      return "bg-muted border-border";
-  }
-}
+// Severity tokens live in `@/lib/severity`.
 
 function formatTimeAgo(ts: number): string {
   const secs = Math.max(0, Math.floor(Date.now() / 1000 - ts));
