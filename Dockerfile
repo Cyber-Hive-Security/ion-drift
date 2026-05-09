@@ -35,16 +35,19 @@ COPY docker/entrypoint.sh /entrypoint.sh
 # Bundle default config — users can override via volume mount:
 #   -v /path/to/server.toml:/app/config/server.toml:ro
 #   -v /path/to/ca.crt:/app/certs/root_ca.crt:ro
-RUN mkdir -p /app/config /app/certs /app/data/certs /app/data/ion-drift/geoip
+RUN mkdir -p /app/config /app/certs /app/data/certs /app/seed/geoip
 
-# Bundle DB-IP Lite databases for out-of-box GeoIP support.
-# MaxMind GeoLite2 takes priority if the user provides their own files.
+# Bundle DB-IP Lite databases under /app/seed/ — outside the data-volume
+# mount path. The entrypoint seeds them into /app/data/ion-drift/geoip/
+# on every start so volumes that pre-date the bundling commit (or empty
+# named volumes shadowing the image) still get populated on upgrade.
+# MaxMind GeoLite2 takes priority at runtime if the user provides their own.
 # DB-IP Lite: https://db-ip.com/db/lite.php — CC BY 4.0 license.
 ARG DBIP_MONTH
 RUN MONTH=${DBIP_MONTH:-$(date +%Y-%m)} && \
-    curl -sSfL "https://download.db-ip.com/free/dbip-city-lite-${MONTH}.mmdb.gz" | gunzip > /app/data/ion-drift/geoip/dbip-city-lite.mmdb && \
-    curl -sSfL "https://download.db-ip.com/free/dbip-asn-lite-${MONTH}.mmdb.gz" | gunzip > /app/data/ion-drift/geoip/dbip-asn-lite.mmdb && \
-    echo "DB-IP Lite ${MONTH} bundled" || echo "DB-IP download failed (non-fatal, GeoIP will be unavailable until MaxMind configured)"
+    curl -sSfL "https://download.db-ip.com/free/dbip-city-lite-${MONTH}.mmdb.gz" | gunzip > /app/seed/geoip/dbip-city-lite.mmdb && \
+    curl -sSfL "https://download.db-ip.com/free/dbip-asn-lite-${MONTH}.mmdb.gz" | gunzip > /app/seed/geoip/dbip-asn-lite.mmdb && \
+    echo "DB-IP Lite ${MONTH} bundled"
 
 COPY config/server.example.toml /app/config/server.toml
 RUN chown -R app:app /app
