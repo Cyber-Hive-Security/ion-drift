@@ -47,6 +47,7 @@ diagnostics/
 # Claude
 CLAUDE.md
 .claude/
+docs/ai/
 
 # Codeforge
 .codeforge/
