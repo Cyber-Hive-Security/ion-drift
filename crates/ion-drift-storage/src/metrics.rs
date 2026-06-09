@@ -76,8 +76,14 @@ fn now_unix() -> i64 {
 
 impl MetricsStore {
     /// Create a new store, opening (or creating) the SQLite database at `db_path`.
+    /// Schema version stamped into `PRAGMA user_version`. Bump when adding a
+    /// versioned migration (see `crate::migrations`). v1 = the 0.5.x baseline.
+    pub const SCHEMA_VERSION: u32 = 1;
+
     pub fn new(db_path: &Path) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(db_path)?;
+        crate::migrations::open_guard(&conn, "metrics.db", Self::SCHEMA_VERSION)
+            .map_err(crate::migrations::to_sqlite_err)?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS metrics (
@@ -127,6 +133,9 @@ impl MetricsStore {
             );
             CREATE INDEX IF NOT EXISTS idx_log_agg_ts ON log_aggregates (timestamp);",
         )?;
+
+        crate::migrations::stamp(&conn, "metrics.db", Self::SCHEMA_VERSION)
+            .map_err(crate::migrations::to_sqlite_err)?;
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),

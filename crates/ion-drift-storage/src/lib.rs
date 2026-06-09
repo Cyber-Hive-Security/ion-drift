@@ -2,6 +2,7 @@ pub mod alerting;
 pub mod behavior;
 pub mod findings;
 pub mod metrics;
+pub mod migrations;
 pub mod read_traits;
 pub mod switch;
 

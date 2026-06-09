@@ -133,9 +133,14 @@ pub struct FindingsStore {
 }
 
 impl FindingsStore {
+    /// Schema version stamped into `PRAGMA user_version`. Bump when adding a
+    /// versioned migration (see `crate::migrations`). v1 = the 0.5.x baseline.
+    pub const SCHEMA_VERSION: u32 = 1;
+
     pub fn new(db_path: &Path) -> Result<Self, String> {
         let conn =
             Connection::open(db_path).map_err(|e| format!("failed to open findings db: {e}"))?;
+        crate::migrations::open_guard(&conn, "findings.db", Self::SCHEMA_VERSION)?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .map_err(|e| format!("pragma failed: {e}"))?;
@@ -174,6 +179,8 @@ impl FindingsStore {
             ",
         )
         .map_err(|e| format!("schema creation failed: {e}"))?;
+
+        crate::migrations::stamp(&conn, "findings.db", Self::SCHEMA_VERSION)?;
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
