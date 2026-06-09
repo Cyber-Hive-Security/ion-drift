@@ -17,8 +17,10 @@ Every device on the network is tracked by MAC address. Each device profile recor
 
 Devices begin in a **7-day learning period**. During learning, the engine collects observations but does not generate behavioral anomalies (blocked connection attempts are still flagged immediately). After the learning period, the device is promoted:
 
-- **Baselined** — at least 3 distinct flow tuples and 50 total observations. Full anomaly detection at highest confidence.
-- **Sparse** — insufficient observations for full profiling. Anomaly detection runs with reduced confidence scores.
+- **Baselined** — at least 10 distinct baseline entries and 200 total observations after the learning period. Active devices are fast-tracked to baselined early (before the 7-day mark) once they reach 5,000 observations. Full anomaly detection at highest confidence.
+- **Sparse** — fewer than 50 total observations after the learning period: barely active, thin baseline. Anomaly detection runs with reduced confidence scores.
+
+Devices that reach the end of the learning period with between 50 and 200 observations stay in `learning` and have their learning window extended by 3 days to collect more data.
 
 Promotions are checked every 10 minutes and during nightly maintenance at 3 AM.
 
