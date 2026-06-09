@@ -415,7 +415,11 @@ async fn queue_worker(
         let Some(next_id) = next_id else {
             continue;
         };
-        let batch = pending.remove(&next_id).unwrap();
+        // next_id was selected from pending's keys; guard against a future
+        // refactor making this a daemon-killing panic.
+        let Some(batch) = pending.remove(&next_id) else {
+            continue;
+        };
 
         // Update metrics
         {

@@ -791,7 +791,11 @@ async fn run_correlation(
                 .collect();
 
             for mac in &wireless_macs {
-                let builder = identity_map.get_mut(mac).unwrap();
+                // Key came from iterating identity_map above; guard anyway so a
+                // future refactor that removes entries can't panic the engine.
+                let Some(builder) = identity_map.get_mut(mac) else {
+                    continue;
+                };
                 let switch_id = match &builder.switch_device_id {
                     Some(id) => id.clone(),
                     None => continue,
