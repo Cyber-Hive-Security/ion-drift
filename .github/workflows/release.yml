@@ -51,3 +51,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Bakes the release version into the binary (routes::version() /
+          # the /health endpoint). Without it every image reports "dev".
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
