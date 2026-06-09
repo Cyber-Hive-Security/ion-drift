@@ -191,10 +191,44 @@ fn parse_module_url(s: &str) -> anyhow::Result<Url> {
             ))
         }
     }
-    if url.host_str().is_none() {
-        return Err(anyhow!("module URL must include a host"));
+    let blocked = match url.host() {
+        None => return Err(anyhow!("module URL must include a host")),
+        Some(url::Host::Ipv4(v4)) => ipv4_is_blocked(v4),
+        Some(url::Host::Ipv6(v6)) => ipv6_is_blocked(v6),
+        Some(url::Host::Domain(domain)) => {
+            // Resolve so a DNS name can't smuggle a blocked address past a
+            // literal-IP check. Unresolvable hosts are not blocked here —
+            // registration fails at the manifest probe with a clearer error.
+            use std::net::ToSocketAddrs;
+            (domain, 0u16)
+                .to_socket_addrs()
+                .map(|mut addrs| {
+                    addrs.any(|a| match a.ip() {
+                        std::net::IpAddr::V4(v4) => ipv4_is_blocked(v4),
+                        std::net::IpAddr::V6(v6) => ipv6_is_blocked(v6),
+                    })
+                })
+                .unwrap_or(false)
+        }
+    };
+    if blocked {
+        return Err(anyhow!(
+            "module URL host resolves to a blocked address range (link-local/unspecified/broadcast)"
+        ));
     }
     Ok(url)
+}
+
+/// SSRF guard for admin-registered module URLs. Loopback and RFC1918 are
+/// deliberately ALLOWED — modules legitimately run on the LAN or the same
+/// host. Blocked: link-local (incl. cloud metadata 169.254.0.0/16 and
+/// fe80::/10), unspecified, and broadcast addresses.
+fn ipv4_is_blocked(v4: std::net::Ipv4Addr) -> bool {
+    v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast() || v4.octets()[0] == 0
+}
+
+fn ipv6_is_blocked(v6: std::net::Ipv6Addr) -> bool {
+    v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80
 }
 
 /// Validate a manifest against host rules. Pure function so callers can
@@ -372,6 +406,24 @@ mod tests {
         assert!(parse_module_url("ftp://example.com").is_err());
         assert!(parse_module_url("not a url").is_err());
         assert!(parse_module_url("http://").is_err());
+    }
+
+    #[test]
+    fn url_parse_blocks_link_local_and_unspecified() {
+        // Cloud metadata endpoint and friends — never a legitimate module.
+        assert!(parse_module_url("http://169.254.169.254/latest").is_err());
+        assert!(parse_module_url("http://169.254.0.1:8080").is_err());
+        assert!(parse_module_url("http://0.0.0.0:9000").is_err());
+        assert!(parse_module_url("http://255.255.255.255").is_err());
+        assert!(parse_module_url("http://[fe80::1]:8080").is_err());
+    }
+
+    #[test]
+    fn url_parse_allows_loopback_and_private() {
+        // Modules legitimately run on the LAN or the same host.
+        assert!(parse_module_url("http://127.0.0.1:9201").is_ok());
+        assert!(parse_module_url("http://10.20.25.27:9201").is_ok());
+        assert!(parse_module_url("http://192.168.1.50:8080").is_ok());
     }
 
     #[tokio::test]
