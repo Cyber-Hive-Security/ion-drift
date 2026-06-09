@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+      - 'drift-v*'
   workflow_dispatch:
 
 env:
@@ -36,7 +37,12 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            # drift-vX.Y.Z tag scheme (e.g. drift-v0.5.0)
+            type=match,pattern=drift-v(\d+\.\d+\.\d+),group=1
+            type=match,pattern=drift-v(\d+\.\d+)\.\d+,group=1
+            # Release tags are never "the default branch", so the old
+            # is_default_branch condition meant :latest was never updated.
+            type=raw,value=latest
 
       - name: Build and push
         uses: docker/build-push-action@v6
