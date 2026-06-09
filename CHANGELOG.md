@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-06-09
+
+### Fixed
+
+- **World map / GeoIP empty on existing installs** (#6) — Docker named volumes are only seeded from the image on first creation, so any install whose data volume predates the GeoIP bundling shadowed the bundled DB-IP files forever. Bundled databases now live at `/app/seed/geoip` (outside the volume mount) and the entrypoint idempotently seeds them into the data volume on every start. Also: a GeoIP download failure during image build now fails the build instead of silently shipping an empty database.
+- **Release workflow tag triggers** — `drift-v*` tags now build and publish the Docker image (the `drift-v0.5.0` tag did not match the previous `v*`-only trigger), and `:latest` is updated on release tags.
+
+### Added
+
+- **CI workflow** — `cargo test --workspace`, frontend typecheck and build on every push/PR to `main`/`development`.
+
 ## [0.5.0] - 2026-04-10
 
 ### Added
