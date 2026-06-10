@@ -1,0 +1,57 @@
+# cargo-fuzz harness crate for ion-drift parse paths.
+# Standalone workspace (empty [workspace] table below) so the nightly-only,
+# libfuzzer-instrumented build never participates in `cargo build --workspace`.
+#
+# Run (requires nightly): cargo +nightly fuzz run <target>
+# Targets:
+#   wire_envelope        - serde_json::from_slice::<EventEnvelope> (module wire input)
+#   snmp_detect_profile  - snmp_profile::detect_profile(&str)      (device sysDescr)
+#   log_parse_entry      - log_parser::parse_log_entry(..)          (RouterOS log text)
+#   snmp_decode_portlist - snmp_client::decode_portlist(&[u8])      (device portlist bitmap)
+[package]
+name = "ion-drift-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+tempfile = "3"
+ion-drift-module-api = { path = "../crates/ion-drift-module-api" }
+mikrotik-core = { path = "../crates/mikrotik-core" }
+ion-drift-web = { path = "../crates/ion-drift-web" }
+
+[[bin]]
+name = "wire_envelope"
+path = "fuzz_targets/wire_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snmp_detect_profile"
+path = "fuzz_targets/snmp_detect_profile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "log_parse_entry"
+path = "fuzz_targets/log_parse_entry.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snmp_decode_portlist"
+path = "fuzz_targets/snmp_decode_portlist.rs"
+test = false
+doc = false
+bench = false
+
+# Detach from the parent ion-drift workspace.
+[workspace]
