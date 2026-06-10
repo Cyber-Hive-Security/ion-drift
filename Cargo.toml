@@ -13,3 +13,6 @@ members = [
 version = "0.5.0"
 edition = "2024"
 license = "PolyForm-Shield-1.0.0"
+# Source-available, not for crates.io. Also what makes cargo-deny's
+# [licenses.private] exemption apply to the first-party crates.
+publish = false

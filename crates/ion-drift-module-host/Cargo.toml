@@ -3,6 +3,7 @@ name = "ion-drift-module-host"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
+publish = { workspace = true }
 description = "Runtime host for Ion Drift modules (registry, event bus, lifecycle)"
 
 [dependencies]
