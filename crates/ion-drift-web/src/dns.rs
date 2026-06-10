@@ -4,9 +4,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hickory_resolver::Resolver;
-use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::proto::rr::RData;
+use hickory_resolver::{Resolver, TokioResolver};
 
 pub trait DnsResolver: Send + Sync {
     fn reverse_lookup<'a>(
@@ -16,27 +17,29 @@ pub trait DnsResolver: Send + Sync {
 }
 
 pub struct HickoryResolver {
-    resolver: Resolver<TokioConnectionProvider>,
+    resolver: TokioResolver,
 }
 
 impl HickoryResolver {
     pub fn new(dns_server: Option<&str>) -> anyhow::Result<Self> {
-        let config = if let Some(server) = dns_server {
+        let mut builder = if let Some(server) = dns_server {
             let addr: IpAddr = server
                 .parse()
                 .map_err(|e| anyhow::anyhow!("invalid dns_server IP {server:?}: {e}"))?;
-            let ns_group = NameServerConfigGroup::from_ips_clear(&[addr], 53, true);
-            ResolverConfig::from_parts(None, Vec::new(), ns_group)
+            let ns = vec![NameServerConfig::udp_and_tcp(addr)];
+            let config = ResolverConfig::from_parts(None, Vec::new(), ns);
+            Resolver::builder_with_config(config, TokioRuntimeProvider::default())
         } else {
             tracing::debug!("no dns_server configured, using system resolver for PTR lookups");
-            ResolverConfig::default()
+            TokioResolver::builder_tokio()
+                .map_err(|e| anyhow::anyhow!("failed to read system DNS config: {e}"))?
         };
-        let mut opts = ResolverOpts::default();
+        let opts = builder.options_mut();
         opts.timeout = Duration::from_millis(500);
         opts.attempts = 1;
-        let resolver = Resolver::builder_with_config(config, TokioConnectionProvider::default())
-            .with_options(opts)
-            .build();
+        let resolver = builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("failed to build DNS resolver: {e}"))?;
         Ok(Self { resolver })
     }
 }
@@ -51,9 +54,10 @@ impl DnsResolver for HickoryResolver {
                 .await
                 .ok()?
                 .ok()?;
-            out.iter()
-                .next()
-                .map(|name| name.to_string().trim_end_matches('.').to_string())
+            out.answers().iter().find_map(|r| match &r.data {
+                RData::PTR(name) => Some(name.to_string().trim_end_matches('.').to_string()),
+                _ => None,
+            })
         })
     }
 }
