@@ -332,10 +332,10 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let store = ModuleRegistryStore::new(tmp.path(), test_kek()).unwrap();
 
-        let m = sample_manifest("scout-shield");
+        let m = sample_manifest("drift-watchlist");
         let id = store
             .register(NewModuleRegistration {
-                name: "scout-shield",
+                name: "drift-watchlist",
                 url: "http://127.0.0.1:3099",
                 manifest: &m,
                 shared_secret: "s-secret",
@@ -347,7 +347,7 @@ mod tests {
 
         let all = store.list().await.unwrap();
         assert_eq!(all.len(), 1);
-        assert_eq!(all[0].name, "scout-shield");
+        assert_eq!(all[0].name, "drift-watchlist");
         assert!(all[0].enabled);
         assert_eq!(all[0].manifest.subscribed_events, vec![EventKind::AnomalyDetected]);
     }
@@ -356,10 +356,10 @@ mod tests {
     async fn secrets_round_trip() {
         let tmp = NamedTempFile::new().unwrap();
         let store = ModuleRegistryStore::new(tmp.path(), test_kek()).unwrap();
-        let m = sample_manifest("scout-shield");
+        let m = sample_manifest("drift-watchlist");
         store
             .register(NewModuleRegistration {
-                name: "scout-shield",
+                name: "drift-watchlist",
                 url: "http://x",
                 manifest: &m,
                 shared_secret: "my-hmac-key",
@@ -368,9 +368,9 @@ mod tests {
             .await
             .unwrap();
 
-        let ss = store.get_shared_secret("scout-shield").await.unwrap().unwrap();
+        let ss = store.get_shared_secret("drift-watchlist").await.unwrap().unwrap();
         assert_eq!(ss.expose_secret(), "my-hmac-key");
-        let tok = store.get_api_token("scout-shield").await.unwrap().unwrap();
+        let tok = store.get_api_token("drift-watchlist").await.unwrap().unwrap();
         assert_eq!(tok.expose_secret(), "my-bearer");
 
         assert!(store.get_shared_secret("nope").await.unwrap().is_none());

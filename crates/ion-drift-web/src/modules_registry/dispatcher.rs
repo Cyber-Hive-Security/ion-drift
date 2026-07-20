@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn signature_verifies_on_receiver_side() {
-        // Simulates what scout-shield will do: parse header, recompute,
+        // Simulates what drift-watchlist will do: parse header, recompute,
         // constant-time compare.
         let timestamp = 1_700_000_000_i64;
         let body = br#"{"kind":"anomaly_detected"}"#;

@@ -129,6 +129,22 @@ impl ModuleRegistryService {
         self.store.list().await
     }
 
+    /// Short SHA-256\[..8\] fingerprint of the module's stored shared secret.
+    ///
+    /// Modules log the same fingerprint of *their* copy at startup; comparing
+    /// the two is how operators detect silent secret divergence between a
+    /// registration and the module's config without exposing either secret.
+    /// Returns `None` if the module is not registered.
+    pub async fn secret_fingerprint(&self, name: &str) -> anyhow::Result<Option<String>> {
+        let Some(secret) = self.store.get_shared_secret(name).await? else {
+            return Ok(None);
+        };
+        use secrecy::ExposeSecret;
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(secret.expose_secret().as_bytes());
+        Ok(Some(hex::encode(digest)[..8].to_string()))
+    }
+
     pub async fn get_by_name(&self, name: &str) -> anyhow::Result<Option<RegisteredModule>> {
         self.store.get_by_name(name).await
     }
@@ -369,7 +385,7 @@ mod tests {
 
     #[test]
     fn valid_name_passes() {
-        validate_module_name("scout-shield").unwrap();
+        validate_module_name("drift-watchlist").unwrap();
         validate_module_name("a1").unwrap();
         validate_module_name("m_2").unwrap();
     }
@@ -429,7 +445,7 @@ mod tests {
     #[tokio::test]
     async fn register_happy_path() {
         let (svc, _tmp) = build_service().await;
-        let base = spawn_mock(Some(sample_manifest("scout-shield"))).await;
+        let base = spawn_mock(Some(sample_manifest("drift-watchlist"))).await;
         let got = svc
             .register(RegisterRequest {
                 url: base.clone(),
@@ -438,7 +454,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(got.name, "scout-shield");
+        assert_eq!(got.name, "drift-watchlist");
         assert_eq!(got.url, base.trim_end_matches('/'));
         assert!(got.enabled);
     }

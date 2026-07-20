@@ -21,6 +21,8 @@ export interface Manifest {
   protocol: "http";
   description?: string | null;
   subscribed_events: string[];
+  /** Events the module declares it may publish back to Drift ([] = passive sink). */
+  declared_publish?: string[];
   exposed_routes: RouteDescriptor[];
 }
 
@@ -33,6 +35,12 @@ export interface RegisteredModule {
   last_seen_at: number | null;
   registered_at: number;
   updated_at: number;
+  /**
+   * SHA-256[..8] fingerprint of the shared secret stored for this
+   * registration. The module logs the fingerprint of its own copy at
+   * startup — a mismatch means the two sides hold diverged secrets.
+   */
+  secret_fingerprint?: string | null;
 }
 
 export interface RegisterModuleRequest {

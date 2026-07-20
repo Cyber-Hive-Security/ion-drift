@@ -13,6 +13,7 @@ import { RegisterModuleForm } from "./register-form";
 import {
   CheckCircle2,
   Clock,
+  KeyRound,
   Plug,
   Power,
   PowerOff,
@@ -131,6 +132,16 @@ function ModuleCard({ module }: { module: RegisteredModule }) {
             <Clock className="h-3 w-3" />
             last seen: {lastSeen}
           </p>
+          {module.secret_fingerprint && (
+            <p
+              className="text-xs text-muted-foreground flex items-center gap-1"
+              title="SHA-256[..8] of the shared secret Drift holds for this registration. The module logs the fingerprint of its own copy at startup — if they differ, the secrets have diverged and event delivery will fail with 401s."
+            >
+              <KeyRound className="h-3 w-3" />
+              secret fingerprint:{" "}
+              <span className="font-mono">{module.secret_fingerprint}</span>
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <button

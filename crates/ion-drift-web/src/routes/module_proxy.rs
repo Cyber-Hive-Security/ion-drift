@@ -7,7 +7,7 @@
 //! by-hop headers on both legs and strips any inbound `Authorization`
 //! (which we always overwrite with our stored token).
 //!
-//! Body size is capped at 10 MB. Scout-shield and similar modules
+//! Body size is capped at 10 MB. Drift-watchlist and similar modules
 //! exchange small JSON documents, not large uploads; streaming can
 //! come later if a module's surface grows.
 //!
@@ -330,11 +330,11 @@ mod tests {
     #[tokio::test]
     async fn forwards_get_and_injects_bearer() {
         let (target, cap) = spawn_target().await;
-        let (router, _store, _tmp) = setup_proxy("scout-shield", &target, true).await;
+        let (router, _store, _tmp) = setup_proxy("drift-watchlist", &target, true).await;
 
         let req = Request::builder()
             .method(Method::GET)
-            .uri("/scout-shield/watchlist")
+            .uri("/drift-watchlist/watchlist")
             .body(Body::empty())
             .unwrap();
         let resp = router.oneshot(req).await.unwrap();

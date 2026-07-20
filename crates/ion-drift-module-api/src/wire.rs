@@ -8,7 +8,7 @@
 //! and own their data.
 //!
 //! The forward-compat design is: one event schema, many transports. A
-//! scout-shield binary and a future scout-shield WASM blob both exchange
+//! drift-watchlist binary and a future drift-watchlist WASM blob both exchange
 //! [`EventEnvelope`] payloads with identical shape; only the plumbing
 //! differs.
 
@@ -256,13 +256,13 @@ mod tests {
     #[test]
     fn manifest_with_defaults_round_trips() {
         let json = r#"{
-            "name": "scout-shield",
+            "name": "drift-watchlist",
             "version": "0.1.0",
             "api_version": { "major": 1, "minor": 1 },
             "protocol": "http"
         }"#;
         let m: Manifest = serde_json::from_str(json).unwrap();
-        assert_eq!(m.name, "scout-shield");
+        assert_eq!(m.name, "drift-watchlist");
         assert!(matches!(m.protocol, ProtocolVariant::Http));
         assert!(m.subscribed_events.is_empty());
         assert!(m.exposed_routes.is_empty());
@@ -277,7 +277,7 @@ mod tests {
 
     /// Frozen-bytes wire snapshot for a Finding envelope.
     ///
-    /// Out-of-process modules (scout-shield, etc.) encode against this exact
+    /// Out-of-process modules (drift-watchlist, etc.) encode against this exact
     /// JSON shape. Any change to field names, ordering, enum tags, or
     /// `#[serde(...)]` rename attributes will break this test — that's the
     /// point. Bumping the wire format is a deliberate act that must update

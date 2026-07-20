@@ -498,12 +498,12 @@ mod tests {
         let store = FindingsStore::new(f.path()).unwrap();
 
         let id1 = store
-            .upsert_finding("scout-engine", &sample("a", FindingSeverity::Medium), None, None)
+            .upsert_finding("sample-engine", &sample("a", FindingSeverity::Medium), None, None)
             .await
             .unwrap();
         let id2 = store
             .upsert_finding(
-                "scout-engine",
+                "sample-engine",
                 &sample("a", FindingSeverity::High),
                 None,
                 None,
@@ -514,7 +514,7 @@ mod tests {
 
         let got = store.get_finding(id1).await.unwrap().unwrap();
         assert_eq!(got.severity as i32, FindingSeverity::High as i32);
-        assert_eq!(got.module_name, "scout-engine");
+        assert_eq!(got.module_name, "sample-engine");
         assert_eq!(got.evidence.len(), 1);
 
         let all = store

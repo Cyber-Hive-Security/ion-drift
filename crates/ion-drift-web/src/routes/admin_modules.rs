@@ -55,7 +55,18 @@ struct RegisterBody {
 
 #[derive(Serialize)]
 struct ListResponse {
-    modules: Vec<RegisteredModule>,
+    modules: Vec<ModuleListItem>,
+}
+
+/// A registered module plus the SHA-256\[..8\] fingerprint of its stored
+/// shared secret. Modules log the fingerprint of their own copy at startup;
+/// a mismatch between the two means the secret has silently diverged.
+/// `flatten` keeps the existing wire shape — the fingerprint is additive.
+#[derive(Serialize)]
+struct ModuleListItem {
+    #[serde(flatten)]
+    module: RegisteredModule,
+    secret_fingerprint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -76,7 +87,17 @@ struct OkResponse {
 async fn list(
     State(service): State<Arc<ModuleRegistryService>>,
 ) -> Result<Json<ListResponse>, ApiError> {
-    let modules = service.list().await.map_err(api_err)?;
+    let mut modules = Vec::new();
+    for module in service.list().await.map_err(api_err)? {
+        let secret_fingerprint = service
+            .secret_fingerprint(&module.name)
+            .await
+            .map_err(api_err)?;
+        modules.push(ModuleListItem {
+            module,
+            secret_fingerprint,
+        });
+    }
     Ok(Json(ListResponse { modules }))
 }
 
@@ -301,6 +322,13 @@ mod tests {
         let json = body_json(resp).await;
         let arr = json["modules"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
+        // Fingerprint of the prebaked secret rides along, flattened next to
+        // the module fields, and matches SHA-256[..8] of the stored secret.
+        use sha2::{Digest, Sha256};
+        let expected =
+            &hex::encode(Sha256::digest(b"shared-secret-at-least-32-chars-long!"))[..8];
+        assert_eq!(arr[0]["secret_fingerprint"], *expected);
+        assert!(arr[0]["name"].is_string(), "flattened module fields present");
     }
 
     #[tokio::test]

@@ -412,7 +412,7 @@ mod tests {
             metadata: None,
         };
         let wire = DriftEventWire::Finding(payload.clone());
-        let ev = wire_to_event(&EventKind::Finding, wire, "scout").unwrap();
+        let ev = wire_to_event(&EventKind::Finding, wire, "sample-module").unwrap();
         match ev {
             DriftEvent::Finding(p) => assert_eq!(p.finding_id, "f1"),
             _ => panic!("expected Finding"),
