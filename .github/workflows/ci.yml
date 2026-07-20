@@ -45,6 +45,9 @@ jobs:
       - name: typecheck
         run: npx tsc --noEmit
 
+      - name: test (vitest smoke floor)
+        run: npm test
+
       - name: build
         run: npm run build
 
