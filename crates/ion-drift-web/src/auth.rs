@@ -18,7 +18,7 @@ use openidconnect::{
 };
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use crate::config::ServerConfig;
 use crate::state::AppState;
@@ -65,6 +65,16 @@ impl SessionData {
     pub fn is_admin(&self) -> bool {
         self.has_role("ion-drift-admin")
     }
+}
+
+/// Derive the at-rest storage key for a session. The full signed token is the
+/// bearer credential and must NEVER be stored (review ID-09): we key both the
+/// in-memory map and the `sessions` table by `SHA-256(token)`, so a stolen
+/// sessions.db (or backup) can't be replayed — the token itself lives only in
+/// the client cookie. Callers that hold a raw cookie value pass it here; the
+/// list/revoke API instead uses this key directly as an opaque handle.
+fn session_storage_key(session_id: &str) -> String {
+    hex::encode(Sha256::digest(session_id.as_bytes()))
 }
 
 /// Temporary data stored while the OIDC auth flow is in progress.
@@ -184,13 +194,11 @@ impl SessionStore {
                 return;
             }
         };
-        let mut invalid_ids = Vec::new();
         for row in rows.flatten() {
-            if !self.is_valid_session_id(&row.0) {
-                tracing::warn!("dropping persisted session with invalid signature");
-                invalid_ids.push(row.0);
-                continue;
-            }
+            // `row.0` is the storage key (SHA-256 of the token), not the token
+            // itself, so it can't be HMAC-verified here — integrity is enforced
+            // at request time in `get()`, which verifies the raw cookie's
+            // signature before hashing it to this key.
             self.sessions.insert(
                 row.0,
                 SessionRecord {
@@ -205,22 +213,17 @@ impl SessionStore {
                 "loaded active sessions from sqlite"
             );
         }
-        // Delete invalid sessions using the already-held db lock
-        // (calling delete_from_db here would deadlock on self.db)
-        for invalid_id in &invalid_ids {
-            let _ = db.execute(
-                "DELETE FROM sessions WHERE session_id = ?1",
-                params![invalid_id],
-            );
-        }
     }
 
     /// Look up a session by ID, returning None if expired.
     pub fn get(&self, session_id: &str) -> Option<SessionData> {
+        // Verify the raw cookie's HMAC signature FIRST, then hash it to the
+        // storage key for lookup (review ID-09).
         if !self.is_valid_session_id(session_id) {
             return None;
         }
-        let mut entry = self.sessions.get_mut(session_id)?;
+        let key = session_storage_key(session_id);
+        let mut entry = self.sessions.get_mut(&key)?;
         let now = now_secs();
         // Absolute timeout (created_at) OR idle timeout (last_accessed).
         let absolute_expired = now.saturating_sub(entry.data.created_at) > self.max_age.as_secs();
@@ -228,8 +231,8 @@ impl SessionStore {
             && now.saturating_sub(entry.data.last_accessed) > self.idle_max.as_secs();
         if absolute_expired || idle_expired {
             drop(entry);
-            self.sessions.remove(session_id);
-            self.delete_from_db(session_id);
+            self.sessions.remove(&key);
+            self.delete_from_db(&key);
             return None;
         }
         entry.data.last_accessed = now;
@@ -238,21 +241,25 @@ impl SessionStore {
     }
 
     fn insert_session(&self, session_id: String, data: SessionData) {
-        self.upsert_db(&session_id, &data);
+        // Store keyed by hash; the raw token is only ever sent to the client.
+        let key = session_storage_key(&session_id);
+        self.upsert_db(&key, &data);
         self.sessions
-            .insert(session_id, SessionRecord { data, dirty: false });
+            .insert(key, SessionRecord { data, dirty: false });
     }
 
     fn remove_session(&self, session_id: &str) {
         if !self.is_valid_session_id(session_id) {
             return;
         }
-        self.sessions.remove(session_id);
-        self.delete_from_db(session_id);
+        let key = session_storage_key(session_id);
+        self.sessions.remove(&key);
+        self.delete_from_db(&key);
     }
 
     pub fn record_access(&self, session_id: &str, ip: Option<String>, ua: Option<String>) {
-        if let Some(mut entry) = self.sessions.get_mut(session_id) {
+        let key = session_storage_key(session_id);
+        if let Some(mut entry) = self.sessions.get_mut(&key) {
             entry.data.last_accessed = now_secs();
             if entry.data.created_ip.is_none() {
                 entry.data.created_ip = ip;
@@ -351,6 +358,11 @@ impl SessionStore {
     }
 
     pub fn list_sessions(&self, current_session: Option<&str>) -> Vec<SessionListEntry> {
+        // The exposed `session_id` is the storage key (a SHA-256 hash), not the
+        // bearer token — it's an opaque handle safe to show and to pass back to
+        // `revoke_session`. `is_current` compares against the hash of the
+        // caller's own cookie.
+        let current_key = current_session.map(session_storage_key);
         let mut out = Vec::new();
         for entry in self.sessions.iter() {
             let data = &entry.data;
@@ -361,19 +373,19 @@ impl SessionStore {
                 last_accessed: data.last_accessed,
                 created_ip: data.created_ip.clone(),
                 user_agent: data.user_agent.clone(),
-                is_current: current_session == Some(entry.key().as_str()),
+                is_current: current_key.as_deref() == Some(entry.key().as_str()),
             });
         }
         out.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
         out
     }
 
-    pub fn revoke_session(&self, session_id: &str) -> bool {
-        if !self.is_valid_session_id(session_id) {
-            return false;
-        }
-        let existed = self.sessions.remove(session_id).is_some();
-        self.delete_from_db(session_id);
+    /// Revoke a session by its storage-key handle (as returned by
+    /// [`list_sessions`](Self::list_sessions)) — this is already the hashed key,
+    /// not a signed token, so it is used directly.
+    pub fn revoke_session(&self, storage_key: &str) -> bool {
+        let existed = self.sessions.remove(storage_key).is_some();
+        self.delete_from_db(storage_key);
         existed
     }
 
@@ -1211,5 +1223,48 @@ mod reserve_tests {
         // alice is throttled but bob is unaffected.
         assert!(l.reserve("alice").is_err());
         assert!(l.reserve("bob").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod session_hash_tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn sample_data() -> SessionData {
+        let now = now_secs();
+        SessionData {
+            user_id: "u1".into(),
+            username: "alice".into(),
+            email: None,
+            roles: vec!["ion-drift-admin".into()],
+            created_at: now,
+            last_accessed: now,
+            created_ip: None,
+            user_agent: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_are_stored_by_hash_not_raw_token() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = SessionStore::new(3600, tmp.path(), "test-signing-secret").unwrap();
+        let token = store.issue_session_id().await.unwrap();
+        store.insert_session(token.clone(), sample_data());
+
+        // The raw cookie still resolves (HMAC-verified, then hashed to look up).
+        assert!(store.get(&token).is_some());
+
+        // The list/revoke handle is the hash, never the bearer token (ID-09).
+        let list = store.list_sessions(Some(&token));
+        assert_eq!(list.len(), 1);
+        assert_ne!(list[0].session_id, token, "must not expose the raw token");
+        assert_eq!(list[0].session_id, session_storage_key(&token));
+        assert!(list[0].is_current);
+
+        // Revoking by the raw token is a no-op; by the hash handle it works.
+        assert!(!store.revoke_session(&token));
+        assert!(store.revoke_session(&session_storage_key(&token)));
+        assert!(store.get(&token).is_none());
     }
 }
