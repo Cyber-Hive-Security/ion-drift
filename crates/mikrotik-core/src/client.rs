@@ -291,8 +291,12 @@ impl MikrotikClient {
         trace!(body_len = body.len(), "response received");
 
         serde_json::from_str::<T>(&body).map_err(|e| {
-            let preview = if body.len() > 200 {
-                format!("{}...", &body[..200])
+            // Truncate on a char boundary — `&body[..200]` panics when byte 200
+            // lands inside a multibyte UTF-8 sequence (valid UTF-8, invalid JSON
+            // from a misbehaving device would otherwise crash the poll task).
+            let preview = if body.chars().count() > 200 {
+                let truncated: String = body.chars().take(200).collect();
+                format!("{truncated}...")
             } else {
                 body
             };

@@ -1033,19 +1033,19 @@ impl ConnectionStore {
 
     // ── Snapshot methods ─────────────────────────────────────────
 
-    /// Save a weekly snapshot.
+    /// Save a weekly snapshot. `period_start`/`period_end` are the ISO-week
+    /// boundary timestamps computed by the caller (see `snapshots::week_boundaries`).
     pub fn save_snapshot(
         &self,
         week: &str,
         snapshot_type: &str,
+        period_start: &str,
+        period_end: &str,
         data: &str,
         summary: &str,
     ) -> anyhow::Result<()> {
         let db = self.db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
         let now = now_iso();
-
-        // Compute period_start and period_end from the ISO week string
-        let (period_start, period_end) = week_to_period(week);
 
         db.execute(
             "INSERT OR REPLACE INTO weekly_snapshots
@@ -2079,14 +2079,6 @@ fn days_to_ymd(days: i64) -> (i64, i64, i64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
-}
-
-/// Convert ISO week string "2026-W09" to (period_start, period_end) ISO dates.
-fn week_to_period(week: &str) -> (String, String) {
-    // Simple approximation: week N starts on Monday of that week
-    // For now, just store the week string as both start/end — the snapshot generator
-    // will provide the actual dates when creating snapshots.
-    (format!("{week}-start"), format!("{week}-end"))
 }
 
 /// Map IP to VLAN label using the registry's CIDR matching.

@@ -443,6 +443,10 @@ fn render_setup_html(username: &str, cw_url: &str, cw_name: &str, error: Option<
   {error_html}
   <form method="POST" action="/setup">
 
+    <label for="setup_token">Setup Token</label>
+    <input type="text" id="setup_token" name="setup_token" required autocomplete="off" autofocus>
+    <div class="info">Check the server logs (docker logs) for the one-time setup token.</div>
+
     <div class="section-label">CertWarden (mTLS Certificate)</div>
     <div class="info">CertWarden URL: <strong>{cw_url_escaped}</strong> &middot; Certificate: <strong>{cw_name_escaped}</strong></div>
 

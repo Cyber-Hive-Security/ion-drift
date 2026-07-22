@@ -46,5 +46,11 @@ export async function apiFetch<T>(
     );
   }
 
+  // 204/205 carry no body — calling response.json() on an empty body throws.
+  // Endpoints that return No Content (e.g. page-view tracking) resolve to undefined.
+  if (response.status === 204 || response.status === 205) {
+    return undefined as T;
+  }
+
   return response.json();
 }
