@@ -693,6 +693,15 @@ async fn main() -> anyhow::Result<()> {
              secure=true to work in browsers. Prefer \"lax\"."
         );
     }
+    // WSTG-N15 (CRYP-01): warn loudly if the RouterOS REST API is configured
+    // over plaintext HTTP — the router credentials and all API traffic would
+    // traverse the network unencrypted.
+    if !config.router.tls {
+        tracing::warn!(
+            "router.tls=false — RouterOS REST traffic (including credentials) will use plaintext \
+             HTTP. Use tls=true with a CA cert on any non-isolated network."
+        );
+    }
 
     // Session store
     let sessions = auth::SessionStore::with_idle_timeout(

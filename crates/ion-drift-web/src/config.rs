@@ -568,7 +568,45 @@ impl ServerConfig {
             );
         }
 
+        // The arbitrary [modules] table (per-module config) can hold module
+        // secrets (shared_secret, api_token, bearer, hmac keys). The fixed
+        // allowlist above can't know their field names, so recursively redact
+        // any secret-looking key throughout the whole config (WSTG-N06 /
+        // DRIFT-2026-0006).
+        redact_secret_keys(&mut value);
+
         toml::to_string_pretty(&value)
             .map_err(|e| anyhow::anyhow!("failed to format masked config: {e}"))
+    }
+}
+
+/// Recursively replace any string value whose KEY looks secret-bearing with
+/// `[REDACTED]`. Conservative: matches on substrings so unknown module secret
+/// fields are caught. Non-string values and non-secret keys are left intact.
+fn redact_secret_keys(value: &mut toml::Value) {
+    fn key_is_secret(k: &str) -> bool {
+        let k = k.to_ascii_lowercase();
+        ["secret", "password", "token", "api_key", "apikey", "hmac", "private_key", "privatekey"]
+            .iter()
+            .any(|needle| k.contains(needle))
+    }
+    match value {
+        toml::Value::Table(table) => {
+            for (k, v) in table.iter_mut() {
+                if key_is_secret(k) {
+                    if let toml::Value::String(_) = v {
+                        *v = toml::Value::String("[REDACTED]".to_string());
+                        continue;
+                    }
+                }
+                redact_secret_keys(v);
+            }
+        }
+        toml::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                redact_secret_keys(v);
+            }
+        }
+        _ => {}
     }
 }
