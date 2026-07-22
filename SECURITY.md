@@ -64,12 +64,14 @@ We follow [coordinated disclosure](https://en.wikipedia.org/wiki/Coordinated_vul
 | `session.secure` | `true` | Requires HTTPS for session cookies. A startup warning is emitted if disabled. |
 | `session.same_site` | `"lax"` | SameSite cookie attribute for CSRF protection. `"none"` warns at startup. |
 | `session.idle_timeout_seconds` | `0` (off) | Idle/inactivity session timeout (capped at `max_age_seconds`). Example configs set `43200` (12h). |
-| `server.trust_proxy_headers` | `true` | Whether to trust `X-Forwarded-For`/`X-Real-IP` for client IP. **Set `false` if directly exposed** (no reverse proxy) so the per-IP rate-limit bucket can't be spoofed. |
+| `server.trust_proxy_headers` | `true` | Whether to trust `X-Forwarded-For`/`X-Real-IP` for client IP. **Set `false` if directly exposed** (no reverse proxy) so forwarding headers can't rotate the per-IP rate-limit bucket; the limiter then keys on the real socket peer address. |
 | `router.tls` | `true` | Use HTTPS for the RouterOS REST API. A startup warning is emitted if disabled (plaintext credentials). |
 | Rate limiting | Enabled | Login endpoints are rate-limited per-username and per-IP with automatic cleanup. |
 | CSRF protection | Enabled | **Every** mutating API request (incl. no-body) must use `Content-Type: application/json`; combined with locked single-origin CORS and SameSite cookies. |
 | Security headers | Enabled | HSTS, CSP (`script-src 'self'`, `frame-ancestors 'none'`), X-Frame-Options DENY, X-Content-Type-Options nosniff, Referrer-Policy, Permissions-Policy. |
-| Body size limit | 2 MiB (1 MiB module inbound) | Maximum request body size. |
+| Body size limit | 2 MiB (1 MiB module inbound) | Maximum request body size. Device and module *responses* are stream-capped (8/10 MiB) and rejected early on an oversized `Content-Length`. |
+| Module proxy | API-only | Reverse-proxied module routes are restricted to the manifest's `exposed_routes` (method + path), and responses are forced inert (`application/json`, `nosniff`, `attachment`) so a module cannot serve active content on Ion Drift's origin. |
+| Session tokens | Hashed at rest | The `sessions` store keys on `SHA-256(token)`; the bearer token exists only in the client cookie, so a stolen `sessions.db` can't be replayed. |
 
 ## Deployment Guidance
 
