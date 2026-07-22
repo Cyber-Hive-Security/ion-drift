@@ -32,6 +32,7 @@ pub mod router_queue;
 pub mod routes;
 pub mod secrets;
 pub mod setup;
+pub mod ssrf;
 pub mod snapshots;
 pub mod snmp_poller;
 pub mod state;

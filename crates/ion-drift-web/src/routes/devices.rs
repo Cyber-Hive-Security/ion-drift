@@ -39,31 +39,13 @@ fn sanitize_device_error(context: &str, e: &dyn std::fmt::Display) -> String {
     }
 }
 
+/// SSRF guard for device connection hosts. Managed routers do not live on
+/// localhost, so loopback is blocked here (allow_loopback = false); RFC1918/ULA
+/// LAN targets are allowed. Uses the shared helper so IPv4-mapped/NAT64 IPv6
+/// forms of blocked ranges are covered consistently with the module path
+/// (WSTG-N06 — previously this only blocked IPv6 ::1).
 fn is_blocked_host(host: &str) -> bool {
-    use std::net::ToSocketAddrs;
-    if let Ok(addrs) = (host, 0u16).to_socket_addrs() {
-        for addr in addrs {
-            let ip = addr.ip();
-            match ip {
-                std::net::IpAddr::V4(v4) => {
-                    if v4.is_loopback()
-                        || v4.is_link_local()
-                        || v4.is_broadcast()
-                        || v4.octets()[0] == 0
-                        || (v4.octets()[0] == 169 && v4.octets()[1] == 254)
-                    {
-                        return true;
-                    }
-                }
-                std::net::IpAddr::V6(v6) => {
-                    if v6.is_loopback() {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
+    crate::ssrf::host_resolves_to_blocked(host, false)
 }
 
 fn bad_request(msg: &str) -> Response {

@@ -50,6 +50,10 @@ impl ModuleRegistryService {
         let http = reqwest::Client::builder()
             .timeout(PROBE_TIMEOUT)
             .user_agent(concat!("ion-drift-modules/", env!("CARGO_PKG_VERSION")))
+            // SSRF: never follow redirects — the guard validates the registered
+            // host, and a 3xx must not be able to move the connection to an
+            // unvetted (e.g. link-local metadata) target (DRIFT-2026-0001).
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .context("build module registry http client")?;
         Ok(Self { store, http })
@@ -172,6 +176,18 @@ impl ModuleRegistryService {
     }
 
     async fn fetch_manifest(&self, base: &Url) -> anyhow::Result<Manifest> {
+        // Re-run the SSRF host guard immediately before every probe (not just
+        // at registration) so a domain that rebinds to a blocked address after
+        // registration — or a stored URL reached via test_connection/refresh —
+        // is still caught (DRIFT-2026-0001 DNS-rebind + re-probe gap).
+        if let Some(host) = base.host_str() {
+            if crate::ssrf::host_resolves_to_blocked(host, true) {
+                return Err(anyhow!(
+                    "module host resolves to a blocked address range at probe time \
+                     (link-local/unspecified/broadcast)"
+                ));
+            }
+        }
         let manifest_url = Url::parse(&format!(
             "{}/manifest",
             base.as_str().trim_end_matches('/')
@@ -207,24 +223,19 @@ fn parse_module_url(s: &str) -> anyhow::Result<Url> {
             ))
         }
     }
+    // SSRF guard. Loopback + RFC1918 + ULA are deliberately ALLOWED (modules
+    // run on the LAN or same host); link-local (incl. cloud metadata), the
+    // unspecified/broadcast ranges, and IPv6-embedded IPv4 forms of those are
+    // blocked via the shared helper (DRIFT-2026-0001, WSTG-N06).
     let blocked = match url.host() {
         None => return Err(anyhow!("module URL must include a host")),
-        Some(url::Host::Ipv4(v4)) => ipv4_is_blocked(v4),
-        Some(url::Host::Ipv6(v6)) => ipv6_is_blocked(v6),
+        Some(url::Host::Ipv4(v4)) => crate::ssrf::ip_is_blocked(v4.into(), true),
+        Some(url::Host::Ipv6(v6)) => crate::ssrf::ip_is_blocked(v6.into(), true),
+        // Resolve so a DNS name can't smuggle a blocked address past a
+        // literal-IP check. Unresolvable hosts are not blocked here —
+        // registration fails at the manifest probe with a clearer error.
         Some(url::Host::Domain(domain)) => {
-            // Resolve so a DNS name can't smuggle a blocked address past a
-            // literal-IP check. Unresolvable hosts are not blocked here —
-            // registration fails at the manifest probe with a clearer error.
-            use std::net::ToSocketAddrs;
-            (domain, 0u16)
-                .to_socket_addrs()
-                .map(|mut addrs| {
-                    addrs.any(|a| match a.ip() {
-                        std::net::IpAddr::V4(v4) => ipv4_is_blocked(v4),
-                        std::net::IpAddr::V6(v6) => ipv6_is_blocked(v6),
-                    })
-                })
-                .unwrap_or(false)
+            crate::ssrf::host_resolves_to_blocked(domain, true)
         }
     };
     if blocked {
@@ -233,18 +244,6 @@ fn parse_module_url(s: &str) -> anyhow::Result<Url> {
         ));
     }
     Ok(url)
-}
-
-/// SSRF guard for admin-registered module URLs. Loopback and RFC1918 are
-/// deliberately ALLOWED — modules legitimately run on the LAN or the same
-/// host. Blocked: link-local (incl. cloud metadata 169.254.0.0/16 and
-/// fe80::/10), unspecified, and broadcast addresses.
-fn ipv4_is_blocked(v4: std::net::Ipv4Addr) -> bool {
-    v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast() || v4.octets()[0] == 0
-}
-
-fn ipv6_is_blocked(v6: std::net::Ipv6Addr) -> bool {
-    v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80
 }
 
 /// Validate a manifest against host rules. Pure function so callers can
