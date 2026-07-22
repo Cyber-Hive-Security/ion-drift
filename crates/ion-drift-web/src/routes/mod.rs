@@ -88,13 +88,12 @@ pub fn version() -> &'static str {
     option_env!("ION_DRIFT_VERSION").unwrap_or("dev")
 }
 
-/// Health check endpoint — no auth required.
+/// Health check endpoint — no auth required. Deliberately returns only
+/// liveness; build version and demo-mode are NOT disclosed to unauthenticated
+/// callers (WSTG-INFO-09 / N09). The authenticated Settings → System view
+/// surfaces the version to logged-in operators.
 async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "status": "ok",
-        "version": version(),
-        "demo_mode": demo::is_demo_mode(),
-    }))
+    Json(serde_json::json!({ "status": "ok" }))
 }
 
 /// CSRF protection middleware for non-GET API endpoints.

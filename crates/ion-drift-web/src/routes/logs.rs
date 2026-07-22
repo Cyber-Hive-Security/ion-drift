@@ -8,6 +8,13 @@ use crate::state::AppState;
 
 use super::api_error;
 
+/// Replace ASCII/Unicode control characters (newlines, tabs, ANSI ESC, etc.)
+/// with '?' so attacker-influenceable router log fields can't inject control
+/// sequences into consumers of /api/logs (DRIFT-2026-0011).
+fn strip_control_chars(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { '?' } else { c }).collect()
+}
+
 #[derive(Deserialize, Default)]
 pub struct LogFilter {
     /// Comma-separated topic filter (e.g., "firewall,dhcp").
@@ -27,10 +34,21 @@ pub async fn list(
 ) -> Result<Json<LogsResponse>, Response> {
     let raw_entries = state.mikrotik.log_entries().await.map_err(api_error)?;
 
-    // Parse all entries into structured form
+    // Strip control/ANSI characters from router-supplied log lines before
+    // parsing. Fields like DHCP hostnames and firewall comments are
+    // attacker-influenceable by any device on a monitored VLAN; unescaped
+    // control sequences reaching a terminal-based consumer of /api/logs enable
+    // log spoofing (DRIFT-2026-0011). The React UI renders inert, but the API
+    // must not emit control bytes. (The syslog path already strips at ingest.)
     let entries: Vec<StructuredLogEntry> = raw_entries
         .iter()
-        .map(|e| log_parser::parse_log_entry(e, &state.geo_cache, &state.oui_db))
+        .map(|e| {
+            let mut sanitized = e.clone();
+            sanitized.message = strip_control_chars(&e.message);
+            sanitized.topics = e.topics.as_deref().map(strip_control_chars);
+            sanitized
+        })
+        .map(|e| log_parser::parse_log_entry(&e, &state.geo_cache, &state.oui_db))
         .collect();
 
     // Deduplicate log+drop/accept pairs (same packet, non-terminating log rule

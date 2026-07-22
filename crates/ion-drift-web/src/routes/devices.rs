@@ -20,7 +20,14 @@ use super::internal_error;
 fn sanitize_device_error(context: &str, e: &dyn std::fmt::Display) -> String {
     let full = e.to_string();
     tracing::warn!(context = %context, error = %full, "device operation failed");
+    categorize_device_error(&full)
+}
 
+/// Map a raw device-error string to a safe category (no logging). Used at the
+/// API read boundary so raw poller errors stored in `DeviceStatus::Offline`
+/// (which may contain hostnames, TLS/cert internals) are never serialized to
+/// clients (WSTG-N07 / INFO-05).
+fn categorize_device_error(full: &str) -> String {
     let lower = full.to_lowercase();
     if lower.contains("authentication") || lower.contains("unauthorized") {
         "authentication_failed: check username and password".into()
@@ -177,12 +184,27 @@ async fn build_runtime_client(
 
 // ── GET /api/devices ─────────────────────────────────────────────
 
+/// Replace any raw error in a device's `Offline` status with a safe category
+/// so internal error detail never reaches the client (WSTG-N07).
+fn sanitize_device_info(mut info: DeviceInfo) -> DeviceInfo {
+    if let DeviceStatus::Offline { error } = &info.status {
+        let safe = categorize_device_error(error);
+        info.status = DeviceStatus::Offline { error: safe };
+    }
+    info
+}
+
 pub async fn list_devices(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<DeviceInfo>>, Response> {
     let dm = state.device_manager.read().await;
-    Ok(Json(dm.device_list()))
+    let devices = dm
+        .device_list()
+        .into_iter()
+        .map(sanitize_device_info)
+        .collect();
+    Ok(Json(devices))
 }
 
 // ── GET /api/devices/{id} ────────────────────────────────────────
@@ -194,11 +216,11 @@ pub async fn get_device(
 ) -> Result<Json<DeviceInfo>, Response> {
     let dm = state.device_manager.read().await;
     if let Some(entry) = dm.get_device(&id) {
-        return Ok(Json(DeviceInfo {
+        return Ok(Json(sanitize_device_info(DeviceInfo {
             record: entry.record.clone(),
             status: entry.status.clone(),
             limitations: entry.limitations.clone(),
-        }));
+        })));
     }
     if let Some(record) = dm.get_disabled_device(&id) {
         return Ok(Json(DeviceInfo {
