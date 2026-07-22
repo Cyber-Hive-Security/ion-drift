@@ -74,9 +74,29 @@ fn validate_ca_cert_path(path: &str) -> Result<(), Response> {
     Ok(())
 }
 
+/// True if `host` is a bare hostname or IP literal with no URL-authority
+/// smuggling: no userinfo (`user@`), path (`/`), fragment (`#`), query (`?`),
+/// scheme, embedded port (`:`), brackets, delimiters, or whitespace.
+///
+/// This closes a validator/connector parser differential: a crafted host like
+/// `x@169.254.169.254/latest/meta-data/#` otherwise passes the length/whitespace
+/// checks, fails DNS resolution *as a whole string* (so the SSRF guard's
+/// fail-open path treats it as "not blocked"), and is then re-parsed by reqwest,
+/// which extracts the embedded link-local IP and connects to it. Parsing the
+/// host as a strict `url::Host` (mirroring the module-registration path) makes
+/// the validator and the connector agree on what "the host" is.
+fn is_structural_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && !host.contains(char::is_whitespace)
+        && (host.parse::<std::net::IpAddr>().is_ok() || url::Host::parse(host).is_ok())
+}
+
 fn validate_host(host: &str) -> Result<(), Response> {
-    if host.is_empty() || host.len() > 253 || host.contains(char::is_whitespace) {
-        return Err(bad_request("invalid host: 1-253 chars, no whitespace"));
+    if !is_structural_host(host) {
+        return Err(bad_request(
+            "invalid host: must be a bare hostname or IP address (1-253 chars, no scheme/port/path)",
+        ));
     }
     if is_blocked_host(host) {
         return Err(bad_request("host resolves to a blocked address"));
@@ -86,9 +106,11 @@ fn validate_host(host: &str) -> Result<(), Response> {
 
 /// Re-validate a host at connection time to prevent DNS rebinding (TOCTOU).
 /// Called immediately before creating a device client, after initial validate_host.
+/// Re-checks structure too, in case a malformed host was stored before this
+/// validation existed.
 fn revalidate_host(host: &str) -> Result<(), Response> {
-    if is_blocked_host(host) {
-        tracing::warn!(host = %host, "DNS rebinding detected: host resolved to blocked address at connection time");
+    if !is_structural_host(host) || is_blocked_host(host) {
+        tracing::warn!(host = %host, "device host failed connection-time SSRF revalidation (structure or DNS rebinding)");
         return Err(bad_request("host resolves to a blocked address (DNS rebinding detected)"));
     }
     Ok(())
@@ -848,5 +870,37 @@ mod tests {
     fn ca_cert_path_accepts_valid() {
         assert!(validate_ca_cert_path("/app/data/certs/ca.pem").is_ok());
         assert!(validate_ca_cert_path("/app/certs/custom-ca.crt").is_ok());
+    }
+
+    #[test]
+    fn host_rejects_url_authority_smuggling() {
+        // The parser-differential bypass: these fail DNS as a whole string
+        // (SSRF guard fails open) but reqwest would extract an embedded/other
+        // host. Structural validation must reject them outright.
+        assert!(!is_structural_host("x@169.254.169.254/latest/meta-data/#"));
+        assert!(!is_structural_host("169.254.169.254/latest/meta-data"));
+        assert!(!is_structural_host("user:pass@10.0.0.1"));
+        assert!(!is_structural_host("host:8080")); // embedded port
+        assert!(!is_structural_host("host#frag"));
+        assert!(!is_structural_host("host/path"));
+        assert!(!is_structural_host("http://host")); // scheme
+        assert!(!is_structural_host("a b")); // whitespace
+        assert!(!is_structural_host(""));
+    }
+
+    #[test]
+    fn host_accepts_bare_hostnames_and_ips() {
+        assert!(is_structural_host("router.lan"));
+        assert!(is_structural_host("mikrotik-01"));
+        assert!(is_structural_host("10.20.25.1"));
+        assert!(is_structural_host("8.8.8.8"));
+        assert!(is_structural_host("fe80::1")); // structurally valid; SSRF-blocked separately
+    }
+
+    #[test]
+    fn validate_host_rejects_smuggled_metadata() {
+        // End-to-end: the crafted host must be refused by validate_host, not
+        // pass through to the client where reqwest reaches 169.254.169.254.
+        assert!(validate_host("x@169.254.169.254/latest/meta-data/#").is_err());
     }
 }

@@ -115,6 +115,40 @@ async fn proxy_impl(
         }
     };
 
+    // Re-validate the module host against the SSRF guard immediately before
+    // connecting — parity with the registration probe path (service.rs). A
+    // hostname vetted at registration can later DNS-rebind to a blocked address
+    // (e.g. 169.254.169.254); the live proxy path previously trusted only the
+    // registration-time check, so a rebind reached metadata. allow_loopback=true
+    // matches module policy (modules may run on the same host).
+    match url::Url::parse(&module.url) {
+        Ok(u) => {
+            if let Some(host) = u.host_str() {
+                if crate::ssrf::host_resolves_to_blocked(host, true) {
+                    tracing::warn!(
+                        module = %name, host = %host,
+                        "module host resolves to a blocked address (possible DNS rebinding); refusing proxy"
+                    );
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(serde_json::json!({
+                            "error": "module host resolves to a blocked address"
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(module = %name, error = %e, "stored module url is unparseable");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "module url invalid" })),
+            )
+                .into_response();
+        }
+    }
+
     let query = req
         .uri()
         .query()
