@@ -828,7 +828,7 @@ pub fn router(
     // and must NOT pick up the session-cookie auth layer below.
     let inbound = crate::modules_registry::inbound_router();
 
-    Ok(app
+    let app = app
         // Nest all API routes under /api with global auth layer
         // (includes /api/system/modules and /api/modules/<name>/* — both auth-gated)
         .nest("/api", api_routes)
@@ -844,7 +844,23 @@ pub fn router(
             .gzip(true)
             .br(true))
         .layer(cors)
-        // Security headers
+        ;
+    let app = apply_security_headers(app);
+    Ok(app.with_state(state))
+}
+
+/// Apply the full HTTP security-header stack to a router. Shared between the
+/// main application router and the pre-provisioning setup-mode routers so the
+/// setup wizard (which handles credentials) gets the same headers as the app.
+///
+/// Headers: X-Frame-Options + CSP frame-ancestors (clickjacking, WSTG-CLNT-09),
+/// X-Content-Type-Options (MIME sniffing), CSP (XSS defense-in-depth),
+/// HSTS (WSTG-CONF-07), Referrer-Policy + Permissions-Policy (WSTG-CONF-14).
+pub fn apply_security_headers<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("DENY"),
@@ -861,7 +877,22 @@ pub fn router(
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'"),
         ))
-        .with_state(state))
+        // HSTS (WSTG-CONF-07). Two years + subdomains. Harmless over plaintext
+        // (browsers ignore it on http://); protects every https:// deployment.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+        ))
+        // Referrer-Policy (WSTG-CONF-14): don't leak the URL cross-origin.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("no-referrer"),
+        ))
+        // Permissions-Policy (WSTG-CONF-14): deny features the UI never uses.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("geolocation=(), camera=(), microphone=(), interest-cohort=()"),
+        ))
 }
 
 /// Middleware adapter that runs the [`RequireAdmin`] extractor on the

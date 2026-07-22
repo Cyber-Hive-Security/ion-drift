@@ -1044,6 +1044,10 @@ async fn run_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> an
         )
         .fallback(|| async { axum::response::Redirect::temporary("/setup") })
         .with_state(setup_state);
+    // Setup mode handles credentials; give it the same security headers as
+    // the main app (WSTG-N05). Deployment should still bind setup behind TLS
+    // or to loopback — see SECURITY.md.
+    let app = crate::routes::apply_security_headers(app);
 
     // Bind to configured listen address so the setup wizard is accessible in Docker
     let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
@@ -1089,6 +1093,9 @@ async fn run_local_setup_mode(config: &ServerConfig, data_dir: &std::path::Path)
         )
         .fallback(|| async { axum::response::Redirect::temporary("/setup") })
         .with_state(state);
+    // Same security headers as the main app for the credential-handling setup
+    // wizard (WSTG-N05).
+    let app = crate::routes::apply_security_headers(app);
 
     // Bind to configured listen address so the setup wizard is accessible in Docker
     let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
