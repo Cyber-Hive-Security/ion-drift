@@ -51,3 +51,6 @@ docs/ai/
 
 # Codeforge
 .codeforge/
+
+# Internal audit tooling — never ship (see audit/README.md)
+audit/
