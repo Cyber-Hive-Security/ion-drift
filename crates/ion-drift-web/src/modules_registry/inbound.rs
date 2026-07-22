@@ -87,6 +87,16 @@ pub const MAX_BODY_BYTES: usize = 1_048_576; // 1 MiB
 /// retry is still detected as a duplicate.
 pub const NONCE_TTL_SECS: u64 = 600;
 
+/// Hard cap on the nonce map. At the 600s TTL this bounds sustained accepted
+/// throughput to ~MAX/600 ≈ 546 envelopes/sec across all modules before old
+/// entries must be evicted early — far above any legitimate rate, and it caps
+/// memory + the GC scan cost (DRIFT-2026-0007).
+const MAX_NONCE_ENTRIES: usize = 327_680;
+
+/// GC only every Nth insert instead of on every insert, so the O(n) `retain`
+/// scan doesn't run under the global lock on the hot path.
+const NONCE_GC_INTERVAL: u64 = 512;
+
 /// In-memory `(module_name, nonce) → seen_at` set with TTL eviction.
 ///
 /// Defense-in-depth against replay: even if an attacker captures a
@@ -95,6 +105,7 @@ pub const NONCE_TTL_SECS: u64 = 600;
 #[derive(Default)]
 pub struct NonceCache {
     inner: Mutex<HashMap<(String, String), u64>>,
+    inserts: std::sync::atomic::AtomicU64,
 }
 
 impl NonceCache {
@@ -103,11 +114,27 @@ impl NonceCache {
     }
 
     /// Record a `(module, nonce)` pair and report whether it was already
-    /// present. Side-effects an opportunistic GC of expired entries on
-    /// each call so the map cannot grow without bound.
+    /// present. GC of expired entries runs periodically (every
+    /// `NONCE_GC_INTERVAL` inserts) or when the map hits `MAX_NONCE_ENTRIES`,
+    /// rather than on every insert, so the O(n) scan is off the hot path while
+    /// the map stays bounded (DRIFT-2026-0007).
     pub async fn record(&self, module: &str, nonce: &str, now_unix: u64) -> bool {
+        use std::sync::atomic::Ordering;
         let mut guard = self.inner.lock().await;
-        guard.retain(|_, t| now_unix.saturating_sub(*t) < NONCE_TTL_SECS);
+
+        let n = self.inserts.fetch_add(1, Ordering::Relaxed);
+        if n % NONCE_GC_INTERVAL == 0 || guard.len() >= MAX_NONCE_ENTRIES {
+            guard.retain(|_, t| now_unix.saturating_sub(*t) < NONCE_TTL_SECS);
+        }
+        // Hard backstop: if still at capacity after GC (sustained flood), drop
+        // the oldest entries so memory cannot grow without bound. Treat an
+        // unknown nonce as new (fail-open on dedup, not on auth — HMAC already
+        // passed) to keep legit traffic flowing.
+        if guard.len() >= MAX_NONCE_ENTRIES {
+            let cutoff = now_unix.saturating_sub(NONCE_TTL_SECS / 2);
+            guard.retain(|_, t| *t >= cutoff);
+        }
+
         let key = (module.to_string(), nonce.to_string());
         match guard.insert(key, now_unix) {
             Some(_) => true,  // already present
@@ -291,11 +318,18 @@ async fn try_publish(
     // name lives on the row. Other event kinds are advisory-only and not
     // persisted here.
     if let DriftEvent::Finding(ref finding) = event {
+        // Clamp module-supplied finding content before persisting. severity is
+        // already an enum (serde-validated); the free-form string/array fields
+        // are not, so a compromised or buggy module could store megabyte
+        // titles, thousands of device MACs, etc. into the operator console
+        // (DRIFT-2026-0005). Bound sizes; content is still module-authored and
+        // rendered inertly by the CSP-guarded React UI.
+        let finding = clamp_finding(finding);
         if let Err(e) = state
             .findings_store
             .upsert_finding(
                 name,
-                finding,
+                &finding,
                 Some(envelope.event_id.as_str()),
                 Some(envelope.nonce.as_str()),
             )
@@ -315,6 +349,42 @@ async fn try_publish(
     let _ = store.touch_last_seen(name).await;
 
     Ok(envelope)
+}
+
+/// Bound the free-form fields of a module-supplied finding so a compromised
+/// module can't flood the operator console (DRIFT-2026-0005). severity is a
+/// serde-validated enum and needs no clamping.
+fn clamp_finding(f: &FindingV1) -> FindingV1 {
+    fn clamp_str(s: &str, max: usize) -> String {
+        s.chars().take(max).collect()
+    }
+    const MAX_TITLE: usize = 512;
+    const MAX_NARRATIVE: usize = 8192;
+    const MAX_CATEGORY: usize = 128;
+    const MAX_ID: usize = 256;
+    const MAX_ACTIONS: usize = 32;
+    const MAX_EVIDENCE: usize = 64;
+    const MAX_MACS: usize = 256;
+
+    let mut c = f.clone();
+    c.finding_id = clamp_str(&f.finding_id, MAX_ID);
+    c.title = clamp_str(&f.title, MAX_TITLE);
+    c.narrative = clamp_str(&f.narrative, MAX_NARRATIVE);
+    c.category = clamp_str(&f.category, MAX_CATEGORY);
+    c.recommended_actions = f
+        .recommended_actions
+        .iter()
+        .take(MAX_ACTIONS)
+        .map(|s| clamp_str(s, 1024))
+        .collect();
+    c.evidence.truncate(MAX_EVIDENCE);
+    c.device_macs = f
+        .device_macs
+        .iter()
+        .take(MAX_MACS)
+        .map(|m| clamp_str(m, 64))
+        .collect();
+    c
 }
 
 /// Translate a wire event into an in-process [`DriftEvent`], dropping any
@@ -384,14 +454,21 @@ mod tests {
     #[tokio::test]
     async fn nonce_cache_records_and_evicts() {
         let cache = NonceCache::new();
+        // Dedup correctness (the security-relevant property) is per-insert.
         assert!(!cache.record("m", "abc", 1000).await);
-        assert!(cache.record("m", "abc", 1001).await); // duplicate
-        assert_eq!(cache.len().await, 1);
+        assert!(cache.record("m", "abc", 1001).await); // duplicate within TTL
 
-        // Far-future timestamp evicts old entries on next insert.
-        assert!(!cache.record("m", "xyz", 1000 + NONCE_TTL_SECS + 1).await);
-        // After GC, the old `abc` entry is gone.
-        assert_eq!(cache.len().await, 1);
+        // GC is periodic (not every insert — DRIFT-2026-0007). Drive enough
+        // fresh inserts to trigger a GC pass at a timestamp far past `abc`'s
+        // TTL; `abc` is then evicted and re-recording it reports "new".
+        let future = 1000 + NONCE_TTL_SECS + 1;
+        for i in 0..=NONCE_GC_INTERVAL {
+            cache.record("m", &format!("n{i}"), future).await;
+        }
+        assert!(
+            !cache.record("m", "abc", future).await,
+            "expired abc should have been evicted by periodic GC"
+        );
     }
 
     #[test]
