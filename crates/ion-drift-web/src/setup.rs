@@ -8,6 +8,14 @@ use secrecy::SecretString;
 use crate::bootstrap;
 use crate::certwarden;
 
+/// Constant-time equality for the one-time setup bootstrap token so a wrong
+/// token can't be recovered byte-by-byte via response timing (WSTG-N10 /
+/// CONF-05).
+fn setup_token_matches(provided: &str, expected: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1
+}
+
 /// Role assigned to local admin users created via the setup wizard.
 const LOCAL_ADMIN_ROLE: &str = "admin";
 use crate::config::{OidcBootstrapSection, TlsSection};
@@ -62,7 +70,7 @@ pub async fn setup_submit(
     // Validate bootstrap token
     if let Some(ref expected) = state.bootstrap_token {
         let provided = form.setup_token.as_deref().unwrap_or("");
-        if provided != expected {
+        if !setup_token_matches(provided, expected) {
             return Html(format!("<h1>Invalid setup token</h1><p>Check the server logs for the correct token.</p><p><a href=\"/setup\">Try again</a></p>")).into_response();
         }
     }
@@ -536,7 +544,7 @@ pub async fn local_setup_submit(
     // Validate bootstrap token (prevents unauthorized setup claims on shared networks)
     if let Some(ref expected) = state.bootstrap_token {
         let provided = form.setup_token.as_deref().unwrap_or("");
-        if provided != expected {
+        if !setup_token_matches(provided, expected) {
             return Html(render_local_setup_html(Some("Invalid setup token. Check the server logs for the correct token."))).into_response();
         }
     }

@@ -38,6 +38,10 @@ pub type OidcClient = CoreClient<
 
 // ── Session store ─────────────────────────────────────────────────
 
+/// Name of the short-lived cookie that binds an in-progress OIDC flow to the
+/// initiating browser (DRIFT-2026-0002 login-CSRF / session-fixation defense).
+const OIDC_STATE_COOKIE: &str = "ion_drift_oidc_state";
+
 /// Data stored for an authenticated session.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionData {
@@ -95,10 +99,21 @@ pub struct SessionStore {
     db: Arc<std::sync::Mutex<rusqlite::Connection>>,
     signing_key: Arc<tokio::sync::RwLock<Vec<u8>>>,
     max_age: Duration,
+    /// Idle timeout; `Duration::ZERO` disables idle expiry (WSTG-SESS-07).
+    idle_max: Duration,
 }
 
 impl SessionStore {
     pub fn new(max_age_seconds: u64, db_path: &Path, session_secret: &str) -> anyhow::Result<Self> {
+        Self::with_idle_timeout(max_age_seconds, 0, db_path, session_secret)
+    }
+
+    pub fn with_idle_timeout(
+        max_age_seconds: u64,
+        idle_timeout_seconds: u64,
+        db_path: &Path,
+        session_secret: &str,
+    ) -> anyhow::Result<Self> {
         let conn = rusqlite::Connection::open(db_path)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -122,6 +137,8 @@ impl SessionStore {
             db: Arc::new(std::sync::Mutex::new(conn)),
             signing_key: Arc::new(tokio::sync::RwLock::new(session_secret.as_bytes().to_vec())),
             max_age: Duration::from_secs(max_age_seconds),
+            // Cap idle at the absolute max_age; 0 = disabled.
+            idle_max: Duration::from_secs(idle_timeout_seconds.min(max_age_seconds)),
         };
         store.load_active_from_db();
         Ok(store)
@@ -205,7 +222,11 @@ impl SessionStore {
         }
         let mut entry = self.sessions.get_mut(session_id)?;
         let now = now_secs();
-        if now - entry.data.created_at > self.max_age.as_secs() {
+        // Absolute timeout (created_at) OR idle timeout (last_accessed).
+        let absolute_expired = now.saturating_sub(entry.data.created_at) > self.max_age.as_secs();
+        let idle_expired = self.idle_max > Duration::ZERO
+            && now.saturating_sub(entry.data.last_accessed) > self.idle_max.as_secs();
+        if absolute_expired || idle_expired {
             drop(entry);
             self.sessions.remove(session_id);
             self.delete_from_db(session_id);
@@ -450,7 +471,14 @@ fn now_secs() -> u64 {
 /// Uses the rightmost X-Forwarded-For entry (set by the nearest trusted proxy),
 /// then X-Real-IP, then falls back to "unknown". Values are validated as IP addresses
 /// to prevent spoofed non-IP strings from bypassing rate limiting.
-pub fn extract_client_ip(headers: &axum::http::HeaderMap) -> String {
+pub fn extract_client_ip(headers: &axum::http::HeaderMap, trust_proxy_headers: bool) -> String {
+    // When not explicitly behind a trusted proxy, do NOT trust client-supplied
+    // forwarding headers — otherwise an attacker rotates them to defeat the
+    // per-IP rate limiter (DRIFT-2026-0009). Falls back to "unknown" (a single
+    // shared bucket); the per-username limiter remains the primary backstop.
+    if !trust_proxy_headers {
+        return "unknown".to_string();
+    }
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         // Use rightmost entry — set by the nearest proxy, harder to spoof than leftmost
         if let Some(last) = xff.rsplit(',').next() {
@@ -602,7 +630,7 @@ fn json_error(status: StatusCode, msg: impl Into<String>) -> Response {
 // ── Handlers ──────────────────────────────────────────────────────
 
 /// `GET /auth/login` — Start the OIDC authorization code flow.
-pub async fn login(State(state): State<AppState>) -> Response {
+pub async fn login(State(state): State<AppState>, jar: CookieJar) -> Response {
     let oidc_client = match &state.oidc_client {
         Some(c) => c,
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "OIDC is not configured"),
@@ -631,7 +659,26 @@ pub async fn login(State(state): State<AppState>) -> Response {
         );
     }
 
-    Redirect::temporary(auth_url.as_str()).into_response()
+    // Bind this pending flow to THIS browser (DRIFT-2026-0002 login-CSRF /
+    // session fixation). The state value is echoed into a short-lived
+    // HttpOnly cookie; the callback requires the cookie to match the `state`
+    // query param, so a state minted by an attacker cannot be completed in a
+    // victim's browser. PKCE+nonce already prevent token injection; this
+    // prevents cross-browser delivery.
+    let same_site = match state.config.session.same_site.to_lowercase().as_str() {
+        "strict" => SameSite::Strict,
+        "none" => SameSite::None,
+        _ => SameSite::Lax,
+    };
+    let state_cookie = Cookie::build((OIDC_STATE_COOKIE, csrf_token.secret().clone()))
+        .path("/")
+        .http_only(true)
+        .secure(state.config.session.secure)
+        .max_age(cookie::time::Duration::seconds(600))
+        .same_site(same_site)
+        .build();
+
+    (jar.add(state_cookie), Redirect::temporary(auth_url.as_str())).into_response()
 }
 
 #[derive(Deserialize)]
@@ -660,6 +707,23 @@ pub async fn callback(
     jar: CookieJar,
     headers: axum::http::HeaderMap,
 ) -> Result<(CookieJar, Redirect), Response> {
+    // Verify the state is bound to THIS browser before doing anything else
+    // (DRIFT-2026-0002). The login handler set an HttpOnly cookie to the state
+    // value; require it to match the `state` query param. Constant-time compare.
+    let bound = jar
+        .get(OIDC_STATE_COOKIE)
+        .map(|c| {
+            use subtle::ConstantTimeEq;
+            c.value().as_bytes().ct_eq(params.state.as_bytes()).unwrap_u8() == 1
+        })
+        .unwrap_or(false);
+    if !bound {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "state does not match this browser's login flow",
+        ));
+    }
+
     // Retrieve and consume the pending auth state
     let (nonce, pkce_verifier) = state.sessions.take_pending(&params.state).ok_or_else(|| {
         json_error(
@@ -763,7 +827,11 @@ pub async fn callback(
         .same_site(same_site)
         .build();
 
-    Ok((jar.add(cookie), Redirect::temporary("/")))
+    // Clear the one-time OIDC state-binding cookie now that the flow is done.
+    let jar = jar
+        .add(cookie)
+        .remove(Cookie::from(OIDC_STATE_COOKIE));
+    Ok((jar, Redirect::temporary("/")))
 }
 
 /// `POST /auth/logout` — Destroy the session and clear the cookie.
@@ -879,7 +947,7 @@ pub async fn local_login(
     Json(req): Json<LocalLoginRequest>,
 ) -> Result<(CookieJar, Json<serde_json::Value>), Response> {
     // Rate limit by both username and client IP
-    let client_ip = extract_client_ip(&headers);
+    let client_ip = extract_client_ip(&headers, state.config.server.trust_proxy_headers);
     let ip_key = format!("ip:{client_ip}");
     if let Err(retry_after) = state.login_limiter.check(&req.username) {
         tracing::warn!(username = %req.username, client_ip = %client_ip, "login rate limited by username");

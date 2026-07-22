@@ -99,39 +99,34 @@ async fn health() -> Json<serde_json::Value> {
 
 /// CSRF protection middleware for non-GET API endpoints.
 ///
-/// Requires that mutating requests (POST/PUT/DELETE) include a Content-Type
-/// header with `application/json`. This prevents cross-origin form submissions
-/// from attaching session cookies, since HTML forms cannot set custom
-/// Content-Type values beyond form-urlencoded/multipart/text-plain.
+/// Requires that EVERY mutating request (POST/PUT/DELETE/PATCH) declares
+/// `Content-Type: application/json` — including no-body requests. A cross-site
+/// HTML form cannot set that Content-Type without triggering a CORS preflight
+/// (which our locked, single-origin CORS rejects), so this blocks
+/// forced-browsing CSRF independently of the SameSite cookie attribute.
 ///
-/// Combined with SameSite=Lax cookies and strict CORS, this provides
-/// defense-in-depth against CSRF attacks.
+/// Previously the check only applied when a body was present, so no-body
+/// mutating POSTs (e.g. `/findings/{id}/acknowledge`, `/behavior/reset`) fell
+/// through to the SameSite=Lax backstop alone — CSRF-able if an operator set
+/// `same_site=none` (WSTG-N02 / SESS-05). The frontend's apiFetch always sends
+/// `application/json` on mutating requests, so legitimate calls are unaffected.
 pub(crate) async fn csrf_guard_layer(
     request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
     let method = request.method().clone();
     if method != Method::GET && method != Method::HEAD && method != Method::OPTIONS {
-        let has_body = request
+        let ct = request
             .headers()
-            .get(header::CONTENT_LENGTH)
+            .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok())
-            .map_or(false, |len| len > 0);
-
-        if has_body {
-            let ct = request
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            if !ct.starts_with("application/json") {
-                return (
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    Json(serde_json::json!({ "error": "Content-Type must be application/json" })),
-                )
-                    .into_response();
-            }
+            .unwrap_or("");
+        if !ct.starts_with("application/json") {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                Json(serde_json::json!({ "error": "Content-Type must be application/json" })),
+            )
+                .into_response();
         }
     }
     next.run(request).await
@@ -203,10 +198,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn csrf_allows_empty_body_post() {
+    async fn csrf_rejects_empty_body_post_without_json_content_type() {
+        // WSTG-N02: no-body mutating requests must ALSO declare
+        // application/json — otherwise they bypass the CSRF guard.
         let req = Request::builder()
             .method(Method::POST)
             .uri("/x")
+            .header(header::CONTENT_LENGTH, "0")
+            .body(Body::empty())
+            .expect("request");
+        let status = app().oneshot(req).await.expect("response").status();
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_empty_body_post_with_json_content_type() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/x")
+            .header(header::CONTENT_TYPE, "application/json")
             .header(header::CONTENT_LENGTH, "0")
             .body(Body::empty())
             .expect("request");

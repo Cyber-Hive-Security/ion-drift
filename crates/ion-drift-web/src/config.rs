@@ -249,6 +249,14 @@ pub struct ServerSection {
     /// Default: [] (empty — configure via Settings > Monitored Regions).
     #[serde(default)]
     pub warning_countries: Vec<String>,
+    /// Trust `X-Forwarded-For`/`X-Real-IP` for client-IP derivation
+    /// (rate-limit keys, auth logs). Enable ONLY when Ion Drift sits behind a
+    /// reverse proxy that overwrites these headers. When false, client-supplied
+    /// values are ignored so an attacker can't spoof the per-IP rate-limit
+    /// bucket (DRIFT-2026-0009 / WSTG-N18). Default true (preserves the
+    /// reverse-proxied deployments' behavior).
+    #[serde(default = "default_true")]
+    pub trust_proxy_headers: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -302,6 +310,13 @@ pub struct SessionSection {
     pub secure: bool,
     #[serde(default = "default_same_site")]
     pub same_site: String,
+    /// Idle/inactivity timeout in seconds (WSTG-SESS-07). A session with no
+    /// access within this window is rejected even if the absolute
+    /// `max_age_seconds` has not elapsed. 0 disables idle expiry (absolute
+    /// timeout only). Recommended: set to e.g. 43200 (12h). Capped at
+    /// `max_age_seconds` at runtime.
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout_seconds: u64,
     /// Loaded from `DRIFT_SESSION_SECRET` env var at runtime.
     #[serde(skip)]
     pub session_secret: String,
@@ -314,6 +329,7 @@ impl Default for SessionSection {
             max_age_seconds: default_max_age(),
             secure: true,
             same_site: default_same_site(),
+            idle_timeout_seconds: default_idle_timeout(),
             session_secret: String::new(),
         }
     }
@@ -339,6 +355,10 @@ fn default_router_port() -> u16 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_idle_timeout() -> u64 {
+    0 // disabled by default (absolute timeout only); example configs set 43200
 }
 
 fn default_username() -> String {

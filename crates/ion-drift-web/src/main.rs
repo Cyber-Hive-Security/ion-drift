@@ -32,6 +32,7 @@ mod router_queue;
 mod routes;
 mod secrets;
 mod setup;
+mod ssrf;
 mod snapshots;
 mod snmp_poller;
 mod state;
@@ -677,9 +678,26 @@ async fn main() -> anyhow::Result<()> {
     // Live traffic buffer (300 entries = 5 min at 1 sample per second, but we poll every 10s so ~50 min)
     let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
 
+    // Cookie-hardening startup guard (WSTG-N13): warn loudly if the session
+    // cookie is configured in a browser-unsafe way. SameSite=None without
+    // Secure is rejected by browsers outright and removes the CSRF backstop.
+    if !config.session.secure {
+        tracing::warn!(
+            "session.secure=false — the session cookie will be sent over plaintext HTTP. \
+             Set secure=true in any TLS/proxied deployment."
+        );
+    }
+    if config.session.same_site.eq_ignore_ascii_case("none") {
+        tracing::warn!(
+            "session.same_site=\"none\" — this removes the SameSite CSRF backstop and requires \
+             secure=true to work in browsers. Prefer \"lax\"."
+        );
+    }
+
     // Session store
-    let sessions = auth::SessionStore::new(
+    let sessions = auth::SessionStore::with_idle_timeout(
         config.session.max_age_seconds,
+        config.session.idle_timeout_seconds,
         &data_dir.join("sessions.db"),
         &config.session.session_secret,
     )?;

@@ -857,6 +857,22 @@ impl SecretsManager {
         Ok(())
     }
 
+    /// A valid argon2id hash (default params) computed once, used as the
+    /// constant-time dummy target when a username doesn't exist so login
+    /// timing doesn't reveal account existence (DRIFT-2026-0008).
+    fn dummy_argon2_hash() -> &'static str {
+        use argon2::password_hash::rand_core::OsRng;
+        use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
+        static H: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        H.get_or_init(|| {
+            let salt = SaltString::generate(&mut OsRng);
+            Argon2::default()
+                .hash_password(b"drift-dummy-verification-password", &salt)
+                .expect("hash dummy password")
+                .to_string()
+        })
+    }
+
     /// Verify a local user's password. Returns the user's role on success.
     pub async fn verify_local_user(&self, username: &str, password: &str) -> anyhow::Result<Option<LocalUser>> {
         use argon2::{Argon2, PasswordVerifier, PasswordHash};
@@ -869,6 +885,13 @@ impl SecretsManager {
         ).optional()?;
 
         let Some((hash_str, role, created_at)) = result else {
+            // User does not exist. Verify against a fixed dummy hash so the
+            // response takes the same argon2 time as a wrong-password attempt
+            // on a real user — closes the username-enumeration timing oracle
+            // (DRIFT-2026-0008 / WSTG-IDNT-04). Result is discarded.
+            let dummy = Self::dummy_argon2_hash();
+            let _ = PasswordHash::new(dummy)
+                .map(|h| Argon2::default().verify_password(password.as_bytes(), &h));
             return Ok(None);
         };
 

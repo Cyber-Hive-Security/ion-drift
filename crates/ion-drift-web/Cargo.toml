@@ -47,6 +47,7 @@ base64 = "0.22"
 hex = "0.4"
 ed25519-dalek = { version = "2", features = ["std"] }
 hmac = "=0.12.1"
+subtle = "2"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder", "tokio1"] }
 x509-parser = "0.16"
 maxminddb = "0.27"
