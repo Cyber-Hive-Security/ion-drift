@@ -14,6 +14,10 @@ listen_addr = "0.0.0.0"
 # When running in Docker, keep this at 3000. Use Docker port mapping
 # (e.g. "3100:3000" in docker-compose.yml) to change the external port.
 listen_port = 3000
+# Trust X-Forwarded-For / X-Real-IP for client-IP (login rate-limit keys, auth
+# logs). Enable ONLY behind a reverse proxy that OVERWRITES these headers.
+# Directly exposed? Leave false to prevent per-IP rate-limit spoofing.
+trust_proxy_headers = true
 # Home location for world map — required for connection arc lines to render.
 home_lon = 142.20
 home_lat = 11.35
@@ -71,7 +75,13 @@ max_age_seconds = 86400
 # Set to true if serving over HTTPS (recommended for production)
 secure = false
 same_site = "lax"
+# Idle/inactivity timeout in seconds (0 disables; capped at max_age_seconds).
+# Recommended for production: 43200 (12h).
+idle_timeout_seconds = 43200
 
 [syslog]
+# The syslog listener is UNAUTHENTICATED (plaintext UDP, source-IP filter only,
+# which is spoofable). Bind it to a trusted management segment/interface and do
+# not expose it to untrusted networks. See SECURITY.md.
 port = 5514
 bind_address = "0.0.0.0"

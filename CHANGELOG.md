@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Security
+
+Pre-release security-hardening pass (findings from an internal review + an OWASP
+WSTG coverage assessment). No known exploitable pre-auth RCE, SQL injection,
+command injection, or secret disclosure was found; the changes below close
+lower-severity gaps and add defense-in-depth.
+
+- **SSRF guard unified and hardened.** Module-registration and device-connection
+  outbound requests now share one guard that additionally blocks IPv6-embedded
+  IPv4 forms of link-local/metadata addresses (`::ffff:`, NAT64, IPv4-compatible),
+  disables HTTP redirect following, and re-validates the host before every probe
+  (not just at registration). RFC1918/ULA LAN targets remain allowed by design.
+- **OIDC login-CSRF / session-fixation fixed.** The in-progress login flow is now
+  bound to the initiating browser via a short-lived state cookie verified in the
+  callback (PKCE + nonce already prevented token injection).
+- **CSRF guard tightened.** The `application/json` requirement now applies to
+  *every* mutating request, including no-body ones (previously bypassable).
+- **HTTP security headers added:** HSTS, Referrer-Policy, Permissions-Policy (now
+  also applied to the setup wizard).
+- **Login username-enumeration timing** closed (constant-time argon2 path on
+  unknown users).
+- **Session hardening:** optional idle/inactivity timeout
+  (`session.idle_timeout_seconds`); startup warnings for `secure=false` /
+  `same_site="none"`.
+- **Rate-limit IP spoofing:** new `server.trust_proxy_headers` (default `true`);
+  set `false` when directly exposed so `X-Forwarded-For` can't rotate the per-IP
+  bucket.
+- **Output hardening:** device errors and RouterOS log fields are sanitized before
+  reaching clients; `/health` no longer discloses the build version to
+  unauthenticated callers; a provisioning error is now generic.
+- **Module trust boundary:** inbound module-supplied finding content is
+  size-clamped; the replay-nonce cache is bounded (periodic GC + hard cap); the
+  unauthenticated syslog ingest is rate-capped.
+- **Crypto/config:** license verification uses Ed25519 `verify_strict`;
+  `--dump-config` recursively redacts secret-looking keys (incl. the `[modules]`
+  table); constant-time comparison for the setup bootstrap token; startup warning
+  when the RouterOS API is configured over plaintext HTTP.
+- Added `subtle` for constant-time comparisons.
+
+See `SECURITY.md` for the deployment guidance and known-limitations/roadmap items
+(local-account MFA, password rotation, multi-user roles) surfaced by the review.
+
 ## [0.5.0] - 2026-04-10
 
 ### Added

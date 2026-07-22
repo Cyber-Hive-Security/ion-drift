@@ -12,6 +12,11 @@ listen_port = 3000
 # Monitored regions — country codes highlighted on the world map (ISO 3166-1 alpha-2).
 # Default: [] (none). Configure via Settings > Monitored Regions in the UI.
 # warning_countries = ["RU", "CN"]
+# Trust X-Forwarded-For / X-Real-IP for the client IP used in login rate-limit
+# keys and auth logs. Enable ONLY behind a reverse proxy that OVERWRITES these
+# headers (e.g. Traefik). If Ion Drift is directly exposed, leave false so an
+# attacker can't spoof the per-IP rate-limit bucket.
+trust_proxy_headers = true
 
 [router]
 # Router IP or hostname (REQUIRED for production; default: 192.168.88.1 = Mikrotik factory default)
@@ -65,6 +70,10 @@ max_age_seconds = 86400
 # is never stored.
 secure = false
 same_site = "lax"
+# Idle/inactivity timeout in seconds. A session with no activity within this
+# window is rejected even before max_age_seconds. 0 disables idle expiry.
+# Recommended: 43200 (12h). Capped at max_age_seconds.
+idle_timeout_seconds = 43200
 
 # ── mTLS Bootstrap (Keycloak-only, advanced) ────────────────────
 # Uncomment the sections below to enable mTLS KEK bootstrap + CertWarden cert management.
