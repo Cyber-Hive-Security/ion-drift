@@ -875,30 +875,52 @@ impl SecretsManager {
 
     /// Verify a local user's password. Returns the user's role on success.
     pub async fn verify_local_user(&self, username: &str, password: &str) -> anyhow::Result<Option<LocalUser>> {
-        use argon2::{Argon2, PasswordVerifier, PasswordHash};
+        // Read the stored hash (if any) under the DB lock, then RELEASE the lock
+        // before the CPU-bound Argon2 verify (review ID-03). Previously the lock
+        // was held across hashing, serializing every other secrets-DB operation
+        // behind each verification and letting a login burst starve the DB.
+        let row: Option<(String, String, i64)> = {
+            let db = self.db.lock().await;
+            db.query_row(
+                "SELECT password_hash, role, created_at FROM local_users WHERE username = ?1",
+                params![username],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+        }; // DB lock dropped here.
 
-        let db = self.db.lock().await;
-        let result: Option<(String, String, i64)> = db.query_row(
-            "SELECT password_hash, role, created_at FROM local_users WHERE username = ?1",
-            params![username],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).optional()?;
+        // Always compute a dummy hash string so the nonexistent-user branch can
+        // spend equivalent Argon2 time (username-enumeration timing oracle,
+        // DRIFT-2026-0008 / WSTG-IDNT-04).
+        let dummy = Self::dummy_argon2_hash().to_string();
+        let password = password.to_string();
+        let hash_str = row.as_ref().map(|(h, _, _)| h.clone());
 
-        let Some((hash_str, role, created_at)) = result else {
-            // User does not exist. Verify against a fixed dummy hash so the
-            // response takes the same argon2 time as a wrong-password attempt
-            // on a real user — closes the username-enumeration timing oracle
-            // (DRIFT-2026-0008 / WSTG-IDNT-04). Result is discarded.
-            let dummy = Self::dummy_argon2_hash();
-            let _ = PasswordHash::new(dummy)
-                .map(|h| Argon2::default().verify_password(password.as_bytes(), &h));
-            return Ok(None);
-        };
+        // Run Argon2 on a blocking thread — it must not block a Tokio worker
+        // (review ID-03).
+        let verified = tokio::task::spawn_blocking(move || {
+            use argon2::{Argon2, PasswordHash, PasswordVerifier};
+            match hash_str {
+                Some(hash_str) => PasswordHash::new(&hash_str)
+                    .map(|h| {
+                        Argon2::default()
+                            .verify_password(password.as_bytes(), &h)
+                            .is_ok()
+                    })
+                    .unwrap_or(false),
+                None => {
+                    let _ = PasswordHash::new(&dummy).map(|h| {
+                        Argon2::default().verify_password(password.as_bytes(), &h)
+                    });
+                    false
+                }
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("password verification task failed: {e}"))?;
 
-        let parsed_hash = PasswordHash::new(&hash_str)
-            .map_err(|e| anyhow::anyhow!("invalid stored hash: {e}"))?;
-
-        if Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok() {
+        if verified {
+            let (_, role, created_at) = row.expect("verified implies the user row exists");
             Ok(Some(LocalUser {
                 username: username.to_string(),
                 role,

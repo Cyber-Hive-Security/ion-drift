@@ -273,6 +273,13 @@ impl SessionStore {
         pkce_verifier: PkceCodeVerifier,
     ) -> bool {
         const MAX_PENDING: usize = 1000;
+        let now = now_secs();
+        // Expire stale entries BEFORE the capacity check (review ID-04). Cleanup
+        // otherwise runs only every 5 minutes, so a burst of abandoned
+        // login-starts could hold all 1000 slots — and lock out every new login
+        // with 429 — for the whole interval. Pruning on insert lets capacity
+        // self-heal continuously; an attacker must now sustain fresh entries.
+        self.pending_auth.retain(|_, v| now - v.created_at <= 300);
         if self.pending_auth.len() >= MAX_PENDING {
             return false;
         }
@@ -281,7 +288,7 @@ impl SessionStore {
             PendingAuth {
                 nonce,
                 pkce_verifier,
-                created_at: now_secs(),
+                created_at: now,
             },
         );
         true
@@ -533,6 +540,43 @@ impl LoginRateLimiter {
             }
         }
         Ok(())
+    }
+
+    /// Atomically record an attempt and return `Err(retry_after)` if the key is
+    /// now in cooldown. Unlike [`check`](Self::check), this reserves the slot
+    /// BEFORE the expensive password verification, so a concurrent burst of
+    /// wrong-password requests can't all be admitted before the first one
+    /// finishes and records a failure (review ID-03). On a successful login the
+    /// caller must call [`record_success`](Self::record_success) to refund.
+    pub fn reserve(&self, key: &str) -> Result<(), u64> {
+        let now = now_secs();
+        let entry = self
+            .attempts
+            .entry(key.to_string())
+            .and_modify(|(count, last)| {
+                *count = count.saturating_add(1);
+                *last = now;
+            })
+            .or_insert((1, now));
+        let count = entry.0;
+        drop(entry); // release the shard lock before returning
+        // Because reserve() counts the attempt up front (unlike check(), which
+        // only counted failures), allow the first two attempts free before the
+        // backoff ramp — preserving the prior two-strikes UX.
+        let cooldown = match count {
+            0..=2 => 0,
+            3 => 1,
+            4 => 2,
+            5 => 4,
+            6 => 8,
+            7 => 16,
+            _ => 30,
+        };
+        if cooldown > 0 {
+            Err(cooldown)
+        } else {
+            Ok(())
+        }
     }
 
     /// Record a failed attempt.
@@ -940,32 +984,55 @@ pub async fn auth_config(State(state): State<AppState>) -> Json<AuthConfigRespon
     })
 }
 
+/// Global cap on concurrent local-login password verifications so a flood of
+/// admitted attempts across many usernames can't saturate the CPU with parallel
+/// Argon2 hashing (review ID-03).
+static LOGIN_VERIFY_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
+
 /// `POST /auth/local-login` — Authenticate with username/password.
 pub async fn local_login(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(req): Json<LocalLoginRequest>,
 ) -> Result<(CookieJar, Json<serde_json::Value>), Response> {
-    // Rate limit by both username and client IP
+    // Rate limit by both username and client IP. Reserve the attempt BEFORE
+    // verification (review ID-03) so a concurrent burst can't all be admitted;
+    // a successful login refunds below. The IP key is only used when the IP is
+    // actually known — when running without a trusted proxy the IP collapses to
+    // "unknown", and rate-limiting a single shared bucket would let one client
+    // (or a legit user's own retries) lock out everyone. The per-username
+    // reserve is the primary backstop in that mode.
     let client_ip = extract_client_ip(&headers, state.config.server.trust_proxy_headers);
-    let ip_key = format!("ip:{client_ip}");
-    if let Err(retry_after) = state.login_limiter.check(&req.username) {
+    let ip_key = (client_ip != "unknown").then(|| format!("ip:{client_ip}"));
+    if let Err(retry_after) = state.login_limiter.reserve(&req.username) {
         tracing::warn!(username = %req.username, client_ip = %client_ip, "login rate limited by username");
         return Err(json_error(
             StatusCode::TOO_MANY_REQUESTS,
             &format!("too many login attempts, retry in {retry_after}s"),
         ));
     }
-    if let Err(retry_after) = state.login_limiter.check(&ip_key) {
-        tracing::warn!(client_ip = %client_ip, "login rate limited by IP");
-        return Err(json_error(
-            StatusCode::TOO_MANY_REQUESTS,
-            &format!("too many login attempts, retry in {retry_after}s"),
-        ));
+    if let Some(ref ip_key) = ip_key {
+        if let Err(retry_after) = state.login_limiter.reserve(ip_key) {
+            tracing::warn!(client_ip = %client_ip, "login rate limited by IP");
+            return Err(json_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                &format!("too many login attempts, retry in {retry_after}s"),
+            ));
+        }
     }
 
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
         json_error(StatusCode::SERVICE_UNAVAILABLE, "local auth not available")
+    })?;
+
+    // Bound concurrent password verifications globally so admitted attempts
+    // across many distinct usernames can't saturate the CPU with parallel
+    // Argon2 hashing (review ID-03).
+    let _verify_permit = LOGIN_VERIFY_SLOTS.acquire().await.map_err(|_| {
+        json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authentication temporarily unavailable",
+        )
     })?;
 
     let sm = sm.read().await;
@@ -975,10 +1042,9 @@ pub async fn local_login(
             json_error(StatusCode::INTERNAL_SERVER_ERROR, "authentication error")
         })?
         .ok_or_else(|| {
-            // Use the same error for both "user not found" and "wrong password"
-            // to prevent user enumeration
-            state.login_limiter.record_failure(&req.username);
-            state.login_limiter.record_failure(&ip_key);
+            // The attempt was already counted by reserve(); nothing to record
+            // here. Same error for "user not found" and "wrong password" to
+            // prevent user enumeration.
             tracing::warn!(username = %req.username, client_ip = %client_ip, "failed local login attempt");
             json_error(StatusCode::UNAUTHORIZED, "invalid username or password")
         })?;
@@ -1036,8 +1102,11 @@ pub async fn local_login(
 
     let jar = CookieJar::new().add(cookie);
 
+    // Successful login — refund the reserved attempts for both keys.
     state.login_limiter.record_success(&req.username);
-    state.login_limiter.record_success(&ip_key);
+    if let Some(ref ip_key) = ip_key {
+        state.login_limiter.record_success(ip_key);
+    }
     tracing::info!(username = %req.username, client_ip = %client_ip, "local login successful");
 
     Ok((jar, Json(serde_json::json!({ "authenticated": true }))))
@@ -1106,4 +1175,41 @@ fn extract_string_array_from_value(value: &serde_json::Value) -> Option<Vec<Stri
     value.as_array().map(|arr| {
         arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
     })
+}
+
+#[cfg(test)]
+mod reserve_tests {
+    use super::LoginRateLimiter;
+
+    #[test]
+    fn reserve_admits_two_then_backs_off() {
+        let l = LoginRateLimiter::new();
+        // First two attempts admitted up front (reserve counts before verify).
+        assert!(l.reserve("user").is_ok());
+        assert!(l.reserve("user").is_ok());
+        // Third within the window is refused with a positive retry-after.
+        let retry = l.reserve("user").expect_err("third attempt should back off");
+        assert!(retry >= 1);
+    }
+
+    #[test]
+    fn record_success_refunds_reservation() {
+        let l = LoginRateLimiter::new();
+        let _ = l.reserve("user");
+        let _ = l.reserve("user");
+        let _ = l.reserve("user"); // now in cooldown
+        l.record_success("user"); // successful login clears the key
+        assert!(l.reserve("user").is_ok());
+    }
+
+    #[test]
+    fn reserve_keys_are_independent() {
+        let l = LoginRateLimiter::new();
+        for _ in 0..5 {
+            let _ = l.reserve("alice");
+        }
+        // alice is throttled but bob is unaffected.
+        assert!(l.reserve("alice").is_err());
+        assert!(l.reserve("bob").is_ok());
+    }
 }
