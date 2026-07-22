@@ -38,7 +38,7 @@ use axum::{
     routing::post,
     Router,
 };
-use ion_drift_module_api::{DriftEvent, EventEnvelope, EventKind, FindingV1};
+use ion_drift_module_api::{DriftEvent, EventEnvelope, EventKind, FindingEvidence, FindingV1};
 use ion_drift_module_host::EventBus;
 use ion_drift_storage::FindingsStore;
 use secrecy::ExposeSecret;
@@ -289,18 +289,32 @@ async fn try_publish(
         ));
     }
 
-    // Step 7: nonce dedup.
+    // Bound the envelope's identifier fields before they are used as a cache
+    // key / persisted. The 1 MiB body limit alone would let a validly-signed
+    // module inflate the nonce cache or findings rows with huge ids/nonces
+    // (review ID-06).
+    const MAX_NONCE_LEN: usize = 128;
+    const MAX_EVENT_ID_LEN: usize = 128;
+    if envelope.nonce.len() > MAX_NONCE_LEN || envelope.event_id.len() > MAX_EVENT_ID_LEN {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            "envelope identifier too long",
+        ));
+    }
+
+    // Step 7: authorization — module must have declared this kind in its
+    // manifest. Checked BEFORE nonce recording so an unauthorized (but validly
+    // signed) kind cannot consume nonce-cache space (review ID-06).
+    if !module.manifest.declared_publish.contains(&envelope.kind) {
+        return Err(reject(StatusCode::FORBIDDEN, "kind not declared"));
+    }
+
+    // Step 8: nonce dedup.
     if nonce_cache
         .record(name, &envelope.nonce, now_unix() as u64)
         .await
     {
         return Err(reject(StatusCode::CONFLICT, "duplicate nonce"));
-    }
-
-    // Step 8: authorization — module must have declared this kind in its
-    // manifest.
-    if !module.manifest.declared_publish.contains(&envelope.kind) {
-        return Err(reject(StatusCode::FORBIDDEN, "kind not declared"));
     }
 
     // Step 9 + 10: convert wire to in-process event, host-stamp source,
@@ -365,6 +379,12 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
     const MAX_ACTIONS: usize = 32;
     const MAX_EVIDENCE: usize = 64;
     const MAX_MACS: usize = 256;
+    // Nested JSON the top-level clamp previously missed (review ID-06): the
+    // opaque `metadata` blob and each `Custom` evidence payload are bounded by
+    // serialized size, and evidence labels by length.
+    const MAX_META_BYTES: usize = 16 * 1024;
+    const MAX_EVIDENCE_LABEL: usize = 256;
+    const MAX_EVIDENCE_PAYLOAD_BYTES: usize = 8 * 1024;
 
     let mut c = f.clone();
     c.finding_id = clamp_str(&f.finding_id, MAX_ID);
@@ -378,6 +398,25 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
         .map(|s| clamp_str(s, 1024))
         .collect();
     c.evidence.truncate(MAX_EVIDENCE);
+    for ev in &mut c.evidence {
+        if let FindingEvidence::Custom { label, payload } = ev {
+            *label = clamp_str(label, MAX_EVIDENCE_LABEL);
+            let oversized = serde_json::to_string(payload)
+                .map(|s| s.len() > MAX_EVIDENCE_PAYLOAD_BYTES)
+                .unwrap_or(true);
+            if oversized {
+                *payload = serde_json::json!({ "_truncated": true });
+            }
+        }
+    }
+    if let Some(meta) = &c.metadata {
+        let oversized = serde_json::to_string(meta)
+            .map(|s| s.len() > MAX_META_BYTES)
+            .unwrap_or(true);
+        if oversized {
+            c.metadata = Some(serde_json::json!({ "_truncated": true }));
+        }
+    }
     c.device_macs = f
         .device_macs
         .iter()
@@ -469,6 +508,40 @@ mod tests {
             !cache.record("m", "abc", future).await,
             "expired abc should have been evicted by periodic GC"
         );
+    }
+
+    #[test]
+    fn clamp_finding_bounds_nested_json() {
+        use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingV1};
+        let big = "x".repeat(100_000);
+        let f = FindingV1 {
+            finding_id: big.clone(),
+            title: big.clone(),
+            narrative: big.clone(),
+            severity: FindingSeverity::High,
+            category: big.clone(),
+            recommended_actions: vec![],
+            evidence: vec![FindingEvidence::Custom {
+                label: big.clone(),
+                payload: serde_json::json!({ "blob": big }),
+            }],
+            device_macs: vec![],
+            timestamp_unix: 0,
+            metadata: Some(serde_json::json!({ "blob": big })),
+        };
+        let c = clamp_finding(&f);
+        assert!(c.finding_id.chars().count() <= 256);
+        assert!(c.title.chars().count() <= 512);
+        // oversized custom evidence payload replaced with a marker
+        match &c.evidence[0] {
+            FindingEvidence::Custom { label, payload } => {
+                assert!(label.chars().count() <= 256);
+                assert_eq!(payload, &serde_json::json!({ "_truncated": true }));
+            }
+            _ => panic!("expected custom evidence"),
+        }
+        // oversized metadata replaced with a marker
+        assert_eq!(c.metadata, Some(serde_json::json!({ "_truncated": true })));
     }
 
     #[test]

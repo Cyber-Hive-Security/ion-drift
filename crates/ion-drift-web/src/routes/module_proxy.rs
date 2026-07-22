@@ -33,6 +33,24 @@ use crate::modules_registry::ModuleRegistryStore;
 /// Max request body forwarded to a module.
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 
+/// True if `req_path` under `method` matches at least one declared route.
+/// A declared `/watchlist` matches `/watchlist` and any `/watchlist/<sub>`
+/// path, but never an unrelated path like `/evil.js` (review ID-01).
+fn route_allowed(
+    routes: &[ion_drift_module_api::RouteDescriptor],
+    method: &axum::http::Method,
+    req_path: &str,
+) -> bool {
+    routes.iter().any(|r| {
+        if !r.method.eq_ignore_ascii_case(method.as_str()) {
+            return false;
+        }
+        let t = r.path.trim_end_matches('/');
+        let rp = if t.is_empty() { "/" } else { t };
+        req_path == rp || req_path.starts_with(&format!("{rp}/"))
+    })
+}
+
 /// Everything the proxy handler needs. Cheaply cloneable.
 #[derive(Clone)]
 pub struct ModuleProxyState {
@@ -98,6 +116,32 @@ async fn proxy_impl(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
                 "error": format!("module '{name}' is disabled")
+            })),
+        )
+            .into_response();
+    }
+
+    // Enforce the manifest's exposed_routes allow-list (review ID-01). Ion Drift
+    // modules are API-only: forward only the (method, path) pairs the module
+    // declared, never arbitrary paths/methods. Modules that declare NO routes
+    // (legacy pre-1.2 manifests) are not broken here — their responses are still
+    // forced inert below, so they cannot serve active content regardless.
+    let req_path = if tail.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{tail}")
+    };
+    if !module.manifest.exposed_routes.is_empty()
+        && !route_allowed(&module.manifest.exposed_routes, req.method(), &req_path)
+    {
+        tracing::warn!(
+            module = %name, path = %req_path, method = %req.method(),
+            "request not in module exposed_routes; refusing"
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "route not exposed by module manifest"
             })),
         )
             .into_response();
@@ -228,13 +272,31 @@ async fn proxy_impl(
     let mut resp = Response::builder().status(status);
     for (hname, value) in response.headers() {
         let s = hname.as_str();
-        if matches!(s, "transfer-encoding" | "connection" | "content-length") {
+        // Also drop the module's own content-type / content-disposition — we
+        // override them below to force inert responses.
+        if matches!(
+            s,
+            "transfer-encoding"
+                | "connection"
+                | "content-length"
+                | "content-type"
+                | "content-disposition"
+        ) {
             continue;
         }
         if let Ok(v) = HeaderValue::from_bytes(value.as_bytes()) {
             resp = resp.header(s, v);
         }
     }
+
+    // Force inert responses (review ID-01, API-only decision): a module must
+    // never serve active content (HTML/JS) on Ion Drift's authenticated origin.
+    // Override Content-Type to JSON and mark the body as an attachment so a
+    // top-level navigation to a module-proxy URL cannot render as a document.
+    resp = resp
+        .header("content-type", "application/json; charset=utf-8")
+        .header("x-content-type-options", "nosniff")
+        .header("content-disposition", "attachment");
 
     let resp_body = match response.bytes().await {
         Ok(b) => b,
@@ -268,6 +330,34 @@ mod tests {
         Key::<Aes256Gcm>::from_slice(&[13u8; 32]).to_owned()
     }
 
+    fn route(path: &str, method: &str) -> RouteDescriptor {
+        RouteDescriptor {
+            path: path.into(),
+            method: method.into(),
+            description: None,
+        }
+    }
+
+    #[test]
+    fn exposed_routes_allow_declared_only() {
+        let routes = vec![route("/watchlist", "GET")];
+        // declared route + subpaths allowed
+        assert!(route_allowed(&routes, &Method::GET, "/watchlist"));
+        assert!(route_allowed(&routes, &Method::GET, "/watchlist/42"));
+        // undeclared path (the ID-01 evil.js vector) refused
+        assert!(!route_allowed(&routes, &Method::GET, "/evil.js"));
+        // right path, wrong method refused
+        assert!(!route_allowed(&routes, &Method::POST, "/watchlist"));
+        // prefix-lookalike that isn't a path-segment boundary refused
+        assert!(!route_allowed(&routes, &Method::GET, "/watchlist-evil"));
+    }
+
+    #[test]
+    fn exposed_routes_method_case_insensitive() {
+        let routes = vec![route("/x", "post")];
+        assert!(route_allowed(&routes, &Method::POST, "/x"));
+    }
+
     fn sample_manifest(name: &str) -> Manifest {
         Manifest {
             name: name.into(),
@@ -277,11 +367,16 @@ mod tests {
             description: None,
             subscribed_events: vec![EventKind::AnomalyDetected],
             declared_publish: vec![],
-            exposed_routes: vec![RouteDescriptor {
-                path: "/watchlist".into(),
-                method: "GET".into(),
-                description: None,
-            }],
+            // Routes exercised by the plumbing tests below. Enforcement itself
+            // is covered by `route_allowed` unit tests and the
+            // `refuses_undeclared_route` integration test.
+            exposed_routes: vec![
+                route("/watchlist", "GET"),
+                route("/api", "GET"), // prefix covers /api/v1/items
+                route("/submit", "POST"),
+                route("/ping", "GET"),
+                route("/", "GET"), // root
+            ],
         }
     }
 
@@ -495,5 +590,24 @@ mod tests {
         let resp = router.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(cap.last_path.lock().unwrap().as_deref(), Some("/"));
+    }
+
+    #[tokio::test]
+    async fn refuses_undeclared_route() {
+        // The ID-01 vector: an admin navigates to a path the module never
+        // declared (e.g. to fetch attacker-served content). Enforcement must
+        // 403 before the request is ever forwarded.
+        let (target, cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("m", &target, true).await;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/m/evil.js")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        // Never forwarded upstream.
+        assert!(cap.last_path.lock().unwrap().is_none());
     }
 }

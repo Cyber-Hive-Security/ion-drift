@@ -37,8 +37,13 @@ use ion_drift_module_api::{
 };
 use secrecy::ExposeSecret;
 use serde::Serialize;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{info, warn};
+
+/// Max concurrent outbound deliveries across all modules. Bounds in-flight
+/// tasks and connections so a hung or flooding module can't pile up unbounded
+/// work before the circuit breaker trips (review ID-07).
+const MAX_CONCURRENT_DELIVERIES: usize = 64;
 
 use super::hmac::sign_bytes;
 use super::store::{ModuleRegistryStore, RegisteredModule};
@@ -93,6 +98,9 @@ pub struct EventDispatcher {
     http: reqwest::Client,
     stats: RwLock<HashMap<String, DeliveryStats>>,
     config: DispatcherConfig,
+    /// Bounds total concurrent deliveries (review ID-07). Excess deliveries are
+    /// shed rather than queued unbounded.
+    delivery_slots: Arc<Semaphore>,
 }
 
 impl EventDispatcher {
@@ -106,6 +114,7 @@ impl EventDispatcher {
             http,
             stats: RwLock::new(HashMap::new()),
             config,
+            delivery_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_DELIVERIES)),
         })
     }
 
@@ -155,8 +164,22 @@ impl EventDispatcher {
                 event: wire.clone(),
             };
 
+            // Acquire a delivery slot up front; shed (don't queue) if saturated
+            // so a hung/flooding module can't spawn unbounded tasks holding
+            // bodies + secrets before the circuit trips (review ID-07).
+            let permit = match Arc::clone(&self.delivery_slots).try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    warn!(
+                        module = %module.name,
+                        "delivery concurrency limit reached; shedding event"
+                    );
+                    continue;
+                }
+            };
             let self_cloned = Arc::clone(self);
             tokio::spawn(async move {
+                let _permit = permit; // released when this delivery finishes
                 self_cloned.deliver(&module, envelope, secret).await;
             });
         }
@@ -185,6 +208,14 @@ impl EventDispatcher {
         let attempts = self.config.retry_backoffs.len().max(1);
         for attempt in 0..attempts {
             if attempt > 0 {
+                // Abandon the retry schedule if the circuit has since opened
+                // (this module is failing on other deliveries too) — don't keep
+                // a task alive holding the body + secret through the full
+                // backoff window (review ID-07).
+                if self.is_circuit_open(&module.name).await {
+                    warn!(module = %module.name, "circuit opened mid-retry; abandoning delivery");
+                    return;
+                }
                 if let Some(delay) = self.config.retry_backoffs.get(attempt) {
                     if !delay.is_zero() {
                         tokio::time::sleep(*delay).await;
@@ -223,6 +254,9 @@ impl EventDispatcher {
         let resp = self
             .http
             .post(&url)
+            // Apply the configured per-attempt timeout (previously dead config;
+            // delivery inherited the shared 30s client timeout) — review ID-07.
+            .timeout(self.config.request_timeout)
             .header("Content-Type", "application/json")
             .header(SIGNATURE_HEADER, format!("t={timestamp},v1={sig}"))
             .body(body.to_vec())
