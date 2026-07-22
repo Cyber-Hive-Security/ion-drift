@@ -1005,9 +1005,15 @@ async fn main() -> anyhow::Result<()> {
         shutdown_for_serve.cancel();
     };
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    // `into_make_service_with_connect_info` exposes the client socket address to
+    // handlers (via `ConnectInfo`) so local-login rate limiting can key on the
+    // real peer IP when no trusted proxy is configured (review ID-03).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await?;
 
     // Server has stopped accepting requests. Now signal modules and call
     // shutdown_all with a bounded timeout so a stuck module cannot block exit.

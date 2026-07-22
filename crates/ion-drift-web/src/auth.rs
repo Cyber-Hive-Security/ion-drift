@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Query, State};
+use axum::extract::{ConnectInfo, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Redirect, Response};
 use axum_extra::extract::CookieJar;
@@ -1004,6 +1004,7 @@ static LOGIN_VERIFY_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::cons
 /// `POST /auth/local-login` — Authenticate with username/password.
 pub async fn local_login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: axum::http::HeaderMap,
     Json(req): Json<LocalLoginRequest>,
 ) -> Result<(CookieJar, Json<serde_json::Value>), Response> {
@@ -1014,7 +1015,14 @@ pub async fn local_login(
     // "unknown", and rate-limiting a single shared bucket would let one client
     // (or a legit user's own retries) lock out everyone. The per-username
     // reserve is the primary backstop in that mode.
-    let client_ip = extract_client_ip(&headers, state.config.server.trust_proxy_headers);
+    // Behind a trusted proxy, derive the IP from the forwarding headers; without
+    // one, use the real socket peer address (review ID-03) instead of a single
+    // shared "unknown" bucket.
+    let client_ip = if state.config.server.trust_proxy_headers {
+        extract_client_ip(&headers, true)
+    } else {
+        peer.ip().to_string()
+    };
     let ip_key = (client_ip != "unknown").then(|| format!("ip:{client_ip}"));
     if let Err(retry_after) = state.login_limiter.reserve(&req.username) {
         tracing::warn!(username = %req.username, client_ip = %client_ip, "login rate limited by username");

@@ -33,6 +33,9 @@ use crate::modules_registry::ModuleRegistryStore;
 /// Max request body forwarded to a module.
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 
+/// Max response body buffered back from a module (review ID-08).
+const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
 /// True if `req_path` under `method` matches at least one declared route.
 /// A declared `/watchlist` matches `/watchlist` and any `/watchlist/<sub>`
 /// path, but never an unrelated path like `/evil.js` (review ID-01).
@@ -298,17 +301,45 @@ async fn proxy_impl(
         .header("x-content-type-options", "nosniff")
         .header("content-disposition", "attachment");
 
-    let resp_body = match response.bytes().await {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(module = %name, error = %e, "module response read failed");
+    // Stream the upstream body with a cap so a malicious or oversized module
+    // response can't exhaust process memory (review ID-08). Reject early on an
+    // oversized Content-Length, then stop the moment the cap is crossed.
+    if let Some(len) = response.content_length() {
+        if len > MAX_RESPONSE_BYTES as u64 {
+            tracing::warn!(module = %name, len, "module response exceeds cap (content-length)");
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": "module response read failed" })),
+                Json(serde_json::json!({ "error": "module response too large" })),
             )
                 .into_response();
         }
-    };
+    }
+    let mut response = response;
+    let mut resp_body: Vec<u8> = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if resp_body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                    tracing::warn!(module = %name, "module response exceeds cap (mid-stream)");
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(serde_json::json!({ "error": "module response too large" })),
+                    )
+                        .into_response();
+                }
+                resp_body.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(module = %name, error = %e, "module response read failed");
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "error": "module response read failed" })),
+                )
+                    .into_response();
+            }
+        }
+    }
 
     resp.body(Body::from(resp_body))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
