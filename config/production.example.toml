@@ -82,6 +82,9 @@ idle_timeout_seconds = 43200
 [syslog]
 # The syslog listener is UNAUTHENTICATED (plaintext UDP, source-IP filter only,
 # which is spoofable). Bind it to a trusted management segment/interface and do
-# not expose it to untrusted networks. See SECURITY.md.
+# not expose it to untrusted networks. A spoofing attacker can both crowd out
+# genuine firewall events and inject false connection records. If your router
+# does not forward syslog, set bind_address = "127.0.0.1" to disable external
+# ingest. See SECURITY.md.
 port = 5514
 bind_address = "0.0.0.0"
