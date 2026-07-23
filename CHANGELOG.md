@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.2b] - 2026-07-23
+
+### Fixed
+
+Follow-ups from the v0.5.2a release smoke test (no functional blockers were
+found; these are polish/UX):
+
+- **Module registration errors are human-readable** — "could not reach module
+  at \<url\>" / timeout / HTTP-status / invalid-manifest messages instead of the
+  raw `GET <url>/manifest` request string. Still no transport internals.
+- **Module registration form validates inline** — persistent per-field errors
+  for URL / shared secret / API token instead of native browser tooltips; no
+  request fires while invalid.
+- **`/modules` redirects to `/admin/modules`** instead of 404ing.
+- **Statistics daily page-view chart no longer hides "today"** — date labels
+  were parsed as UTC midnight and rendered one day early in negative-offset
+  timezones; the current day's bar existed but was mislabeled as yesterday.
+
 ## [0.5.2a] - 2026-07-23
 
 ### Fixed
