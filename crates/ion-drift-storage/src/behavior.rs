@@ -805,9 +805,14 @@ impl BehaviorStore {
         (protocol, destination_port, traffic_class)
     }
 
+    /// Schema version stamped into `PRAGMA user_version`. Bump when adding a
+    /// versioned migration (see `crate::migrations`). v1 = the 0.5.x baseline.
+    pub const SCHEMA_VERSION: u32 = 1;
+
     pub fn new(db_path: &Path) -> Result<Self, String> {
         let conn =
             Connection::open(db_path).map_err(|e| format!("failed to open behavior db: {e}"))?;
+        crate::migrations::open_guard(&conn, "behavior.db", Self::SCHEMA_VERSION)?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .map_err(|e| format!("pragma failed: {e}"))?;
@@ -1127,6 +1132,8 @@ impl BehaviorStore {
             tracing::info!("Phase 3 migration: added service metadata + SoA classification to policy_deviations");
         }
 
+        crate::migrations::stamp(&conn, "behavior.db", Self::SCHEMA_VERSION)?;
+
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
         })
@@ -1189,6 +1196,15 @@ impl BehaviorStore {
     /// Fetch profiles for multiple MACs in a single query.
     /// Returns a HashMap keyed by MAC address.
     pub async fn get_profiles_bulk(&self, macs: &[&str]) -> Result<HashMap<String, DeviceProfile>, String> {
+        // Cap to bound query memory and SQLite parameter count.
+        const MAX_BULK_MACS: usize = 10_000;
+        if macs.len() > MAX_BULK_MACS {
+            return Err(format!(
+                "get_profiles_bulk: {} MACs exceeds cap of {}",
+                macs.len(),
+                MAX_BULK_MACS
+            ));
+        }
         if macs.is_empty() {
             return Ok(HashMap::new());
         }

@@ -291,8 +291,12 @@ impl MikrotikClient {
         trace!(body_len = body.len(), "response received");
 
         serde_json::from_str::<T>(&body).map_err(|e| {
-            let preview = if body.len() > 200 {
-                format!("{}...", &body[..200])
+            // Truncate on a char boundary — `&body[..200]` panics when byte 200
+            // lands inside a multibyte UTF-8 sequence (valid UTF-8, invalid JSON
+            // from a misbehaving device would otherwise crash the poll task).
+            let preview = if body.chars().count() > 200 {
+                let truncated: String = body.chars().take(200).collect();
+                format!("{truncated}...")
             } else {
                 body
             };
@@ -332,13 +336,30 @@ impl MikrotikClient {
         }
     }
 
-    /// Read response body with a size limit to prevent OOM from misbehaving devices.
-    async fn read_body_limited(resp: reqwest::Response) -> Result<String, MikrotikError> {
-        let bytes = resp.bytes().await?;
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err(MikrotikError::ResponseTooLarge(bytes.len(), MAX_RESPONSE_BYTES));
+    /// Read response body with a size limit to prevent OOM from misbehaving
+    /// devices. Rejects early on an oversized `Content-Length` (defense in depth
+    /// — it can lie), then streams and stops the moment the cap is crossed, so an
+    /// oversized body is never fully buffered (review ID-08).
+    async fn read_body_limited(mut resp: reqwest::Response) -> Result<String, MikrotikError> {
+        if let Some(len) = resp.content_length() {
+            if len > MAX_RESPONSE_BYTES as u64 {
+                return Err(MikrotikError::ResponseTooLarge(
+                    len as usize,
+                    MAX_RESPONSE_BYTES,
+                ));
+            }
         }
-        String::from_utf8(bytes.to_vec())
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = resp.chunk().await? {
+            if buf.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                return Err(MikrotikError::ResponseTooLarge(
+                    buf.len() + chunk.len(),
+                    MAX_RESPONSE_BYTES,
+                ));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        String::from_utf8(buf)
             .map_err(|e| MikrotikError::Deserialize(format!("invalid UTF-8 in response: {e}")))
     }
 }

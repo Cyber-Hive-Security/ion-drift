@@ -80,9 +80,11 @@ async fn run_passive_discovery(
     ).await.map_err(|e| anyhow::anyhow!("passive discovery queue submit: {e}"))?;
 
     let mut batch_iter = batch_results.into_iter();
-    let connections_result = batch_iter.next().unwrap();
-    let nat_result = batch_iter.next().unwrap();
-    let filter_result = batch_iter.next().unwrap();
+    let (Some(connections_result), Some(nat_result), Some(filter_result)) =
+        (batch_iter.next(), batch_iter.next(), batch_iter.next())
+    else {
+        anyhow::bail!("passive discovery: batch returned fewer than 3 results");
+    };
 
     // Extract service ports from NAT and filter rules
     let nat_ports = extract_nat_service_ports_from_batch(&nat_result, &filter_result);

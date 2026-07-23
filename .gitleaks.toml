@@ -1,0 +1,15 @@
+# Gitleaks configuration for ion-drift.
+# Extends the default ruleset; allowlists documentation placeholders only.
+# Run locally:  gitleaks git --no-banner --redact .        (full history)
+#               gitleaks git --pre-commit --staged .       (staged changes)
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation placeholder credentials (not real secrets)"
+# docs/troubleshooting.md shows `curl -u ion-drift:yourpassword` as a usage
+# example. These are the only two historical hits; both are placeholders.
+regexes = [
+  '''ion-drift:yourpassword''',
+]

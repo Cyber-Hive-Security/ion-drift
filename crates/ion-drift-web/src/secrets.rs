@@ -155,6 +155,13 @@ impl SecretsManager {
         })
     }
 
+    /// Borrow the KEK so sibling stores (e.g. `ModuleRegistryStore`)
+    /// can encrypt with the same key without the caller having to
+    /// route it around separately.
+    pub(crate) fn kek(&self) -> &Key<Aes256Gcm> {
+        &self.kek
+    }
+
     /// Encrypt a value with the KEK, using the secret name as AAD.
     /// Returns (ciphertext, nonce_bytes).
     fn encrypt_value(&self, name: &str, plaintext: &str) -> anyhow::Result<(Vec<u8>, [u8; 12])> {
@@ -850,25 +857,70 @@ impl SecretsManager {
         Ok(())
     }
 
+    /// A valid argon2id hash (default params) computed once, used as the
+    /// constant-time dummy target when a username doesn't exist so login
+    /// timing doesn't reveal account existence (DRIFT-2026-0008).
+    fn dummy_argon2_hash() -> &'static str {
+        use argon2::password_hash::rand_core::OsRng;
+        use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
+        static H: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        H.get_or_init(|| {
+            let salt = SaltString::generate(&mut OsRng);
+            Argon2::default()
+                .hash_password(b"drift-dummy-verification-password", &salt)
+                .expect("hash dummy password")
+                .to_string()
+        })
+    }
+
     /// Verify a local user's password. Returns the user's role on success.
     pub async fn verify_local_user(&self, username: &str, password: &str) -> anyhow::Result<Option<LocalUser>> {
-        use argon2::{Argon2, PasswordVerifier, PasswordHash};
+        // Read the stored hash (if any) under the DB lock, then RELEASE the lock
+        // before the CPU-bound Argon2 verify (review ID-03). Previously the lock
+        // was held across hashing, serializing every other secrets-DB operation
+        // behind each verification and letting a login burst starve the DB.
+        let row: Option<(String, String, i64)> = {
+            let db = self.db.lock().await;
+            db.query_row(
+                "SELECT password_hash, role, created_at FROM local_users WHERE username = ?1",
+                params![username],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+        }; // DB lock dropped here.
 
-        let db = self.db.lock().await;
-        let result: Option<(String, String, i64)> = db.query_row(
-            "SELECT password_hash, role, created_at FROM local_users WHERE username = ?1",
-            params![username],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).optional()?;
+        // Always compute a dummy hash string so the nonexistent-user branch can
+        // spend equivalent Argon2 time (username-enumeration timing oracle,
+        // DRIFT-2026-0008 / WSTG-IDNT-04).
+        let dummy = Self::dummy_argon2_hash().to_string();
+        let password = password.to_string();
+        let hash_str = row.as_ref().map(|(h, _, _)| h.clone());
 
-        let Some((hash_str, role, created_at)) = result else {
-            return Ok(None);
-        };
+        // Run Argon2 on a blocking thread — it must not block a Tokio worker
+        // (review ID-03).
+        let verified = tokio::task::spawn_blocking(move || {
+            use argon2::{Argon2, PasswordHash, PasswordVerifier};
+            match hash_str {
+                Some(hash_str) => PasswordHash::new(&hash_str)
+                    .map(|h| {
+                        Argon2::default()
+                            .verify_password(password.as_bytes(), &h)
+                            .is_ok()
+                    })
+                    .unwrap_or(false),
+                None => {
+                    let _ = PasswordHash::new(&dummy).map(|h| {
+                        Argon2::default().verify_password(password.as_bytes(), &h)
+                    });
+                    false
+                }
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("password verification task failed: {e}"))?;
 
-        let parsed_hash = PasswordHash::new(&hash_str)
-            .map_err(|e| anyhow::anyhow!("invalid stored hash: {e}"))?;
-
-        if Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok() {
+        if verified {
+            let (_, role, created_at) = row.expect("verified implies the user row exists");
             Ok(Some(LocalUser {
                 username: username.to_string(),
                 role,

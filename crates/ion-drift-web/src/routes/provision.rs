@@ -96,11 +96,14 @@ pub async fn check_permissions(
     match client.check_provision_permission().await {
         Ok(check) => Ok(Json(serde_json::to_value(check).unwrap_or_default())),
         Err(e) => {
+            // Log the detail server-side; return a generic message so raw
+            // RouterOS/network error internals don't reach the client
+            // (WSTG-N08 / ERRH-01).
             tracing::warn!("provision permission check failed: {e}");
             Err((
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({
-                    "error": format!("Could not check permissions: {e}"),
+                    "error": "Could not check router permissions — see server logs",
                     "has_write": false,
                 })),
             )

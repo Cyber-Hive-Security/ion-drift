@@ -4,6 +4,110 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+## [0.5.2] - 2026-07-23
+
+### Security
+
+Pre-release security-hardening pass (findings from an internal review + an OWASP
+WSTG coverage assessment). No known exploitable pre-auth RCE, SQL injection,
+command injection, or secret disclosure was found; the changes below close
+lower-severity gaps and add defense-in-depth.
+
+- **SSRF guard unified and hardened.** Module-registration and device-connection
+  outbound requests now share one guard that additionally blocks IPv6-embedded
+  IPv4 forms of link-local/metadata addresses (`::ffff:`, NAT64, IPv4-compatible),
+  disables HTTP redirect following, and re-validates the host before every probe
+  (not just at registration). RFC1918/ULA LAN targets remain allowed by design.
+- **OIDC login-CSRF / session-fixation fixed.** The in-progress login flow is now
+  bound to the initiating browser via a short-lived state cookie verified in the
+  callback (PKCE + nonce already prevented token injection).
+- **CSRF guard tightened.** The `application/json` requirement now applies to
+  *every* mutating request, including no-body ones (previously bypassable).
+- **HTTP security headers added:** HSTS, Referrer-Policy, Permissions-Policy (now
+  also applied to the setup wizard).
+- **Login username-enumeration timing** closed (constant-time argon2 path on
+  unknown users).
+- **Session hardening:** optional idle/inactivity timeout
+  (`session.idle_timeout_seconds`); startup warnings for `secure=false` /
+  `same_site="none"`.
+- **Rate-limit IP spoofing:** new `server.trust_proxy_headers` (default `true`);
+  set `false` when directly exposed so `X-Forwarded-For` can't rotate the per-IP
+  bucket.
+- **Output hardening:** device errors and RouterOS log fields are sanitized before
+  reaching clients; `/health` no longer discloses the build version to
+  unauthenticated callers; a provisioning error is now generic.
+- **Module trust boundary:** inbound module-supplied finding content is
+  size-clamped; the replay-nonce cache is bounded (periodic GC + hard cap); the
+  unauthenticated syslog ingest is rate-capped.
+- **Crypto/config:** license verification uses Ed25519 `verify_strict`;
+  `--dump-config` recursively redacts secret-looking keys (incl. the `[modules]`
+  table); constant-time comparison for the setup bootstrap token; startup warning
+  when the RouterOS API is configured over plaintext HTTP.
+- Added `subtle` for constant-time comparisons.
+
+Second hardening pass (external review). Follow-up fixes verified against the
+codebase and covered by unit tests:
+
+- **Module proxy locked to API-only.** The `/api/modules/<name>` reverse proxy now
+  enforces the manifest's `exposed_routes` allow-list (only declared method/path
+  pairs are forwarded; declared paths match their own sub-paths but not arbitrary
+  ones) and forces inert responses (overrides `Content-Type` to `application/json`
+  + `nosniff` + `attachment`), so a registered module can never serve active
+  content on Ion Drift's authenticated origin.
+- **SSRF: proxy revalidation + strict device-host parsing.** The live module proxy
+  re-runs the SSRF guard before every request (not just at registration), closing
+  a post-registration DNS-rebinding path. Device hosts must now parse as a bare IP
+  literal or `url::Host`, rejecting userinfo/path/fragment/scheme/port smuggling
+  (e.g. `x@169.254.169.254/latest/meta-data/#`) that previously bypassed the guard
+  via a validator/connector parser differential.
+- **Login DoS hardening.** Rate-limit slots are reserved *before* password
+  verification (a burst can no longer all be admitted); Argon2 now runs on a
+  blocking thread with the secrets-DB lock released first (no more serializing the
+  DB behind hashing); a global semaphore bounds concurrent verifications. When no
+  trusted proxy is configured the limiter keys on the real socket peer IP instead
+  of a shared bucket.
+- **OIDC pending-state** entries are expired before the capacity check, so a burst
+  of abandoned login-starts can't lock out new logins for the cleanup interval.
+- **Session tokens stored hashed.** The `sessions` table and in-memory map are now
+  keyed by `SHA-256(token)`; the bearer token lives only in the client cookie, so
+  a stolen `sessions.db`/backup can't be replayed. (Invalidates existing sessions
+  on upgrade — users re-authenticate once.)
+- **Module inbound ingest bounds.** Publish authorization is checked before the
+  nonce is recorded (an unauthorized kind can't consume cache); envelope
+  `nonce`/`event_id` lengths and previously-unclamped nested finding JSON
+  (`metadata`, custom-evidence payloads) are now bounded.
+- **Event dispatcher bounded.** Concurrent deliveries are capped by a semaphore
+  (excess shed, not queued), the configured per-attempt `request_timeout` is now
+  actually applied, and the circuit breaker is re-checked between retries.
+- **Response size caps.** RouterOS/SwOS clients and the module proxy stream
+  responses with an early `Content-Length` reject and a mid-stream cap, instead of
+  buffering the whole body before checking; the SwOS pre-auth 401 body drain is
+  bounded.
+
+See `SECURITY.md` for the deployment guidance and known-limitations/roadmap items
+(local-account MFA, password rotation, multi-user roles, KEK-off-volume, syslog
+authenticated transport, SSRF socket-layer IP pinning) surfaced by the reviews.
+
+### Fixed
+
+- **UTF-8 panic** in the RouterOS client's deserialize-error preview (`&body[..200]`
+  could split a multibyte char and panic the poll task); now truncates on a char
+  boundary.
+- **mTLS/CertWarden setup wizard** was unsubmittable — the form was missing its
+  `setup_token` input, so every browser submit failed "Invalid setup token".
+- **204 responses** (e.g. page-view tracking) no longer make the frontend API
+  client throw on an empty body.
+- **Weekly snapshots** now persist real ISO period boundaries instead of
+  placeholder strings (`2026-W09-start`).
+
+### Dependencies
+
+- **quinn-proto 0.11.16** — fixes RUSTSEC-2026-0185 (high, 7.5): remote memory
+  exhaustion from unbounded out-of-order QUIC stream reassembly (transitive via
+  hickory's QUIC feature). Also replaces the yanked `spin` 0.9.8 with 0.9.9.
+
 ## [0.5.1] - 2026-06-09
 
 ### Fixed

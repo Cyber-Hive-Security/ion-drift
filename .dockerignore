@@ -8,3 +8,7 @@ web/dist/
 *.md
 !README.md
 docs/
+
+# Internal audit tooling — never ship (placed after !README.md so audit/README.md
+# is also excluded; last match wins in .dockerignore)
+audit/

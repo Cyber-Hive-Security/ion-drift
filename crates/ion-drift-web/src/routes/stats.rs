@@ -318,9 +318,17 @@ pub async fn diagnostic_report(
         "source"
     };
 
+    let data_directory_hash = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(data_dir.display().to_string().as_bytes());
+        let digest = hasher.finalize();
+        format!("sha256:{}", hex::encode(&digest[..8]))
+    };
+
     let environment = EnvironmentInfo {
         version: version.clone(),
-        data_directory: data_dir.display().to_string(),
+        data_directory: data_directory_hash,
         data_dir_size_bytes: data_dir_size,
         uptime_seconds,
         oidc_configured: state.config.has_oidc(),

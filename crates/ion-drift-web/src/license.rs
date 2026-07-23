@@ -120,8 +120,10 @@ pub fn validate_license_key(key: &str) -> Result<LicensePayload, String> {
             .map_err(|_| "invalid key: wrong signature length")?,
     );
 
+    // verify_strict rejects non-canonical / small-order signatures and keys
+    // (signature malleability), not just forged ones (WSTG-N14 / CRYP-04).
     verifying_key
-        .verify(&payload_bytes, &signature)
+        .verify_strict(&payload_bytes, &signature)
         .map_err(|_| "invalid license key: signature verification failed")?;
 
     // Parse payload

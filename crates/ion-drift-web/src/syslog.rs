@@ -178,7 +178,16 @@ pub fn spawn_syslog_listener(
         let mut total_parsed: u64 = 0;
         let mut total_unparsed: u64 = 0;
         let mut total_rejected: u64 = 0;
+        let mut total_rate_limited: u64 = 0;
         let mut last_stats = tokio::time::Instant::now();
+
+        // Ingest rate cap (DRIFT-2026-0004). The source-IP filter is spoofable
+        // (plaintext UDP), so bound accepted volume to stop a flood from
+        // exhausting disk / degrading connection_history queries. 500/s is far
+        // above any real RouterOS syslog rate.
+        const MAX_EVENTS_PER_SEC: u64 = 500;
+        let mut rate_window = tokio::time::Instant::now();
+        let mut rate_window_count: u64 = 0;
 
         loop {
             let result = tokio::time::timeout(
@@ -195,6 +204,22 @@ pub fn spawn_syslog_listener(
                         total_rejected += 1;
                         if total_rejected <= 10 {
                             tracing::warn!("syslog: rejected packet from unauthorized source {}", addr.ip());
+                        }
+                        continue;
+                    }
+                    // Ingest rate cap (DRIFT-2026-0004): bound accepted events
+                    // per second so a spoofed-source flood can't exhaust disk.
+                    if rate_window.elapsed().as_secs() >= 1 {
+                        rate_window = tokio::time::Instant::now();
+                        rate_window_count = 0;
+                    }
+                    rate_window_count += 1;
+                    if rate_window_count > MAX_EVENTS_PER_SEC {
+                        total_rate_limited += 1;
+                        if total_rate_limited % 1000 == 1 {
+                            tracing::warn!(
+                                "syslog: ingest rate cap hit ({MAX_EVENTS_PER_SEC}/s) — dropping excess (total dropped: {total_rate_limited})"
+                            );
                         }
                         continue;
                     }

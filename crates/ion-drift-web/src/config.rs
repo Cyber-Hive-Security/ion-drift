@@ -21,30 +21,10 @@ pub struct ServerConfig {
     pub syslog: SyslogSection,
     #[serde(default)]
     pub polling: PollingConfig,
-    #[serde(default)]
-    pub arc: ArcProxySection,
     /// Per-module TOML configuration tables keyed by module name.
     /// Modules access their section via `ctx.config::<T>()`.
     #[serde(default)]
     pub modules: toml::Table,
-}
-
-/// Ion Arc reverse proxy configuration.
-/// When `url` is set, Drift proxies `/api/arc/*` requests to the Arc backend.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ArcProxySection {
-    /// Base URL of the Arc backend (e.g., "http://ion-arc:3001").
-    /// If empty, Arc proxy is disabled and the frontend shows Arc as unavailable.
-    #[serde(default)]
-    pub url: String,
-}
-
-impl Default for ArcProxySection {
-    fn default() -> Self {
-        Self {
-            url: String::new(),
-        }
-    }
 }
 
 /// Background poller interval configuration. All intervals are in seconds.
@@ -269,6 +249,14 @@ pub struct ServerSection {
     /// Default: [] (empty — configure via Settings > Monitored Regions).
     #[serde(default)]
     pub warning_countries: Vec<String>,
+    /// Trust `X-Forwarded-For`/`X-Real-IP` for client-IP derivation
+    /// (rate-limit keys, auth logs). Enable ONLY when Ion Drift sits behind a
+    /// reverse proxy that overwrites these headers. When false, client-supplied
+    /// values are ignored so an attacker can't spoof the per-IP rate-limit
+    /// bucket (DRIFT-2026-0009 / WSTG-N18). Default true (preserves the
+    /// reverse-proxied deployments' behavior).
+    #[serde(default = "default_true")]
+    pub trust_proxy_headers: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -322,6 +310,13 @@ pub struct SessionSection {
     pub secure: bool,
     #[serde(default = "default_same_site")]
     pub same_site: String,
+    /// Idle/inactivity timeout in seconds (WSTG-SESS-07). A session with no
+    /// access within this window is rejected even if the absolute
+    /// `max_age_seconds` has not elapsed. 0 disables idle expiry (absolute
+    /// timeout only). Recommended: set to e.g. 43200 (12h). Capped at
+    /// `max_age_seconds` at runtime.
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout_seconds: u64,
     /// Loaded from `DRIFT_SESSION_SECRET` env var at runtime.
     #[serde(skip)]
     pub session_secret: String,
@@ -334,6 +329,7 @@ impl Default for SessionSection {
             max_age_seconds: default_max_age(),
             secure: true,
             same_site: default_same_site(),
+            idle_timeout_seconds: default_idle_timeout(),
             session_secret: String::new(),
         }
     }
@@ -359,6 +355,10 @@ fn default_router_port() -> u16 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_idle_timeout() -> u64 {
+    0 // disabled by default (absolute timeout only); example configs set 43200
 }
 
 fn default_username() -> String {
@@ -568,7 +568,45 @@ impl ServerConfig {
             );
         }
 
+        // The arbitrary [modules] table (per-module config) can hold module
+        // secrets (shared_secret, api_token, bearer, hmac keys). The fixed
+        // allowlist above can't know their field names, so recursively redact
+        // any secret-looking key throughout the whole config (WSTG-N06 /
+        // DRIFT-2026-0006).
+        redact_secret_keys(&mut value);
+
         toml::to_string_pretty(&value)
             .map_err(|e| anyhow::anyhow!("failed to format masked config: {e}"))
+    }
+}
+
+/// Recursively replace any string value whose KEY looks secret-bearing with
+/// `[REDACTED]`. Conservative: matches on substrings so unknown module secret
+/// fields are caught. Non-string values and non-secret keys are left intact.
+fn redact_secret_keys(value: &mut toml::Value) {
+    fn key_is_secret(k: &str) -> bool {
+        let k = k.to_ascii_lowercase();
+        ["secret", "password", "token", "api_key", "apikey", "hmac", "private_key", "privatekey"]
+            .iter()
+            .any(|needle| k.contains(needle))
+    }
+    match value {
+        toml::Value::Table(table) => {
+            for (k, v) in table.iter_mut() {
+                if key_is_secret(k) {
+                    if let toml::Value::String(_) = v {
+                        *v = toml::Value::String("[REDACTED]".to_string());
+                        continue;
+                    }
+                }
+                redact_secret_keys(v);
+            }
+        }
+        toml::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                redact_secret_keys(v);
+            }
+        }
+        _ => {}
     }
 }

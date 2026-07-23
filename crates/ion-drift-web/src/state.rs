@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use mikrotik_core::MikrotikClient;
-use ion_drift_storage::{BehaviorStore, MetricsStore, SwitchStore};
+use ion_drift_storage::{BehaviorStore, FindingsStore, MetricsStore, SwitchStore};
 use mikrotik_core::TrafficTracker;
 use ion_drift_storage::behavior::VlanRegistry;
 use mikrotik_core::resources::firewall::FilterRule;
@@ -16,6 +16,7 @@ use crate::live_traffic::LiveTrafficBuffer;
 use crate::oui::OuiDb;
 use crate::poller_registry::PollerRegistry;
 use crate::routes::network_map_status::NetworkMapStatusCache;
+use crate::modules_registry::{EventDispatcher, ModuleRegistryService, ModuleRegistryStore, NonceCache};
 use crate::secrets::SecretsManager;
 use crate::stats_store::StatsStore;
 use crate::attack_techniques::AttackTechniqueDb;
@@ -57,10 +58,24 @@ pub struct AppState {
     pub network_map_cache: Arc<RwLock<Option<NetworkMapStatusCache>>>,
     /// Device behavioral fingerprinting store (SQLite).
     pub behavior_store: Arc<BehaviorStore>,
+    /// Module-emitted findings store (SQLite). Receives finding events
+    /// pushed in over the inbound publish endpoint.
+    pub findings_store: Arc<FindingsStore>,
     /// Cached firewall filter rules for behavior correlation.
     pub firewall_rules_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
     /// Encrypted secrets manager (None if bootstrap not configured).
     pub secrets_manager: Option<Arc<RwLock<SecretsManager>>>,
+    /// Persistence for externally-registered modules (shares `secrets.db`
+    /// with SecretsManager; None if bootstrap not yet run).
+    pub module_registry_store: Option<Arc<ModuleRegistryStore>>,
+    /// Registration + manifest-validation service layered over the store.
+    pub module_registry_service: Option<Arc<ModuleRegistryService>>,
+    /// HMAC-signed event dispatcher; the run loop is spawned in main.rs
+    /// and subscribes to every `EventKind` on the in-process EventBus.
+    pub module_event_dispatcher: Option<Arc<EventDispatcher>>,
+    /// Replay-protection cache for inbound module event publishes.
+    /// Keyed by `(module_name, nonce)` with TTL eviction.
+    pub nonce_cache: Arc<NonceCache>,
     /// Multi-device manager (router + switches).
     pub device_manager: Arc<RwLock<DeviceManager>>,
     /// Switch-specific data store (port metrics, MAC table, neighbors, etc.).

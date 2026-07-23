@@ -1,6 +1,11 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
-import { useConnectionSummary, useBehaviorAlerts, useDevices } from "@/api/queries";
+import {
+  useConnectionSummary,
+  useBehaviorAlerts,
+  useDevices,
+  useFindingsSummary,
+} from "@/api/queries";
 import {
   LayoutDashboard,
   Network,
@@ -16,7 +21,9 @@ import {
   Cable,
   Search,
   FileCheck,
+  BookOpen,
   BarChart3,
+  Plug,
 } from "lucide-react";
 
 const navItems = [
@@ -26,6 +33,7 @@ const navItems = [
   { to: "/firewall", label: "Firewall", icon: Shield },
   { to: "/connections", label: "Connections", icon: Plug2 },
   { to: "/behavior", label: "Behavior", icon: Activity },
+  { to: "/findings", label: "Findings", icon: BookOpen },
   { to: "/policy", label: "Policy", icon: FileCheck },
   { to: "/history", label: "History", icon: History },
   { to: "/logs", label: "Logs", icon: ScrollText },
@@ -43,6 +51,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const hasFlagged = (connectionSummary.data?.flagged_count ?? 0) > 0;
   const behaviorAlerts = useBehaviorAlerts();
   const pendingAnomalies = behaviorAlerts.data?.tier1_pending ?? 0;
+  const findingsSummary = useFindingsSummary();
+  const openFindings = findingsSummary.data?.open_count ?? 0;
   const { data: devices = [] } = useDevices();
   const sidebarDevices = devices.filter((d) => d.device_type !== "router");
 
@@ -64,6 +74,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           const active = to === "/" ? currentPath === "/" : currentPath.startsWith(to);
           const showDot = to === "/connections" && hasFlagged;
           const showBehaviorBadge = to === "/behavior" && pendingAnomalies > 0;
+          const showFindingsBadge = to === "/findings" && openFindings > 0;
           return (
             <Link
               key={to}
@@ -84,6 +95,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               {showBehaviorBadge && (
                 <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-warning px-1 text-[10px] font-bold text-background">
                   {pendingAnomalies}
+                </span>
+              )}
+              {showFindingsBadge && (
+                <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-warning px-1 text-[10px] font-bold text-background">
+                  {openFindings}
                 </span>
               )}
             </Link>
@@ -162,6 +178,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       <div className="border-t border-border p-3 space-y-0.5">
         {[
           { to: "/statistics", label: "Statistics", icon: BarChart3 },
+          { to: "/admin/modules", label: "Modules", icon: Plug },
           { to: "/settings", label: "Settings", icon: Settings },
         ].map(({ to, label, icon: Icon }) => {
           const active = currentPath.startsWith(to);

@@ -3,6 +3,7 @@ name = "ion-drift-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Web server for Mikrotik RouterOS management dashboard"
 
 [[bin]]
@@ -25,6 +26,7 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-manual-roots", "rustls-tls-webpki-roots"] }
+url = "2"
 openidconnect = { version = "=4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
 jsonwebtoken = "=10.3.0"
 rand = "0.9"
@@ -45,13 +47,14 @@ base64 = "0.22"
 hex = "0.4"
 ed25519-dalek = { version = "2", features = ["std"] }
 hmac = "=0.12.1"
+subtle = "2"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder", "tokio1"] }
 x509-parser = "0.16"
-maxminddb = "0.24"
+maxminddb = "0.27"
 flate2 = "1"
 tar = "0.4"
-quick-xml = "0.37"
-hickory-resolver = "0.25"
+quick-xml = "0.41"
+hickory-resolver = "0.26"
 openssl = "0.10"
 libc = "0.2"
 

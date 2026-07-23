@@ -87,6 +87,7 @@ pub mod module;
 pub mod registration;
 pub mod state_reads;
 pub mod storage;
+pub mod wire;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -100,9 +101,9 @@ pub use context::{
 pub use error::{EventError, ModuleError, StorageError};
 pub use event::{
     AnomalyDetectedV1, BehaviorBaselineUpdatedV1, ConnectionStateChangedV1, DeviceAddedV1,
-    DeviceRemovedV1, DeviceUnreachableV1, DriftEvent, EventKind,
-    InfrastructureSnapshotUpdatedV1, InvestigationCompletedV1, InvestigationStartedV1,
-    SwitchTopologyChangedV1,
+    DeviceRemovedV1, DeviceUnreachableV1, DriftEvent, EventKind, FindingEvidence,
+    FindingSeverity, FindingV1, InfrastructureSnapshotUpdatedV1, InvestigationCompletedV1,
+    InvestigationStartedV1, SwitchTopologyChangedV1,
 };
 pub use module::{ApiVersion, Module};
 pub use registration::ModuleRegistration;
@@ -110,3 +111,6 @@ pub use state_reads::{
     BehaviorRead, ConnectionRead, DeviceManagerRead, SnapshotRead, SwitchRead,
 };
 pub use storage::{Migration, ModuleStorage};
+pub use wire::{
+    DriftEventWire, EventEnvelope, Manifest, ModuleCustomWireV1, ProtocolVariant, RouteDescriptor,
+};

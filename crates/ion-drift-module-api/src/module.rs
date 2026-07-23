@@ -14,7 +14,7 @@ use crate::registration::ModuleRegistration;
 /// Compatibility rule: same major, module minor ≤ host minor. Minor bumps are
 /// additive only (new events, new capabilities); major bumps are rare and
 /// breaking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ApiVersion {
     pub major: u16,
     pub minor: u16,

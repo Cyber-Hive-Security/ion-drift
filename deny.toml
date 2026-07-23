@@ -1,0 +1,71 @@
+# cargo-deny configuration for ion-drift
+# Wired in 2026-06-09 as part of the security tooling sweep.
+# Run: cargo deny check          (all checks)
+#      cargo deny check advisories
+#      cargo deny check licenses
+#      cargo deny check bans
+#      cargo deny check sources
+
+[graph]
+all-features = true
+
+[output]
+feature-depth = 1
+
+# ── Security advisories (RUSTSEC) ──────────────────────────────────────────
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Yanked crates in the lockfile are treated as a finding.
+yanked = "warn"
+# Add advisory IDs here only with a documented justification.
+ignore = [
+    # rsa Marvin Attack (timing sidechannel, no upstream fix). Pulled in via
+    # openidconnect, which Drift uses only to VERIFY ID-token signatures
+    # against the IdP's public JWKS. Confirmed 2026-06-09: no RSA private-key
+    # operations anywhere (OIDC client auth is client_secret, not
+    # private_key_jwt; session tokens are HMAC). Re-evaluate if client auth
+    # ever moves to private_key_jwt or any code path loads an RSA private key.
+    "RUSTSEC-2023-0071",
+]
+
+# ── License policy ─────────────────────────────────────────────────────────
+[licenses]
+confidence-threshold = 0.8
+# Permissive licenses acceptable for a redistributed binary.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "0BSD",                 # quoted_printable (via lettre)
+    "CDLA-Permissive-2.0",  # webpki-roots (via reqwest/hyper-rustls/lettre)
+]
+# Note: the workspace's own PolyForm-Shield-1.0.0 license is not an OSI/SPDX
+# term cargo-deny recognizes; the [licenses.private] block below skips the
+# first-party crates so it never needs to appear in this allow list.
+
+# The workspace's own crates are not published; don't license-gate them.
+[licenses.private]
+ignore = true
+
+# ── Dependency bans / duplicate detection ──────────────────────────────────
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+# Path-only workspace deps (no version key) read as wildcards; they're
+# first-party and unpublished, so don't warn on them.
+allow-wildcard-paths = true
+allow = []
+deny = []
+
+# ── Source provenance ──────────────────────────────────────────────────────
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

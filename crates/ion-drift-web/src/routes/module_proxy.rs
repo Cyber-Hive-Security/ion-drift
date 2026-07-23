@@ -1,0 +1,644 @@
+//! Reverse-proxy handler for registered modules.
+//!
+//! Mounted under the admin-authenticated `/api/modules` root by the
+//! main router, this handler forwards requests to the external module's
+//! base URL with the per-registration bearer token injected. It
+//! preserves method, path tail, query string, and body; it filters hop-
+//! by-hop headers on both legs and strips any inbound `Authorization`
+//! (which we always overwrite with our stored token).
+//!
+//! Body size is capped at 10 MB. Drift-watchlist and similar modules
+//! exchange small JSON documents, not large uploads; streaming can
+//! come later if a module's surface grows.
+//!
+//! The handler is deliberately standalone — it takes its own
+//! [`ModuleProxyState`] via `with_state`, not the full `AppState`. The
+//! admin-auth middleware is applied at mount time by the parent router
+//! (see Task 8 for integration).
+
+use std::sync::Arc;
+
+use axum::{
+    body::Body,
+    extract::{Path, Request, State},
+    http::{HeaderValue, StatusCode},
+    response::{IntoResponse, Json, Response},
+    routing::any,
+    Router,
+};
+use secrecy::ExposeSecret;
+
+use crate::modules_registry::ModuleRegistryStore;
+
+/// Max request body forwarded to a module.
+const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+
+/// Max response body buffered back from a module (review ID-08).
+const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
+/// True if `req_path` under `method` matches at least one declared route.
+/// A declared `/watchlist` matches `/watchlist` and any `/watchlist/<sub>`
+/// path, but never an unrelated path like `/evil.js` (review ID-01).
+fn route_allowed(
+    routes: &[ion_drift_module_api::RouteDescriptor],
+    method: &axum::http::Method,
+    req_path: &str,
+) -> bool {
+    routes.iter().any(|r| {
+        if !r.method.eq_ignore_ascii_case(method.as_str()) {
+            return false;
+        }
+        let t = r.path.trim_end_matches('/');
+        let rp = if t.is_empty() { "/" } else { t };
+        req_path == rp || req_path.starts_with(&format!("{rp}/"))
+    })
+}
+
+/// Everything the proxy handler needs. Cheaply cloneable.
+#[derive(Clone)]
+pub struct ModuleProxyState {
+    pub store: Arc<ModuleRegistryStore>,
+    pub http: reqwest::Client,
+}
+
+/// Build a router for `/{name}` and `/{name}/{*tail}` routes.
+///
+/// Mount like: `Router::new().nest("/api/modules", module_proxy_router(state))`.
+pub fn module_proxy_router(state: ModuleProxyState) -> Router {
+    Router::new()
+        .route("/{name}", any(proxy_root))
+        .route("/{name}/{*tail}", any(proxy_tail))
+        .with_state(state)
+}
+
+async fn proxy_root(
+    State(state): State<ModuleProxyState>,
+    Path(name): Path<String>,
+    req: Request,
+) -> Response {
+    proxy_impl(state, name, String::new(), req).await
+}
+
+async fn proxy_tail(
+    State(state): State<ModuleProxyState>,
+    Path((name, tail)): Path<(String, String)>,
+    req: Request,
+) -> Response {
+    proxy_impl(state, name, tail, req).await
+}
+
+async fn proxy_impl(
+    state: ModuleProxyState,
+    name: String,
+    tail: String,
+    req: Request,
+) -> Response {
+    let module = match state.store.get_by_name(&name).await {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("module '{name}' not registered")
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::warn!(module = %name, error = %e, "module lookup failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "module lookup failed" })),
+            )
+                .into_response();
+        }
+    };
+
+    if !module.enabled {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": format!("module '{name}' is disabled")
+            })),
+        )
+            .into_response();
+    }
+
+    // Enforce the manifest's exposed_routes allow-list (review ID-01). Ion Drift
+    // modules are API-only: forward only the (method, path) pairs the module
+    // declared, never arbitrary paths/methods. Modules that declare NO routes
+    // (legacy pre-1.2 manifests) are not broken here — their responses are still
+    // forced inert below, so they cannot serve active content regardless.
+    let req_path = if tail.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{tail}")
+    };
+    if !module.manifest.exposed_routes.is_empty()
+        && !route_allowed(&module.manifest.exposed_routes, req.method(), &req_path)
+    {
+        tracing::warn!(
+            module = %name, path = %req_path, method = %req.method(),
+            "request not in module exposed_routes; refusing"
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "route not exposed by module manifest"
+            })),
+        )
+            .into_response();
+    }
+
+    let api_token = match state.store.get_api_token(&name).await {
+        Ok(Some(t)) => t,
+        _ => {
+            tracing::warn!(module = %name, "api token missing");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "module api token missing" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Re-validate the module host against the SSRF guard immediately before
+    // connecting — parity with the registration probe path (service.rs). A
+    // hostname vetted at registration can later DNS-rebind to a blocked address
+    // (e.g. 169.254.169.254); the live proxy path previously trusted only the
+    // registration-time check, so a rebind reached metadata. allow_loopback=true
+    // matches module policy (modules may run on the same host).
+    match url::Url::parse(&module.url) {
+        Ok(u) => {
+            if let Some(host) = u.host_str() {
+                if crate::ssrf::host_resolves_to_blocked(host, true) {
+                    tracing::warn!(
+                        module = %name, host = %host,
+                        "module host resolves to a blocked address (possible DNS rebinding); refusing proxy"
+                    );
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(serde_json::json!({
+                            "error": "module host resolves to a blocked address"
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(module = %name, error = %e, "stored module url is unparseable");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "module url invalid" })),
+            )
+                .into_response();
+        }
+    }
+
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    let tail_segment = if tail.is_empty() {
+        String::new()
+    } else {
+        format!("/{tail}")
+    };
+    let target_url = format!(
+        "{}{}{}",
+        module.url.trim_end_matches('/'),
+        tail_segment,
+        query
+    );
+
+    let method = req.method().clone();
+    let mut builder = state.http.request(method, &target_url);
+
+    for (hname, value) in req.headers() {
+        let s = hname.as_str();
+        if matches!(
+            s,
+            "host"
+                | "connection"
+                | "transfer-encoding"
+                | "cookie"
+                | "authorization"
+                | "content-length"
+        ) {
+            continue;
+        }
+        if let Ok(v) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
+            builder = builder.header(s, v);
+        }
+    }
+
+    builder = builder.header(
+        "Authorization",
+        format!("Bearer {}", api_token.expose_secret()),
+    );
+
+    let body_bytes = match axum::body::to_bytes(req.into_body(), MAX_BODY_BYTES).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({ "error": "request body too large" })),
+            )
+                .into_response();
+        }
+    };
+    if !body_bytes.is_empty() {
+        builder = builder.body(body_bytes.to_vec());
+    }
+
+    let response = match builder.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(module = %name, target = %target_url, error = %e, "module proxy failed");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": format!("module '{name}' unreachable"),
+                    "detail": e.to_string(),
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let _ = state.store.touch_last_seen(&name).await;
+
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut resp = Response::builder().status(status);
+    for (hname, value) in response.headers() {
+        let s = hname.as_str();
+        // Also drop the module's own content-type / content-disposition — we
+        // override them below to force inert responses.
+        if matches!(
+            s,
+            "transfer-encoding"
+                | "connection"
+                | "content-length"
+                | "content-type"
+                | "content-disposition"
+        ) {
+            continue;
+        }
+        if let Ok(v) = HeaderValue::from_bytes(value.as_bytes()) {
+            resp = resp.header(s, v);
+        }
+    }
+
+    // Force inert responses (review ID-01, API-only decision): a module must
+    // never serve active content (HTML/JS) on Ion Drift's authenticated origin.
+    // Override Content-Type to JSON and mark the body as an attachment so a
+    // top-level navigation to a module-proxy URL cannot render as a document.
+    resp = resp
+        .header("content-type", "application/json; charset=utf-8")
+        .header("x-content-type-options", "nosniff")
+        .header("content-disposition", "attachment");
+
+    // Stream the upstream body with a cap so a malicious or oversized module
+    // response can't exhaust process memory (review ID-08). Reject early on an
+    // oversized Content-Length, then stop the moment the cap is crossed.
+    if let Some(len) = response.content_length() {
+        if len > MAX_RESPONSE_BYTES as u64 {
+            tracing::warn!(module = %name, len, "module response exceeds cap (content-length)");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": "module response too large" })),
+            )
+                .into_response();
+        }
+    }
+    let mut response = response;
+    let mut resp_body: Vec<u8> = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if resp_body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                    tracing::warn!(module = %name, "module response exceeds cap (mid-stream)");
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(serde_json::json!({ "error": "module response too large" })),
+                    )
+                        .into_response();
+                }
+                resp_body.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(module = %name, error = %e, "module response read failed");
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "error": "module response read failed" })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    resp.body(Body::from(resp_body))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules_registry::store::NewModuleRegistration;
+    use aes_gcm::{Aes256Gcm, Key};
+    use axum::{extract::State as AxState, http::Method, routing::any, Json as AxJson};
+    use ion_drift_module_api::{ApiVersion, EventKind, Manifest, ProtocolVariant, RouteDescriptor};
+    use std::net::SocketAddr;
+    use std::sync::Mutex;
+    use tempfile::NamedTempFile;
+    use tower::ServiceExt;
+
+    fn test_kek() -> Key<Aes256Gcm> {
+        Key::<Aes256Gcm>::from_slice(&[13u8; 32]).to_owned()
+    }
+
+    fn route(path: &str, method: &str) -> RouteDescriptor {
+        RouteDescriptor {
+            path: path.into(),
+            method: method.into(),
+            description: None,
+        }
+    }
+
+    #[test]
+    fn exposed_routes_allow_declared_only() {
+        let routes = vec![route("/watchlist", "GET")];
+        // declared route + subpaths allowed
+        assert!(route_allowed(&routes, &Method::GET, "/watchlist"));
+        assert!(route_allowed(&routes, &Method::GET, "/watchlist/42"));
+        // undeclared path (the ID-01 evil.js vector) refused
+        assert!(!route_allowed(&routes, &Method::GET, "/evil.js"));
+        // right path, wrong method refused
+        assert!(!route_allowed(&routes, &Method::POST, "/watchlist"));
+        // prefix-lookalike that isn't a path-segment boundary refused
+        assert!(!route_allowed(&routes, &Method::GET, "/watchlist-evil"));
+    }
+
+    #[test]
+    fn exposed_routes_method_case_insensitive() {
+        let routes = vec![route("/x", "post")];
+        assert!(route_allowed(&routes, &Method::POST, "/x"));
+    }
+
+    fn sample_manifest(name: &str) -> Manifest {
+        Manifest {
+            name: name.into(),
+            version: "0.1.0".into(),
+            api_version: ApiVersion::CURRENT,
+            protocol: ProtocolVariant::Http,
+            description: None,
+            subscribed_events: vec![EventKind::AnomalyDetected],
+            declared_publish: vec![],
+            // Routes exercised by the plumbing tests below. Enforcement itself
+            // is covered by `route_allowed` unit tests and the
+            // `refuses_undeclared_route` integration test.
+            exposed_routes: vec![
+                route("/watchlist", "GET"),
+                route("/api", "GET"), // prefix covers /api/v1/items
+                route("/submit", "POST"),
+                route("/ping", "GET"),
+                route("/", "GET"), // root
+            ],
+        }
+    }
+
+    #[derive(Default)]
+    struct TargetCapture {
+        last_method: Mutex<Option<Method>>,
+        last_path: Mutex<Option<String>>,
+        last_query: Mutex<Option<String>>,
+        last_auth: Mutex<Option<String>>,
+        last_body: Mutex<Option<Vec<u8>>>,
+        last_custom: Mutex<Option<String>>,
+    }
+
+    async fn spawn_target() -> (String, Arc<TargetCapture>) {
+        let cap = Arc::new(TargetCapture::default());
+        let state = Arc::clone(&cap);
+        let app = Router::new()
+            .fallback(any(
+                move |AxState(cap): AxState<Arc<TargetCapture>>, req: Request| async move {
+                    *cap.last_method.lock().unwrap() = Some(req.method().clone());
+                    *cap.last_path.lock().unwrap() = Some(req.uri().path().to_string());
+                    *cap.last_query.lock().unwrap() =
+                        req.uri().query().map(|s| s.to_string());
+                    *cap.last_auth.lock().unwrap() = req
+                        .headers()
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .map(String::from);
+                    *cap.last_custom.lock().unwrap() = req
+                        .headers()
+                        .get("x-custom")
+                        .and_then(|v| v.to_str().ok())
+                        .map(String::from);
+                    let body = axum::body::to_bytes(req.into_body(), 1 << 20)
+                        .await
+                        .unwrap_or_default()
+                        .to_vec();
+                    *cap.last_body.lock().unwrap() = Some(body.clone());
+                    AxJson(serde_json::json!({ "ok": true, "echo": body.len() }))
+                },
+            ))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), cap)
+    }
+
+    async fn setup_proxy(
+        name: &str,
+        target_url: &str,
+        enabled: bool,
+    ) -> (Router, Arc<ModuleRegistryStore>, NamedTempFile) {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Arc::new(ModuleRegistryStore::new(tmp.path(), test_kek()).unwrap());
+        let m = sample_manifest(name);
+        store
+            .register(NewModuleRegistration {
+                name,
+                url: target_url,
+                manifest: &m,
+                shared_secret: "shared-secret-at-least-32-chars-long!",
+                api_token: "api-token-at-least-32-chars-long-xyz0",
+            })
+            .await
+            .unwrap();
+        if !enabled {
+            store.set_enabled(name, false).await.unwrap();
+        }
+        let http = reqwest::Client::new();
+        let router = module_proxy_router(ModuleProxyState {
+            store: Arc::clone(&store),
+            http,
+        });
+        (router, store, tmp)
+    }
+
+    #[tokio::test]
+    async fn forwards_get_and_injects_bearer() {
+        let (target, cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("drift-watchlist", &target, true).await;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/drift-watchlist/watchlist")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert_eq!(
+            cap.last_method.lock().unwrap().as_ref().unwrap(),
+            &Method::GET
+        );
+        assert_eq!(
+            cap.last_path.lock().unwrap().as_deref(),
+            Some("/watchlist")
+        );
+        let auth = cap.last_auth.lock().unwrap().clone().unwrap();
+        assert_eq!(auth, "Bearer api-token-at-least-32-chars-long-xyz0");
+    }
+
+    #[tokio::test]
+    async fn preserves_query_and_nested_path() {
+        let (target, cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("m", &target, true).await;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/m/api/v1/items?limit=5&mac=aa:bb")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert_eq!(
+            cap.last_path.lock().unwrap().as_deref(),
+            Some("/api/v1/items")
+        );
+        assert_eq!(
+            cap.last_query.lock().unwrap().as_deref(),
+            Some("limit=5&mac=aa:bb")
+        );
+    }
+
+    #[tokio::test]
+    async fn forwards_post_body_and_custom_header() {
+        let (target, cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("m", &target, true).await;
+
+        let body = br#"{"hello":"world"}"#.to_vec();
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/m/submit")
+            .header("x-custom", "value-1")
+            .body(Body::from(body.clone()))
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert_eq!(
+            cap.last_method.lock().unwrap().as_ref().unwrap(),
+            &Method::POST
+        );
+        assert_eq!(cap.last_body.lock().unwrap().clone().unwrap(), body);
+        assert_eq!(
+            cap.last_custom.lock().unwrap().as_deref(),
+            Some("value-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn strips_inbound_authorization_and_replaces() {
+        let (target, cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("m", &target, true).await;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/m/ping")
+            .header("authorization", "Bearer a-user-token-that-leaks")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let forwarded = cap.last_auth.lock().unwrap().clone().unwrap();
+        assert_eq!(forwarded, "Bearer api-token-at-least-32-chars-long-xyz0");
+        assert!(!forwarded.contains("a-user-token-that-leaks"));
+    }
+
+    #[tokio::test]
+    async fn returns_404_for_unknown_module() {
+        let (target, _cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("known", &target, true).await;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/unknown/path")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn returns_503_for_disabled_module() {
+        let (target, _cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("m", &target, false).await;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/m/anything")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn handles_empty_tail_root() {
+        let (target, cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("m", &target, true).await;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/m")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(cap.last_path.lock().unwrap().as_deref(), Some("/"));
+    }
+
+    #[tokio::test]
+    async fn refuses_undeclared_route() {
+        // The ID-01 vector: an admin navigates to a path the module never
+        // declared (e.g. to fetch attacker-served content). Enforcement must
+        // 403 before the request is ever forwarded.
+        let (target, cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("m", &target, true).await;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/m/evil.js")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        // Never forwarded upstream.
+        assert!(cap.last_path.lock().unwrap().is_none());
+    }
+}

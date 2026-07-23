@@ -1,0 +1,12 @@
+#!/bin/bash
+# Pre-commit hook: block commits containing secrets (gitleaks).
+# Install: cp scripts/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "pre-commit: gitleaks not found in PATH — install it (https://github.com/gitleaks/gitleaks/releases)" >&2
+    echo "pre-commit: refusing to commit without a secret scan. Bypass (NOT recommended): git commit --no-verify" >&2
+    exit 1
+fi
+
+exec gitleaks git --pre-commit --staged --redact --no-banner

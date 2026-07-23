@@ -6,11 +6,20 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ion_drift_module_api::{AnomalyDetectedV1, DriftEvent};
+use ion_drift_module_host::EventBus;
 use ion_drift_storage::behavior::{BehaviorStore, NewAnomaly, VlanRegistry};
 use tokio::sync::RwLock;
 
 use crate::connection_store::{ConnectionStore, FlowClassification, NewAnomalyLink};
 use crate::task_supervisor::TaskSupervisor;
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// Spawn the anomaly correlator background task.
 pub fn spawn_anomaly_correlator(
@@ -18,12 +27,14 @@ pub fn spawn_anomaly_correlator(
     connection_store: Arc<ConnectionStore>,
     behavior_store: Arc<BehaviorStore>,
     vlan_registry: Arc<RwLock<VlanRegistry>>,
+    event_bus: EventBus,
     interval_secs: u64,
 ) {
     supervisor.spawn("anomaly_correlator", move || {
         let connection_store = connection_store.clone();
         let behavior_store = behavior_store.clone();
         let vlan_registry = vlan_registry.clone();
+        let event_bus = event_bus.clone();
         Box::pin(async move {
         // Wait 5 minutes for behavior collector + baselines to have initial data
         tokio::time::sleep(Duration::from_secs(300)).await;
@@ -34,7 +45,7 @@ pub fn spawn_anomaly_correlator(
             interval.tick().await;
 
             let registry = vlan_registry.read().await.clone();
-            match run_correlation(&connection_store, &behavior_store, &registry).await {
+            match run_correlation(&connection_store, &behavior_store, &registry, &event_bus).await {
                 Ok((port_links, device_links)) => {
                     if port_links > 0 || device_links > 0 {
                         tracing::info!(
@@ -56,8 +67,10 @@ async fn run_correlation(
     conn_store: &ConnectionStore,
     behavior_store: &BehaviorStore,
     registry: &VlanRegistry,
+    event_bus: &EventBus,
 ) -> anyhow::Result<(usize, usize)> {
-    let port_links = correlate_port_to_device(conn_store, behavior_store, registry).await?;
+    let port_links =
+        correlate_port_to_device(conn_store, behavior_store, registry, event_bus).await?;
     let device_links = correlate_device_to_port(conn_store, behavior_store).await?;
     auto_resolve_links(conn_store, behavior_store).await?;
     Ok((port_links, device_links))
@@ -68,6 +81,7 @@ async fn correlate_port_to_device(
     conn_store: &ConnectionStore,
     behavior_store: &BehaviorStore,
     registry: &VlanRegistry,
+    event_bus: &EventBus,
 ) -> anyhow::Result<usize> {
     let mut total_links = 0;
 
@@ -153,7 +167,7 @@ async fn correlate_port_to_device(
                         .and_then(|v| v.trim().parse::<i64>().ok())
                         .unwrap_or(0);
 
-                    if let Err(e) = behavior_store
+                    match behavior_store
                         .record_anomaly(&NewAnomaly {
                             mac: device.mac.clone(),
                             anomaly_type: classification_str.to_string(),
@@ -190,7 +204,19 @@ async fn correlate_port_to_device(
                         })
                         .await
                     {
-                        tracing::warn!(mac = %device.mac, "failed to record anomaly from port flow correlation: {e}");
+                        Ok(anomaly_id) => {
+                            event_bus.publish(DriftEvent::AnomalyDetected(AnomalyDetectedV1 {
+                                anomaly_id,
+                                device_mac: device.mac.clone(),
+                                severity: severity.to_string(),
+                                anomaly_type: classification_str.to_string(),
+                                vlan: Some(vlan),
+                                timestamp_unix: now_unix(),
+                            }));
+                        }
+                        Err(e) => {
+                            tracing::warn!(mac = %device.mac, "failed to record anomaly from port flow correlation: {e}");
+                        }
                     }
                 }
             }

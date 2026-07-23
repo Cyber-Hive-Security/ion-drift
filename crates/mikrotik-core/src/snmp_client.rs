@@ -1188,3 +1188,10 @@ fn decode_portlist(bytes: &[u8]) -> Vec<u32> {
     }
     ports
 }
+
+/// Fuzzing-only entry point for [`decode_portlist`]; cargo-fuzz builds the
+/// whole graph with `--cfg fuzzing`, normal builds never see this.
+#[cfg(fuzzing)]
+pub fn fuzz_decode_portlist(bytes: &[u8]) -> Vec<u32> {
+    decode_portlist(bytes)
+}

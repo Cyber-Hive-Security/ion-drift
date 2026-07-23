@@ -25,7 +25,9 @@ pub fn generate_weekly_snapshots(store: &ConnectionStore) -> anyhow::Result<()> 
                 geo_data.iter().map(|g| g.unique_destinations).sum::<i64>(),
             );
             let data = serde_json::to_string(&geo_data).unwrap_or_else(|_| "[]".into());
-            if let Err(e) = store.save_snapshot(&week, "world_map", &data, &summary) {
+            if let Err(e) =
+                store.save_snapshot(&week, "world_map", &period_start, &period_end, &data, &summary)
+            {
                 tracing::warn!("failed to save world_map snapshot: {e}");
             }
         }
@@ -41,7 +43,9 @@ pub fn generate_weekly_snapshots(store: &ConnectionStore) -> anyhow::Result<()> 
                 port_data.len(),
             );
             let data = serde_json::to_string(&port_data).unwrap_or_else(|_| "[]".into());
-            if let Err(e) = store.save_snapshot(&week, "sankey_port", &data, &summary) {
+            if let Err(e) =
+                store.save_snapshot(&week, "sankey_port", &period_start, &period_end, &data, &summary)
+            {
                 tracing::warn!("failed to save sankey_port snapshot: {e}");
             }
         }

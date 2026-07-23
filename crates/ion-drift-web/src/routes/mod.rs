@@ -1,9 +1,11 @@
+pub mod admin_modules;
 pub mod alerts;
 pub mod arp;
 pub mod backbone;
 pub mod behavior;
 pub mod connections;
 pub mod devices;
+pub mod findings;
 pub mod firewall;
 pub mod history;
 pub mod identity;
@@ -13,6 +15,7 @@ pub mod license;
 pub mod ip;
 pub mod logs;
 pub mod metrics;
+pub mod module_proxy;
 pub mod neighbor_aliases;
 pub mod network_map_status;
 pub mod policy;
@@ -85,50 +88,44 @@ pub fn version() -> &'static str {
     option_env!("ION_DRIFT_VERSION").unwrap_or("dev")
 }
 
-/// Health check endpoint — no auth required.
+/// Health check endpoint — no auth required. Deliberately returns only
+/// liveness; build version and demo-mode are NOT disclosed to unauthenticated
+/// callers (WSTG-INFO-09 / N09). The authenticated Settings → System view
+/// surfaces the version to logged-in operators.
 async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "status": "ok",
-        "version": version(),
-        "demo_mode": demo::is_demo_mode(),
-    }))
+    Json(serde_json::json!({ "status": "ok" }))
 }
 
 /// CSRF protection middleware for non-GET API endpoints.
 ///
-/// Requires that mutating requests (POST/PUT/DELETE) include a Content-Type
-/// header with `application/json`. This prevents cross-origin form submissions
-/// from attaching session cookies, since HTML forms cannot set custom
-/// Content-Type values beyond form-urlencoded/multipart/text-plain.
+/// Requires that EVERY mutating request (POST/PUT/DELETE/PATCH) declares
+/// `Content-Type: application/json` — including no-body requests. A cross-site
+/// HTML form cannot set that Content-Type without triggering a CORS preflight
+/// (which our locked, single-origin CORS rejects), so this blocks
+/// forced-browsing CSRF independently of the SameSite cookie attribute.
 ///
-/// Combined with SameSite=Lax cookies and strict CORS, this provides
-/// defense-in-depth against CSRF attacks.
+/// Previously the check only applied when a body was present, so no-body
+/// mutating POSTs (e.g. `/findings/{id}/acknowledge`, `/behavior/reset`) fell
+/// through to the SameSite=Lax backstop alone — CSRF-able if an operator set
+/// `same_site=none` (WSTG-N02 / SESS-05). The frontend's apiFetch always sends
+/// `application/json` on mutating requests, so legitimate calls are unaffected.
 pub(crate) async fn csrf_guard_layer(
     request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
     let method = request.method().clone();
     if method != Method::GET && method != Method::HEAD && method != Method::OPTIONS {
-        let has_body = request
+        let ct = request
             .headers()
-            .get(header::CONTENT_LENGTH)
+            .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok())
-            .map_or(false, |len| len > 0);
-
-        if has_body {
-            let ct = request
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            if !ct.starts_with("application/json") {
-                return (
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    Json(serde_json::json!({ "error": "Content-Type must be application/json" })),
-                )
-                    .into_response();
-            }
+            .unwrap_or("");
+        if !ct.starts_with("application/json") {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                Json(serde_json::json!({ "error": "Content-Type must be application/json" })),
+            )
+                .into_response();
         }
     }
     next.run(request).await
@@ -200,10 +197,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn csrf_allows_empty_body_post() {
+    async fn csrf_rejects_empty_body_post_without_json_content_type() {
+        // WSTG-N02: no-body mutating requests must ALSO declare
+        // application/json — otherwise they bypass the CSRF guard.
         let req = Request::builder()
             .method(Method::POST)
             .uri("/x")
+            .header(header::CONTENT_LENGTH, "0")
+            .body(Body::empty())
+            .expect("request");
+        let status = app().oneshot(req).await.expect("response").status();
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_empty_body_post_with_json_content_type() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/x")
+            .header(header::CONTENT_TYPE, "application/json")
             .header(header::CONTENT_LENGTH, "0")
             .body(Body::empty())
             .expect("request");
@@ -317,7 +329,6 @@ async fn demo_sanitize_layer(
 pub fn router(
     state: AppState,
     web_dist: std::path::PathBuf,
-    module_router: Router,
 ) -> anyhow::Result<Router> {
     // SPA fallback: serve static files from web/dist/,
     // fall back to index.html for client-side routing.
@@ -446,6 +457,12 @@ pub fn router(
         )
         .route("/behavior/alerts", get(behavior::alerts))
         .route("/behavior/wan-scan-pressure", get(behavior::wan_scan_pressure))
+        // Findings (module-emitted)
+        .route("/findings", get(findings::list))
+        .route("/findings/summary", get(findings::summary))
+        .route("/findings/{id}", get(findings::detail))
+        .route("/findings/{id}/acknowledge", post(findings::acknowledge))
+        .route("/findings/{id}/resolve", post(findings::resolve))
         // Policy
         .route("/policy", get(policy::policy_overview).post(policy::create_policy))
         .route("/policy/{id}", put(policy::update_policy).delete(policy::delete_policy))
@@ -748,9 +765,43 @@ pub fn router(
                 },
             ),
         )
-        // Nested module subrouter — covered by the auth/CSRF layer stack below
-        // because nest_service is added before .layer() calls.
-        .nest_service("/modules", module_router)
+        ;
+
+    // External-module registry routes (Module API v1.1).
+    // Mounted only when the secrets bootstrap has completed and the
+    // registry store/service were constructed in main.rs. Each nested
+    // subrouter applies its own RequireAdmin layer so non-admin
+    // callers are rejected even though the parent `/api` scope is
+    // only user-authenticated.
+    let api_routes = if let (Some(service), Some(store)) = (
+        state.module_registry_service.clone(),
+        state.module_registry_store.clone(),
+    ) {
+        let admin_mw = middleware::from_fn_with_state(
+            state.clone(),
+            require_admin_passthrough,
+        );
+        api_routes
+            .nest_service(
+                "/modules",
+                crate::routes::module_proxy::module_proxy_router(
+                    crate::routes::module_proxy::ModuleProxyState {
+                        store,
+                        http: state.http_client.clone(),
+                    },
+                )
+                .route_layer(admin_mw.clone()),
+            )
+            .nest_service(
+                "/admin/modules",
+                crate::routes::admin_modules::admin_modules_router(service)
+                    .route_layer(admin_mw),
+            )
+    } else {
+        api_routes
+    };
+
+    let api_routes = api_routes
         // Demo mode sanitization (outermost — runs after response is built)
         .layer(middleware::from_fn(demo_sanitize_layer))
         // Global auth middleware for all API routes
@@ -780,10 +831,18 @@ pub fn router(
         app
     };
 
-    Ok(app
+    // Inbound module event publish endpoint
+    // (`POST /api/v1/modules/{name}/events`). Mounted at the top level
+    // because it does its own auth via HMAC + URL-path module identity
+    // and must NOT pick up the session-cookie auth layer below.
+    let inbound = crate::modules_registry::inbound_router();
+
+    let app = app
         // Nest all API routes under /api with global auth layer
         // (includes /api/system/modules and /api/modules/<name>/* — both auth-gated)
         .nest("/api", api_routes)
+        // Inbound module event publish (separate trust path).
+        .merge(inbound)
         // Hashed static assets with immutable cache headers
         .merge(assets_with_cache)
         // SPA static files (fallback for all non-API routes)
@@ -794,7 +853,23 @@ pub fn router(
             .gzip(true)
             .br(true))
         .layer(cors)
-        // Security headers
+        ;
+    let app = apply_security_headers(app);
+    Ok(app.with_state(state))
+}
+
+/// Apply the full HTTP security-header stack to a router. Shared between the
+/// main application router and the pre-provisioning setup-mode routers so the
+/// setup wizard (which handles credentials) gets the same headers as the app.
+///
+/// Headers: X-Frame-Options + CSP frame-ancestors (clickjacking, WSTG-CLNT-09),
+/// X-Content-Type-Options (MIME sniffing), CSP (XSS defense-in-depth),
+/// HSTS (WSTG-CONF-07), Referrer-Policy + Permissions-Policy (WSTG-CONF-14).
+pub fn apply_security_headers<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("DENY"),
@@ -811,5 +886,41 @@ pub fn router(
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'"),
         ))
-        .with_state(state))
+        // HSTS (WSTG-CONF-07). Two years + subdomains. Harmless over plaintext
+        // (browsers ignore it on http://); protects every https:// deployment.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+        ))
+        // Referrer-Policy (WSTG-CONF-14): don't leak the URL cross-origin.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("no-referrer"),
+        ))
+        // Permissions-Policy (WSTG-CONF-14): deny features the UI never uses.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("geolocation=(), camera=(), microphone=(), interest-cohort=()"),
+        ))
+}
+
+/// Middleware adapter that runs the [`RequireAdmin`] extractor on the
+/// request and rejects with 401/403 if it fails. Used as a
+/// `route_layer` on the external-module subrouters so admin-only
+/// access is enforced even though the subrouters have their own
+/// state types.
+async fn require_admin_passthrough(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::extract::FromRequestParts;
+    let (mut parts, body) = req.into_parts();
+    match crate::middleware::RequireAdmin::from_request_parts(&mut parts, &state).await {
+        Ok(_) => {
+            let req = axum::extract::Request::from_parts(parts, body);
+            next.run(req).await
+        }
+        Err(rej) => rej,
+    }
 }

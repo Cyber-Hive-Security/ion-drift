@@ -23,6 +23,7 @@ mod log_parser;
 mod middleware;
 mod module_adapters;
 mod modules;
+mod modules_registry;
 mod oui;
 mod passive_discovery;
 mod poller_registry;
@@ -31,6 +32,7 @@ mod router_queue;
 mod routes;
 mod secrets;
 mod setup;
+mod ssrf;
 mod snapshots;
 mod snmp_poller;
 mod state;
@@ -664,6 +666,10 @@ async fn main() -> anyhow::Result<()> {
         ion_drift_storage::BehaviorStore::new(&data_dir.join("behavior.db"))
             .map_err(|e| anyhow::anyhow!("failed to init behavior store: {e}"))?,
     );
+    let findings_store = Arc::new(
+        ion_drift_storage::FindingsStore::new(&data_dir.join("findings.db"))
+            .map_err(|e| anyhow::anyhow!("failed to init findings store: {e}"))?,
+    );
     let stats_store = Arc::new(
         stats_store::StatsStore::new(&data_dir.join("stats.db"))
             .map_err(|e| anyhow::anyhow!("failed to init stats store: {e}"))?,
@@ -672,9 +678,35 @@ async fn main() -> anyhow::Result<()> {
     // Live traffic buffer (300 entries = 5 min at 1 sample per second, but we poll every 10s so ~50 min)
     let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
 
+    // Cookie-hardening startup guard (WSTG-N13): warn loudly if the session
+    // cookie is configured in a browser-unsafe way. SameSite=None without
+    // Secure is rejected by browsers outright and removes the CSRF backstop.
+    if !config.session.secure {
+        tracing::warn!(
+            "session.secure=false — the session cookie will be sent over plaintext HTTP. \
+             Set secure=true in any TLS/proxied deployment."
+        );
+    }
+    if config.session.same_site.eq_ignore_ascii_case("none") {
+        tracing::warn!(
+            "session.same_site=\"none\" — this removes the SameSite CSRF backstop and requires \
+             secure=true to work in browsers. Prefer \"lax\"."
+        );
+    }
+    // WSTG-N15 (CRYP-01): warn loudly if the RouterOS REST API is configured
+    // over plaintext HTTP — the router credentials and all API traffic would
+    // traverse the network unencrypted.
+    if !config.router.tls {
+        tracing::warn!(
+            "router.tls=false — RouterOS REST traffic (including credentials) will use plaintext \
+             HTTP. Use tls=true with a CA cert on any non-isolated network."
+        );
+    }
+
     // Session store
-    let sessions = auth::SessionStore::new(
+    let sessions = auth::SessionStore::with_idle_timeout(
         config.session.max_age_seconds,
+        config.session.idle_timeout_seconds,
         &data_dir.join("sessions.db"),
         &config.session.session_secret,
     )?;
@@ -811,9 +843,12 @@ async fn main() -> anyhow::Result<()> {
         modules_config: config.modules.clone(),
     };
 
+    // The `modules::load()` pathway is retained as infrastructure only —
+    // it always returns `Vec::new()`. External modules are loaded at
+    // runtime via the ModuleRegistryStore (Module API v1.1), not
+    // compiled in. See docs/ai/arch/modules.md.
     let mut module_registry_value =
         ion_drift_module_host::ModuleRegistry::load(modules::load(), host_deps).await;
-    let module_router = module_registry_value.build_router();
 
     // Log the loaded module list at startup so operators can tell which
     // modules a binary was built with at a glance.
@@ -832,6 +867,42 @@ async fn main() -> anyhow::Result<()> {
 
     let module_registry = Arc::new(tokio::sync::RwLock::new(module_registry_value));
 
+    // External-module registry (Module API v1.1). Shares secrets.db
+    // with SecretsManager so both use the same KEK.
+    let (module_registry_store, module_registry_service, module_event_dispatcher): (
+        Option<Arc<modules_registry::ModuleRegistryStore>>,
+        Option<Arc<modules_registry::ModuleRegistryService>>,
+        Option<Arc<modules_registry::EventDispatcher>>,
+    ) = if let Some(sm_lock) = &secrets_manager {
+        let kek = sm_lock.read().await.kek().clone();
+        let db_path = data_dir.join("secrets.db");
+        match modules_registry::ModuleRegistryStore::new(&db_path, kek) {
+            Ok(store) => {
+                let store = Arc::new(store);
+                let service = modules_registry::ModuleRegistryService::new(Arc::clone(&store))
+                    .map(Arc::new)
+                    .map_err(|e| {
+                        tracing::warn!(error = %e, "module registry service init failed");
+                        e
+                    })
+                    .ok();
+                let dispatcher = modules_registry::EventDispatcher::new(
+                    Arc::clone(&store),
+                    http_client.clone(),
+                    modules_registry::DispatcherConfig::default(),
+                );
+                tracing::info!("external module registry ready");
+                (Some(store), service, Some(dispatcher))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "module registry store init failed");
+                (None, None, None)
+            }
+        }
+    } else {
+        (None, None, None)
+    };
+
     // Build AppState
     let app_state = AppState {
         mikrotik: mikrotik.clone(),
@@ -847,11 +918,16 @@ async fn main() -> anyhow::Result<()> {
         connection_store: connection_store.clone(),
         network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
         behavior_store: behavior_store.clone(),
+        findings_store: findings_store.clone(),
         firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((
             Vec::new(),
             std::time::Instant::now(),
         ))),
         secrets_manager: secrets_manager.clone(),
+        module_registry_store: module_registry_store.clone(),
+        module_registry_service: module_registry_service.clone(),
+        module_event_dispatcher: module_event_dispatcher.clone(),
+        nonce_cache: Arc::new(crate::modules_registry::NonceCache::new()),
         device_manager: device_manager.clone(),
         switch_store: switch_store.clone(),
         topology_cache: Arc::new(tokio::sync::RwLock::new(None)),
@@ -875,6 +951,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn all background tasks
     tasks::spawn_all(&app_state, dns_resolver);
+
+    // Start the module event dispatcher loop if the registry came up.
+    if let Some(dispatcher) = app_state.module_event_dispatcher.clone() {
+        modules_registry::spawn_dispatcher_loop(dispatcher, app_state.event_bus.clone());
+    }
 
     // Resolve web/dist path relative to the config file's parent (project root)
     let web_dist = config_file
@@ -903,7 +984,7 @@ async fn main() -> anyhow::Result<()> {
     let registry_for_graceful = module_registry.clone();
 
     // Build router and start server
-    let app = routes::router(app_state, web_dist, module_router)?;
+    let app = routes::router(app_state, web_dist)?;
     let bind_addr = format!(
         "{}:{}",
         config.server.listen_addr, config.server.listen_port
@@ -924,9 +1005,15 @@ async fn main() -> anyhow::Result<()> {
         shutdown_for_serve.cancel();
     };
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    // `into_make_service_with_connect_info` exposes the client socket address to
+    // handlers (via `ConnectInfo`) so local-login rate limiting can key on the
+    // real peer IP when no trusted proxy is configured (review ID-03).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await?;
 
     // Server has stopped accepting requests. Now signal modules and call
     // shutdown_all with a bounded timeout so a stuck module cannot block exit.
@@ -990,6 +1077,10 @@ async fn run_setup_mode(config: &ServerConfig, data_dir: &std::path::Path) -> an
         )
         .fallback(|| async { axum::response::Redirect::temporary("/setup") })
         .with_state(setup_state);
+    // Setup mode handles credentials; give it the same security headers as
+    // the main app (WSTG-N05). Deployment should still bind setup behind TLS
+    // or to loopback — see SECURITY.md.
+    let app = crate::routes::apply_security_headers(app);
 
     // Bind to configured listen address so the setup wizard is accessible in Docker
     let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);
@@ -1035,6 +1126,9 @@ async fn run_local_setup_mode(config: &ServerConfig, data_dir: &std::path::Path)
         )
         .fallback(|| async { axum::response::Redirect::temporary("/setup") })
         .with_state(state);
+    // Same security headers as the main app for the credential-handling setup
+    // wizard (WSTG-N05).
+    let app = crate::routes::apply_security_headers(app);
 
     // Bind to configured listen address so the setup wizard is accessible in Docker
     let bind_addr = format!("{}:{}", config.server.listen_addr, config.server.listen_port);

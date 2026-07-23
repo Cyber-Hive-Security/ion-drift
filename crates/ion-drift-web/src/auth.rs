@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Query, State};
+use axum::extract::{ConnectInfo, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Redirect, Response};
 use axum_extra::extract::CookieJar;
@@ -18,7 +18,7 @@ use openidconnect::{
 };
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use crate::config::ServerConfig;
 use crate::state::AppState;
@@ -37,6 +37,10 @@ pub type OidcClient = CoreClient<
 >;
 
 // ── Session store ─────────────────────────────────────────────────
+
+/// Name of the short-lived cookie that binds an in-progress OIDC flow to the
+/// initiating browser (DRIFT-2026-0002 login-CSRF / session-fixation defense).
+const OIDC_STATE_COOKIE: &str = "ion_drift_oidc_state";
 
 /// Data stored for an authenticated session.
 #[derive(Debug, Clone, Serialize)]
@@ -61,6 +65,16 @@ impl SessionData {
     pub fn is_admin(&self) -> bool {
         self.has_role("ion-drift-admin")
     }
+}
+
+/// Derive the at-rest storage key for a session. The full signed token is the
+/// bearer credential and must NEVER be stored (review ID-09): we key both the
+/// in-memory map and the `sessions` table by `SHA-256(token)`, so a stolen
+/// sessions.db (or backup) can't be replayed — the token itself lives only in
+/// the client cookie. Callers that hold a raw cookie value pass it here; the
+/// list/revoke API instead uses this key directly as an opaque handle.
+fn session_storage_key(session_id: &str) -> String {
+    hex::encode(Sha256::digest(session_id.as_bytes()))
 }
 
 /// Temporary data stored while the OIDC auth flow is in progress.
@@ -95,10 +109,21 @@ pub struct SessionStore {
     db: Arc<std::sync::Mutex<rusqlite::Connection>>,
     signing_key: Arc<tokio::sync::RwLock<Vec<u8>>>,
     max_age: Duration,
+    /// Idle timeout; `Duration::ZERO` disables idle expiry (WSTG-SESS-07).
+    idle_max: Duration,
 }
 
 impl SessionStore {
     pub fn new(max_age_seconds: u64, db_path: &Path, session_secret: &str) -> anyhow::Result<Self> {
+        Self::with_idle_timeout(max_age_seconds, 0, db_path, session_secret)
+    }
+
+    pub fn with_idle_timeout(
+        max_age_seconds: u64,
+        idle_timeout_seconds: u64,
+        db_path: &Path,
+        session_secret: &str,
+    ) -> anyhow::Result<Self> {
         let conn = rusqlite::Connection::open(db_path)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -122,6 +147,8 @@ impl SessionStore {
             db: Arc::new(std::sync::Mutex::new(conn)),
             signing_key: Arc::new(tokio::sync::RwLock::new(session_secret.as_bytes().to_vec())),
             max_age: Duration::from_secs(max_age_seconds),
+            // Cap idle at the absolute max_age; 0 = disabled.
+            idle_max: Duration::from_secs(idle_timeout_seconds.min(max_age_seconds)),
         };
         store.load_active_from_db();
         Ok(store)
@@ -167,13 +194,11 @@ impl SessionStore {
                 return;
             }
         };
-        let mut invalid_ids = Vec::new();
         for row in rows.flatten() {
-            if !self.is_valid_session_id(&row.0) {
-                tracing::warn!("dropping persisted session with invalid signature");
-                invalid_ids.push(row.0);
-                continue;
-            }
+            // `row.0` is the storage key (SHA-256 of the token), not the token
+            // itself, so it can't be HMAC-verified here — integrity is enforced
+            // at request time in `get()`, which verifies the raw cookie's
+            // signature before hashing it to this key.
             self.sessions.insert(
                 row.0,
                 SessionRecord {
@@ -188,27 +213,26 @@ impl SessionStore {
                 "loaded active sessions from sqlite"
             );
         }
-        // Delete invalid sessions using the already-held db lock
-        // (calling delete_from_db here would deadlock on self.db)
-        for invalid_id in &invalid_ids {
-            let _ = db.execute(
-                "DELETE FROM sessions WHERE session_id = ?1",
-                params![invalid_id],
-            );
-        }
     }
 
     /// Look up a session by ID, returning None if expired.
     pub fn get(&self, session_id: &str) -> Option<SessionData> {
+        // Verify the raw cookie's HMAC signature FIRST, then hash it to the
+        // storage key for lookup (review ID-09).
         if !self.is_valid_session_id(session_id) {
             return None;
         }
-        let mut entry = self.sessions.get_mut(session_id)?;
+        let key = session_storage_key(session_id);
+        let mut entry = self.sessions.get_mut(&key)?;
         let now = now_secs();
-        if now - entry.data.created_at > self.max_age.as_secs() {
+        // Absolute timeout (created_at) OR idle timeout (last_accessed).
+        let absolute_expired = now.saturating_sub(entry.data.created_at) > self.max_age.as_secs();
+        let idle_expired = self.idle_max > Duration::ZERO
+            && now.saturating_sub(entry.data.last_accessed) > self.idle_max.as_secs();
+        if absolute_expired || idle_expired {
             drop(entry);
-            self.sessions.remove(session_id);
-            self.delete_from_db(session_id);
+            self.sessions.remove(&key);
+            self.delete_from_db(&key);
             return None;
         }
         entry.data.last_accessed = now;
@@ -217,21 +241,25 @@ impl SessionStore {
     }
 
     fn insert_session(&self, session_id: String, data: SessionData) {
-        self.upsert_db(&session_id, &data);
+        // Store keyed by hash; the raw token is only ever sent to the client.
+        let key = session_storage_key(&session_id);
+        self.upsert_db(&key, &data);
         self.sessions
-            .insert(session_id, SessionRecord { data, dirty: false });
+            .insert(key, SessionRecord { data, dirty: false });
     }
 
     fn remove_session(&self, session_id: &str) {
         if !self.is_valid_session_id(session_id) {
             return;
         }
-        self.sessions.remove(session_id);
-        self.delete_from_db(session_id);
+        let key = session_storage_key(session_id);
+        self.sessions.remove(&key);
+        self.delete_from_db(&key);
     }
 
     pub fn record_access(&self, session_id: &str, ip: Option<String>, ua: Option<String>) {
-        if let Some(mut entry) = self.sessions.get_mut(session_id) {
+        let key = session_storage_key(session_id);
+        if let Some(mut entry) = self.sessions.get_mut(&key) {
             entry.data.last_accessed = now_secs();
             if entry.data.created_ip.is_none() {
                 entry.data.created_ip = ip;
@@ -252,6 +280,13 @@ impl SessionStore {
         pkce_verifier: PkceCodeVerifier,
     ) -> bool {
         const MAX_PENDING: usize = 1000;
+        let now = now_secs();
+        // Expire stale entries BEFORE the capacity check (review ID-04). Cleanup
+        // otherwise runs only every 5 minutes, so a burst of abandoned
+        // login-starts could hold all 1000 slots — and lock out every new login
+        // with 429 — for the whole interval. Pruning on insert lets capacity
+        // self-heal continuously; an attacker must now sustain fresh entries.
+        self.pending_auth.retain(|_, v| now - v.created_at <= 300);
         if self.pending_auth.len() >= MAX_PENDING {
             return false;
         }
@@ -260,7 +295,7 @@ impl SessionStore {
             PendingAuth {
                 nonce,
                 pkce_verifier,
-                created_at: now_secs(),
+                created_at: now,
             },
         );
         true
@@ -323,6 +358,11 @@ impl SessionStore {
     }
 
     pub fn list_sessions(&self, current_session: Option<&str>) -> Vec<SessionListEntry> {
+        // The exposed `session_id` is the storage key (a SHA-256 hash), not the
+        // bearer token — it's an opaque handle safe to show and to pass back to
+        // `revoke_session`. `is_current` compares against the hash of the
+        // caller's own cookie.
+        let current_key = current_session.map(session_storage_key);
         let mut out = Vec::new();
         for entry in self.sessions.iter() {
             let data = &entry.data;
@@ -333,19 +373,19 @@ impl SessionStore {
                 last_accessed: data.last_accessed,
                 created_ip: data.created_ip.clone(),
                 user_agent: data.user_agent.clone(),
-                is_current: current_session == Some(entry.key().as_str()),
+                is_current: current_key.as_deref() == Some(entry.key().as_str()),
             });
         }
         out.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
         out
     }
 
-    pub fn revoke_session(&self, session_id: &str) -> bool {
-        if !self.is_valid_session_id(session_id) {
-            return false;
-        }
-        let existed = self.sessions.remove(session_id).is_some();
-        self.delete_from_db(session_id);
+    /// Revoke a session by its storage-key handle (as returned by
+    /// [`list_sessions`](Self::list_sessions)) — this is already the hashed key,
+    /// not a signed token, so it is used directly.
+    pub fn revoke_session(&self, storage_key: &str) -> bool {
+        let existed = self.sessions.remove(storage_key).is_some();
+        self.delete_from_db(storage_key);
         existed
     }
 
@@ -450,7 +490,14 @@ fn now_secs() -> u64 {
 /// Uses the rightmost X-Forwarded-For entry (set by the nearest trusted proxy),
 /// then X-Real-IP, then falls back to "unknown". Values are validated as IP addresses
 /// to prevent spoofed non-IP strings from bypassing rate limiting.
-pub fn extract_client_ip(headers: &axum::http::HeaderMap) -> String {
+pub fn extract_client_ip(headers: &axum::http::HeaderMap, trust_proxy_headers: bool) -> String {
+    // When not explicitly behind a trusted proxy, do NOT trust client-supplied
+    // forwarding headers — otherwise an attacker rotates them to defeat the
+    // per-IP rate limiter (DRIFT-2026-0009). Falls back to "unknown" (a single
+    // shared bucket); the per-username limiter remains the primary backstop.
+    if !trust_proxy_headers {
+        return "unknown".to_string();
+    }
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         // Use rightmost entry — set by the nearest proxy, harder to spoof than leftmost
         if let Some(last) = xff.rsplit(',').next() {
@@ -505,6 +552,43 @@ impl LoginRateLimiter {
             }
         }
         Ok(())
+    }
+
+    /// Atomically record an attempt and return `Err(retry_after)` if the key is
+    /// now in cooldown. Unlike [`check`](Self::check), this reserves the slot
+    /// BEFORE the expensive password verification, so a concurrent burst of
+    /// wrong-password requests can't all be admitted before the first one
+    /// finishes and records a failure (review ID-03). On a successful login the
+    /// caller must call [`record_success`](Self::record_success) to refund.
+    pub fn reserve(&self, key: &str) -> Result<(), u64> {
+        let now = now_secs();
+        let entry = self
+            .attempts
+            .entry(key.to_string())
+            .and_modify(|(count, last)| {
+                *count = count.saturating_add(1);
+                *last = now;
+            })
+            .or_insert((1, now));
+        let count = entry.0;
+        drop(entry); // release the shard lock before returning
+        // Because reserve() counts the attempt up front (unlike check(), which
+        // only counted failures), allow the first two attempts free before the
+        // backoff ramp — preserving the prior two-strikes UX.
+        let cooldown = match count {
+            0..=2 => 0,
+            3 => 1,
+            4 => 2,
+            5 => 4,
+            6 => 8,
+            7 => 16,
+            _ => 30,
+        };
+        if cooldown > 0 {
+            Err(cooldown)
+        } else {
+            Ok(())
+        }
     }
 
     /// Record a failed attempt.
@@ -602,7 +686,7 @@ fn json_error(status: StatusCode, msg: impl Into<String>) -> Response {
 // ── Handlers ──────────────────────────────────────────────────────
 
 /// `GET /auth/login` — Start the OIDC authorization code flow.
-pub async fn login(State(state): State<AppState>) -> Response {
+pub async fn login(State(state): State<AppState>, jar: CookieJar) -> Response {
     let oidc_client = match &state.oidc_client {
         Some(c) => c,
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "OIDC is not configured"),
@@ -631,7 +715,26 @@ pub async fn login(State(state): State<AppState>) -> Response {
         );
     }
 
-    Redirect::temporary(auth_url.as_str()).into_response()
+    // Bind this pending flow to THIS browser (DRIFT-2026-0002 login-CSRF /
+    // session fixation). The state value is echoed into a short-lived
+    // HttpOnly cookie; the callback requires the cookie to match the `state`
+    // query param, so a state minted by an attacker cannot be completed in a
+    // victim's browser. PKCE+nonce already prevent token injection; this
+    // prevents cross-browser delivery.
+    let same_site = match state.config.session.same_site.to_lowercase().as_str() {
+        "strict" => SameSite::Strict,
+        "none" => SameSite::None,
+        _ => SameSite::Lax,
+    };
+    let state_cookie = Cookie::build((OIDC_STATE_COOKIE, csrf_token.secret().clone()))
+        .path("/")
+        .http_only(true)
+        .secure(state.config.session.secure)
+        .max_age(cookie::time::Duration::seconds(600))
+        .same_site(same_site)
+        .build();
+
+    (jar.add(state_cookie), Redirect::temporary(auth_url.as_str())).into_response()
 }
 
 #[derive(Deserialize)]
@@ -660,6 +763,23 @@ pub async fn callback(
     jar: CookieJar,
     headers: axum::http::HeaderMap,
 ) -> Result<(CookieJar, Redirect), Response> {
+    // Verify the state is bound to THIS browser before doing anything else
+    // (DRIFT-2026-0002). The login handler set an HttpOnly cookie to the state
+    // value; require it to match the `state` query param. Constant-time compare.
+    let bound = jar
+        .get(OIDC_STATE_COOKIE)
+        .map(|c| {
+            use subtle::ConstantTimeEq;
+            c.value().as_bytes().ct_eq(params.state.as_bytes()).unwrap_u8() == 1
+        })
+        .unwrap_or(false);
+    if !bound {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "state does not match this browser's login flow",
+        ));
+    }
+
     // Retrieve and consume the pending auth state
     let (nonce, pkce_verifier) = state.sessions.take_pending(&params.state).ok_or_else(|| {
         json_error(
@@ -763,7 +883,11 @@ pub async fn callback(
         .same_site(same_site)
         .build();
 
-    Ok((jar.add(cookie), Redirect::temporary("/")))
+    // Clear the one-time OIDC state-binding cookie now that the flow is done.
+    let jar = jar
+        .add(cookie)
+        .remove(Cookie::from(OIDC_STATE_COOKIE));
+    Ok((jar, Redirect::temporary("/")))
 }
 
 /// `POST /auth/logout` — Destroy the session and clear the cookie.
@@ -872,32 +996,63 @@ pub async fn auth_config(State(state): State<AppState>) -> Json<AuthConfigRespon
     })
 }
 
+/// Global cap on concurrent local-login password verifications so a flood of
+/// admitted attempts across many usernames can't saturate the CPU with parallel
+/// Argon2 hashing (review ID-03).
+static LOGIN_VERIFY_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
+
 /// `POST /auth/local-login` — Authenticate with username/password.
 pub async fn local_login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: axum::http::HeaderMap,
     Json(req): Json<LocalLoginRequest>,
 ) -> Result<(CookieJar, Json<serde_json::Value>), Response> {
-    // Rate limit by both username and client IP
-    let client_ip = extract_client_ip(&headers);
-    let ip_key = format!("ip:{client_ip}");
-    if let Err(retry_after) = state.login_limiter.check(&req.username) {
+    // Rate limit by both username and client IP. Reserve the attempt BEFORE
+    // verification (review ID-03) so a concurrent burst can't all be admitted;
+    // a successful login refunds below. The IP key is only used when the IP is
+    // actually known — when running without a trusted proxy the IP collapses to
+    // "unknown", and rate-limiting a single shared bucket would let one client
+    // (or a legit user's own retries) lock out everyone. The per-username
+    // reserve is the primary backstop in that mode.
+    // Behind a trusted proxy, derive the IP from the forwarding headers; without
+    // one, use the real socket peer address (review ID-03) instead of a single
+    // shared "unknown" bucket.
+    let client_ip = if state.config.server.trust_proxy_headers {
+        extract_client_ip(&headers, true)
+    } else {
+        peer.ip().to_string()
+    };
+    let ip_key = (client_ip != "unknown").then(|| format!("ip:{client_ip}"));
+    if let Err(retry_after) = state.login_limiter.reserve(&req.username) {
         tracing::warn!(username = %req.username, client_ip = %client_ip, "login rate limited by username");
         return Err(json_error(
             StatusCode::TOO_MANY_REQUESTS,
             &format!("too many login attempts, retry in {retry_after}s"),
         ));
     }
-    if let Err(retry_after) = state.login_limiter.check(&ip_key) {
-        tracing::warn!(client_ip = %client_ip, "login rate limited by IP");
-        return Err(json_error(
-            StatusCode::TOO_MANY_REQUESTS,
-            &format!("too many login attempts, retry in {retry_after}s"),
-        ));
+    if let Some(ref ip_key) = ip_key {
+        if let Err(retry_after) = state.login_limiter.reserve(ip_key) {
+            tracing::warn!(client_ip = %client_ip, "login rate limited by IP");
+            return Err(json_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                &format!("too many login attempts, retry in {retry_after}s"),
+            ));
+        }
     }
 
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
         json_error(StatusCode::SERVICE_UNAVAILABLE, "local auth not available")
+    })?;
+
+    // Bound concurrent password verifications globally so admitted attempts
+    // across many distinct usernames can't saturate the CPU with parallel
+    // Argon2 hashing (review ID-03).
+    let _verify_permit = LOGIN_VERIFY_SLOTS.acquire().await.map_err(|_| {
+        json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authentication temporarily unavailable",
+        )
     })?;
 
     let sm = sm.read().await;
@@ -907,10 +1062,9 @@ pub async fn local_login(
             json_error(StatusCode::INTERNAL_SERVER_ERROR, "authentication error")
         })?
         .ok_or_else(|| {
-            // Use the same error for both "user not found" and "wrong password"
-            // to prevent user enumeration
-            state.login_limiter.record_failure(&req.username);
-            state.login_limiter.record_failure(&ip_key);
+            // The attempt was already counted by reserve(); nothing to record
+            // here. Same error for "user not found" and "wrong password" to
+            // prevent user enumeration.
             tracing::warn!(username = %req.username, client_ip = %client_ip, "failed local login attempt");
             json_error(StatusCode::UNAUTHORIZED, "invalid username or password")
         })?;
@@ -968,8 +1122,11 @@ pub async fn local_login(
 
     let jar = CookieJar::new().add(cookie);
 
+    // Successful login — refund the reserved attempts for both keys.
     state.login_limiter.record_success(&req.username);
-    state.login_limiter.record_success(&ip_key);
+    if let Some(ref ip_key) = ip_key {
+        state.login_limiter.record_success(ip_key);
+    }
     tracing::info!(username = %req.username, client_ip = %client_ip, "local login successful");
 
     Ok((jar, Json(serde_json::json!({ "authenticated": true }))))
@@ -1038,4 +1195,84 @@ fn extract_string_array_from_value(value: &serde_json::Value) -> Option<Vec<Stri
     value.as_array().map(|arr| {
         arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
     })
+}
+
+#[cfg(test)]
+mod reserve_tests {
+    use super::LoginRateLimiter;
+
+    #[test]
+    fn reserve_admits_two_then_backs_off() {
+        let l = LoginRateLimiter::new();
+        // First two attempts admitted up front (reserve counts before verify).
+        assert!(l.reserve("user").is_ok());
+        assert!(l.reserve("user").is_ok());
+        // Third within the window is refused with a positive retry-after.
+        let retry = l.reserve("user").expect_err("third attempt should back off");
+        assert!(retry >= 1);
+    }
+
+    #[test]
+    fn record_success_refunds_reservation() {
+        let l = LoginRateLimiter::new();
+        let _ = l.reserve("user");
+        let _ = l.reserve("user");
+        let _ = l.reserve("user"); // now in cooldown
+        l.record_success("user"); // successful login clears the key
+        assert!(l.reserve("user").is_ok());
+    }
+
+    #[test]
+    fn reserve_keys_are_independent() {
+        let l = LoginRateLimiter::new();
+        for _ in 0..5 {
+            let _ = l.reserve("alice");
+        }
+        // alice is throttled but bob is unaffected.
+        assert!(l.reserve("alice").is_err());
+        assert!(l.reserve("bob").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod session_hash_tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn sample_data() -> SessionData {
+        let now = now_secs();
+        SessionData {
+            user_id: "u1".into(),
+            username: "alice".into(),
+            email: None,
+            roles: vec!["ion-drift-admin".into()],
+            created_at: now,
+            last_accessed: now,
+            created_ip: None,
+            user_agent: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_are_stored_by_hash_not_raw_token() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = SessionStore::new(3600, tmp.path(), "test-signing-secret").unwrap();
+        let token = store.issue_session_id().await.unwrap();
+        store.insert_session(token.clone(), sample_data());
+
+        // The raw cookie still resolves (HMAC-verified, then hashed to look up).
+        assert!(store.get(&token).is_some());
+
+        // The list/revoke handle is the hash, never the bearer token (ID-09).
+        let list = store.list_sessions(Some(&token));
+        assert_eq!(list.len(), 1);
+        assert_ne!(list[0].session_id, token, "must not expose the raw token");
+        assert_eq!(list[0].session_id, session_storage_key(&token));
+        assert!(list[0].is_current);
+
+        // Revoking by the raw token is a no-op; by the hash handle it works.
+        assert!(!store.revoke_session(&token));
+        assert!(store.revoke_session(&session_storage_key(&token)));
+        assert!(store.get(&token).is_none());
+    }
 }

@@ -76,9 +76,9 @@ impl MaxMindProvider {
             None => return (None, None, None),
         };
 
-        let asn_result: maxminddb::geoip2::Asn = match asn_reader.lookup(*ip) {
-            Ok(r) => r,
-            Err(_) => return (None, None, None),
+        let asn_result: maxminddb::geoip2::Asn = match asn_reader.lookup(*ip).and_then(|r| r.decode()) {
+            Ok(Some(r)) => r,
+            _ => return (None, None, None),
         };
 
         let asn = asn_result
@@ -98,26 +98,24 @@ impl GeoProvider for MaxMindProvider {
         let city_reader = self.mmdb_city.read().ok()?;
         let city_reader = city_reader.as_ref()?;
 
-        let city_result: maxminddb::geoip2::City = city_reader.lookup(*ip).ok()?;
-        let country = city_result.country.as_ref()?;
+        let lookup = city_reader.lookup(*ip).ok()?;
+        let city_result: maxminddb::geoip2::City = lookup.decode().ok().flatten()?;
+        let country = &city_result.country;
         let country_code = country.iso_code?.to_string();
         let country_name = country
             .names
-            .as_ref()
-            .and_then(|n| n.get("en"))
+            .english
             .map(|s| s.to_string())
             .unwrap_or_else(|| country_code.clone());
 
         let city = city_result
             .city
-            .as_ref()
-            .and_then(|c| c.names.as_ref())
-            .and_then(|n| n.get("en"))
+            .names
+            .english
             .map(|s| s.to_string());
 
-        let location = city_result.location.as_ref();
-        let lat = location.and_then(|l| l.latitude);
-        let lon = location.and_then(|l| l.longitude);
+        let lat = city_result.location.latitude;
+        let lon = city_result.location.longitude;
         let (asn, org, isp) = self.lookup_asn(ip);
 
         Some(GeoInfo {

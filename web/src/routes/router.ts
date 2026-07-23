@@ -12,6 +12,7 @@ import { FirewallPage } from "./firewall";
 import { ConnectionsPage } from "./connections";
 import { LogsPage } from "./logs";
 import { BehaviorPage } from "./behavior";
+import { FindingsPage } from "./findings";
 import { PolicyPage } from "./policy";
 import { HistoryPage } from "./history";
 import { SettingsPage } from "./settings";
@@ -23,6 +24,7 @@ import { InferencePage } from "@/features/inference/inference-page";
 import { SetupWizard } from "@/features/provision/setup-wizard";
 import { SankeyInvestigationPage } from "@/features/sankey/sankey-investigation-page";
 import { StatisticsPage } from "@/features/statistics/statistics-page";
+import { AdminModulesPage } from "@/features/admin/modules/modules-page";
 
 // Lazy-load the auto-generated topology page (separate D3 chunk).
 const LazyTopologyPage = React.lazy(
@@ -94,6 +96,12 @@ const behaviorRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { mac?: string } => ({
     mac: (search.mac as string) || undefined,
   }),
+});
+
+const findingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/findings",
+  component: FindingsPage,
 });
 
 const policyRoute = createRoute({
@@ -231,6 +239,12 @@ const setupWizardRoute = createRoute({
   component: SetupWizard,
 });
 
+const adminModulesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/modules",
+  component: AdminModulesPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   interfacesRoute,
@@ -239,6 +253,7 @@ const routeTree = rootRoute.addChildren([
   connectionsRoute,
   logsRoute,
   behaviorRoute,
+  findingsRoute,
   policyRoute,
   historyRoute,
   topologyRoute,
@@ -250,6 +265,7 @@ const routeTree = rootRoute.addChildren([
   settingsRoute,
   statisticsRoute,
   setupWizardRoute,
+  adminModulesRoute,
 ]);
 
 export const router = createRouter({ routeTree });
