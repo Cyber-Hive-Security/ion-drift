@@ -59,9 +59,22 @@ function aggregateDailyViews(entries: PageViewEntry[]) {
   return Array.from(byDate.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, views]) => ({
-      date: new Date(date).toLocaleDateString([], { month: "short", day: "numeric" }),
+      // Parse "YYYY-MM-DD" as LOCAL date components. `new Date("YYYY-MM-DD")`
+      // parses as UTC midnight, which toLocaleDateString then renders one day
+      // EARLIER in any negative-offset timezone — making "today's" bar appear
+      // labeled as yesterday and the current day seem missing.
+      date: formatDayLabel(date),
       views,
     }));
+}
+
+function formatDayLabel(isoDate: string) {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  if (!y || !m || !d) return isoDate;
+  return new Date(y, m - 1, d).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function aggregateByPage(entries: PageViewEntry[]) {

@@ -193,22 +193,30 @@ impl ModuleRegistryService {
             base.as_str().trim_end_matches('/')
         ))
         .context("construct manifest URL")?;
+        // These errors surface verbatim in the admin UI (via api_err), so keep
+        // them human-readable and free of transport internals. The URL shown
+        // is operator-supplied, not an internal path.
         let resp = self
             .http
             .get(manifest_url.clone())
             .send()
             .await
-            .with_context(|| format!("GET {manifest_url}"))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    anyhow!("module at {base} did not respond (timed out)")
+                } else {
+                    anyhow!("could not reach module at {base}")
+                }
+            })?;
         if !resp.status().is_success() {
             return Err(anyhow!(
-                "GET {manifest_url} returned {}",
+                "module at {base} answered the manifest request with {}",
                 resp.status()
             ));
         }
-        let manifest: Manifest = resp
-            .json()
-            .await
-            .with_context(|| format!("parse manifest body from {manifest_url}"))?;
+        let manifest: Manifest = resp.json().await.map_err(|_| {
+            anyhow!("module at {base} returned an invalid manifest")
+        })?;
         Ok(manifest)
     }
 }
