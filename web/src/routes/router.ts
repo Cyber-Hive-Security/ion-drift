@@ -3,6 +3,7 @@ import {
   createRouter,
   createRoute,
   createRootRoute,
+  redirect,
 } from "@tanstack/react-router";
 import { RootLayout } from "./__root";
 import { DashboardPage } from "./index";
@@ -245,6 +246,15 @@ const adminModulesRoute = createRoute({
   component: AdminModulesPage,
 });
 
+// Convenience alias: /modules (typed directly) → /admin/modules.
+const modulesRedirectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/modules",
+  beforeLoad: () => {
+    throw redirect({ to: "/admin/modules" });
+  },
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   interfacesRoute,
@@ -266,6 +276,7 @@ const routeTree = rootRoute.addChildren([
   statisticsRoute,
   setupWizardRoute,
   adminModulesRoute,
+  modulesRedirectRoute,
 ]);
 
 export const router = createRouter({ routeTree });
