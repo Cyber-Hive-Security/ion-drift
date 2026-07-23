@@ -57,6 +57,10 @@ jobs:
             # drift-vX.Y.Z tag scheme (e.g. drift-v0.5.0)
             type=match,pattern=drift-v(\d+\.\d+\.\d+),group=1
             type=match,pattern=drift-v(\d+\.\d+)\.\d+,group=1
+            # letter-suffixed patch tags (e.g. v0.5.2b) — not valid semver,
+            # so the type=semver patterns above skip them entirely
+            type=match,pattern=v(\d+\.\d+\.\d+[a-z]+),group=1
+            type=match,pattern=v(\d+\.\d+)\.\d+[a-z]+,group=1
             # Release tags are never "the default branch", so the old
             # is_default_branch condition meant :latest was never updated.
             type=raw,value=latest
