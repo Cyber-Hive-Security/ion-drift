@@ -96,6 +96,13 @@ async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok" }))
 }
 
+/// `GET /api/system/about` — build version for the authenticated Settings →
+/// System "About" view. Lives behind the global `/api` auth layer, so this is
+/// the operator-only version surface that `health()` deliberately omits.
+async fn system_about() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "version": version() }))
+}
+
 /// CSRF protection middleware for non-GET API endpoints.
 ///
 /// Requires that EVERY mutating request (POST/PUT/DELETE/PATCH) declares
@@ -749,6 +756,8 @@ pub fn router(
         .route("/license", get(license::get_license))
         .route("/license/key", post(license::submit_license_key))
         .route("/license/acknowledge", post(license::acknowledge_license))
+        // About (build version — authenticated counterpart to /health)
+        .route("/system/about", get(system_about))
         // Statistics / Diagnostic Report
         .route("/stats/page-view", post(stats::record_page_view))
         .route("/stats/page-views", get(stats::get_page_views))

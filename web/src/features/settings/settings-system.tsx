@@ -32,8 +32,10 @@ import { formatBytes, formatNumber } from "@/lib/format";
 
 function AboutSection() {
   const { data } = useQuery({
-    queryKey: ["health"],
-    queryFn: () => apiFetch<{ status: string; version: string }>("/health"),
+    // /health no longer discloses the version (unauthenticated surface);
+    // this authenticated endpoint is the operator-facing replacement.
+    queryKey: ["system", "about"],
+    queryFn: () => apiFetch<{ version: string }>("/api/system/about"),
     staleTime: Infinity,
   });
 
