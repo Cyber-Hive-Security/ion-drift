@@ -39,6 +39,7 @@ function AlertRulesSection() {
     "anomaly_critical", "anomaly_correlated", "anomaly_warning",
     "device_new", "device_flagged", "device_offline",
     "port_violation", "interface_down",
+    "dhcp_pool_exhausted", "firewall_drop_spike", "auth_bruteforce",
   ];
 
   return (

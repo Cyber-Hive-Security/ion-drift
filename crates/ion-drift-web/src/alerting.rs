@@ -1,17 +1,21 @@
 //! Alerting engine — evaluates alert rules, enforces cooldowns, delivers notifications.
 //!
 //! Phase 1–4: anomaly_critical, anomaly_correlated, device_new, device_flagged, port_violation,
-//! anomaly_warning, interface_down, device_offline, dhcp_pool_exhausted, firewall_drop_spike.
+//! anomaly_warning, interface_down, device_offline, dhcp_pool_exhausted, firewall_drop_spike,
+//! auth_bruteforce.
 //! Delivery: ntfy, webhook, smtp.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 pub use ion_drift_storage::alerting::{AlertRule, AlertHistoryEntry, AlertStatus, DeliveryChannelConfig};
 use ion_drift_storage::behavior::VlanRegistry;
 use ion_drift_storage::{BehaviorStore, SwitchStore};
+use mikrotik_core::resources::log::LogEntry;
 use serde::Deserialize;
 
 use crate::connection_store::ConnectionStore;
+use crate::router_queue::{Priority, QueuedRequest};
 use crate::state::AppState;
 use crate::task_supervisor::TaskSupervisor;
 
@@ -478,6 +482,9 @@ async fn evaluate_cycle(
             }
             "firewall_drop_spike" => {
                 collect_firewall_drop_spike_alerts(state, rule, &mut pending_alerts).await;
+            }
+            "auth_bruteforce" => {
+                collect_auth_bruteforce_alerts(state, rule, &mut pending_alerts).await;
             }
             _ => {}
         }
@@ -1236,6 +1243,277 @@ async fn collect_firewall_drop_spike_alerts(state: &AppState, rule: &AlertRule, 
     }
 }
 
+// ── Auth brute-force detection (CVE-2026-16347) ─────────────────
+//
+// RouterOS lacks effective rate-limiting on API/service logins (CVE-2026-16347,
+// CWE-307): the per-connection login delay is bypassable via concurrent
+// sessions, so the router itself will never stop a credential-guessing run.
+// This collector watches the router log ring buffer for `login failure` entries
+// and raises alerts on failure bursts. A same-second multi-failure burst from
+// one source is the signature of the concurrent-session delay bypass.
+
+/// Alert-state key holding the last processed log `.id` (parsed numeric form).
+const AUTH_BF_CURSOR_KEY: &str = "auth_bruteforce:last_log_id";
+/// New failures from a single (source, service) per cycle to raise a warning.
+const AUTH_BF_WARN_THRESHOLD: usize = 5;
+/// New failures from a single (source, service) per cycle to raise a critical.
+const AUTH_BF_CRIT_THRESHOLD: usize = 15;
+/// Low-and-slow: total failures across many sources to raise a distributed alert.
+const AUTH_BF_DISTRIBUTED_TOTAL: usize = 15;
+/// Low-and-slow: minimum distinct source IPs for the distributed alert.
+const AUTH_BF_DISTRIBUTED_SOURCES: usize = 5;
+/// Failures sharing one log timestamp (1s resolution) = concurrent-session bypass.
+const AUTH_BF_SAME_SECOND_BURST: usize = 3;
+
+/// A single parsed `login failure for user <u> from <ip> via <service>` log entry.
+#[derive(Debug, Clone)]
+struct LoginFailure {
+    user: String,
+    /// Absent for console logins (`login failure for user x via console`).
+    src_ip: Option<String>,
+    service: String,
+    /// Raw RouterOS log timestamp string (1-second resolution).
+    time: String,
+}
+
+/// One detected brute-force signal, ready to become a PendingAlert.
+#[derive(Debug)]
+struct BruteforceSignal {
+    /// Cooldown subject, e.g. `auth:10.0.0.5:api` or `auth:distributed`.
+    subject: String,
+    src_ip: Option<String>,
+    service: String,
+    count: usize,
+    users: Vec<String>,
+    severity: &'static str,
+    /// Same-second burst observed — the CVE-2026-16347 per-connection delay bypass.
+    delay_bypass: bool,
+    distributed: bool,
+}
+
+/// Parse a RouterOS log `.id` (`"*1F4"`) into its numeric form.
+fn parse_log_id(id: &str) -> Option<u64> {
+    u64::from_str_radix(id.strip_prefix('*')?, 16).ok()
+}
+
+/// Parse a `login failure` log message into its components.
+fn parse_login_failure(entry: &LogEntry) -> Option<LoginFailure> {
+    let rest = entry.message.strip_prefix("login failure for user ")?;
+    // Two shapes: "<user> from <ip> via <service>" and "<user> via <service>".
+    let (user, src_ip, service) = if let Some((user, tail)) = rest.split_once(" from ") {
+        let (ip, service) = tail.split_once(" via ")?;
+        (user, Some(ip.to_string()), service)
+    } else {
+        let (user, service) = rest.split_once(" via ")?;
+        (user, None, service)
+    };
+    Some(LoginFailure {
+        user: user.to_string(),
+        src_ip,
+        service: service.trim().to_string(),
+        time: entry.time.clone(),
+    })
+}
+
+/// Group failures by (source, service) and emit signals for bursts and
+/// distributed (low-and-slow) patterns.
+fn detect_bruteforce(failures: &[LoginFailure]) -> Vec<BruteforceSignal> {
+    let mut groups: BTreeMap<(String, String), Vec<&LoginFailure>> = BTreeMap::new();
+    for f in failures {
+        let src = f.src_ip.clone().unwrap_or_else(|| "local".into());
+        groups.entry((src, f.service.clone())).or_default().push(f);
+    }
+
+    let mut signals = Vec::new();
+    for ((src, service), group) in &groups {
+        if group.len() < AUTH_BF_WARN_THRESHOLD {
+            continue;
+        }
+        let mut users: Vec<String> = group.iter().map(|f| f.user.clone()).collect();
+        users.sort();
+        users.dedup();
+
+        // Same-second burst: N failures sharing one 1s-resolution timestamp can
+        // only come from concurrent sessions — the CVE-2026-16347 bypass.
+        let mut per_second: BTreeMap<&str, usize> = BTreeMap::new();
+        for f in group {
+            *per_second.entry(f.time.as_str()).or_default() += 1;
+        }
+        let delay_bypass = per_second.values().any(|&n| n >= AUTH_BF_SAME_SECOND_BURST);
+
+        signals.push(BruteforceSignal {
+            subject: format!("auth:{src}:{service}"),
+            src_ip: (src != "local").then(|| src.clone()),
+            service: service.clone(),
+            count: group.len(),
+            users,
+            severity: if group.len() >= AUTH_BF_CRIT_THRESHOLD || delay_bypass {
+                "critical"
+            } else {
+                "warning"
+            },
+            delay_bypass,
+            distributed: false,
+        });
+    }
+
+    // Low-and-slow sweep: every source stays under the per-source threshold but
+    // the aggregate is clearly a coordinated guessing run.
+    if signals.is_empty() && failures.len() >= AUTH_BF_DISTRIBUTED_TOTAL {
+        let mut sources: Vec<&str> = failures
+            .iter()
+            .filter_map(|f| f.src_ip.as_deref())
+            .collect();
+        sources.sort();
+        sources.dedup();
+        if sources.len() >= AUTH_BF_DISTRIBUTED_SOURCES {
+            let mut users: Vec<String> = failures.iter().map(|f| f.user.clone()).collect();
+            users.sort();
+            users.dedup();
+            let mut services: Vec<String> = failures.iter().map(|f| f.service.clone()).collect();
+            services.sort();
+            services.dedup();
+            signals.push(BruteforceSignal {
+                subject: "auth:distributed".into(),
+                src_ip: None,
+                service: services.join(", "),
+                count: failures.len(),
+                users,
+                severity: "critical",
+                delay_bypass: false,
+                distributed: true,
+            });
+        }
+    }
+
+    signals
+}
+
+fn bruteforce_alert_body(signal: &BruteforceSignal) -> String {
+    let mut shown_users = signal.users.clone();
+    let extra = shown_users.len().saturating_sub(5);
+    shown_users.truncate(5);
+    let users_label = if extra > 0 {
+        format!("{} (+{extra} more)", shown_users.join(", "))
+    } else {
+        shown_users.join(", ")
+    };
+
+    let mut body = if signal.distributed {
+        format!(
+            "{} failed login attempts via {} from multiple source IPs since the last check (users tried: {users_label}). Pattern is consistent with a distributed credential-guessing sweep.",
+            signal.count, signal.service
+        )
+    } else {
+        format!(
+            "{} failed login attempts via {} from {} since the last check (users tried: {users_label}).",
+            signal.count,
+            signal.service,
+            signal.src_ip.as_deref().unwrap_or("local console")
+        )
+    };
+
+    if signal.delay_bypass {
+        body.push_str(
+            " Multiple failures within the same second indicate concurrent sessions bypassing the per-connection login delay (CVE-2026-16347).",
+        );
+    }
+    if signal.service.contains("api") {
+        body.push_str(
+            " RouterOS API auth has no effective rate limiting (CVE-2026-16347, no fixed release); restrict API access with firewall rules and use long random passwords.",
+        );
+    }
+    body
+}
+
+async fn collect_auth_bruteforce_alerts(state: &AppState, rule: &AlertRule, alerts: &mut Vec<PendingAlert>) {
+    let channels = parse_channels(&rule.delivery_channels);
+
+    // Fetch the router log ring buffer through the shared queue.
+    let results = match state
+        .router_queue
+        .submit(
+            "alerting-auth-bruteforce",
+            Priority::Normal,
+            vec![QueuedRequest::get("log")],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("alerting: auth_bruteforce: log fetch failed: {e}");
+            return;
+        }
+    };
+    let entries: Vec<LogEntry> = match &results[0] {
+        Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        Err(e) => {
+            tracing::warn!("alerting: auth_bruteforce: log fetch failed: {e}");
+            return;
+        }
+    };
+
+    let max_id = entries.iter().filter_map(|e| parse_log_id(&e.id)).max().unwrap_or(0);
+    let cursor = get_state(&state.switch_store, AUTH_BF_CURSOR_KEY)
+        .await
+        .and_then(|s| s.parse::<u64>().ok());
+
+    let last_id = match cursor {
+        // First run, or the log buffer reset (router reboot): initialize the
+        // cursor without alerting on entries of unknown age.
+        None => {
+            set_state(&state.switch_store, AUTH_BF_CURSOR_KEY, &max_id.to_string()).await;
+            return;
+        }
+        Some(c) if c > max_id => {
+            set_state(&state.switch_store, AUTH_BF_CURSOR_KEY, &max_id.to_string()).await;
+            return;
+        }
+        Some(c) => c,
+    };
+
+    let failures: Vec<LoginFailure> = entries
+        .iter()
+        .filter(|e| parse_log_id(&e.id).is_some_and(|id| id > last_id))
+        .filter_map(parse_login_failure)
+        .collect();
+
+    if max_id > last_id {
+        set_state(&state.switch_store, AUTH_BF_CURSOR_KEY, &max_id.to_string()).await;
+    }
+    if failures.is_empty() {
+        return;
+    }
+
+    for signal in detect_bruteforce(&failures) {
+        let title = if signal.distributed {
+            "Distributed Login Brute-Force Detected".to_string()
+        } else {
+            format!(
+                "Login Brute-Force Detected ({} via {})",
+                signal.src_ip.as_deref().unwrap_or("local"),
+                signal.service
+            )
+        };
+        alerts.push(PendingAlert {
+            rule_id: rule.id,
+            event_type: "auth_bruteforce".into(),
+            severity: signal.severity.into(),
+            subject: signal.subject.clone(),
+            device_mac: None,
+            device_hostname: None,
+            device_ip: signal.src_ip.clone(),
+            vlan_id: None,
+            title,
+            body: bruteforce_alert_body(&signal),
+            anomaly_id: None,
+            delivery_channels: channels.clone(),
+            investigation_verdict: None,
+            investigation_summary: None,
+        });
+    }
+}
+
 fn parse_channels(json: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(json).unwrap_or_default()
 }
@@ -1292,4 +1570,146 @@ pub fn spawn_alert_engine(supervisor: &TaskSupervisor, state: AppState, interval
             .await;
         }
     })});
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn log(id: &str, time: &str, message: &str) -> LogEntry {
+        LogEntry {
+            id: id.into(),
+            time: time.into(),
+            topics: Some("system,error,critical".into()),
+            message: message.into(),
+        }
+    }
+
+    fn failure(user: &str, ip: Option<&str>, service: &str, time: &str) -> LoginFailure {
+        LoginFailure {
+            user: user.into(),
+            src_ip: ip.map(Into::into),
+            service: service.into(),
+            time: time.into(),
+        }
+    }
+
+    #[test]
+    fn parses_log_ids() {
+        assert_eq!(parse_log_id("*1F4"), Some(500));
+        assert_eq!(parse_log_id("*a"), Some(10));
+        assert_eq!(parse_log_id("1F4"), None);
+        assert_eq!(parse_log_id("*zz"), None);
+    }
+
+    #[test]
+    fn parses_login_failure_with_source() {
+        let entry = log("*1", "12:00:00", "login failure for user admin from 10.20.30.99 via api");
+        let f = parse_login_failure(&entry).unwrap();
+        assert_eq!(f.user, "admin");
+        assert_eq!(f.src_ip.as_deref(), Some("10.20.30.99"));
+        assert_eq!(f.service, "api");
+    }
+
+    #[test]
+    fn parses_console_login_failure_without_source() {
+        let entry = log("*2", "12:00:00", "login failure for user root via console");
+        let f = parse_login_failure(&entry).unwrap();
+        assert_eq!(f.user, "root");
+        assert_eq!(f.src_ip, None);
+        assert_eq!(f.service, "console");
+    }
+
+    #[test]
+    fn ignores_unrelated_log_entries() {
+        let entry = log("*3", "12:00:00", "user admin logged in from 10.0.0.1 via winbox");
+        assert!(parse_login_failure(&entry).is_none());
+    }
+
+    #[test]
+    fn below_threshold_is_silent() {
+        let failures: Vec<_> = (0..4)
+            .map(|i| failure("admin", Some("10.0.0.5"), "api", &format!("12:00:0{i}")))
+            .collect();
+        assert!(detect_bruteforce(&failures).is_empty());
+    }
+
+    #[test]
+    fn burst_from_one_source_warns() {
+        let failures: Vec<_> = (0..6)
+            .map(|i| failure("admin", Some("10.0.0.5"), "ssh", &format!("12:00:0{i}")))
+            .collect();
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].severity, "warning");
+        assert_eq!(signals[0].subject, "auth:10.0.0.5:ssh");
+        assert!(!signals[0].delay_bypass);
+    }
+
+    #[test]
+    fn heavy_burst_is_critical() {
+        let failures: Vec<_> = (0..16)
+            .map(|i| failure("admin", Some("10.0.0.5"), "api", &format!("12:{:02}:00", i)))
+            .collect();
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].severity, "critical");
+    }
+
+    #[test]
+    fn same_second_burst_flags_delay_bypass_and_escalates() {
+        // 5 failures, 3 sharing one timestamp — concurrent sessions (CVE-2026-16347).
+        let mut failures: Vec<_> = (0..3)
+            .map(|_| failure("admin", Some("10.0.0.5"), "api", "12:00:00"))
+            .collect();
+        failures.push(failure("admin", Some("10.0.0.5"), "api", "12:00:01"));
+        failures.push(failure("admin", Some("10.0.0.5"), "api", "12:00:02"));
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert!(signals[0].delay_bypass);
+        assert_eq!(signals[0].severity, "critical");
+        assert!(bruteforce_alert_body(&signals[0]).contains("CVE-2026-16347"));
+    }
+
+    #[test]
+    fn distributed_sweep_detected_when_sources_stay_under_threshold() {
+        // 5 IPs x 3 attempts each = 15 total, all under the per-source threshold.
+        let mut failures = Vec::new();
+        for ip_octet in 1..=5 {
+            for i in 0..3 {
+                failures.push(failure(
+                    "admin",
+                    Some(&format!("10.0.0.{ip_octet}")),
+                    "api",
+                    &format!("12:0{ip_octet}:0{i}"),
+                ));
+            }
+        }
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert!(signals[0].distributed);
+        assert_eq!(signals[0].severity, "critical");
+        assert_eq!(signals[0].subject, "auth:distributed");
+    }
+
+    #[test]
+    fn per_source_signal_suppresses_distributed_signal() {
+        // One loud source plus background noise → per-source alert only.
+        let mut failures: Vec<_> = (0..6)
+            .map(|i| failure("admin", Some("10.0.0.5"), "api", &format!("12:00:1{i}")))
+            .collect();
+        for ip_octet in 1..=4 {
+            for i in 0..3 {
+                failures.push(failure(
+                    "admin",
+                    Some(&format!("10.0.1.{ip_octet}")),
+                    "api",
+                    &format!("12:0{ip_octet}:2{i}"),
+                ));
+            }
+        }
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert!(!signals[0].distributed);
+    }
 }
