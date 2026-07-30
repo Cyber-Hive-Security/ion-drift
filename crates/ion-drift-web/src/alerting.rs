@@ -1472,11 +1472,37 @@ async fn collect_auth_bruteforce_alerts(state: &AppState, rule: &AlertRule, aler
         Some(c) => c,
     };
 
-    let failures: Vec<LoginFailure> = entries
+    let fresh: Vec<&LogEntry> = entries
         .iter()
         .filter(|e| parse_log_id(&e.id).is_some_and(|id| id > last_id))
-        .filter_map(parse_login_failure)
         .collect();
+    let failures: Vec<LoginFailure> = fresh.iter().copied().filter_map(parse_login_failure).collect();
+
+    // Auth-relevant entries the parser did not recognise. RouterOS wording for
+    // login failures varies by service and version; log them so an unhandled
+    // shape shows up as a mismatch rather than silence.
+    let unparsed: Vec<&str> = fresh
+        .iter()
+        .filter(|e| {
+            let m = e.message.to_ascii_lowercase();
+            (m.contains("login") || m.contains("failure") || m.contains("failed"))
+                && parse_login_failure(e).is_none()
+        })
+        .map(|e| e.message.as_str())
+        .collect();
+    if !unparsed.is_empty() {
+        tracing::debug!(
+            count = unparsed.len(),
+            samples = ?unparsed.iter().take(5).collect::<Vec<_>>(),
+            "auth_bruteforce: auth-related log entries not matched by the login-failure parser",
+        );
+    }
+    tracing::debug!(
+        new_entries = fresh.len(),
+        parsed_failures = failures.len(),
+        unparsed_auth_entries = unparsed.len(),
+        "auth_bruteforce: log scan complete",
+    );
 
     if max_id > last_id {
         set_state(&state.switch_store, AUTH_BF_CURSOR_KEY, &max_id.to_string()).await;
