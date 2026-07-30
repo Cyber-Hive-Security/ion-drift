@@ -1274,6 +1274,11 @@ struct LoginFailure {
     service: String,
     /// Raw RouterOS log timestamp string (1-second resolution).
     time: String,
+    /// Severity prefix the emitting logging action prepended (e.g. `SYS-ERR:`),
+    /// empty when the action sets no prefix. Each configured `/system/logging`
+    /// action logs the same event once, so one real failure appears once per
+    /// prefix; counting is done per prefix bucket to avoid multiplying counts.
+    prefix: String,
 }
 
 /// One detected brute-force signal, ready to become a PendingAlert.
@@ -1297,8 +1302,14 @@ fn parse_log_id(id: &str) -> Option<u64> {
 }
 
 /// Parse a `login failure` log message into its components.
+///
+/// A `/system/logging` action may prepend a prefix, so the real message is
+/// `[<prefix>: ]login failure for user <u> [from <ip> ]via <service>`.
 fn parse_login_failure(entry: &LogEntry) -> Option<LoginFailure> {
-    let rest = entry.message.strip_prefix("login failure for user ")?;
+    const MARKER: &str = "login failure for user ";
+    let start = entry.message.find(MARKER)?;
+    let prefix = entry.message[..start].trim().to_string();
+    let rest = &entry.message[start + MARKER.len()..];
     // Two shapes: "<user> from <ip> via <service>" and "<user> via <service>".
     let (user, src_ip, service) = if let Some((user, tail)) = rest.split_once(" from ") {
         let (ip, service) = tail.split_once(" via ")?;
@@ -1312,7 +1323,27 @@ fn parse_login_failure(entry: &LogEntry) -> Option<LoginFailure> {
         src_ip,
         service: service.trim().to_string(),
         time: entry.time.clone(),
+        prefix,
     })
+}
+
+/// Collapse the per-logging-action duplicates of the same events.
+///
+/// Every configured `/system/logging` action logs each event once, so a router
+/// with three actions reports one real failure three times, identical except
+/// for the action's prefix. Each prefix bucket therefore holds the complete set
+/// of real failures; the largest bucket is that set. Picking a bucket (rather
+/// than deduplicating by timestamp) keeps genuine same-second concurrent
+/// attempts distinct — that burst is the CVE-2026-16347 signature.
+fn dedup_logging_actions<'a>(failures: &[&'a LoginFailure]) -> Vec<&'a LoginFailure> {
+    let mut by_prefix: BTreeMap<&str, Vec<&'a LoginFailure>> = BTreeMap::new();
+    for f in failures {
+        by_prefix.entry(f.prefix.as_str()).or_default().push(f);
+    }
+    by_prefix
+        .into_values()
+        .max_by_key(|bucket| bucket.len())
+        .unwrap_or_default()
 }
 
 /// Group failures by (source, service) and emit signals for bursts and
@@ -1323,6 +1354,14 @@ fn detect_bruteforce(failures: &[LoginFailure]) -> Vec<BruteforceSignal> {
         let src = f.src_ip.clone().unwrap_or_else(|| "local".into());
         groups.entry((src, f.service.clone())).or_default().push(f);
     }
+    let groups: BTreeMap<(String, String), Vec<&LoginFailure>> = groups
+        .into_iter()
+        .map(|(k, v)| {
+            let deduped = dedup_logging_actions(&v);
+            (k, deduped)
+        })
+        .collect();
+    let total_failures: usize = groups.values().map(Vec::len).sum();
 
     let mut signals = Vec::new();
     for ((src, service), group) in &groups {
@@ -1359,25 +1398,26 @@ fn detect_bruteforce(failures: &[LoginFailure]) -> Vec<BruteforceSignal> {
 
     // Low-and-slow sweep: every source stays under the per-source threshold but
     // the aggregate is clearly a coordinated guessing run.
-    if signals.is_empty() && failures.len() >= AUTH_BF_DISTRIBUTED_TOTAL {
-        let mut sources: Vec<&str> = failures
+    if signals.is_empty() && total_failures >= AUTH_BF_DISTRIBUTED_TOTAL {
+        let deduped: Vec<&LoginFailure> = groups.values().flatten().copied().collect();
+        let mut sources: Vec<&str> = deduped
             .iter()
             .filter_map(|f| f.src_ip.as_deref())
             .collect();
         sources.sort();
         sources.dedup();
         if sources.len() >= AUTH_BF_DISTRIBUTED_SOURCES {
-            let mut users: Vec<String> = failures.iter().map(|f| f.user.clone()).collect();
+            let mut users: Vec<String> = deduped.iter().map(|f| f.user.clone()).collect();
             users.sort();
             users.dedup();
-            let mut services: Vec<String> = failures.iter().map(|f| f.service.clone()).collect();
+            let mut services: Vec<String> = deduped.iter().map(|f| f.service.clone()).collect();
             services.sort();
             services.dedup();
             signals.push(BruteforceSignal {
                 subject: "auth:distributed".into(),
                 src_ip: None,
                 service: services.join(", "),
-                count: failures.len(),
+                count: total_failures,
                 users,
                 severity: "critical",
                 delay_bypass: false,
@@ -1612,11 +1652,16 @@ mod tests {
     }
 
     fn failure(user: &str, ip: Option<&str>, service: &str, time: &str) -> LoginFailure {
+        failure_p(user, ip, service, time, "")
+    }
+
+    fn failure_p(user: &str, ip: Option<&str>, service: &str, time: &str, prefix: &str) -> LoginFailure {
         LoginFailure {
             user: user.into(),
             src_ip: ip.map(Into::into),
             service: service.into(),
             time: time.into(),
+            prefix: prefix.into(),
         }
     }
 
@@ -1635,6 +1680,73 @@ mod tests {
         assert_eq!(f.user, "admin");
         assert_eq!(f.src_ip.as_deref(), Some("10.20.30.99"));
         assert_eq!(f.service, "api");
+    }
+
+    /// Real kuat-dev capture: RouterOS logging actions prepend severity prefixes.
+    #[test]
+    fn parses_prefixed_login_failure() {
+        let entry = log(
+            "*4",
+            "12:00:00",
+            "SYS-ERR: login failure for user drift-cve-test from 10.20.25.17 via rest-api",
+        );
+        let f = parse_login_failure(&entry).unwrap();
+        assert_eq!(f.user, "drift-cve-test");
+        assert_eq!(f.src_ip.as_deref(), Some("10.20.25.17"));
+        assert_eq!(f.service, "rest-api");
+        assert_eq!(f.prefix, "SYS-ERR:");
+    }
+
+    /// Three logging actions log every failure once each. The reported count
+    /// must be the real attempt count, not 3x it.
+    #[test]
+    fn triple_logged_failures_are_not_multiplied() {
+        let mut failures = Vec::new();
+        for i in 0..8 {
+            let t = format!("12:00:{i:02}");
+            for prefix in ["", "SYS-ERR:", "CRITICAL:"] {
+                failures.push(failure_p("admin", Some("10.20.25.17"), "rest-api", &t, prefix));
+            }
+        }
+        assert_eq!(failures.len(), 24);
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].count, 8, "count must not be inflated by logging actions");
+        assert!(!signals[0].delay_bypass, "distinct seconds must not read as a burst");
+    }
+
+    /// Deduplication must not erase genuine same-second concurrent attempts —
+    /// that burst is the CVE-2026-16347 delay-bypass signature.
+    #[test]
+    fn triple_logging_preserves_same_second_burst() {
+        let mut failures = Vec::new();
+        // 3 concurrent attempts in one second, then 3 spread out — all triple-logged.
+        for _ in 0..3 {
+            for prefix in ["", "SYS-ERR:", "CRITICAL:"] {
+                failures.push(failure_p("admin", Some("10.0.0.9"), "api", "12:00:00", prefix));
+            }
+        }
+        for i in 1..=3 {
+            for prefix in ["", "SYS-ERR:", "CRITICAL:"] {
+                failures.push(failure_p("admin", Some("10.0.0.9"), "api", &format!("12:00:0{i}"), prefix));
+            }
+        }
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].count, 6);
+        assert!(signals[0].delay_bypass);
+        assert_eq!(signals[0].severity, "critical");
+    }
+
+    /// Routers where every logging action sets a prefix must still be detected.
+    #[test]
+    fn detects_when_all_actions_are_prefixed() {
+        let failures: Vec<_> = (0..6)
+            .map(|i| failure_p("admin", Some("10.0.0.7"), "api", &format!("12:00:0{i}"), "SYS-ERR:"))
+            .collect();
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].count, 6);
     }
 
     #[test]
