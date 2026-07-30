@@ -1,3 +1,4 @@
+mod advisory;
 mod behavior;
 mod cert;
 mod connections;
@@ -200,6 +201,9 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
         state.clone(),
         state.config.polling.metrics_interval_secs,
     );
+
+    // Advisory exploitation correlation (independent of the alert rules)
+    advisory::spawn_advisory_evaluator(&state.task_supervisor, state.clone());
 
     // Page view stats pruning (daily, retain 90 days)
     spawn_stats_pruner(state.stats_store.clone());

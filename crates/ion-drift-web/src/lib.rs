@@ -1,3 +1,4 @@
+pub mod advisory;
 pub mod alerting;
 pub mod anomaly_correlator;
 pub mod attack_techniques;

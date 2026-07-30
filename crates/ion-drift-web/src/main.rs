@@ -1,3 +1,4 @@
+mod advisory;
 mod alerting;
 mod anomaly_correlator;
 mod attack_techniques;
@@ -670,10 +671,47 @@ async fn main() -> anyhow::Result<()> {
         ion_drift_storage::FindingsStore::new(&data_dir.join("findings.db"))
             .map_err(|e| anyhow::anyhow!("failed to init findings store: {e}"))?,
     );
+    let advisory_store = Arc::new(
+        ion_drift_storage::AdvisoryStore::new(&data_dir.join("advisory.db"))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to init advisory store: {e}"))?,
+    );
     let stats_store = Arc::new(
         stats_store::StatsStore::new(&data_dir.join("stats.db"))
             .map_err(|e| anyhow::anyhow!("failed to init stats store: {e}"))?,
     );
+
+    // Load the advisory catalog once at startup. A bad catalog degrades the
+    // correlation, it does not stop the server — the loader keeps whatever it
+    // could parse and reports the rest.
+    {
+        let seed_dir = advisory_seed_dir();
+        let overlay_dir = data_dir.join("advisories");
+        match advisory::catalog::load_catalog(&advisory_store, &seed_dir, &overlay_dir).await {
+            Ok(report) if report.degraded => tracing::warn!(
+                advisories = report.advisories_loaded,
+                signals = report.signals_loaded,
+                rejected = ?report.files_rejected,
+                "advisory catalog loaded with rejections — correlation is degraded"
+            ),
+            // Zero advisories makes the whole engine inert, and the commonest
+            // cause is a relative seed path resolved against the wrong working
+            // directory. That must not read as a normal startup line.
+            Ok(report) if report.advisories_loaded == 0 => tracing::warn!(
+                seed_dir = %seed_dir.display(),
+                overlay_dir = %overlay_dir.display(),
+                "advisory catalog is empty — no advisories loaded, so exploitation \
+                 correlation cannot produce findings; check the seed directory \
+                 (override with DRIFT_ADVISORY_SEED_DIR)"
+            ),
+            Ok(report) => tracing::info!(
+                advisories = report.advisories_loaded,
+                signals = report.signals_loaded,
+                "advisory catalog loaded"
+            ),
+            Err(e) => tracing::warn!(error = %e, "advisory catalog load failed"),
+        }
+    }
 
     // Live traffic buffer (300 entries = 5 min at 1 sample per second, but we poll every 10s so ~50 min)
     let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
@@ -919,6 +957,7 @@ async fn main() -> anyhow::Result<()> {
         network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
         behavior_store: behavior_store.clone(),
         findings_store: findings_store.clone(),
+        advisory_store: advisory_store.clone(),
         firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((
             Vec::new(),
             std::time::Instant::now(),
@@ -1036,6 +1075,24 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("ion-drift shutdown complete");
     Ok(())
+}
+
+/// Locate the bundled advisory catalog.
+///
+/// Container images ship it under `/app/seed/` — outside the data volume, the
+/// same convention the GeoIP databases use — while a source checkout reads it
+/// straight from the repo. `DRIFT_ADVISORY_SEED_DIR` overrides both. A missing
+/// directory is not an error: the loader treats an absent seed as "no bundled
+/// advisories" and the operator overlay still applies.
+fn advisory_seed_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("DRIFT_ADVISORY_SEED_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    let bundled = std::path::PathBuf::from("/app/seed/advisories");
+    if bundled.is_dir() {
+        return bundled;
+    }
+    std::path::PathBuf::from("data/advisories")
 }
 
 /// Run the setup-mode server when no cert/secrets are present.

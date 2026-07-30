@@ -32,6 +32,15 @@ ca_cert_path = "/app/certs/root_ca.crt"
 username = "ion-drift"
 wan_interface = "ether1"
 # dns_server = "192.168.88.1"
+# Source address the router sees ion-drift's own REST requests arriving from.
+# Optional; lets brute-force detection tell a stale stored router password apart
+# from someone guessing that username. Leaving it unset never suppresses a
+# detection. In a container this is the host's address on the router's path.
+# Override: DRIFT_ROUTER_LOCAL_SOURCE_IP env var — the usual way to set this in a
+# container, where the address depends on the host rather than on the image.
+# A value that is not a valid IP address is logged as a warning and ignored
+# (falls back to loopback-only) — it never stops the server from starting.
+# local_source_ip = "192.168.88.10"
 
 # ── OIDC (optional) ──────────────────────────────────────────────
 # Uncomment to enable SSO. Works with Keycloak, Authentik, Authelia.

@@ -293,10 +293,20 @@ pub fn validate_manifest(m: &Manifest) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Names the host stamps onto findings it emits itself. Findings dedup on
+/// `(module_name, finding_id)`, so a module registering under one of these
+/// could overwrite core findings through the inbound publish endpoint.
+const RESERVED_MODULE_NAMES: &[&str] = &["advisory", "in-process"];
+
 /// Same rule as the in-process [`ion_drift_module_api::Module::name`]:
-/// `^[a-z][a-z0-9_-]{1,31}$`. We spell it out by hand to avoid pulling
-/// in the regex crate for one check.
+/// `^[a-z][a-z0-9_-]{1,31}$`, plus the host's reserved names. We spell it
+/// out by hand to avoid pulling in the regex crate for one check.
 fn validate_module_name(name: &str) -> anyhow::Result<()> {
+    if RESERVED_MODULE_NAMES.contains(&name) {
+        return Err(anyhow!(
+            "module name {name:?} is reserved by the host"
+        ));
+    }
     let len = name.chars().count();
     if !(2..=32).contains(&len) {
         return Err(anyhow!(
@@ -405,6 +415,21 @@ mod tests {
         assert!(validate_module_name("with space").is_err());
         assert!(validate_module_name("Nope").is_err());
         assert!(validate_module_name(&"a".repeat(33)).is_err());
+    }
+
+    /// Both reserved names are otherwise character-legal, so only the reserved
+    /// list stops a module claiming the finding namespace the host writes to.
+    #[test]
+    fn reserved_names_rejected() {
+        for name in RESERVED_MODULE_NAMES {
+            assert!(
+                validate_module_name(name).is_err(),
+                "{name} must be reserved"
+            );
+            assert!(validate_manifest(&sample_manifest(name)).is_err());
+        }
+        // Not a prefix ban — a module may still namespace itself around them.
+        validate_module_name("advisory-feed").unwrap();
     }
 
     #[test]

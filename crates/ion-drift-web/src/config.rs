@@ -278,6 +278,19 @@ pub struct RouterSection {
     pub wan_interface: String,
     /// Internal DNS server IP for PTR lookups. If not set, PTR lookups are skipped.
     pub dns_server: Option<String>,
+    /// The address the router records Drift's own REST requests as coming from.
+    /// Override: `DRIFT_ROUTER_LOCAL_SOURCE_IP`.
+    ///
+    /// Used only to recognise Drift's own failed logins in the router log, so a
+    /// stale stored password is reported as a broken integration instead of an
+    /// intrusion. Leaving it unset never disables detection: the fallback in
+    /// `alerting::split_own_credential_failures` only recognises source-less
+    /// and loopback log entries, neither of which an off-box attacker can
+    /// produce in that field.
+    ///
+    /// Validated by [`validate_local_source_ip`] on load: a value that is not an
+    /// address is warned about and dropped, never fatal.
+    pub local_source_ip: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -423,6 +436,31 @@ impl ServerConfig {
     }
 }
 
+// ── Validation helpers ────────────────────────────────────────────
+
+/// Parse `[router] local_source_ip` (env `DRIFT_ROUTER_LOCAL_SOURCE_IP`) into the
+/// address own-source suppression compares against, or `None` when it is unset,
+/// blank, or not an address.
+///
+/// A value that is not an address identifies nothing:
+/// `alerting::is_own_source` parses both sides before comparing, so a typo
+/// suppresses no log entry while still counting as "configured" — which also
+/// turns off the unset-value fallback that recognises source-less console
+/// entries. Rejecting it here makes the effective behaviour the documented
+/// fallback (loopback and source-less entries only) rather than a third,
+/// undocumented one.
+///
+/// Deliberately not an error. A bad value must not brick a monitoring server:
+/// the worst case of ignoring it is Drift's own stale credential being reported
+/// as an attack, and the worst case of refusing to start is no monitoring at all.
+pub fn validate_local_source_ip(raw: Option<&str>) -> Option<std::net::IpAddr> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    raw.parse().ok()
+}
+
 // ── Loading ───────────────────────────────────────────────────────
 
 impl ServerConfig {
@@ -487,6 +525,34 @@ impl ServerConfig {
         }
         if let Ok(dns) = std::env::var("DRIFT_ROUTER_DNS_SERVER") {
             config.router.dns_server = Some(dns);
+        }
+        // Drift's own deployments are containers (see `Dockerfile` and
+        // `config/production.example.toml`), where an operator drives config by
+        // environment. Without this override `local_source_ip` is unreachable
+        // for them, so they stay on the loopback-only fallback and Drift's own
+        // stale-password retries get reported as an attack — the exact false
+        // positive the field exists to prevent.
+        if let Ok(src) = std::env::var("DRIFT_ROUTER_LOCAL_SOURCE_IP") {
+            config.router.local_source_ip = Some(src);
+        }
+
+        // Normalise `local_source_ip` before anything reads it, so a typo cannot
+        // sit in the config looking configured while suppressing nothing.
+        if let Some(raw) = config.router.local_source_ip.take() {
+            match validate_local_source_ip(Some(&raw)) {
+                // Stored canonicalised: an env var picked up from a compose file
+                // routinely carries surrounding whitespace.
+                Some(ip) => config.router.local_source_ip = Some(ip.to_string()),
+                // Blank is "unset", spelled differently. Nothing to report.
+                None if raw.trim().is_empty() => {}
+                None => tracing::warn!(
+                    value = %raw,
+                    "router.local_source_ip (env DRIFT_ROUTER_LOCAL_SOURCE_IP) is not a valid \
+                     IP address and is being ignored — own-source suppression falls back to \
+                     loopback-only, so Drift's own failed logins from a stale stored router \
+                     password may be reported as a brute-force attack"
+                ),
+            }
         }
 
         // Validate router host configuration

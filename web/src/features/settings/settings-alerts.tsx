@@ -131,7 +131,10 @@ function AlertRuleRow({
   onUpdate: ReturnType<typeof useUpdateAlertRule>;
   onDelete: ReturnType<typeof useDeleteAlertRule>;
 }) {
-  const isDefault = rule.id <= 8;
+  // The backend owns this: it is the rule the delete endpoint will refuse.
+  // The old `rule.id <= 8` guess hid the control on rules that were deletable
+  // and offered it on seeded rules that landed above id 8.
+  const isDefault = rule.is_default;
   const channels: string[] = (() => {
     try { return JSON.parse(rule.delivery_channels); } catch { return []; }
   })();

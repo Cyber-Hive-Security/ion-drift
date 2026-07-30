@@ -1607,6 +1607,10 @@ export interface AlertRule {
   delivery_channels: string;
   created_at: string;
   updated_at: string;
+  /** Seeded by Drift and refused by DELETE /api/alerts/rules/{id}. The backend
+   *  decides this (the lowest-id row for a seeded event_type); never infer it
+   *  from the id here. */
+  is_default: boolean;
 }
 
 export interface AlertHistoryEntry {

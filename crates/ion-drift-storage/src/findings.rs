@@ -95,6 +95,25 @@ pub struct Finding {
     pub resolution_note: Option<String>,
 }
 
+/// The resolution [`FindingsStore::reopen_by_key`] cleared off a row it
+/// re-opened.
+///
+/// Returned rather than discarded so the caller can carry the record into the
+/// re-opened finding as evidence. A re-open has to win over any resolution — a
+/// live attack must be visible — but the operator's account of what they did
+/// about it is worth keeping, and this is what keeps "reopen anyway" from
+/// meaning "destroy the note".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriorResolution {
+    /// Who resolved it: an operator's username, or `system` for the engine's own
+    /// close-out. `unknown` when the row carried no attribution at all.
+    pub resolved_by: String,
+    /// When, in unix seconds. `0` when the row carried no timestamp.
+    pub resolved_at: i64,
+    /// The note they left, if any.
+    pub resolution_note: Option<String>,
+}
+
 /// Aggregate counts surfaced by `GET /api/findings/summary`. Severity
 /// counts cover open findings only — resolved/acknowledged severities are
 /// not actionable for the dashboard.
@@ -374,6 +393,137 @@ impl FindingsStore {
         Ok(())
     }
 
+    /// Resolve a finding by its dedup key rather than its row id, so an
+    /// engine that re-derives a `finding_id` can close its own finding out
+    /// without first looking up the row.
+    ///
+    /// `upsert_finding` deliberately preserves lifecycle state on conflict and
+    /// `auto_resolve_stale` exempts critical/high, so without this a finding
+    /// whose underlying condition has cleared would stay open forever.
+    ///
+    /// Returns `Ok(false)` when no open/acknowledged row matches — this is not
+    /// an error, it just means the finding was never raised or is already
+    /// resolved, which makes repeated calls idempotent.
+    pub async fn resolve_by_key(
+        &self,
+        module_name: &str,
+        finding_id: &str,
+        note: &str,
+    ) -> Result<bool, String> {
+        let db = self.db.lock().await;
+        let now = now_unix();
+        let updated = db
+            .execute(
+                "UPDATE findings
+                 SET status = 'resolved',
+                     resolved_at = ?1,
+                     resolved_by = 'system',
+                     resolution_note = ?2
+                 WHERE module_name = ?3
+                   AND finding_id = ?4
+                   AND status IN ('open', 'acknowledged')",
+                params![now, note, module_name, finding_id],
+            )
+            .map_err(|e| format!("resolve_by_key failed: {e}"))?;
+        Ok(updated > 0)
+    }
+
+    /// Re-open a resolved finding whose condition an engine has observed again,
+    /// keyed the same way as [`Self::resolve_by_key`].
+    ///
+    /// `upsert_finding` deliberately preserves lifecycle state on conflict so a
+    /// re-emission cannot undo an operator's triage. That is right for a
+    /// finding whose condition genuinely cleared, but an engine re-observing
+    /// the condition itself needs a way to say so: without this, a live attack
+    /// that pauses long enough to be closed out and then resumes refreshes the
+    /// row's body while the row stays `resolved` — kept out of
+    /// `GET /api/findings?status=open` and out of `critical_open` for good.
+    ///
+    /// Only a `resolved` row is touched. An `acknowledged` one is a live triage
+    /// decision on a still-open finding and is left exactly as the operator set
+    /// it.
+    ///
+    /// A row resolved by *anyone* re-opens, the operator included, and the
+    /// tradeoff is deliberate. Restricting this to `resolved_by = 'system'`
+    /// stopped the engine from undoing operator triage on its own schedule, but
+    /// it bought that with the worse failure in the opposite direction: an
+    /// operator who resolves an exploitation finding during a lull silences the
+    /// same attack permanently when it resumes — no open row, nothing in
+    /// `critical_open`, no alert, and no way back short of a manual DB edit. A
+    /// finding that reappears when it should not is an annoyance an operator can
+    /// see and act on; a live attack with no finding is invisible by
+    /// construction. For a security product only one of those is survivable.
+    ///
+    /// What the operator wrote is preserved rather than destroyed. The
+    /// resolution being cleared is *returned* as a [`PriorResolution`] so the
+    /// caller can fold it into the re-opened finding as evidence — "previously
+    /// resolved by <who> on <date>: <note>" — which keeps their account of what
+    /// they did attached to the finding instead of suppressing it. `None` means
+    /// no row changed (already open, acknowledged, or absent), so repeated calls
+    /// stay idempotent and a caller can tell a genuine re-open from a no-op.
+    ///
+    /// Resolving is a statement about *this* occurrence, not a standing
+    /// instruction to stay quiet. Durable suppression is a different feature and
+    /// belongs in the `advisory_suppression` table, which is **not wired up
+    /// yet** — until it is, an operator who wants a finding to stay closed has
+    /// to remove the condition producing it.
+    ///
+    /// Acknowledgement stamps are cleared along with the resolution. They belong
+    /// to the incarnation that was closed out; carrying them across would show a
+    /// freshly re-opened finding as already acknowledged by someone who never
+    /// saw this occurrence of it, and hide it from anyone triaging by ack state.
+    pub async fn reopen_by_key(
+        &self,
+        module_name: &str,
+        finding_id: &str,
+    ) -> Result<Option<PriorResolution>, String> {
+        let db = self.db.lock().await;
+        // Read before clearing: the UPDATE decides whether a row changed, but by
+        // the time it has run the row no longer carries what was cleared. Both
+        // statements run under the store's single connection lock, so nothing
+        // can slip between them.
+        let prior: Option<(Option<String>, Option<i64>, Option<String>)> = db
+            .query_row(
+                "SELECT resolved_by, resolved_at, resolution_note
+                 FROM findings
+                 WHERE module_name = ?1 AND finding_id = ?2 AND status = 'resolved'",
+                params![module_name, finding_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|e| format!("reopen_by_key lookup failed: {e}"))?;
+
+        let updated = db
+            .execute(
+                "UPDATE findings
+                 SET status = 'open',
+                     resolved_at = NULL,
+                     resolved_by = NULL,
+                     resolution_note = NULL,
+                     acknowledged_at = NULL,
+                     acknowledged_by = NULL
+                 WHERE module_name = ?1
+                   AND finding_id = ?2
+                   AND status = 'resolved'",
+                params![module_name, finding_id],
+            )
+            .map_err(|e| format!("reopen_by_key failed: {e}"))?;
+        if updated == 0 {
+            return Ok(None);
+        }
+
+        let (resolved_by, resolved_at, resolution_note) = prior.unwrap_or_default();
+        Ok(Some(PriorResolution {
+            // Every path that resolves a row stamps both columns, so a NULL here
+            // means the row was written outside this API. Report it as unknown
+            // rather than dropping the record — the caller asked what was
+            // cleared, and "something was" is still the honest answer.
+            resolved_by: resolved_by.unwrap_or_else(|| "unknown".to_string()),
+            resolved_at: resolved_at.unwrap_or(0),
+            resolution_note,
+        }))
+    }
+
     pub async fn summary(&self) -> Result<FindingsSummary, String> {
         let db = self.db.lock().await;
         db.query_row(
@@ -623,5 +773,295 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(open.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn resolve_by_key_closes_open_finding_and_is_idempotent() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+
+        // Critical is deliberate: auto_resolve_stale exempts it in SQL, so a
+        // by-key close-out is the only way this finding ever leaves 'open'.
+        let id_a = store
+            .upsert_finding("m", &sample("a", FindingSeverity::Critical), None, None)
+            .await
+            .unwrap();
+
+        let closed = store
+            .resolve_by_key("m", "a", "condition cleared")
+            .await
+            .unwrap();
+        assert!(closed, "first close must report a resolved row");
+
+        let found = store.get_finding(id_a).await.unwrap().unwrap();
+        assert_eq!(found.status, FindingStatus::Resolved);
+        assert_eq!(found.resolved_by.as_deref(), Some("system"));
+        assert_eq!(found.resolution_note.as_deref(), Some("condition cleared"));
+
+        // Idempotent: nothing left to close, and not an error.
+        let again = store
+            .resolve_by_key("m", "a", "condition cleared")
+            .await
+            .unwrap();
+        assert!(!again, "second close must be a no-op");
+
+        // Unknown keys are a no-op too, not an error.
+        assert!(!store.resolve_by_key("m", "nope", "x").await.unwrap());
+        assert!(!store.resolve_by_key("other", "a", "x").await.unwrap());
+
+        // Acknowledged findings are closeable; already-resolved ones are not
+        // re-opened or re-stamped by a later call.
+        let id_b = store
+            .upsert_finding("m", &sample("b", FindingSeverity::High), None, None)
+            .await
+            .unwrap();
+        store.acknowledge(id_b, "alice").await.unwrap();
+        assert!(store.resolve_by_key("m", "b", "cleared").await.unwrap());
+    }
+
+    /// The lifecycle an in-progress attack actually takes: seen, quiet long
+    /// enough to be closed out, then seen again. `upsert_finding` preserves
+    /// lifecycle state on conflict, so re-emitting alone refreshes the body and
+    /// leaves the row `resolved` — out of `?status=open` and out of
+    /// `critical_open` while the attack is live.
+    #[tokio::test]
+    async fn exploit_finding_reopens_after_close() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+        let key = "rb4011:svc:api:CVE-2026-16347:exploit";
+
+        let id = store
+            .upsert_finding("advisory", &sample(key, FindingSeverity::Critical), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get_finding(id).await.unwrap().unwrap().status,
+            FindingStatus::Open
+        );
+
+        // The attack pauses; the evaluator closes it out.
+        assert!(
+            store
+                .resolve_by_key("advisory", key, "exploitation signal ceased")
+                .await
+                .unwrap()
+        );
+        assert_eq!(store.summary().await.unwrap().critical_open, 0);
+
+        // It resumes: the evaluator re-emits and re-opens.
+        store
+            .upsert_finding("advisory", &sample(key, FindingSeverity::Critical), None, None)
+            .await
+            .unwrap();
+        let prior = store
+            .reopen_by_key("advisory", key)
+            .await
+            .unwrap()
+            .expect("a re-observed finding must come back");
+        assert_eq!(prior.resolved_by, "system");
+        assert_eq!(
+            prior.resolution_note.as_deref(),
+            Some("exploitation signal ceased")
+        );
+
+        let got = store.get_finding(id).await.unwrap().unwrap();
+        assert_eq!(got.status, FindingStatus::Open);
+        assert_eq!(got.resolved_at, None);
+        assert_eq!(got.resolved_by, None);
+        assert_eq!(got.resolution_note, None);
+        assert_eq!(store.summary().await.unwrap().critical_open, 1);
+
+        let open = store
+            .list_findings(&FindingsQuery {
+                status: Some(FindingStatus::Open),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(open.len(), 1, "the live attack must be listed as open");
+
+        // Idempotent, and never overrides a live triage decision: an
+        // acknowledged finding is left exactly as the operator set it.
+        assert!(store.reopen_by_key("advisory", key).await.unwrap().is_none());
+        assert!(
+            store
+                .reopen_by_key("advisory", "no-such-key")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        store.acknowledge(id, "alice").await.unwrap();
+        assert!(store.reopen_by_key("advisory", key).await.unwrap().is_none());
+        assert_eq!(
+            store.get_finding(id).await.unwrap().unwrap().status,
+            FindingStatus::Acknowledged
+        );
+    }
+
+    /// A no-op has to be distinguishable from a genuine re-open, or a caller
+    /// folding the cleared resolution into its evidence would re-derive it on
+    /// every cycle for a finding that never left `open`.
+    #[tokio::test]
+    async fn reopen_returns_none_when_already_open() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+
+        let id = store
+            .upsert_finding("advisory", &sample("k", FindingSeverity::Critical), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get_finding(id).await.unwrap().unwrap().status,
+            FindingStatus::Open
+        );
+
+        assert!(
+            store.reopen_by_key("advisory", "k").await.unwrap().is_none(),
+            "an already-open row has no resolution to clear"
+        );
+        assert_eq!(
+            store.get_finding(id).await.unwrap().unwrap().status,
+            FindingStatus::Open,
+            "and is left exactly as it was"
+        );
+
+        // Same for a key that names nothing at all.
+        assert!(
+            store
+                .reopen_by_key("advisory", "never-raised")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.reopen_by_key("other", "k").await.unwrap().is_none());
+    }
+
+    /// An attack that resumes has to become visible again, whoever closed the
+    /// finding out.
+    ///
+    /// Exempting operator-resolved rows kept their note safe but silenced the
+    /// resumption: the operator resolves during a lull, the attack comes back,
+    /// and there is no open finding, nothing in `critical_open`, and no alert —
+    /// permanently, because nothing in the engine can ever flip that row again.
+    /// So the re-open wins, and the operator's record is preserved by being
+    /// *returned* to the caller as evidence rather than by suppressing the
+    /// finding. Both halves are asserted here: the row comes back open and
+    /// un-triaged, and nothing about alice's decision is silently dropped.
+    #[tokio::test]
+    async fn operator_resolved_finding_reopens_when_attack_resumes() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+        let key = "rb4011:svc:api:CVE-2026-16347:exploit";
+
+        let id = store
+            .upsert_finding("advisory", &sample(key, FindingSeverity::Critical), None, None)
+            .await
+            .unwrap();
+        store.acknowledge(id, "bob").await.unwrap();
+        store
+            .resolve(id, "alice", Some("api restricted to mgmt vlan".into()))
+            .await
+            .unwrap();
+        assert_eq!(store.summary().await.unwrap().critical_open, 0);
+
+        // The attack resumes and the evaluator re-observes it.
+        let prior = store
+            .reopen_by_key("advisory", key)
+            .await
+            .unwrap()
+            .expect("a live attack must come back regardless of who closed it");
+        assert_eq!(prior.resolved_by, "alice");
+        assert_eq!(
+            prior.resolution_note.as_deref(),
+            Some("api restricted to mgmt vlan"),
+            "the operator's note is handed back, not destroyed"
+        );
+        assert!(prior.resolved_at > 0, "and dated, so evidence can say when");
+
+        let got = store.get_finding(id).await.unwrap().unwrap();
+        assert_eq!(got.status, FindingStatus::Open);
+        assert_eq!(got.resolved_at, None);
+        assert_eq!(got.resolved_by, None);
+        assert_eq!(got.resolution_note, None);
+        assert_eq!(
+            got.acknowledged_by, None,
+            "an open row must not carry triage state from the closed-out incarnation"
+        );
+        assert_eq!(got.acknowledged_at, None);
+        assert_eq!(
+            store.summary().await.unwrap().critical_open,
+            1,
+            "the resumed attack must be counted again"
+        );
+
+        // The evaluator keeps asking every cycle; only the first ask changed
+        // anything, so the note is reported exactly once.
+        for _ in 0..3 {
+            assert!(store.reopen_by_key("advisory", key).await.unwrap().is_none());
+        }
+    }
+
+    /// The engine's own close-outs re-open too, and a re-opened finding carries
+    /// no acknowledgement from the incarnation that was closed out, or it
+    /// returns already-triaged by someone who never saw this occurrence.
+    #[tokio::test]
+    async fn engine_resolved_finding_is_reopened_and_ack_stamps_cleared() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+        let key = "rb4011:svc:api:CVE-2026-16347:exploit";
+
+        let id = store
+            .upsert_finding("advisory", &sample(key, FindingSeverity::Critical), None, None)
+            .await
+            .unwrap();
+        // Acknowledged during the first run, then the attack pauses and the
+        // engine closes it out.
+        store.acknowledge(id, "bob").await.unwrap();
+        assert!(
+            store
+                .resolve_by_key("advisory", key, "exploitation signal ceased")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store.get_finding(id).await.unwrap().unwrap().acknowledged_by.as_deref(),
+            Some("bob"),
+            "the closed-out row still carries the ack it was closed with"
+        );
+
+        // It resumes.
+        let prior = store
+            .reopen_by_key("advisory", key)
+            .await
+            .unwrap()
+            .expect("a finding the engine closed must come back when the signal does");
+        assert_eq!(prior.resolved_by, "system");
+        let got = store.get_finding(id).await.unwrap().unwrap();
+        assert_eq!(got.status, FindingStatus::Open);
+        assert_eq!(got.resolved_by, None);
+        assert_eq!(got.resolution_note, None);
+        assert_eq!(
+            got.acknowledged_by, None,
+            "a re-opened finding must not show as acknowledged by the previous incarnation's triager"
+        );
+        assert_eq!(got.acknowledged_at, None);
+        assert_eq!(store.summary().await.unwrap().critical_open, 1);
+
+        // `auto_resolve_stale` also stamps 'system', so what it closed is
+        // likewise the engine's to re-open.
+        let mut stale = sample("stale-key", FindingSeverity::Low);
+        stale.timestamp_unix = 0;
+        store.upsert_finding("advisory", &stale, None, None).await.unwrap();
+        assert_eq!(store.auto_resolve_stale(3600).await.unwrap(), 1);
+        let stale_prior = store
+            .reopen_by_key("advisory", "stale-key")
+            .await
+            .unwrap()
+            .expect("an auto-resolved row re-opens too");
+        assert_eq!(stale_prior.resolved_by, "system");
+        assert_eq!(
+            stale_prior.resolution_note.as_deref(),
+            Some("auto-resolved: stale")
+        );
     }
 }

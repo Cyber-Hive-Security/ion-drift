@@ -1,0 +1,50 @@
+{
+  "catalog_version": 1,
+  "generated_at": "2026-07-28",
+  "advisories": [
+    {
+      "advisory_id": "CVE-2026-16347",
+      "title": "RouterOS API service permits unlimited credential guessing",
+      "narrative": "Every published RouterOS build, and the Cloud Hosted Router images built from them, will accept an unbounded number of authentication attempts on the API service. Nothing locks an account after repeated failures, nothing rate-limits the attempts in a way that matters, and the service applies no source restriction of its own unless an operator configures one. Some builds pause briefly before answering a failed attempt, but the pause is charged per connection: an attacker who opens sessions in parallel gets as many guesses per second as they hold sockets, so the delay throttles one thread rather than the attack. The weakness class is CWE-307. Published scores are CVSS v3.1 8.8 and CVSS v4.0 8.7, both assuming an adjacent-network attacker (AV:A) rather than an internet-based one — so the practical precondition is an API port reachable from a segment an intruder already occupies: a flat LAN, a guest or wireless VLAN sharing the management subnet, or a compromised host inside it. No fixed release exists for any branch, and none should be assumed to be coming. Treat this as a standing property of the platform and manage it by controlling who can reach the API, not by waiting for an upgrade. Drift raises this advisory whenever api or api-ssl is observed exposed, and promotes it to confirmed exploitation when the router log shows failed logins arriving faster than sequential connections could deliver them.",
+      "severity": "high",
+      "requires_surface_class": "service",
+      "requires_surface_names": ["api", "api-ssl"],
+      "requires_state": ["exposed"],
+      "version_constraint": null,
+      "no_fixed_release": true,
+      "fixed_versions": [],
+      "mitigations": [
+        "Scope the service to management sources: /ip/service set api address=<mgmt-cidr> and the same for api-ssl. The field takes a comma-separated list of addresses or CIDR ranges, and connections from anywhere else are dropped before a password is ever checked.",
+        "Turn the service off where nothing consumes it: /ip/service disable api,api-ssl. The API is routinely enabled for one integration years ago and never revisited; a disabled service cannot be guessed at.",
+        "Repeat the boundary in the firewall, not only on the service, because a later configuration restore can quietly widen the service address list. Add an input-chain rule dropping tcp/8728 and tcp/8729 from every interface list except the management one, and place it above any broader accept rule.",
+        "Give every account that can log in over the API a long, randomly generated password. RouterOS imposes no minimum length and no complexity requirement, so an account created with a weak password keeps it indefinitely; 24 or more random characters from a password manager puts the keyspace beyond a guessing run that nothing on the router will interrupt.",
+        "Create a dedicated user for each integration in a group carrying only the permissions it needs — usually api plus read — instead of reusing an admin login. This does not slow the guessing down, but it bounds what a guessed credential is worth.",
+        "Terminate a VPN on the router and bind API access to it whenever the client has to cross a network you do not control. WireGuard or IPsec, with the service address list scoped to the tunnel subnet, replaces a password-only defence with a key-based one. Exposing api-ssl straight onto an untrusted segment leans entirely on password strength, which is precisely the control this issue removes.",
+        "Keep a /system/logging action covering the system, error and critical topics so failed logins land in the log Drift polls. Since the router will never lock an account, that log is the only place an attack in progress becomes visible."
+      ],
+      "references": [
+        "https://www.cisa.gov/news-events/ics-advisories/icsa-26-209-05",
+        "https://nvd.nist.gov/vuln/detail/CVE-2026-16347",
+        "https://help.mikrotik.com/docs/spaces/ROS/pages/268337176/Bruteforce+prevention"
+      ],
+      "attack_techniques": ["T1110"],
+      "signals": [
+        {
+          "signal_id": "auth.login_failure_same_second_burst",
+          "confidence": "strong",
+          "description": "Three or more failed logins from one source against one service share a single log timestamp, which the router records at one-second resolution. Strictly sequential connections cannot produce that shape while the per-connection delay is in force, so the burst is direct evidence that the delay was sidestepped by running sessions concurrently."
+        },
+        {
+          "signal_id": "auth.login_failure_burst",
+          "confidence": "corroborating",
+          "description": "One source produced a run of failed logins against one service inside a single polling cycle. Consistent with credential guessing, but on its own it does not separate an automated run from a locked-out operator or an integration retrying a stale password, so it corroborates rather than confirms."
+        },
+        {
+          "signal_id": "auth.login_failure_distributed",
+          "confidence": "strong",
+          "description": "Failed logins against this service arrived from five or more distinct sources in one polling cycle, with no single source reaching the per-source threshold. That is the shape of a run deliberately spread thin enough to stay under a per-source alarm, and the spread is only worth an attacker's effort where nothing locks the account and nothing rate-limits the service — the property this advisory describes. A stale integration credential retries from the one host that holds it, and an operator locked out mistypes from the one seat they are sitting at, so neither explains a coordinated spread across unrelated sources."
+        }
+      ]
+    }
+  ]
+}

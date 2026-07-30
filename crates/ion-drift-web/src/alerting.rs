@@ -6,6 +6,7 @@
 //! Delivery: ntfy, webhook, smtp.
 
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::time::Duration;
 
 pub use ion_drift_storage::alerting::{AlertRule, AlertHistoryEntry, AlertStatus, DeliveryChannelConfig};
@@ -1254,6 +1255,10 @@ async fn collect_firewall_drop_spike_alerts(state: &AppState, rule: &AlertRule, 
 
 /// Alert-state key holding the last processed log `.id` (parsed numeric form).
 const AUTH_BF_CURSOR_KEY: &str = "auth_bruteforce:last_log_id";
+/// `router_queue` poller id for this collector's `/log` fetch. Every submitter
+/// needs its own: the queue keys pending work by poller id and evicts the older
+/// batch when two of them collide, which would silently skip a whole cycle.
+const AUTH_BF_POLLER_ID: &str = "alerting-auth-bruteforce";
 /// New failures from a single (source, service) per cycle to raise a warning.
 const AUTH_BF_WARN_THRESHOLD: usize = 5;
 /// New failures from a single (source, service) per cycle to raise a critical.
@@ -1283,17 +1288,48 @@ struct LoginFailure {
 
 /// One detected brute-force signal, ready to become a PendingAlert.
 #[derive(Debug)]
-struct BruteforceSignal {
+pub struct BruteforceSignal {
     /// Cooldown subject, e.g. `auth:10.0.0.5:api` or `auth:distributed`.
-    subject: String,
-    src_ip: Option<String>,
-    service: String,
-    count: usize,
-    users: Vec<String>,
-    severity: &'static str,
-    /// Same-second burst observed — the CVE-2026-16347 per-connection delay bypass.
-    delay_bypass: bool,
-    distributed: bool,
+    pub subject: String,
+    pub src_ip: Option<String>,
+    /// Display form only — for the distributed signal this is a joined list and
+    /// must never be parsed. Use [`BruteforceSignal::services`] for that.
+    pub service: String,
+    /// Every service the signal covers paired with the failures that landed on
+    /// that service *alone*, in sorted order by service. One entry for a
+    /// per-source signal, N for a distributed sweep.
+    ///
+    /// Per-service because [`Self::count`] is a cross-service total for a
+    /// sweep. Writing that total onto every service's surface made one stray
+    /// api failure alongside a 20-failure ssh sweep look like a 21-event attack
+    /// on the api service — reviving, on the wrong surface, the false positive
+    /// the advisory surface-scope check exists to stop.
+    pub services: Vec<(String, usize)>,
+    /// Every distinct source IP the signal covers. Empty for console logins.
+    pub sources: Vec<String>,
+    pub count: usize,
+    pub users: Vec<String>,
+    pub severity: &'static str,
+    /// Same-second burst observed — the per-connection delay bypass.
+    pub delay_bypass: bool,
+    pub distributed: bool,
+}
+
+impl BruteforceSignal {
+    /// The catalog-facing signal id for this observation.
+    ///
+    /// Ids name a behaviour, never an advisory — the linkage from a signal to
+    /// an advisory lives in `advisory_signal` rows loaded from the catalog.
+    /// Every value here must appear in [`crate::advisory::signals::EMITTED_SIGNALS`].
+    pub fn signal_id(&self) -> &'static str {
+        if self.delay_bypass {
+            "auth.login_failure_same_second_burst"
+        } else if self.distributed {
+            "auth.login_failure_distributed"
+        } else {
+            "auth.login_failure_burst"
+        }
+    }
 }
 
 /// Parse a RouterOS log `.id` (`"*1F4"`) into its numeric form.
@@ -1305,18 +1341,32 @@ fn parse_log_id(id: &str) -> Option<u64> {
 ///
 /// A `/system/logging` action may prepend a prefix, so the real message is
 /// `[<prefix>: ]login failure for user <u> [from <ip> ]via <service>`.
+///
+/// Both separators are matched from the *right*. The username is the one field
+/// on the line an attacker chooses, and RouterOS writes it verbatim into the
+/// middle of it, so a separator found from the left is a separator the attacker
+/// may have supplied. Splitting on the first ` from ` let a username of
+/// `admin from 127.0.0.1` donate that loopback address to `src_ip` while the
+/// router's real source slid into the tail — and [`is_own_source`] then read the
+/// attempt as Drift's own and dropped it before detection. The router appends
+/// ` from <ip>` and ` via <service>` at the end of the line, so the last
+/// occurrence of each is the real one and no username can reach past it.
 fn parse_login_failure(entry: &LogEntry) -> Option<LoginFailure> {
     const MARKER: &str = "login failure for user ";
     let start = entry.message.find(MARKER)?;
     let prefix = entry.message[..start].trim().to_string();
     let rest = &entry.message[start + MARKER.len()..];
     // Two shapes: "<user> from <ip> via <service>" and "<user> via <service>".
-    let (user, src_ip, service) = if let Some((user, tail)) = rest.split_once(" from ") {
-        let (ip, service) = tail.split_once(" via ")?;
-        (user, Some(ip.to_string()), service)
-    } else {
-        let (user, service) = rest.split_once(" via ")?;
-        (user, None, service)
+    let (head, service) = rest.rsplit_once(" via ")?;
+    let (user, src_ip) = match head.rsplit_once(" from ") {
+        // Whatever follows the router's own ` from ` is kept verbatim, even
+        // when it is not a recognisable address: a recorded source must stay a
+        // source. Downgrading an unparseable one to `None` would present it as
+        // a console entry, which the unset-`local_source_ip` fallback treats as
+        // Drift's own — the same blinding this split exists to close.
+        // Well-formedness is judged in `is_own_source`, which parses.
+        Some((user, source)) => (user, Some(source.to_string())),
+        None => (head, None),
     };
     Some(LoginFailure {
         user: user.to_string(),
@@ -1344,6 +1394,72 @@ fn dedup_logging_actions<'a>(failures: &[&'a LoginFailure]) -> Vec<&'a LoginFail
         .into_values()
         .max_by_key(|bucket| bucket.len())
         .unwrap_or_default()
+}
+
+/// True when a log entry's source address could plausibly be Drift itself.
+///
+/// With `[router] local_source_ip` configured, only that address counts: Drift
+/// always reaches the router over the network, so its own failures always carry
+/// a source. Unset, the only sources accepted are "none recorded" (a local
+/// console entry) and a real loopback address.
+///
+/// Every candidate is parsed as an [`IpAddr`] before it is judged, never
+/// prefix-matched, and anything that does not parse is never Drift's own.
+/// `src_ip` is carved out of a line that embeds an attacker-chosen username, so
+/// a textual test on it is a test on attacker input: `ip.starts_with("127.")`
+/// accepted `"127.0.0.1 from 10.20.35.99"` — exactly what a username of
+/// `admin from 127.0.0.1` produced — and with `router.username` at its default
+/// of `admin`, that silently deleted a live attack from detection on a stock
+/// configuration. Failing closed here means the worst case is Drift's own stale
+/// credential being reported as an attack, not an attack being reported as
+/// Drift's own.
+fn is_own_source(src_ip: Option<&str>, own_source: Option<&str>) -> bool {
+    match (own_source, src_ip) {
+        // Configured: a console entry carries no source and Drift never logs in
+        // from the console, so it is not Drift's own.
+        (Some(_), None) => false,
+        (Some(own), Some(ip)) => {
+            // Compared as addresses, not as text, so nothing that merely starts
+            // with (or contains) the configured value can pass. A configured
+            // value that is not an address matches nothing — the safe direction.
+            let (Ok(ip), Ok(own)) = (ip.parse::<IpAddr>(), own.parse::<IpAddr>()) else {
+                return false;
+            };
+            ip == own
+        }
+        (None, None) => true,
+        (None, Some(ip)) => ip.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()),
+    }
+}
+
+/// Split off the failures produced by Drift's own router credential.
+///
+/// `MikrotikClient` sends HTTP Basic auth on every request and `router_queue`
+/// drains a batch sequentially in tens of milliseconds, so a stale stored
+/// password lands several failures inside a single 1-second log timestamp —
+/// exactly the shape of the concurrent-session delay bypass. Left in, Drift
+/// would report itself as an in-progress attack. The failures are still worth
+/// surfacing, just as a broken-integration warning rather than an intrusion,
+/// so they are returned separately instead of being dropped silently.
+///
+/// A failure only counts as Drift's own when the username matches *and* the
+/// source is plausibly Drift ([`is_own_source`]). Matching on the username
+/// alone would be a detection-killer rather than a false-positive fix:
+/// `router.username` defaults to `admin`, so anyone guessing that account from
+/// anywhere would have every one of their failures moved out of detection.
+/// The comparison is exact for the same reason — RouterOS usernames are
+/// case-sensitive, and `Admin` is a different account than `admin`.
+///
+/// Returns `(kept, own_credential_failures)`.
+fn split_own_credential_failures(
+    failures: &[LoginFailure],
+    own_user: &str,
+    own_source: Option<&str>,
+) -> (Vec<LoginFailure>, Vec<LoginFailure>) {
+    failures
+        .iter()
+        .cloned()
+        .partition(|f| !(f.user == own_user && is_own_source(f.src_ip.as_deref(), own_source)))
 }
 
 /// Group failures by (source, service) and emit signals for bursts and
@@ -1384,6 +1500,8 @@ fn detect_bruteforce(failures: &[LoginFailure]) -> Vec<BruteforceSignal> {
             subject: format!("auth:{src}:{service}"),
             src_ip: (src != "local").then(|| src.clone()),
             service: service.clone(),
+            services: vec![(service.clone(), group.len())],
+            sources: if src == "local" { Vec::new() } else { vec![src.clone()] },
             count: group.len(),
             users,
             severity: if group.len() >= AUTH_BF_CRIT_THRESHOLD || delay_bypass {
@@ -1410,13 +1528,26 @@ fn detect_bruteforce(failures: &[LoginFailure]) -> Vec<BruteforceSignal> {
             let mut users: Vec<String> = deduped.iter().map(|f| f.user.clone()).collect();
             users.sort();
             users.dedup();
-            let mut services: Vec<String> = deduped.iter().map(|f| f.service.clone()).collect();
-            services.sort();
-            services.dedup();
+            // Counted per service, not just listed: `count` below is the
+            // cross-service total the sweep is judged on, and correlation must
+            // not attribute that total to a service that contributed one
+            // failure to it. BTreeMap keys keep the order sorted by service.
+            let mut per_service: BTreeMap<&str, usize> = BTreeMap::new();
+            for f in &deduped {
+                *per_service.entry(f.service.as_str()).or_default() += 1;
+            }
             signals.push(BruteforceSignal {
                 subject: "auth:distributed".into(),
                 src_ip: None,
-                service: services.join(", "),
+                // `service` stays a human-readable join for the alert body; the
+                // machine-readable list rides in `services` so correlation can
+                // key on one surface per service instead of a joined blob.
+                service: per_service.keys().copied().collect::<Vec<_>>().join(", "),
+                services: per_service
+                    .iter()
+                    .map(|(service, count)| ((*service).to_string(), *count))
+                    .collect(),
+                sources: sources.iter().map(|s| (*s).to_string()).collect(),
                 count: total_failures,
                 users,
                 severity: "critical",
@@ -1466,57 +1597,126 @@ fn bruteforce_alert_body(signal: &BruteforceSignal) -> String {
     body
 }
 
-async fn collect_auth_bruteforce_alerts(state: &AppState, rule: &AlertRule, alerts: &mut Vec<PendingAlert>) {
-    let channels = parse_channels(&rule.delivery_channels);
+/// What a fetched log batch means for the stored cursor.
+#[derive(Debug, PartialEq, Eq)]
+enum CursorAction {
+    /// Leave the stored cursor exactly as it is — nothing was learned about how
+    /// far the log has advanced.
+    Hold,
+    /// Move the cursor to this id and skip detection for this cycle.
+    Reset(u64),
+    /// Process the entries newer than this id.
+    Advance(u64),
+}
 
+/// Decide what to do with the stored cursor for one fetched log batch.
+///
+/// `entries` is `None` when the batch could not be read at all — a failed fetch
+/// or a payload that did not deserialize. That says nothing about the log's
+/// position, and treating it as an empty buffer is actively harmful: `max_id`
+/// becomes 0, which is indistinguishable from a router reboot, so the cursor is
+/// rewound to 0 and the *entire* ring buffer is replayed as new on the next
+/// cycle — easily reported as a distributed brute force for an attack that
+/// ended weeks ago. Only a batch that parsed cleanly and is genuinely empty is
+/// a real buffer reset.
+fn cursor_action(entries: Option<&[LogEntry]>, stored: Option<u64>) -> CursorAction {
+    let Some(entries) = entries else {
+        return CursorAction::Hold;
+    };
+    let max_id = entries.iter().filter_map(|e| parse_log_id(&e.id)).max().unwrap_or(0);
+    match stored {
+        // First run, or the log buffer reset (router reboot): initialize the
+        // cursor without alerting on entries of unknown age.
+        None => CursorAction::Reset(max_id),
+        Some(c) if c > max_id => CursorAction::Reset(max_id),
+        Some(c) => CursorAction::Advance(c),
+    }
+}
+
+/// Read the router log ring buffer forward from `cursor_key` and return the
+/// brute-force signals in the new entries.
+///
+/// Kept here (rather than in `advisory::exploitation`) because the parsers and
+/// thresholds it drives live in this module. Each consumer passes its own
+/// cursor key so no consumer can drain entries another one has not seen yet,
+/// and its own `poller_id` because `router_queue` keys pending work by that id
+/// and evicts the older batch when two submitters collide on it.
+pub(crate) async fn scan_auth_signals_with_cursor(
+    state: &AppState,
+    poller_id: &str,
+    cursor_key: &str,
+) -> Vec<BruteforceSignal> {
     // Fetch the router log ring buffer through the shared queue.
     let results = match state
         .router_queue
-        .submit(
-            "alerting-auth-bruteforce",
-            Priority::Normal,
-            vec![QueuedRequest::get("log")],
-        )
+        .submit(poller_id, Priority::Normal, vec![QueuedRequest::get("log")])
         .await
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!("alerting: auth_bruteforce: log fetch failed: {e}");
-            return;
+            tracing::warn!("{poller_id}: auth_bruteforce: log fetch failed: {e}");
+            return Vec::new();
         }
     };
-    let entries: Vec<LogEntry> = match &results[0] {
-        Ok(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
-        Err(e) => {
-            tracing::warn!("alerting: auth_bruteforce: log fetch failed: {e}");
-            return;
+    // `None` means "batch unreadable" — see `cursor_action`, which must not
+    // confuse that with an empty ring buffer.
+    let entries: Option<Vec<LogEntry>> = match results.first() {
+        Some(Ok(v)) => match serde_json::from_value::<Vec<LogEntry>>(v.clone()) {
+            Ok(entries) => Some(entries),
+            Err(e) => {
+                tracing::warn!("{poller_id}: auth_bruteforce: log payload not parseable: {e}");
+                None
+            }
+        },
+        Some(Err(e)) => {
+            tracing::warn!("{poller_id}: auth_bruteforce: log fetch failed: {e}");
+            None
+        }
+        None => {
+            tracing::warn!("{poller_id}: auth_bruteforce: log fetch returned no result");
+            None
         }
     };
 
-    let max_id = entries.iter().filter_map(|e| parse_log_id(&e.id)).max().unwrap_or(0);
-    let cursor = get_state(&state.switch_store, AUTH_BF_CURSOR_KEY)
+    let cursor = get_state(&state.switch_store, cursor_key)
         .await
         .and_then(|s| s.parse::<u64>().ok());
 
-    let last_id = match cursor {
-        // First run, or the log buffer reset (router reboot): initialize the
-        // cursor without alerting on entries of unknown age.
-        None => {
-            set_state(&state.switch_store, AUTH_BF_CURSOR_KEY, &max_id.to_string()).await;
-            return;
+    let (entries, last_id) = match cursor_action(entries.as_deref(), cursor) {
+        CursorAction::Hold => return Vec::new(),
+        CursorAction::Reset(max_id) => {
+            set_state(&state.switch_store, cursor_key, &max_id.to_string()).await;
+            return Vec::new();
         }
-        Some(c) if c > max_id => {
-            set_state(&state.switch_store, AUTH_BF_CURSOR_KEY, &max_id.to_string()).await;
-            return;
-        }
-        Some(c) => c,
+        // `Advance` is only produced from a batch that parsed, so this cannot
+        // observe the `None` above.
+        CursorAction::Advance(c) => (entries.unwrap_or_default(), c),
     };
+    let max_id = entries.iter().filter_map(|e| parse_log_id(&e.id)).max().unwrap_or(0);
 
     let fresh: Vec<&LogEntry> = entries
         .iter()
         .filter(|e| parse_log_id(&e.id).is_some_and(|id| id > last_id))
         .collect();
-    let failures: Vec<LoginFailure> = fresh.iter().copied().filter_map(parse_login_failure).collect();
+    let parsed: Vec<LoginFailure> = fresh.iter().copied().filter_map(parse_login_failure).collect();
+
+    // Drift's own credential failing is a broken-integration problem, not an
+    // intrusion, and its timing signature is indistinguishable from the
+    // concurrent-session bypass. Strip it before detection sees it — but only
+    // when the source says it really is Drift, never on the username alone.
+    let (failures, own) = split_own_credential_failures(
+        &parsed,
+        &state.config.router.username,
+        state.config.router.local_source_ip.as_deref(),
+    );
+    if !own.is_empty() {
+        tracing::warn!(
+            count = own.len(),
+            user = %state.config.router.username,
+            "auth_bruteforce: Drift's own router credential is failing to authenticate — \
+             excluded from brute-force detection; check the stored router password",
+        );
+    }
 
     // Auth-relevant entries the parser did not recognise. RouterOS wording for
     // login failures varies by service and version; log them so an unhandled
@@ -1540,18 +1740,24 @@ async fn collect_auth_bruteforce_alerts(state: &AppState, rule: &AlertRule, aler
     tracing::debug!(
         new_entries = fresh.len(),
         parsed_failures = failures.len(),
+        own_credential_failures = own.len(),
         unparsed_auth_entries = unparsed.len(),
         "auth_bruteforce: log scan complete",
     );
 
     if max_id > last_id {
-        set_state(&state.switch_store, AUTH_BF_CURSOR_KEY, &max_id.to_string()).await;
+        set_state(&state.switch_store, cursor_key, &max_id.to_string()).await;
     }
     if failures.is_empty() {
-        return;
+        return Vec::new();
     }
+    detect_bruteforce(&failures)
+}
 
-    for signal in detect_bruteforce(&failures) {
+async fn collect_auth_bruteforce_alerts(state: &AppState, rule: &AlertRule, alerts: &mut Vec<PendingAlert>) {
+    let channels = parse_channels(&rule.delivery_channels);
+
+    for signal in scan_auth_signals_with_cursor(state, AUTH_BF_POLLER_ID, AUTH_BF_CURSOR_KEY).await {
         let title = if signal.distributed {
             "Distributed Login Brute-Force Detected".to_string()
         } else {
@@ -1849,5 +2055,361 @@ mod tests {
         let signals = detect_bruteforce(&failures);
         assert_eq!(signals.len(), 1);
         assert!(!signals[0].distributed);
+    }
+
+    /// Regression: Drift authenticating with a stale stored password produces a
+    /// same-second failure burst against its own router. Without the filter it
+    /// reads as the concurrent-session bypass and Drift reports itself as an
+    /// active intrusion.
+    #[test]
+    fn drift_own_credential_failures_are_excluded() {
+        let failures: Vec<_> = (0..5)
+            .map(|_| failure("drift-svc", Some("10.20.25.27"), "rest-api", "12:00:00"))
+            .collect();
+        // Own source is configured, so these really are Drift's own retries.
+        let (kept, own) =
+            split_own_credential_failures(&failures, "drift-svc", Some("10.20.25.27"));
+        assert_eq!(own.len(), 5, "own-credential failures must be split off");
+        assert!(kept.is_empty(), "nothing may survive into detection");
+        assert!(
+            detect_bruteforce(&kept).is_empty(),
+            "Drift's own credential must never raise a brute-force signal"
+        );
+
+        // Usernames compare exactly: RouterOS treats `Drift-SVC` as a different
+        // account from `drift-svc`, so one must not be able to hide behind the
+        // other's exemption.
+        let mixed_case: Vec<_> = (0..5)
+            .map(|_| failure("Drift-SVC", Some("10.20.25.27"), "rest-api", "12:00:00"))
+            .collect();
+        let (kept, own) =
+            split_own_credential_failures(&mixed_case, "drift-svc", Some("10.20.25.27"));
+        assert!(own.is_empty(), "a different account is not Drift's own");
+        assert_eq!(kept.len(), 5);
+    }
+
+    /// The username-only strip this replaced was a detection killer, not a
+    /// false-positive fix: `router.username` defaults to `admin`, so an
+    /// attacker guessing that account from anywhere emptied the failure set
+    /// and no alert, observation or finding was ever produced.
+    #[test]
+    fn same_username_from_foreign_ip_still_detected() {
+        let failures: Vec<_> = (0..5)
+            .map(|_| failure("admin", Some("10.20.35.99"), "api", "12:00:00"))
+            .collect();
+
+        // Drift's own address is known and this is not it.
+        let (kept, own) = split_own_credential_failures(&failures, "admin", Some("10.20.25.27"));
+        assert!(own.is_empty(), "a foreign source is never Drift's own credential");
+        assert_eq!(kept.len(), 5);
+        let signals = detect_bruteforce(&kept);
+        assert_eq!(signals.len(), 1, "a signal must still be produced");
+        assert!(
+            signals[0].delay_bypass,
+            "five failures sharing one timestamp is the same-second burst"
+        );
+
+        // And with no address configured at all, the fallback must not blind
+        // detection either — that is the whole point of the fallback.
+        let (kept, own) = split_own_credential_failures(&failures, "admin", None);
+        assert!(own.is_empty());
+        assert_eq!(detect_bruteforce(&kept).len(), 1);
+    }
+
+    /// Unset `local_source_ip` falls back to the only sources an off-box
+    /// attacker cannot put in this field — but only if the field is judged as
+    /// an address rather than as text. `src_ip` is cut from a line containing an
+    /// attacker-chosen username, so every hostile shape below has to be refused.
+    #[test]
+    fn own_source_fallback_accepts_only_console_and_loopback() {
+        assert!(is_own_source(None, None), "console entries carry no source");
+        assert!(is_own_source(Some("127.0.0.1"), None));
+        assert!(is_own_source(Some("::1"), None));
+        assert!(is_own_source(Some("127.1.2.3"), None), "all of 127/8 is loopback");
+        assert!(!is_own_source(Some("10.20.25.27"), None));
+
+        // Hostile: everything a `starts_with("127.")` test used to wave through.
+        // The first is what a username of `admin from 127.0.0.1` produced before
+        // the parser was hardened, and it is the shape that blinded detection.
+        assert!(!is_own_source(Some("127.0.0.1 from 10.20.35.99"), None));
+        assert!(!is_own_source(Some(" 127.0.0.1"), None));
+        assert!(!is_own_source(Some("127.0.0.1x"), None));
+        assert!(!is_own_source(Some("not-an-ip"), None));
+        assert!(!is_own_source(Some(""), None));
+        assert!(!is_own_source(Some("127.0.0.300"), None));
+
+        // Configured: that address exactly. Not a console entry — Drift always
+        // reaches the router over the network.
+        assert!(is_own_source(Some("10.20.25.27"), Some("10.20.25.27")));
+        assert!(!is_own_source(Some("10.20.25.28"), Some("10.20.25.27")));
+        assert!(!is_own_source(None, Some("10.20.25.27")));
+
+        // The same hostile shapes with an address configured: a value that only
+        // *contains* the configured address is not the configured address, and
+        // a configured value that is not an address matches nothing.
+        assert!(!is_own_source(
+            Some("10.20.25.27 from 10.20.35.99"),
+            Some("10.20.25.27")
+        ));
+        assert!(!is_own_source(Some("10.20.25.27x"), Some("10.20.25.27")));
+        assert!(!is_own_source(Some("10.20.25.27"), Some("drift.kaziik.xyz")));
+    }
+
+    /// The full path a crafted attempt takes: raw log line → `parse_login_failure`
+    /// → `split_own_credential_failures` → `detect_bruteforce`.
+    ///
+    /// RouterOS writes the attacker's username verbatim into the middle of the
+    /// line, so an attempt as `admin from 127.0.0.1` logs as
+    /// `login failure for user admin from 127.0.0.1 from 10.20.35.99 via api`.
+    /// Splitting on the *first* ` from ` gave `src_ip` the injected loopback,
+    /// which the own-source fallback accepted, so with `router.username` at its
+    /// default of `admin` and `local_source_ip` shipped commented out — the
+    /// stock configuration — every failure was moved out of detection and no
+    /// alert, observation or finding was ever produced.
+    #[test]
+    fn injected_loopback_in_username_does_not_strip_the_attempt() {
+        let entries: Vec<LogEntry> = (0..6)
+            .map(|i| {
+                log(
+                    &format!("*{}", i + 1),
+                    &format!("12:00:0{i}"),
+                    "login failure for user admin from 127.0.0.1 from 10.20.35.99 via api",
+                )
+            })
+            .collect();
+
+        let parsed: Vec<LoginFailure> = entries.iter().filter_map(parse_login_failure).collect();
+        assert_eq!(parsed.len(), 6, "every crafted line must still parse");
+        assert_eq!(
+            parsed[0].src_ip.as_deref(),
+            Some("10.20.35.99"),
+            "the source is the one the router appended, not the one in the username"
+        );
+        assert_eq!(
+            parsed[0].user, "admin from 127.0.0.1",
+            "the injected text stays in the username where it was typed"
+        );
+        assert_eq!(parsed[0].service, "api");
+
+        // Stock config: local_source_ip unset, router.username = "admin".
+        let (kept, own) = split_own_credential_failures(&parsed, "admin", None);
+        assert!(
+            own.is_empty(),
+            "an injected loopback must never pass as Drift's own credential"
+        );
+        assert_eq!(kept.len(), 6, "the attempts must survive into detection");
+
+        let signals = detect_bruteforce(&kept);
+        assert_eq!(signals.len(), 1, "the attack must still raise a signal");
+        assert_eq!(signals[0].src_ip.as_deref(), Some("10.20.35.99"));
+        assert_eq!(signals[0].subject, "auth:10.20.35.99:api");
+        assert_eq!(signals[0].count, 6);
+
+        // And with loopback configured as Drift's own source, which is the most
+        // generous reading of the crafted line available to the attacker.
+        let (kept, own) = split_own_credential_failures(&parsed, "admin", Some("127.0.0.1"));
+        assert!(own.is_empty());
+        assert_eq!(detect_bruteforce(&kept).len(), 1);
+    }
+
+    /// The username cannot move either boundary, because both are matched from
+    /// the right and the router writes both at the end of the line.
+    #[test]
+    fn username_cannot_move_the_source_or_service_boundary() {
+        // ` via ` in the username: the service is still the real trailing one.
+        let f = parse_login_failure(&log(
+            "*1",
+            "12:00:00",
+            "login failure for user admin via api from 10.20.35.99 via ssh",
+        ))
+        .unwrap();
+        assert_eq!(f.user, "admin via api");
+        assert_eq!(f.src_ip.as_deref(), Some("10.20.35.99"));
+        assert_eq!(f.service, "ssh");
+
+        // Both injected at once.
+        let f = parse_login_failure(&log(
+            "*2",
+            "12:00:00",
+            "login failure for user x from ::1 via console from 10.20.35.99 via api",
+        ))
+        .unwrap();
+        assert_eq!(f.user, "x from ::1 via console");
+        assert_eq!(f.src_ip.as_deref(), Some("10.20.35.99"));
+        assert_eq!(f.service, "api");
+        assert!(
+            !is_own_source(f.src_ip.as_deref(), None),
+            "the real source is remote"
+        );
+
+        // A prefix still comes off, and a console entry still parses as one.
+        let f = parse_login_failure(&log(
+            "*3",
+            "12:00:00",
+            "SYS-ERR: login failure for user root via console",
+        ))
+        .unwrap();
+        assert_eq!(f.prefix, "SYS-ERR:");
+        assert_eq!(f.user, "root");
+        assert_eq!(f.src_ip, None);
+        assert_eq!(f.service, "console");
+    }
+
+    /// A payload that does not deserialize says nothing about the log's
+    /// position. Treating it as an empty buffer rewinds the cursor to 0 and
+    /// replays the entire ring buffer on the next cycle.
+    #[test]
+    fn unparseable_log_payload_holds_the_cursor() {
+        assert_eq!(cursor_action(None, Some(500)), CursorAction::Hold);
+        assert_eq!(cursor_action(None, None), CursorAction::Hold);
+
+        // A batch that parsed and is genuinely empty is a real buffer reset.
+        assert_eq!(cursor_action(Some(&[]), Some(500)), CursorAction::Reset(0));
+
+        let entries = [log("*1F4", "12:00:00", "login failure for user admin via api")];
+        assert_eq!(cursor_action(Some(&entries), None), CursorAction::Reset(500));
+        assert_eq!(cursor_action(Some(&entries), Some(400)), CursorAction::Advance(400));
+        // Cursor ahead of the buffer = the router rebooted.
+        assert_eq!(cursor_action(Some(&entries), Some(600)), CursorAction::Reset(500));
+    }
+
+    /// The distributed branch joins its services for display. Correlation needs
+    /// the parsed list, or the always-critical multi-source case is dropped.
+    #[test]
+    fn distributed_signal_carries_service_list() {
+        let mut failures = Vec::new();
+        for ip_octet in 1..=5 {
+            for (i, service) in ["api", "ssh", "winbox"].iter().enumerate() {
+                failures.push(failure(
+                    "admin",
+                    Some(&format!("10.0.0.{ip_octet}")),
+                    service,
+                    &format!("12:0{ip_octet}:0{i}"),
+                ));
+            }
+        }
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert!(signals[0].distributed);
+        assert!(signals[0].services.len() > 1, "joined display string is not parseable");
+        assert_eq!(
+            signals[0].services,
+            vec![
+                ("api".to_string(), 5),
+                ("ssh".to_string(), 5),
+                ("winbox".to_string(), 5),
+            ],
+            "each service carries its own failure count, not the sweep total"
+        );
+        assert_eq!(signals[0].count, 15, "the sweep total stays on the signal");
+        assert_eq!(signals[0].service, "api, ssh, winbox", "display string unchanged");
+        assert_eq!(signals[0].sources.len(), 5);
+        assert_eq!(signals[0].signal_id(), "auth.login_failure_distributed");
+    }
+
+    /// The counts a distributed sweep hands to correlation must be per service.
+    /// 20 ssh failures spread over six sources plus one stray api failure is an
+    /// ssh sweep; attributing the 21-event total to the api surface as well is
+    /// what turned it into a confirmed api exploitation finding.
+    #[test]
+    fn distributed_signal_counts_each_service_separately() {
+        let mut failures = Vec::new();
+        for src in 1..=6 {
+            for i in 0..3 {
+                failures.push(failure(
+                    "admin",
+                    Some(&format!("10.0.0.{src}")),
+                    "ssh",
+                    &format!("12:0{src}:0{i}"),
+                ));
+            }
+        }
+        // 18 ssh so far; two more keep every source under the per-source
+        // threshold of 5 while clearing the distributed total of 15.
+        failures.push(failure("admin", Some("10.0.0.1"), "ssh", "12:10:00"));
+        failures.push(failure("admin", Some("10.0.0.2"), "ssh", "12:10:01"));
+        failures.push(failure("admin", Some("10.0.0.3"), "api", "12:10:02"));
+
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1, "no source reaches the per-source threshold");
+        assert!(signals[0].distributed);
+        assert_eq!(signals[0].count, 21, "the sweep total spans both services");
+        assert_eq!(
+            signals[0].services,
+            vec![("api".to_string(), 1), ("ssh".to_string(), 20)],
+            "the api service saw exactly one failure and must say so"
+        );
+    }
+
+    #[test]
+    fn same_second_burst_maps_to_strong_signal() {
+        let mut failures: Vec<_> = (0..3)
+            .map(|_| failure("admin", Some("10.0.0.5"), "api", "12:00:00"))
+            .collect();
+        failures.push(failure("admin", Some("10.0.0.5"), "api", "12:00:01"));
+        failures.push(failure("admin", Some("10.0.0.5"), "api", "12:00:02"));
+        let signals = detect_bruteforce(&failures);
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].signal_id(), "auth.login_failure_same_second_burst");
+        assert_eq!(
+            signals[0].services,
+            vec![("api".to_string(), 5)],
+            "a per-source signal carries its one service and that service's count"
+        );
+
+        // A plain burst that never shares a second stays the weaker id.
+        let spread: Vec<_> = (0..6)
+            .map(|i| failure("admin", Some("10.0.0.5"), "api", &format!("12:00:0{i}")))
+            .collect();
+        assert_eq!(
+            detect_bruteforce(&spread)[0].signal_id(),
+            "auth.login_failure_burst"
+        );
+    }
+
+    /// Every id `signal_id()` can return must be one core declares it emits,
+    /// or the catalog can never link an advisory to it.
+    #[test]
+    fn emitted_signal_ids_are_registered() {
+        let mut failures: Vec<_> = (0..3)
+            .map(|_| failure("admin", Some("10.0.0.5"), "api", "12:00:00"))
+            .collect();
+        failures.push(failure("admin", Some("10.0.0.5"), "api", "12:00:01"));
+        failures.push(failure("admin", Some("10.0.0.5"), "api", "12:00:02"));
+        let mut spread: Vec<_> = (0..6)
+            .map(|i| failure("admin", Some("10.0.0.5"), "ssh", &format!("12:00:0{i}")))
+            .collect();
+        for ip_octet in 1..=5 {
+            for i in 0..3 {
+                spread.push(failure(
+                    "admin",
+                    Some(&format!("10.9.0.{ip_octet}")),
+                    "api",
+                    &format!("13:0{ip_octet}:0{i}"),
+                ));
+            }
+        }
+        let distributed: Vec<_> = (1..=5)
+            .flat_map(|ip_octet| {
+                (0..3).map(move |i| {
+                    failure(
+                        "admin",
+                        Some(&format!("10.0.0.{ip_octet}")),
+                        "api",
+                        &format!("12:0{ip_octet}:0{i}"),
+                    )
+                })
+            })
+            .collect();
+
+        for set in [&failures, &spread, &distributed] {
+            for signal in detect_bruteforce(set) {
+                assert!(
+                    crate::advisory::signals::is_known_signal(signal.signal_id()),
+                    "{} is not in EMITTED_SIGNALS",
+                    signal.signal_id()
+                );
+            }
+        }
     }
 }
