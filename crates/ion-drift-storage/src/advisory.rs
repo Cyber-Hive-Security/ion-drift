@@ -22,11 +22,6 @@ use rusqlite::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-/// Schema version stamped into `PRAGMA user_version` for `advisory.db`.
-/// v1 = the Phase 1 baseline. Bump when adding a versioned migration
-/// (see `crate::migrations`).
-pub const SCHEMA_VERSION: i64 = 1;
-
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -80,10 +75,44 @@ pub struct AdvisoryStore {
 }
 
 impl AdvisoryStore {
+    /// Schema version stamped into `PRAGMA user_version` for `advisory.db`.
+    /// v1 = the Phase 1 baseline; v2 adds `advisory_auth_failure`, the
+    /// cross-cycle auth-failure accumulator. Bump when appending a step to
+    /// [`Self::MIGRATION_STEPS`] (see `crate::migrations`).
+    pub const SCHEMA_VERSION: u32 = 2;
+
+    /// Versioned migrations applied after the v1 baseline, in ascending
+    /// order. Steps use plain `CREATE TABLE` (no `IF NOT EXISTS`) on
+    /// purpose: `apply_versioned` guarantees run-once, and a wrongly re-run
+    /// step must fail loudly rather than pass as a no-op.
+    ///
+    /// v2 — `advisory_auth_failure`: one row per evaluator cycle per surface
+    /// carrying the deduped login-failure count for that cycle. This is the
+    /// persisted state cross-cycle counting (Phase 4) reads; the advisory
+    /// evaluator is its sole writer (Phase 3, not wired yet). Same windowed
+    /// counting + prune model as `advisory_attack_observation`.
+    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[(
+        2,
+        "
+        CREATE TABLE advisory_auth_failure (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id TEXT NOT NULL,
+            surface_key TEXT NOT NULL,
+            failure_count INTEGER NOT NULL,
+            src_ips TEXT NOT NULL,
+            observed_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX idx_advisory_auth_failure_surface
+            ON advisory_auth_failure(surface_key, observed_at DESC);
+        ",
+    )];
+
     pub async fn new(db_path: &Path) -> Result<Self, String> {
-        let conn =
+        let mut conn =
             Connection::open(db_path).map_err(|e| format!("failed to open advisory db: {e}"))?;
-        crate::migrations::open_guard(&conn, "advisory.db", SCHEMA_VERSION as u32)?;
+        let db_version =
+            crate::migrations::open_guard(&conn, "advisory.db", Self::SCHEMA_VERSION)?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .map_err(|e| format!("pragma failed: {e}"))?;
@@ -151,7 +180,14 @@ impl AdvisoryStore {
         )
         .map_err(|e| format!("schema creation failed: {e}"))?;
 
-        crate::migrations::stamp(&conn, "advisory.db", SCHEMA_VERSION as u32)?;
+        crate::migrations::apply_versioned(
+            &mut conn,
+            "advisory.db",
+            db_version,
+            Self::MIGRATION_STEPS,
+        )?;
+
+        crate::migrations::stamp(&conn, "advisory.db", Self::SCHEMA_VERSION)?;
 
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -436,7 +472,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, i64::from(AdvisoryStore::SCHEMA_VERSION));
     }
 
     #[tokio::test]
@@ -536,6 +572,163 @@ mod tests {
 
         let other = store.advisories_for_signal("sig.other").await.unwrap();
         assert_eq!(other, vec![("ADV-1".to_string(), "strong".to_string())]);
+    }
+
+    /// Build an advisory.db exactly as a Phase 1 (schema v1) binary left it:
+    /// the v1 baseline DDL, a catalog row, an observation row, `user_version=1`.
+    /// The DDL is copied verbatim from the v1 baseline rather than calling
+    /// current code, so this fixture stays a v1 database even after the
+    /// baseline moves on.
+    fn create_v1_database(path: &Path) {
+        let conn = Connection::open(path).expect("create v1 db");
+        conn.execute_batch(
+            "
+            CREATE TABLE advisory (
+                advisory_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                narrative TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                requires_surface_class TEXT NOT NULL,
+                requires_surface_names TEXT NOT NULL,
+                requires_state TEXT NOT NULL,
+                version_constraint TEXT,
+                no_fixed_release INTEGER NOT NULL DEFAULT 0,
+                fixed_versions TEXT NOT NULL,
+                mitigations TEXT NOT NULL,
+                references_json TEXT NOT NULL,
+                attack_techniques TEXT NOT NULL,
+                source TEXT NOT NULL,
+                catalog_version INTEGER NOT NULL,
+                generated_at TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE advisory_signal (
+                advisory_id TEXT NOT NULL,
+                signal_id TEXT NOT NULL,
+                confidence TEXT NOT NULL
+                    CHECK (confidence IN ('strong', 'corroborating')),
+                description TEXT NOT NULL,
+                PRIMARY KEY (advisory_id, signal_id)
+            );
+
+            CREATE INDEX idx_advisory_signal_signal
+                ON advisory_signal(signal_id);
+
+            CREATE TABLE advisory_attack_observation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                surface_key TEXT NOT NULL,
+                signal_id TEXT NOT NULL,
+                src_ips TEXT NOT NULL,
+                event_count INTEGER NOT NULL,
+                observed_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX idx_advisory_obs_surface
+                ON advisory_attack_observation(surface_key, observed_at DESC);
+
+            CREATE TABLE advisory_suppression (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                advisory_id TEXT NOT NULL,
+                surface_key TEXT NOT NULL,
+                reason TEXT,
+                created_by TEXT,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER,
+                UNIQUE(advisory_id, surface_key)
+            );
+
+            INSERT INTO advisory VALUES (
+                'ADV-V1', 'v1 title', 'v1 narrative', 'high', 'service',
+                '[\"api\"]', '[\"exposed\"]', NULL, 1, '[]',
+                '[\"restrict\"]', '[]', '[\"T1110\"]', 'bundled', 1,
+                '2026-07-28', 1753000000
+            );
+
+            INSERT INTO advisory_attack_observation
+                (device_id, surface_key, signal_id, src_ips, event_count, observed_at)
+            VALUES
+                ('dev-1', 'dev-1:svc:api', 'auth.login_failure_burst',
+                 '[\"10.0.0.1\"]', 21, 1753000100);
+
+            PRAGMA user_version = 1;
+            ",
+        )
+        .expect("v1 fixture ddl");
+    }
+
+    fn table_exists(conn: &Connection, name: &str) -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+            params![name],
+            |r| r.get::<_, i64>(0),
+        )
+        .expect("sqlite_master query")
+            > 0
+    }
+
+    fn user_version(path: &Path) -> i64 {
+        let conn = Connection::open(path).expect("open for version check");
+        conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("user_version")
+    }
+
+    #[tokio::test]
+    async fn existing_v1_database_is_upgraded_in_place_to_v2() {
+        let f = NamedTempFile::new().unwrap();
+        create_v1_database(f.path());
+        assert_eq!(user_version(f.path()), 1, "fixture must start at v1");
+
+        // A v2 binary opening a v1 database on disk: this is the upgrade path.
+        let store = AdvisoryStore::new(f.path()).await.expect("v1 db must open");
+
+        assert_eq!(user_version(f.path()), 2, "v1 database migrates to v2");
+        {
+            let conn = Connection::open(f.path()).unwrap();
+            assert!(
+                table_exists(&conn, "advisory_auth_failure"),
+                "v2 adds the auth-failure accumulator table"
+            );
+        }
+
+        // The v1 data survived the migration and is readable through the
+        // store's own APIs — upgraded in place, not recreated.
+        let advisories = store.list_advisories().await.unwrap();
+        assert_eq!(advisories.len(), 1);
+        assert_eq!(advisories[0].advisory_id, "ADV-V1");
+        assert_eq!(advisories[0].requires_surface_names, vec!["api"]);
+
+        let obs = store.observations_since(0).await.unwrap();
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].event_count, 21);
+        assert_eq!(obs[0].src_ips, vec!["10.0.0.1"]);
+    }
+
+    #[tokio::test]
+    async fn migrated_database_reopens_without_rerunning_steps() {
+        let f = NamedTempFile::new().unwrap();
+        create_v1_database(f.path());
+
+        // First open migrates; drop the store so the file is released.
+        drop(AdvisoryStore::new(f.path()).await.expect("migrating open"));
+        assert_eq!(user_version(f.path()), 2);
+
+        // Second open must be a no-op: the migration step uses plain
+        // CREATE TABLE, so a wrongly re-run step fails loudly here instead
+        // of passing silently.
+        drop(AdvisoryStore::new(f.path()).await.expect("reopen at v2"));
+        assert_eq!(user_version(f.path()), 2);
+    }
+
+    #[tokio::test]
+    async fn fresh_db_creates_v2_schema() {
+        let f = NamedTempFile::new().unwrap();
+        let _store = AdvisoryStore::new(f.path()).await.unwrap();
+
+        assert_eq!(user_version(f.path()), 2, "fresh database lands on v2");
+        let conn = Connection::open(f.path()).unwrap();
+        assert!(table_exists(&conn, "advisory_auth_failure"));
     }
 
     #[tokio::test]
