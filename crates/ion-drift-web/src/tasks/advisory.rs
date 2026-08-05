@@ -30,6 +30,10 @@ pub fn spawn_advisory_evaluator(supervisor: &TaskSupervisor, state: AppState) {
             tracing::info!(interval_secs = INTERVAL_SECS, "advisory evaluator starting");
 
             let mut interval = tokio::time::interval(Duration::from_secs(INTERVAL_SECS));
+            // Skip missed ticks rather than firing them back-to-back. After a
+            // stall the default burst would write several accumulator rows in
+            // quick succession, and cross-cycle counting reads that table.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
 

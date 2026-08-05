@@ -47,6 +47,9 @@ pub fn spawn_dns_cache_poller(supervisor: &TaskSupervisor, state: AppState) {
             tracing::info!(interval_secs, "dns cache poller starting");
 
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            // A stall must not queue up back-to-back cache polls; the cache
+            // contents are the same either way and the router queue is shared.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
                 if let Err(e) = poll_once(&state).await {

@@ -57,20 +57,23 @@ pub(crate) fn sustained_hits(
 ) -> Vec<SustainedHit> {
     struct Window {
         total: i64,
-        cycles: usize,
+        /// Distinct `observed_at` stamps, NOT a row count. The evaluator
+        /// normally writes one row per surface per cycle, but a tokio
+        /// missed-tick burst after a stall fires it several times in quick
+        /// succession, and each firing writes a row. Counting rows would let
+        /// a stalled host manufacture the spread this rule exists to require.
+        cycles: BTreeSet<i64>,
         sources: BTreeSet<String>,
     }
     let mut per_surface: BTreeMap<&str, Window> = BTreeMap::new();
     for r in window_rows {
         let w = per_surface.entry(r.surface_key.as_str()).or_insert(Window {
             total: 0,
-            cycles: 0,
+            cycles: BTreeSet::new(),
             sources: BTreeSet::new(),
         });
         w.total += r.failure_count;
-        // One row per cycle per surface by construction (sole-writer rule),
-        // so the row count IS the distinct-cycle count.
-        w.cycles += 1;
+        w.cycles.insert(r.observed_at);
         w.sources.extend(r.src_ips.iter().cloned());
     }
 
@@ -84,7 +87,7 @@ pub(crate) fn sustained_hits(
             continue;
         };
         if w.total >= SUSTAINED_TOTAL
-            && w.cycles >= SUSTAINED_MIN_CYCLES
+            && w.cycles.len() >= SUSTAINED_MIN_CYCLES
             && w.sources.len() >= SUSTAINED_MIN_SOURCES
         {
             hits.push(SustainedHit {
@@ -92,7 +95,7 @@ pub(crate) fn sustained_hits(
                 event_count: t.count as i64,
                 src_ips: w.sources.iter().cloned().collect(),
                 window_total: w.total,
-                window_cycles: w.cycles,
+                window_cycles: w.cycles.len(),
             });
         }
     }
@@ -122,7 +125,9 @@ pub async fn note_sustained(
             sources = hit.src_ips.len(),
             "advisory: sustained low-and-slow auth-failure run detected"
         );
-        state
+        // One surface failing to record must not cost the others their
+        // signal this cycle.
+        if let Err(e) = state
             .advisory_store
             .record_observation(
                 &device_id,
@@ -132,7 +137,14 @@ pub async fn note_sustained(
                 hit.event_count,
                 now,
             )
-            .await?;
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                surface = %hit.surface_key,
+                "advisory: sustained observation write failed"
+            );
+        }
     }
     Ok(())
 }
@@ -177,6 +189,24 @@ mod tests {
         assert_eq!(hits[0].window_total, 30);
         assert_eq!(hits[0].window_cycles, 10);
         assert_eq!(hits[0].src_ips, vec!["10.0.0.5", "10.0.0.9"], "window union, sorted");
+    }
+
+    /// A tokio missed-tick burst fires the evaluator several times in quick
+    /// succession after a stall, and each firing writes an accumulator row.
+    /// Counting rows rather than distinct cycles would let that inflate the
+    /// spread toward SUSTAINED_MIN_CYCLES without real time passing.
+    #[test]
+    fn rows_sharing_one_timestamp_count_as_one_cycle() {
+        let rows: Vec<AuthFailure> = (0..10)
+            .map(|i| {
+                let src = if i % 2 == 0 { "10.0.0.5" } else { "10.0.0.9" };
+                row("router-1:svc:api", 3, &[src], 1000)
+            })
+            .collect();
+        // Total 30 and two sources both clear their thresholds; only the
+        // cycle count stands between this and a false positive.
+        let hits = sustained_hits(&rows, &[current("api", 3, &["10.0.0.5"])], "router-1");
+        assert!(hits.is_empty(), "ten rows in one cycle is still one cycle");
     }
 
     /// One 30-failure burst in a single cycle: loud, but the per-cycle
