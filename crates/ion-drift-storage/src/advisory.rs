@@ -103,8 +103,9 @@ impl AdvisoryStore {
     /// v2 — `advisory_auth_failure`: one row per evaluator cycle per surface
     /// carrying the deduped login-failure count for that cycle. This is the
     /// persisted state cross-cycle counting (Phase 4) reads; the advisory
-    /// evaluator is its sole writer (Phase 3, not wired yet). Same windowed
-    /// counting + prune model as `advisory_attack_observation`.
+    /// evaluator is its sole writer (Phase 3, wired — see `tasks/advisory.rs`
+    /// and `exploitation::note_auth_failures`). Same windowed counting +
+    /// prune model as `advisory_attack_observation`.
     const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[(
         2,
         "
