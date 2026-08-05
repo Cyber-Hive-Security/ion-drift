@@ -46,6 +46,16 @@ pub fn spawn_advisory_evaluator(supervisor: &TaskSupervisor, state: AppState) {
                 {
                     tracing::warn!(error = %e, "advisory: auth-failure write failed");
                 }
+                // Cross-cycle judgement over the accumulator (Phase 4): a
+                // sustained sub-threshold run becomes a strong signal the
+                // evaluator below correlates like any other. Runs after the
+                // accumulator write so the window includes this cycle's row.
+                if let Err(e) =
+                    crate::advisory::sustained::note_sustained(&state, &scan.service_totals)
+                        .await
+                {
+                    tracing::warn!(error = %e, "advisory: sustained evaluation failed");
+                }
 
                 if let Err(e) = exploitation::evaluate(&state).await {
                     tracing::warn!(error = %e, "advisory: evaluation failed");

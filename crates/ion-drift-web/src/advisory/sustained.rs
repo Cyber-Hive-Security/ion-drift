@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ion_drift_storage::advisory::AuthFailure;
 
 use crate::alerting::ServiceFailureTotal;
+use crate::state::AppState;
 
 /// Signal id this module emits. Must stay in `signals::EMITTED_SIGNALS`.
 pub(crate) const SIGNAL_SUSTAINED: &str = "auth.login_failure_sustained";
@@ -96,6 +97,44 @@ pub(crate) fn sustained_hits(
         }
     }
     hits
+}
+
+/// Read the window, judge this cycle's surfaces, and persist each hit as an
+/// attack observation under [`SIGNAL_SUSTAINED`]. From here the existing
+/// exploitation evaluator owns it: catalog linkage, surface scope, the 24h
+/// window, re-open and close-out all behave exactly as for per-cycle signals.
+pub async fn note_sustained(
+    state: &AppState,
+    totals: &[ServiceFailureTotal],
+) -> Result<(), String> {
+    let now = super::exploitation::now_unix();
+    let window_rows = state
+        .advisory_store
+        .auth_failures_since(now - SUSTAINED_WINDOW_SECS)
+        .await?;
+    let device_id = super::exploitation::primary_device_id(state).await;
+
+    for hit in sustained_hits(&window_rows, totals, &device_id) {
+        tracing::warn!(
+            surface = %hit.surface_key,
+            window_total = hit.window_total,
+            window_cycles = hit.window_cycles,
+            sources = hit.src_ips.len(),
+            "advisory: sustained low-and-slow auth-failure run detected"
+        );
+        state
+            .advisory_store
+            .record_observation(
+                &device_id,
+                &hit.surface_key,
+                SIGNAL_SUSTAINED,
+                &hit.src_ips,
+                hit.event_count,
+                now,
+            )
+            .await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
