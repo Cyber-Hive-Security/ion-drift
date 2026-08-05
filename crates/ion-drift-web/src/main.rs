@@ -8,6 +8,7 @@ mod bootstrap;
 mod certwarden;
 mod config;
 mod confusable;
+mod staging;
 mod connection_store;
 mod correlation_engine;
 pub mod demo;
