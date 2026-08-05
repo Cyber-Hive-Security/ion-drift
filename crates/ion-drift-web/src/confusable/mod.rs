@@ -5,4 +5,5 @@
 //! Core only knows how to normalize a name, compute a UTS #39 skeleton, and
 //! compare — adding a brand is a catalog edit, never a code change.
 
+pub mod catalog;
 pub mod skeleton;

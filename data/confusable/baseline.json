@@ -1,0 +1,20 @@
+{
+  "catalog_version": 1,
+  "entries": [
+    { "brand": "PayPal", "domain": "paypal.com" },
+    { "brand": "Microsoft", "domain": "microsoft.com" },
+    { "brand": "Microsoft 365 sign-in", "domain": "microsoftonline.com" },
+    { "brand": "Google", "domain": "google.com" },
+    { "brand": "Apple", "domain": "apple.com" },
+    { "brand": "Apple iCloud", "domain": "icloud.com" },
+    { "brand": "Amazon", "domain": "amazon.com" },
+    { "brand": "Netflix", "domain": "netflix.com" },
+    { "brand": "Facebook", "domain": "facebook.com" },
+    { "brand": "GitHub", "domain": "github.com" },
+    { "brand": "LinkedIn", "domain": "linkedin.com" },
+    { "brand": "Dropbox", "domain": "dropbox.com" },
+    { "brand": "Chase Bank", "domain": "chase.com" },
+    { "brand": "Wells Fargo", "domain": "wellsfargo.com" },
+    { "brand": "Coinbase", "domain": "coinbase.com" }
+  ]
+}
