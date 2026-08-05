@@ -1,6 +1,6 @@
 {
-  "catalog_version": 1,
-  "generated_at": "2026-07-28",
+  "catalog_version": 2,
+  "generated_at": "2026-08-05",
   "advisories": [
     {
       "advisory_id": "CVE-2026-16347",
@@ -43,6 +43,11 @@
           "signal_id": "auth.login_failure_distributed",
           "confidence": "strong",
           "description": "Failed logins against this service arrived from five or more distinct sources in one polling cycle, with no single source reaching the per-source threshold. That is the shape of a run deliberately spread thin enough to stay under a per-source alarm, and the spread is only worth an attacker's effort where nothing locks the account and nothing rate-limits the service — the property this advisory describes. A stale integration credential retries from the one host that holds it, and an operator locked out mistypes from the one seat they are sitting at, so neither explains a coordinated spread across unrelated sources."
+        },
+        {
+          "signal_id": "auth.login_failure_sustained",
+          "confidence": "strong",
+          "description": "Failed logins against this service kept arriving across many polling cycles — thirty or more inside a week, spread over at least six separate cycles and at least two distinct sources — while no single cycle was loud enough to trip a per-cycle detector. That is the shape of a run deliberately paced to stay under burst thresholds, and pacing is only worth an attacker's effort where nothing locks the account and nothing rate-limits the service — the property this advisory describes. The two-source floor is what separates this from the loudest benign look-alike, an integration retrying a stale credential from one host: a single machine with a dead password produces volume and persistence, but not source diversity."
         }
       ]
     }

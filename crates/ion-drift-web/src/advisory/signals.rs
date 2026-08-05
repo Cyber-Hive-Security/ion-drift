@@ -14,6 +14,7 @@ pub const EMITTED_SIGNALS: &[&str] = &[
     "auth.login_failure_burst",
     "auth.login_failure_same_second_burst",
     "auth.login_failure_distributed",
+    "auth.login_failure_sustained",
 ];
 
 /// True when `id` is a signal core knows how to emit.
