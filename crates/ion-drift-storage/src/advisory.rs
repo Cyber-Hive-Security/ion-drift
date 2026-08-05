@@ -70,6 +70,20 @@ pub struct AttackObservation {
     pub observed_at: i64,
 }
 
+/// One accumulator row: the deduped login-failure count one evaluator cycle
+/// observed on one surface. Raw per-cycle state, not a conclusion — Phase 4's
+/// cross-cycle counting windows these rows and decides what to surface.
+/// Sole writer: the advisory evaluator (see `tasks/advisory.rs`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthFailure {
+    pub id: i64,
+    pub device_id: String,
+    pub surface_key: String,
+    pub failure_count: i64,
+    pub src_ips: Vec<String>,
+    pub observed_at: i64,
+}
+
 pub struct AdvisoryStore {
     db: Arc<Mutex<Connection>>,
 }
@@ -367,6 +381,67 @@ impl AdvisoryStore {
         .map_err(|e| format!("prune_observations failed: {e}"))
     }
 
+    /// Record one evaluator cycle's deduped login-failure count for one
+    /// surface. Same windowed counting + prune model as
+    /// [`Self::record_observation`]; absence of a row is the zero.
+    pub async fn record_auth_failure(
+        &self,
+        device_id: &str,
+        surface_key: &str,
+        failure_count: i64,
+        src_ips: &[String],
+        observed_at: i64,
+    ) -> Result<(), String> {
+        let src_ips_json =
+            serde_json::to_string(src_ips).map_err(|e| format!("serialize src_ips: {e}"))?;
+
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO advisory_auth_failure
+                (device_id, surface_key, failure_count, src_ips, observed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                device_id,
+                surface_key,
+                failure_count,
+                src_ips_json,
+                observed_at
+            ],
+        )
+        .map_err(|e| format!("record_auth_failure failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Accumulator rows at or after `cutoff`, newest first. This is the
+    /// window cross-cycle counting (Phase 4) reasons over.
+    pub async fn auth_failures_since(&self, cutoff: i64) -> Result<Vec<AuthFailure>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db
+            .prepare(
+                "SELECT id, device_id, surface_key, failure_count, src_ips, observed_at
+                 FROM advisory_auth_failure
+                 WHERE observed_at >= ?1
+                 ORDER BY observed_at DESC",
+            )
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map(params![cutoff], Self::map_auth_failure)
+            .map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("row collect failed: {e}"))
+    }
+
+    /// Drop accumulator rows older than `cutoff` (an absolute unix timestamp,
+    /// not an age). Returns the number of rows deleted.
+    pub async fn prune_auth_failures(&self, cutoff: i64) -> Result<usize, String> {
+        let db = self.db.lock().await;
+        db.execute(
+            "DELETE FROM advisory_auth_failure WHERE observed_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| format!("prune_auth_failures failed: {e}"))
+    }
+
     pub async fn list_advisories(&self) -> Result<Vec<AdvisoryRecord>, String> {
         let db = self.db.lock().await;
         let mut stmt = db
@@ -433,6 +508,19 @@ impl AdvisoryStore {
             src_ips: serde_json::from_str(&src_ips_json).unwrap_or_default(),
             event_count: row.get(5)?,
             observed_at: row.get(6)?,
+        })
+    }
+
+    fn map_auth_failure(row: &Row<'_>) -> rusqlite::Result<AuthFailure> {
+        let src_ips_json: String = row.get(4)?;
+
+        Ok(AuthFailure {
+            id: row.get(0)?,
+            device_id: row.get(1)?,
+            surface_key: row.get(2)?,
+            failure_count: row.get(3)?,
+            src_ips: serde_json::from_str(&src_ips_json).unwrap_or_default(),
+            observed_at: row.get(5)?,
         })
     }
 }
@@ -766,5 +854,56 @@ mod tests {
         // Window queries honour the cutoff too.
         let recent = store.observations_since(300).await.unwrap();
         assert_eq!(recent.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn auth_failure_roundtrip_newest_first() {
+        let f = NamedTempFile::new().unwrap();
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+
+        let ips = vec!["10.0.0.9".to_string(), "10.0.0.7".to_string()];
+        store
+            .record_auth_failure("router-1", "router-1:svc:ssh", 4, &ips, 100)
+            .await
+            .unwrap();
+        store
+            .record_auth_failure("router-1", "router-1:svc:api", 1, &[], 200)
+            .await
+            .unwrap();
+
+        let rows = store.auth_failures_since(0).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].observed_at, 200, "newest first");
+        assert_eq!(rows[0].surface_key, "router-1:svc:api");
+        assert_eq!(rows[0].failure_count, 1);
+        assert!(rows[0].src_ips.is_empty(), "console-only cycle has no sources");
+        assert_eq!(rows[1].src_ips, ips, "src_ips survive the JSON roundtrip");
+
+        let recent = store.auth_failures_since(150).await.unwrap();
+        assert_eq!(
+            recent.len(),
+            1,
+            "cutoff is inclusive-forward like observations_since"
+        );
+    }
+
+    #[tokio::test]
+    async fn prune_auth_failures_deletes_only_older_than_cutoff() {
+        let f = NamedTempFile::new().unwrap();
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+
+        for ts in [100_i64, 200, 300] {
+            store
+                .record_auth_failure("router-1", "router-1:svc:ssh", 2, &[], ts)
+                .await
+                .unwrap();
+        }
+
+        let deleted = store.prune_auth_failures(200).await.unwrap();
+        assert_eq!(deleted, 1, "only the ts=100 row is older than the cutoff");
+
+        let left = store.auth_failures_since(0).await.unwrap();
+        assert_eq!(left.len(), 2);
+        assert_eq!(left[1].observed_at, 200, "cutoff row is retained");
     }
 }
