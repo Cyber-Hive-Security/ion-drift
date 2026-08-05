@@ -98,6 +98,25 @@ pub struct DnsStaticEntry {
     pub comment: Option<String>,
 }
 
+/// DNS cache entry — `/ip/dns/cache`
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DnsCacheEntry {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub name: String,
+    /// Resolved payload: an IP for A/AAAA, a target name for CNAME.
+    #[serde(default)]
+    pub data: Option<String>,
+    #[serde(rename = "type", default)]
+    pub record_type: Option<String>,
+    /// RouterOS duration string, e.g. "23h59m59s".
+    #[serde(default)]
+    pub ttl: Option<String>,
+    #[serde(rename = "static", default, deserialize_with = "ros_bool_opt")]
+    pub is_static: Option<bool>,
+}
+
 /// IP pool — `/ip/pool`
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -204,6 +223,11 @@ impl MikrotikClient {
         self.get("ip/dns/static").await
     }
 
+    /// List the DNS cache — every name the router has resolved recently.
+    pub async fn dns_cache(&self) -> Result<Vec<DnsCacheEntry>, MikrotikError> {
+        self.get("ip/dns/cache").await
+    }
+
     /// List IP address pools.
     pub async fn ip_pools(&self) -> Result<Vec<IpPool>, MikrotikError> {
         self.get("ip/pool").await
@@ -227,5 +251,38 @@ impl MikrotikClient {
     /// Get DNS server configuration.
     pub async fn dns_config(&self) -> Result<DnsConfig, MikrotikError> {
         self.get("ip/dns").await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dns_cache_entry_deserializes_router_payload() {
+        let payload = serde_json::json!([{
+            ".id": "*1",
+            "name": "paypa1.com",
+            "data": "203.0.113.9",
+            "type": "A",
+            "ttl": "23h59m59s",
+            "static": "false"
+        }]);
+        let entries: Vec<DnsCacheEntry> = serde_json::from_value(payload).unwrap();
+        assert_eq!(entries[0].name, "paypa1.com");
+        assert_eq!(entries[0].data.as_deref(), Some("203.0.113.9"));
+        assert_eq!(entries[0].record_type.as_deref(), Some("A"));
+        assert_eq!(entries[0].ttl.as_deref(), Some("23h59m59s"));
+        assert_eq!(entries[0].is_static, Some(false));
+    }
+
+    #[test]
+    fn dns_cache_entry_tolerates_missing_optionals() {
+        // CNAME rows and stripped payloads: only `.id` and `name` are certain.
+        let payload = serde_json::json!([{ ".id": "*2", "name": "example.com" }]);
+        let entries: Vec<DnsCacheEntry> = serde_json::from_value(payload).unwrap();
+        assert_eq!(entries[0].name, "example.com");
+        assert!(entries[0].data.is_none());
+        assert!(entries[0].is_static.is_none());
     }
 }
