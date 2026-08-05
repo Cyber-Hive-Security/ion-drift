@@ -33,7 +33,7 @@ use ion_drift_storage::dns::{DnsStore, WatchlistEntry};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use super::skeleton::{normalize_domain, skeleton_of};
+use super::skeleton::skeleton_of;
 
 const SOURCE_BUNDLED: &str = "bundled";
 const SOURCE_OPERATOR: &str = "operator";
@@ -114,22 +114,22 @@ pub async fn load_watchlist(
             };
 
             for raw in file.entries {
-                let domain = normalize_domain(&raw.domain);
-                // A single label can never match: candidate_suffixes only
-                // yields 2+ label suffixes, so the row would sit in the
-                // database matching nothing.
-                if domain.is_empty() || !domain.contains('.') {
+                // Staging rejects what can never match — empty, over-length,
+                // or a single label, since `candidate_suffixes` only yields
+                // 2+ label suffixes and the row would sit matching nothing.
+                let Some(domain) = crate::staging::stage_dns_name(&raw.domain) else {
                     report.reject_entry(
                         &path,
-                        &raw.domain,
-                        "domain must have at least two labels".to_string(),
+                        &crate::staging::stage_text(&raw.domain, crate::staging::MAX_DNS_NAME),
+                        "domain must be a bounded name of at least two labels".to_string(),
                     );
                     continue;
-                }
+                };
                 let entry = WatchlistEntry {
                     skeleton: skeleton_of(&domain),
                     domain,
-                    brand: raw.brand,
+                    // Catalog text reaches finding titles an operator reads.
+                    brand: crate::staging::stage_text(&raw.brand, crate::staging::MAX_BRAND),
                     allow: raw.allow,
                     source: source.to_string(),
                     catalog_version: file.catalog_version,

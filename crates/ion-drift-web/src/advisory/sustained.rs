@@ -106,7 +106,7 @@ pub(crate) fn sustained_hits(
 /// attack observation under [`SIGNAL_SUSTAINED`]. From here the existing
 /// exploitation evaluator owns it: catalog linkage, surface scope, the 24h
 /// window, re-open and close-out all behave exactly as for per-cycle signals.
-pub async fn note_sustained(
+pub(crate) async fn note_sustained(
     state: &AppState,
     totals: &[ServiceFailureTotal],
 ) -> Result<(), String> {

@@ -13,7 +13,7 @@ use mikrotik_core::resources::ip::DnsCacheEntry;
 use crate::confusable::detector::{
     CONFUSABLE_MODULE, ConfusableHit, WatchIndex, build_finding, group_hits,
 };
-use crate::confusable::skeleton::{normalize_domain, skeleton_of};
+use crate::confusable::skeleton::skeleton_of;
 use crate::router_queue::{Priority, QueuedRequest};
 use crate::state::AppState;
 use crate::task_supervisor::TaskSupervisor;
@@ -85,21 +85,28 @@ async fn poll_once(state: &AppState) -> Result<(), String> {
     // One observation per name; addresses aggregated across its A/AAAA/CNAME
     // rows in this snapshot.
     let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut rejected = 0usize;
     for e in &entries {
-        let name = normalize_domain(&e.name);
-        if name.is_empty() {
+        // Everything past this point is staged: bounded, scrubbed, and shaped.
+        // A name the staging layer cannot make usable is counted, not stored.
+        let Some(name) = crate::staging::stage_dns_name(&e.name) else {
+            rejected += 1;
             continue;
-        }
+        };
         let addrs = by_name.entry(name).or_default();
         if let Some(data) = &e.data {
             addrs.push(data.clone());
         }
     }
+    if rejected > 0 {
+        tracing::debug!(count = rejected, "dns-cache: cache entries rejected by staging");
+    }
 
     let index = WatchIndex::build(&state.dns_store.list_watchlist().await?);
 
     let mut hits: Vec<(ConfusableHit, Vec<String>)> = Vec::new();
-    for (name, addresses) in &by_name {
+    for (name, raw_addresses) in &by_name {
+        let addresses = &crate::staging::stage_addresses(raw_addresses);
         // One name failing to store must not cost the rest of the cycle, the
         // match pass, or the prune below.
         if let Err(e) = state
