@@ -1478,6 +1478,76 @@ fn split_own_credential_failures(
 
 /// Group failures by (source, service) and emit signals for bursts and
 /// distributed (low-and-slow) patterns.
+/// Per-service deduped failure totals for one scan cycle, thresholds NOT
+/// applied. `BruteforceSignal` exists only above the alert thresholds, and the
+/// per-source and distributed signals deliberately overlap — so neither one is
+/// a usable count. The advisory accumulator's cross-cycle counter needs the
+/// below-threshold failures too, or a low-and-slow run that never crosses a
+/// per-cycle threshold stays invisible forever.
+#[derive(Debug, PartialEq)]
+pub(crate) struct ServiceFailureTotal {
+    pub service: String,
+    /// Deduped count — same `dedup_logging_actions` pass the detector runs, so
+    /// this view and the signal view of one cycle can never disagree about
+    /// what a single failure is.
+    pub count: usize,
+    /// Distinct source IPs, sorted. Console failures count but contribute none.
+    pub sources: Vec<String>,
+}
+
+/// Everything one pass over the fresh log entries yields: the thresholded
+/// brute-force signals and the pre-threshold per-service totals. One struct so
+/// a consumer cannot accidentally run the parse twice against one cursor.
+pub(crate) struct AuthScan {
+    pub signals: Vec<BruteforceSignal>,
+    pub service_totals: Vec<ServiceFailureTotal>,
+}
+
+impl AuthScan {
+    fn empty() -> Self {
+        Self {
+            signals: Vec::new(),
+            service_totals: Vec::new(),
+        }
+    }
+}
+
+fn service_failure_totals(failures: &[LoginFailure]) -> Vec<ServiceFailureTotal> {
+    // Identical grouping to detect_bruteforce: (source, service), then the
+    // logging-action dedup per group.
+    let mut groups: BTreeMap<(String, String), Vec<&LoginFailure>> = BTreeMap::new();
+    for f in failures {
+        let src = f.src_ip.clone().unwrap_or_else(|| "local".into());
+        groups.entry((src, f.service.clone())).or_default().push(f);
+    }
+    let mut totals: BTreeMap<String, ServiceFailureTotal> = BTreeMap::new();
+    for ((src, service), group) in &groups {
+        let deduped = dedup_logging_actions(group);
+        if deduped.is_empty() {
+            continue;
+        }
+        let entry = totals
+            .entry(service.clone())
+            .or_insert_with(|| ServiceFailureTotal {
+                service: service.clone(),
+                count: 0,
+                sources: Vec::new(),
+            });
+        entry.count += deduped.len();
+        if src != "local" {
+            entry.sources.push(src.clone());
+        }
+    }
+    totals
+        .into_values()
+        .map(|mut t| {
+            t.sources.sort();
+            t.sources.dedup();
+            t
+        })
+        .collect()
+}
+
 fn detect_bruteforce(failures: &[LoginFailure]) -> Vec<BruteforceSignal> {
     let mut groups: BTreeMap<(String, String), Vec<&LoginFailure>> = BTreeMap::new();
     for f in failures {
@@ -2033,19 +2103,20 @@ fn cursor_action(entries: Option<&[LogEntry]>, stored: Option<u64>) -> CursorAct
     }
 }
 
-/// Read the router log ring buffer forward from `cursor_key` and return the
-/// brute-force signals in the new entries.
+/// Read the router log ring buffer forward from `cursor_key` and return both
+/// views of the new entries: the thresholded brute-force signals and the
+/// pre-threshold per-service failure totals.
 ///
 /// Kept here (rather than in `advisory::exploitation`) because the parsers and
 /// thresholds it drives live in this module. Each consumer passes its own
 /// cursor key so no consumer can drain entries another one has not seen yet,
 /// and its own `poller_id` because `router_queue` keys pending work by that id
 /// and evicts the older batch when two submitters collide on it.
-pub(crate) async fn scan_auth_signals_with_cursor(
+pub(crate) async fn scan_auth_with_cursor(
     state: &AppState,
     poller_id: &str,
     cursor_key: &str,
-) -> Vec<BruteforceSignal> {
+) -> AuthScan {
     // Fetch the router log ring buffer through the shared queue.
     let results = match state
         .router_queue
@@ -2055,7 +2126,7 @@ pub(crate) async fn scan_auth_signals_with_cursor(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("{poller_id}: auth_bruteforce: log fetch failed: {e}");
-            return Vec::new();
+            return AuthScan::empty();
         }
     };
     // `None` means "batch unreadable" — see `cursor_action`, which must not
@@ -2083,10 +2154,10 @@ pub(crate) async fn scan_auth_signals_with_cursor(
         .and_then(|s| s.parse::<u64>().ok());
 
     let (entries, last_id) = match cursor_action(entries.as_deref(), cursor) {
-        CursorAction::Hold => return Vec::new(),
+        CursorAction::Hold => return AuthScan::empty(),
         CursorAction::Reset(max_id) => {
             set_state(&state.switch_store, cursor_key, &max_id.to_string()).await;
-            return Vec::new();
+            return AuthScan::empty();
         }
         // `Advance` is only produced from a batch that parsed, so this cannot
         // observe the `None` above.
@@ -2149,9 +2220,12 @@ pub(crate) async fn scan_auth_signals_with_cursor(
         set_state(&state.switch_store, cursor_key, &max_id.to_string()).await;
     }
     if failures.is_empty() {
-        return Vec::new();
+        return AuthScan::empty();
     }
-    detect_bruteforce(&failures)
+    AuthScan {
+        signals: detect_bruteforce(&failures),
+        service_totals: service_failure_totals(&failures),
+    }
 }
 
 /// The subjects the cooldown will stop from firing this cycle.
@@ -2193,7 +2267,9 @@ async fn suppressed_auth_subjects(
 async fn collect_auth_bruteforce_alerts(state: &AppState, rule: &AlertRule, alerts: &mut Vec<PendingAlert>) {
     let channels = parse_channels(&rule.delivery_channels);
 
-    let signals = scan_auth_signals_with_cursor(state, AUTH_BF_POLLER_ID, AUTH_BF_CURSOR_KEY).await;
+    let signals = scan_auth_with_cursor(state, AUTH_BF_POLLER_ID, AUTH_BF_CURSOR_KEY)
+        .await
+        .signals;
 
     let suppressed =
         suppressed_auth_subjects(&state.switch_store, rule.id, rule.cooldown_seconds, &signals).await;
@@ -2368,6 +2444,56 @@ mod tests {
             time: time.into(),
             prefix: prefix.into(),
         }
+    }
+
+    #[test]
+    fn service_totals_count_below_threshold_failures() {
+        // Two ssh failures from one source: below AUTH_BF_WARN_THRESHOLD, so
+        // detect_bruteforce stays silent — but the accumulator must still see 2.
+        let failures = vec![
+            failure("admin", Some("10.0.0.5"), "ssh", "10:00:00"),
+            failure("admin", Some("10.0.0.5"), "ssh", "10:03:00"),
+        ];
+        assert!(
+            detect_bruteforce(&failures).is_empty(),
+            "precondition: sub-threshold"
+        );
+        let totals = service_failure_totals(&failures);
+        assert_eq!(totals.len(), 1);
+        assert_eq!(totals[0].service, "ssh");
+        assert_eq!(totals[0].count, 2);
+        assert_eq!(totals[0].sources, vec!["10.0.0.5"]);
+    }
+
+    #[test]
+    fn service_totals_collapse_logging_action_duplicates() {
+        // One real failure emitted by two /system/logging actions (distinct
+        // prefixes) must count once — same dedup the detector applies.
+        let failures = vec![
+            failure("admin", Some("10.0.0.5"), "api", "10:00:00"),
+            failure_p("admin", Some("10.0.0.5"), "api", "10:00:00", "SYS-ERR:"),
+        ];
+        let totals = service_failure_totals(&failures);
+        assert_eq!(totals.len(), 1);
+        assert_eq!(totals[0].count, 1, "logging-action echo is not a second failure");
+    }
+
+    #[test]
+    fn service_totals_union_sources_and_hide_console() {
+        let failures = vec![
+            failure("admin", Some("10.0.0.5"), "ssh", "10:00:00"),
+            failure("admin", Some("10.0.0.2"), "ssh", "10:01:00"),
+            failure("root", None, "console", "10:02:00"),
+        ];
+        let mut totals = service_failure_totals(&failures);
+        totals.sort_by(|a, b| a.service.cmp(&b.service));
+        assert_eq!(totals.len(), 2);
+        assert_eq!(totals[0].service, "console");
+        assert_eq!(totals[0].count, 1, "console failures are counted");
+        assert!(totals[0].sources.is_empty(), "…but 'local' is not a source IP");
+        assert_eq!(totals[1].service, "ssh");
+        assert_eq!(totals[1].count, 2);
+        assert_eq!(totals[1].sources, vec!["10.0.0.2", "10.0.0.5"], "sorted, deduped");
     }
 
     #[test]
