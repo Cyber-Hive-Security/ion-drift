@@ -52,11 +52,92 @@ pub struct DnsStore {
 
 impl DnsStore {
     /// Schema version stamped into `PRAGMA user_version` for `dns.db`.
-    /// Bump when appending a step to [`Self::MIGRATION_STEPS`].
-    pub const SCHEMA_VERSION: u32 = 1;
+    /// v1 = the baseline; v2 adds CHECK constraints bounding every field an
+    /// attacker can influence. Bump when appending a step to
+    /// [`Self::MIGRATION_STEPS`].
+    pub const SCHEMA_VERSION: u32 = 2;
 
-    /// Versioned migrations applied after the v1 baseline. None yet.
-    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[];
+    /// Versioned migrations applied after the v1 baseline, in ascending order.
+    ///
+    /// v2 — CHECK constraints as the backstop under the code-level staging
+    /// layer (`ion_drift_web::staging`). The staging functions are where a bad
+    /// value is supposed to be caught; these constraints are what catches a
+    /// future writer that forgets to call them. SQLite cannot add a CHECK with
+    /// `ALTER TABLE`, so each table is rebuilt.
+    ///
+    /// Rows are **repaired, never dropped**: over-long values are truncated to
+    /// the bound and out-of-range numbers are clamped, the same "bound, don't
+    /// drop" rule the staging layer follows. A migration step is a static SQL
+    /// string and cannot log a dropped-row count, so dropping would mean
+    /// silent data loss — unacceptable for evidence an operator may be
+    /// mid-investigation on. The single exception is an observation whose name
+    /// is empty, which cannot be repaired into something matchable; the writer
+    /// has always skipped empty names, so this is a theoretical row.
+    ///
+    /// `INSERT OR IGNORE` because truncating two names that differ only past
+    /// character 253 collapses them onto one primary key.
+    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[(
+        2,
+        "
+        CREATE TABLE dns_observation_new (
+            name TEXT PRIMARY KEY
+                CHECK (length(name) BETWEEN 1 AND 253),
+            skeleton TEXT NOT NULL
+                CHECK (length(skeleton) <= 253),
+            addresses TEXT NOT NULL,
+            first_seen INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL
+                CHECK (last_seen >= first_seen)
+        );
+
+        INSERT OR IGNORE INTO dns_observation_new
+            (name, skeleton, addresses, first_seen, last_seen)
+        SELECT substr(name, 1, 253),
+               substr(skeleton, 1, 253),
+               addresses,
+               first_seen,
+               max(last_seen, first_seen)
+        FROM dns_observation
+        WHERE length(trim(name)) > 0;
+
+        DROP TABLE dns_observation;
+        ALTER TABLE dns_observation_new RENAME TO dns_observation;
+
+        CREATE INDEX idx_dns_observation_skeleton ON dns_observation(skeleton);
+        CREATE INDEX idx_dns_observation_last_seen ON dns_observation(last_seen);
+
+        CREATE TABLE confusable_watchlist_new (
+            domain TEXT PRIMARY KEY
+                CHECK (length(domain) BETWEEN 1 AND 253),
+            brand TEXT NOT NULL
+                CHECK (length(brand) <= 128),
+            skeleton TEXT NOT NULL
+                CHECK (length(skeleton) <= 253),
+            allow INTEGER NOT NULL DEFAULT 0
+                CHECK (allow IN (0, 1)),
+            source TEXT NOT NULL,
+            catalog_version INTEGER NOT NULL
+                CHECK (catalog_version >= 0)
+        );
+
+        INSERT OR IGNORE INTO confusable_watchlist_new
+            (domain, brand, skeleton, allow, source, catalog_version)
+        SELECT substr(domain, 1, 253),
+               substr(brand, 1, 128),
+               substr(skeleton, 1, 253),
+               CASE WHEN allow = 0 THEN 0 ELSE 1 END,
+               source,
+               max(catalog_version, 0)
+        FROM confusable_watchlist
+        WHERE length(trim(domain)) > 0;
+
+        DROP TABLE confusable_watchlist;
+        ALTER TABLE confusable_watchlist_new RENAME TO confusable_watchlist;
+
+        CREATE INDEX idx_confusable_watchlist_skeleton
+            ON confusable_watchlist(skeleton);
+        ",
+    )];
 
     pub async fn new(db_path: &Path) -> Result<Self, String> {
         let mut conn =
@@ -240,6 +321,129 @@ impl DnsStore {
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
+
+    /// Build a dns.db exactly as a v1 binary left it: the v1 baseline DDL
+    /// (no CHECK constraints), `user_version = 1`, and rows that the v2
+    /// constraints would reject unrepaired. Copied verbatim rather than
+    /// calling current code, so this fixture stays a v1 database even after
+    /// the baseline moves on.
+    fn create_v1_dns_database(path: &Path) {
+        let conn = Connection::open(path).expect("create v1 dns db");
+        conn.execute_batch(
+            "
+            CREATE TABLE dns_observation (
+                name TEXT PRIMARY KEY,
+                skeleton TEXT NOT NULL,
+                addresses TEXT NOT NULL,
+                first_seen INTEGER NOT NULL,
+                last_seen INTEGER NOT NULL
+            );
+            CREATE INDEX idx_dns_observation_skeleton ON dns_observation(skeleton);
+            CREATE INDEX idx_dns_observation_last_seen ON dns_observation(last_seen);
+
+            CREATE TABLE confusable_watchlist (
+                domain TEXT PRIMARY KEY,
+                brand TEXT NOT NULL,
+                skeleton TEXT NOT NULL,
+                allow INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL,
+                catalog_version INTEGER NOT NULL
+            );
+            CREATE INDEX idx_confusable_watchlist_skeleton
+                ON confusable_watchlist(skeleton);
+
+            PRAGMA user_version = 1;
+            ",
+        )
+        .expect("v1 dns fixture ddl");
+
+        let long_name = "a".repeat(400);
+        let long_brand = "B".repeat(400);
+        conn.execute(
+            "INSERT INTO dns_observation (name, skeleton, addresses, first_seen, last_seen)
+             VALUES ('good.example', 'good.example', '[\"10.0.0.1\"]', 100, 200)",
+            [],
+        )
+        .expect("good observation");
+        conn.execute(
+            "INSERT INTO dns_observation (name, skeleton, addresses, first_seen, last_seen)
+             VALUES (?1, ?1, '[]', 100, 50)",
+            params![long_name],
+        )
+        .expect("oversized observation with last_seen before first_seen");
+        conn.execute(
+            "INSERT INTO confusable_watchlist
+                (domain, brand, skeleton, allow, source, catalog_version)
+             VALUES ('paypal.com', ?1, 'paypal.com', 7, 'bundled', -3)",
+            params![long_brand],
+        )
+        .expect("watchlist row with oversized brand, odd allow, negative version");
+    }
+
+    fn user_version(path: &Path) -> i64 {
+        let conn = Connection::open(path).expect("open for version check");
+        conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("user_version")
+    }
+
+    #[tokio::test]
+    async fn v1_database_upgrades_to_v2_repairing_rows_instead_of_dropping_them() {
+        let f = NamedTempFile::new().unwrap();
+        create_v1_dns_database(f.path());
+        assert_eq!(user_version(f.path()), 1, "fixture must start at v1");
+
+        let store = DnsStore::new(f.path()).await.expect("v1 dns db must open");
+        assert_eq!(user_version(f.path()), 2, "v1 database migrates to v2");
+
+        // Nothing was dropped: both observations survive, the oversized one
+        // truncated to the bound rather than deleted.
+        let obs = store.observations_since(0).await.unwrap();
+        assert_eq!(obs.len(), 2, "no observation was dropped by the migration");
+        let long = obs
+            .iter()
+            .find(|o| o.name.starts_with("aaa"))
+            .expect("the oversized row survived");
+        assert_eq!(long.name.len(), 253, "over-long name truncated to the bound");
+        assert!(
+            long.last_seen >= long.first_seen,
+            "last_seen repaired to satisfy the ordering constraint"
+        );
+
+        let list = store.list_watchlist().await.unwrap();
+        assert_eq!(list.len(), 1, "no watchlist row was dropped");
+        assert_eq!(list[0].brand.len(), 128, "over-long brand truncated");
+        assert!(list[0].allow, "non-boolean allow repaired to true");
+        assert_eq!(list[0].catalog_version, 0, "negative version clamped to zero");
+    }
+
+    #[tokio::test]
+    async fn migrated_dns_database_reopens_without_rerunning_steps() {
+        let f = NamedTempFile::new().unwrap();
+        create_v1_dns_database(f.path());
+
+        drop(DnsStore::new(f.path()).await.expect("migrating open"));
+        assert_eq!(user_version(f.path()), 2);
+
+        // The v2 step uses plain CREATE TABLE, so a wrongly re-run step fails
+        // loudly here instead of passing silently.
+        drop(DnsStore::new(f.path()).await.expect("reopen at v2"));
+        assert_eq!(user_version(f.path()), 2);
+    }
+
+    #[tokio::test]
+    async fn fresh_database_lands_on_v2_with_constraints_enforced() {
+        let f = NamedTempFile::new().unwrap();
+        let store = DnsStore::new(f.path()).await.unwrap();
+        assert_eq!(user_version(f.path()), 2, "fresh database lands on v2");
+
+        // The backstop is real: a writer bypassing the staging layer is
+        // rejected by the database itself, not merely by convention.
+        let err = store
+            .upsert_observation(&"x".repeat(400), "x", &[], 100)
+            .await
+            .expect_err("CHECK must reject an over-long name");
+        assert!(err.contains("insert failed"), "got: {err}");
+    }
 
     #[tokio::test]
     async fn observation_upsert_reports_new_then_updates_in_place() {
