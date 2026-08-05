@@ -247,6 +247,29 @@ impl DnsStore {
         .map_err(|e| format!("prune_observations failed: {e}"))
     }
 
+    /// Evict observations beyond `max`, oldest `last_seen` first. Returns the
+    /// number evicted.
+    ///
+    /// Time-based pruning alone cannot bound this table: distinct names are
+    /// attacker-controlled and free to mint (DNS tunnelling, a random-subdomain
+    /// sweep, or a chatty implant), so a purely temporal window still admits
+    /// unbounded rows inside it. This is the ceiling that makes the storage
+    /// cost finite, and the caller logs what it evicted — a cap that silently
+    /// discards evidence would be worse than no cap.
+    pub async fn enforce_observation_cap(&self, max: usize) -> Result<usize, String> {
+        let db = self.db.lock().await;
+        db.execute(
+            "DELETE FROM dns_observation
+             WHERE name NOT IN (
+                 SELECT name FROM dns_observation
+                 ORDER BY last_seen DESC
+                 LIMIT ?1
+             )",
+            params![max as i64],
+        )
+        .map_err(|e| format!("enforce_observation_cap failed: {e}"))
+    }
+
     /// Insert a watchlist row, or refine the existing row keyed by `domain`.
     /// A higher `catalog_version` wins; the same version overwrites, so the
     /// operator overlay (loaded second) layers over the bundled seed.
@@ -471,6 +494,31 @@ mod tests {
             vec!["203.0.113.10"],
             "addresses follow the latest sighting"
         );
+    }
+
+    #[tokio::test]
+    async fn observation_cap_evicts_oldest_first_and_reports_the_count() {
+        let f = NamedTempFile::new().unwrap();
+        let store = DnsStore::new(f.path()).await.unwrap();
+
+        // Ten names, ascending last_seen. An attacker mints these for free.
+        for i in 0..10i64 {
+            store
+                .upsert_observation(&format!("n{i}.example"), "s", &[], 100 + i)
+                .await
+                .unwrap();
+        }
+
+        let evicted = store.enforce_observation_cap(4).await.unwrap();
+        assert_eq!(evicted, 6, "eviction count is reported, never silent");
+
+        let left = store.observations_since(0).await.unwrap();
+        assert_eq!(left.len(), 4);
+        assert_eq!(left[0].name, "n9.example", "newest retained");
+        assert_eq!(left[3].name, "n6.example", "oldest six evicted");
+
+        // Under the cap: nothing to do, and it says so.
+        assert_eq!(store.enforce_observation_cap(100).await.unwrap(), 0);
     }
 
     #[tokio::test]

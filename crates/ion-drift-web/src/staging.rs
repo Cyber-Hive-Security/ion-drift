@@ -63,7 +63,7 @@ fn is_display_hostile(c: char) -> bool {
 }
 
 /// Drop every display-hostile character. Length is unchanged otherwise.
-fn scrub(s: &str) -> String {
+pub(crate) fn scrub(s: &str) -> String {
     s.chars().filter(|c| !is_display_hostile(*c)).collect()
 }
 

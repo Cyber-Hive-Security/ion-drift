@@ -9,10 +9,20 @@
 /// punycode labels decoded to Unicode so `xn--pple-43d.com` and the raw
 /// Cyrillic form skeleton identically.
 pub(crate) fn normalize_domain(raw: &str) -> String {
-    let trimmed = raw.trim().trim_end_matches('.').to_lowercase();
+    // Strip display-hostile characters before anything else. A bidi override
+    // or zero-width character surviving into a name would reach finding
+    // titles, database rows and structured log lines — spoofing what an
+    // operator reads. Legitimate confusables (Cyrillic а and friends) are
+    // deliberately untouched: they are the signal, not the noise.
+    let scrubbed = crate::staging::scrub(raw);
+    let trimmed = scrubbed.trim().trim_end_matches('.').to_lowercase();
     // A label idna cannot decode comes back best-effort; never panic on
-    // attacker-controlled input.
-    let (unicode, _result) = idna::domain_to_unicode(&trimmed);
+    // attacker-controlled input. The error is worth seeing when chasing a
+    // name that did not match as expected, but it is not an operator concern.
+    let (unicode, result) = idna::domain_to_unicode(&trimmed);
+    if let Err(e) = result {
+        tracing::debug!(raw = %trimmed, error = %e, "confusable: IDNA decode was lossy");
+    }
     unicode
 }
 
@@ -51,6 +61,23 @@ mod tests {
     fn cross_script_lookalikes_share_a_skeleton() {
         // Cyrillic а (U+0430) in place of Latin a.
         assert_eq!(skeleton_of("аpple.com"), skeleton_of("apple.com"));
+    }
+
+    #[test]
+    fn normalize_strips_display_hostile_characters() {
+        // The bidi override must not survive into a finding title or a log
+        // line; the Cyrillic а must, because it is the confusability itself.
+        assert_eq!(normalize_domain("\u{202E}\u{0430}pple.com"), "\u{0430}pple.com");
+        assert_eq!(normalize_domain("pay\u{200B}pal.com"), "paypal.com");
+    }
+
+    #[test]
+    fn normalize_never_panics_on_malformed_punycode() {
+        // Attacker-controlled input reaches this function directly; an IDNA
+        // failure must degrade, never abort the poll cycle.
+        for bad in ["xn--.com", "xn--bad-.com", "xn--a-ecp.ru", "..", "-.-"] {
+            let _ = normalize_domain(bad);
+        }
     }
 
     #[test]

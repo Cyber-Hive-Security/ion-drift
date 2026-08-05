@@ -26,8 +26,16 @@ const POLLER_ID: &str = "dns-cache";
 /// compete with the pollers while the snapshot is warming up.
 const STARTUP_DELAY_SECS: u64 = 120;
 /// Observation retention: long enough that "first seen" is meaningful for
-/// investigation, pruned so the table cannot grow without bound.
+/// investigation, pruned so old rows do not accumulate.
 const OBSERVATION_RETENTION_SECS: i64 = 90 * 86400;
+/// Hard ceiling on distinct observed names.
+///
+/// Retention alone does not bound this table: distinct names are
+/// attacker-controlled and free to mint, so a 90-day window still admits
+/// unbounded rows inside it. At roughly 150 bytes a row this ceiling costs
+/// single-digit megabytes — affordable on appliance storage, and far below
+/// what a DNS-tunnelling implant would otherwise write.
+const MAX_DNS_OBSERVATIONS: usize = 50_000;
 
 /// Spawn the supervised DNS cache polling loop.
 pub fn spawn_dns_cache_poller(supervisor: &TaskSupervisor, state: AppState) {
@@ -137,6 +145,22 @@ async fn poll_once(state: &AppState) -> Result<(), String> {
         Ok(0) => {}
         Ok(n) => tracing::debug!(count = n, "dns-cache: pruned stale observations"),
         Err(e) => tracing::warn!(error = %e, "dns-cache: prune failed"),
+    }
+    // Ceiling after retention: evicting is reported at warn, because hitting
+    // the cap means something is minting names faster than they age out and
+    // an operator should know.
+    match state
+        .dns_store
+        .enforce_observation_cap(MAX_DNS_OBSERVATIONS)
+        .await
+    {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(
+            count = n,
+            cap = MAX_DNS_OBSERVATIONS,
+            "dns-cache: evicted oldest observations at the storage ceiling"
+        ),
+        Err(e) => tracing::warn!(error = %e, "dns-cache: cap enforcement failed"),
     }
     Ok(())
 }
