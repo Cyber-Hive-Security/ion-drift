@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use mikrotik_core::resources::ip::DnsCacheEntry;
 
-use crate::confusable::detector::{CONFUSABLE_MODULE, WatchIndex, build_finding};
+use crate::confusable::detector::{
+    CONFUSABLE_MODULE, ConfusableHit, WatchIndex, build_finding, group_hits,
+};
 use crate::confusable::skeleton::{normalize_domain, skeleton_of};
 use crate::router_queue::{Priority, QueuedRequest};
 use crate::state::AppState;
@@ -85,30 +87,45 @@ async fn poll_once(state: &AppState) -> Result<(), String> {
 
     let index = WatchIndex::build(&state.dns_store.list_watchlist().await?);
 
+    let mut hits: Vec<(ConfusableHit, Vec<String>)> = Vec::new();
     for (name, addresses) in &by_name {
-        state
+        // One name failing to store must not cost the rest of the cycle, the
+        // match pass, or the prune below.
+        if let Err(e) = state
             .dns_store
             .upsert_observation(name, &skeleton_of(name), addresses, now)
-            .await?;
+            .await
+        {
+            tracing::warn!(error = %e, name = %name, "dns-cache: observation write failed");
+        }
         // Match every cycle, not only on new names: upsert_finding dedups on
         // (module, finding_id), and re-matching lets a watchlist update catch
         // names still present in the cache.
         if let Some(hit) = index.match_name(name) {
-            let finding = build_finding(&hit, addresses, now);
-            match state
-                .findings_store
-                .upsert_finding(CONFUSABLE_MODULE, &finding, None, None)
-                .await
-            {
-                Ok(_) => tracing::warn!(
-                    observed = %hit.observed,
-                    resembles = %hit.watchlist_domain,
-                    "confusable domain observed"
-                ),
-                Err(e) => {
-                    tracing::warn!(error = %e, name = %name, "dns-cache: finding upsert failed")
-                }
-            }
+            hits.push((hit, addresses.clone()));
+        }
+    }
+
+    // Group before emitting: every subdomain of one lookalike registration is
+    // one attacker asset and belongs in one finding.
+    for group in group_hits(hits) {
+        let finding = build_finding(&group, now);
+        match state
+            .findings_store
+            .upsert_finding(CONFUSABLE_MODULE, &finding, None, None)
+            .await
+        {
+            Ok(_) => tracing::warn!(
+                suffix = %group.matched_suffix,
+                resembles = %group.watchlist_domain,
+                names = group.observed_names.len(),
+                "confusable domain observed"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                suffix = %group.matched_suffix,
+                "dns-cache: finding upsert failed"
+            ),
         }
     }
 
