@@ -7,6 +7,7 @@ pub mod behavior_engine;
 pub mod bootstrap;
 pub mod certwarden;
 pub mod config;
+pub mod confusable;
 pub mod connection_store;
 pub mod correlation_engine;
 pub mod demo;

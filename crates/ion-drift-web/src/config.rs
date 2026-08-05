@@ -56,6 +56,9 @@ pub struct PollingConfig {
     /// Infrastructure policy sync from router DHCP/DNS/firewall.
     #[serde(default = "default_policy_sync_interval")]
     pub policy_sync_interval_secs: u64,
+    /// DNS cache harvest for confusable-domain detection.
+    #[serde(default = "default_dns_cache_interval")]
+    pub dns_cache_interval_secs: u64,
 }
 
 impl Default for PollingConfig {
@@ -69,6 +72,7 @@ impl Default for PollingConfig {
             correlation_interval_secs: default_correlation_interval(),
             topology_interval_secs: default_topology_interval(),
             policy_sync_interval_secs: default_policy_sync_interval(),
+            dns_cache_interval_secs: default_dns_cache_interval(),
         }
     }
 }
@@ -81,6 +85,7 @@ fn default_behavior_interval() -> u64 { 60 }
 fn default_correlation_interval() -> u64 { 120 }
 fn default_topology_interval() -> u64 { 120 }
 fn default_policy_sync_interval() -> u64 { 300 }
+fn default_dns_cache_interval() -> u64 { 300 }
 
 // ── OIDC Bootstrap (nested under [oidc.bootstrap]) ──────────────
 

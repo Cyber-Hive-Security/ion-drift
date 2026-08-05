@@ -681,6 +681,11 @@ async fn main() -> anyhow::Result<()> {
         stats_store::StatsStore::new(&data_dir.join("stats.db"))
             .map_err(|e| anyhow::anyhow!("failed to init stats store: {e}"))?,
     );
+    let dns_store = Arc::new(
+        ion_drift_storage::DnsStore::new(&data_dir.join("dns.db"))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to init dns store: {e}"))?,
+    );
 
     // Load the advisory catalog once at startup. A bad catalog degrades the
     // correlation, it does not stop the server — the loader keeps whatever it
@@ -711,6 +716,35 @@ async fn main() -> anyhow::Result<()> {
                 "advisory catalog loaded"
             ),
             Err(e) => tracing::warn!(error = %e, "advisory catalog load failed"),
+        }
+    }
+
+    // Load the confusable watchlist once at startup — same fail-soft contract
+    // as the advisory catalog above.
+    {
+        let seed_dir = confusable_seed_dir();
+        let overlay_dir = data_dir.join("confusable");
+        match confusable::catalog::load_watchlist(&dns_store, &seed_dir, &overlay_dir).await {
+            Ok(report) if report.degraded => tracing::warn!(
+                entries = report.entries_loaded,
+                rejected = ?report.files_rejected,
+                "confusable watchlist loaded with rejections — detection is degraded"
+            ),
+            // Zero entries makes the detector inert, and the commonest cause
+            // is a relative seed path resolved against the wrong working
+            // directory. That must not read as a normal startup line.
+            Ok(report) if report.entries_loaded == 0 => tracing::warn!(
+                seed_dir = %seed_dir.display(),
+                overlay_dir = %overlay_dir.display(),
+                "confusable watchlist is empty — no brands loaded, so the \
+                 confusable-domain detector cannot produce findings; check the \
+                 seed directory (override with DRIFT_CONFUSABLE_SEED_DIR)"
+            ),
+            Ok(report) => tracing::info!(
+                entries = report.entries_loaded,
+                "confusable watchlist loaded"
+            ),
+            Err(e) => tracing::warn!(error = %e, "confusable watchlist load failed"),
         }
     }
 
@@ -959,6 +993,7 @@ async fn main() -> anyhow::Result<()> {
         behavior_store: behavior_store.clone(),
         findings_store: findings_store.clone(),
         advisory_store: advisory_store.clone(),
+        dns_store: dns_store.clone(),
         firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((
             Vec::new(),
             std::time::Instant::now(),
@@ -1094,6 +1129,23 @@ fn advisory_seed_dir() -> std::path::PathBuf {
         return bundled;
     }
     std::path::PathBuf::from("data/advisories")
+}
+
+/// Where the bundled confusable watchlist lives. Same conventions as
+/// [`advisory_seed_dir`]: container images ship it under `/app/seed/`, a
+/// source checkout reads it straight from the repo, and
+/// `DRIFT_CONFUSABLE_SEED_DIR` overrides both. A missing directory is not an
+/// error: the loader treats an absent seed as "no bundled brands" and the
+/// operator overlay still applies.
+fn confusable_seed_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("DRIFT_CONFUSABLE_SEED_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    let bundled = std::path::PathBuf::from("/app/seed/confusable");
+    if bundled.is_dir() {
+        return bundled;
+    }
+    std::path::PathBuf::from("data/confusable")
 }
 
 /// Run the setup-mode server when no cert/secrets are present.

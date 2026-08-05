@@ -3,7 +3,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use mikrotik_core::MikrotikClient;
-use ion_drift_storage::{AdvisoryStore, BehaviorStore, FindingsStore, MetricsStore, SwitchStore};
+use ion_drift_storage::{
+    AdvisoryStore, BehaviorStore, DnsStore, FindingsStore, MetricsStore, SwitchStore,
+};
 use mikrotik_core::TrafficTracker;
 use ion_drift_storage::behavior::VlanRegistry;
 use mikrotik_core::resources::firewall::FilterRule;
@@ -64,6 +66,9 @@ pub struct AppState {
     /// Advisory catalog + attack observations (SQLite). Content is loaded from
     /// the JSON catalog at startup; core carries no advisory text of its own.
     pub advisory_store: Arc<AdvisoryStore>,
+    /// Observed DNS names + confusable watchlist (SQLite). Watchlist content
+    /// is loaded from the JSON catalog at startup; core names no brands.
+    pub dns_store: Arc<DnsStore>,
     /// Cached firewall filter rules for behavior correlation.
     pub firewall_rules_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
     /// Encrypted secrets manager (None if bootstrap not configured).

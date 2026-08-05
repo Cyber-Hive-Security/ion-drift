@@ -131,3 +131,4 @@ idle_timeout_seconds = 43200
 # correlation_interval_secs = 120  # Identity correlation engine
 # topology_interval_secs = 120     # Network topology rebuild
 # policy_sync_interval_secs = 3600 # Infrastructure policy sync
+# dns_cache_interval_secs = 300    # DNS cache harvest (confusable-domain detection)

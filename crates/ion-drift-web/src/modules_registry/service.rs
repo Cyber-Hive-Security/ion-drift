@@ -296,7 +296,7 @@ pub fn validate_manifest(m: &Manifest) -> anyhow::Result<()> {
 /// Names the host stamps onto findings it emits itself. Findings dedup on
 /// `(module_name, finding_id)`, so a module registering under one of these
 /// could overwrite core findings through the inbound publish endpoint.
-const RESERVED_MODULE_NAMES: &[&str] = &["advisory", "in-process"];
+const RESERVED_MODULE_NAMES: &[&str] = &["advisory", "in-process", "confusable"];
 
 /// Same rule as the in-process [`ion_drift_module_api::Module::name`]:
 /// `^[a-z][a-z0-9_-]{1,31}$`, plus the host's reserved names. We spell it

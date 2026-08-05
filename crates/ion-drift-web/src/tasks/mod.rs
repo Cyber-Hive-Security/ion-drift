@@ -2,6 +2,7 @@ mod advisory;
 mod behavior;
 mod cert;
 mod connections;
+mod dns_cache;
 mod findings;
 mod metrics;
 mod policy_deviation_detector;
@@ -204,6 +205,9 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
 
     // Advisory exploitation correlation (independent of the alert rules)
     advisory::spawn_advisory_evaluator(&state.task_supervisor, state.clone());
+
+    // DNS cache harvest + confusable-domain detection
+    dns_cache::spawn_dns_cache_poller(&state.task_supervisor, state.clone());
 
     // Page view stats pruning (daily, retain 90 days)
     spawn_stats_pruner(state.stats_store.clone());
