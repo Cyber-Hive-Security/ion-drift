@@ -1,6 +1,7 @@
 pub mod advisory;
 pub mod alerting;
 pub mod behavior;
+pub mod dns;
 pub mod findings;
 pub mod metrics;
 pub mod migrations;
@@ -8,6 +9,7 @@ pub mod read_traits;
 pub mod switch;
 
 pub use advisory::{AdvisoryRecord, AdvisoryStore, AttackObservation};
+pub use dns::{DnsObservation, DnsStore, WatchlistEntry};
 pub use alerting::{AlertHistoryEntry, AlertRule, AlertStatus, DeliveryChannelConfig};
 pub use behavior::{BehaviorStore, Investigation, InvestigationStats, NewInvestigation};
 pub use findings::{
