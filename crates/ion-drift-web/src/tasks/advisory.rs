@@ -33,10 +33,18 @@ pub fn spawn_advisory_evaluator(supervisor: &TaskSupervisor, state: AppState) {
             loop {
                 interval.tick().await;
 
-                for signal in exploitation::scan_auth_signals(&state).await {
-                    if let Err(e) = exploitation::note_observation(&state, &signal).await {
+                let scan = exploitation::scan_auth(&state).await;
+                for signal in &scan.signals {
+                    if let Err(e) = exploitation::note_observation(&state, signal).await {
                         tracing::warn!(error = %e, "advisory: observation write failed");
                     }
+                }
+                // Accumulator write is per-cycle, not per-signal: one row per
+                // surface carrying the cycle's deduped failure count (Phase 3).
+                if let Err(e) =
+                    exploitation::note_auth_failures(&state, &scan.service_totals).await
+                {
+                    tracing::warn!(error = %e, "advisory: auth-failure write failed");
                 }
 
                 if let Err(e) = exploitation::evaluate(&state).await {
@@ -52,6 +60,11 @@ pub fn spawn_advisory_evaluator(supervisor: &TaskSupervisor, state: AppState) {
                     Ok(0) => {}
                     Ok(n) => tracing::debug!(count = n, "advisory: pruned old observations"),
                     Err(e) => tracing::warn!(error = %e, "advisory: prune failed"),
+                }
+                match state.advisory_store.prune_auth_failures(cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::debug!(count = n, "advisory: pruned old auth failures"),
+                    Err(e) => tracing::warn!(error = %e, "advisory: auth-failure prune failed"),
                 }
             }
         })
