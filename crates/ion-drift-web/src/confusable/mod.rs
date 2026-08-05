@@ -6,4 +6,5 @@
 //! compare — adding a brand is a catalog edit, never a code change.
 
 pub mod catalog;
+pub mod detector;
 pub mod skeleton;
