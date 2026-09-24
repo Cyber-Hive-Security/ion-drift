@@ -37,6 +37,12 @@ advisory is a JSON file, not a release.
   an operator drops into the overlay. The loader binds every value as a SQL parameter and fails soft
   on anything malformed. Keep it that way: a bad advisory file degrades the catalog, it never takes
   the process down.
+- **`version_constraint` is `null` or a non-empty array of ranges.** Each range is an object with any of
+  `start_including`, `start_excluding`, `end_including`, `end_excluding`, `exact` — the same shape the NVD
+  feed produces, e.g. `[{"start_including": "7.0", "end_excluding": "7.24.2"}]`. A range may not combine
+  `exact` with any start/end bound. Anything else (including the old `"< 7.16"` string form) is rejected
+  at load and degrades the catalog. An advisory with a constraint raises a version finding on every
+  device in range; one without a constraint raises only service-exposure and exploitation findings.
 
 ## Bumping `catalog_version`
 

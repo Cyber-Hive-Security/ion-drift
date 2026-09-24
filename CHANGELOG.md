@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Vulnerability feed.** Daily NVD + CISA KEV pull for RouterOS. Every managed RouterOS device whose version
+  falls in a published affected range gets a finding; CVEs CISA lists as exploited in the wild are Critical.
+  Findings state plainly that Drift checked the version, not whether the affected feature is enabled.
+- **Mandatory feed consent.** Administrators confirm the feed (on by default) or turn it off, with a warning,
+  before any outbound request is made. Settings → Security shows who decided and when.
+- **Service exposure findings.** Bundled advisories scoped to a service (CVE-2026-16347: `api`/`api-ssl`)
+  now raise an early-warning finding when the service is enabled — High when reachable from anywhere, Low
+  when restricted by `address` — without waiting for an attack. An acknowledged finding reopens if the
+  restriction is later removed.
+- **Operator resolutions stick.** A vulnerability or exposure finding an operator resolves manually stays
+  resolved. Drift reopens only findings it resolved itself — after an upgrade, if the version regresses;
+  after a service is disabled, if it is re-enabled.
+- **Feed health.** Findings shows a banner when the feed is off or its data is more than three days old.
+
+### Changed
+
+- Advisory catalog `version_constraint` must now be `null` or an array of version ranges.
+
 ## [0.5.2b] - 2026-07-23
 
 ### Fixed

@@ -13,6 +13,7 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
 import { DataTable, type Column } from "@/components/data-table";
 import { DeviceLink } from "@/components/device-link";
+import { AdvisoryFeedStatusBanner } from "@/components/advisory-feed-status-banner";
 import { cn } from "@/lib/utils";
 import {
   findingSeverityBg,
@@ -334,6 +335,7 @@ export function FindingsPage() {
       onRefresh={() => findingsQ.refetch()}
       isRefreshing={findingsQ.isFetching}
     >
+      <AdvisoryFeedStatusBanner />
       <div className="mb-4 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <Filter className="h-4 w-4 text-muted-foreground" />

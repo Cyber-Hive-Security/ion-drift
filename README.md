@@ -310,6 +310,20 @@ No line of code was written by a human. Human contribution was limited to produc
 
 This project demonstrates that AI coding agents can produce production-grade, security-conscious software when guided by a knowledgeable operator who understands the problem domain.
 
+## Outbound connections
+
+Ion Drift is self-hosted and sends no telemetry. With one exception, it only talks to devices you configure.
+
+The **vulnerability feed** downloads public RouterOS vulnerability data once a day from:
+
+- `services.nvd.nist.gov` — NIST National Vulnerability Database
+- `www.cisa.gov` — CISA Known Exploited Vulnerabilities catalog
+
+These are plain HTTPS downloads; nothing about your installation, network, or devices is sent. The feed is
+on by default, but **no request is made until an administrator confirms it** in the dialog shown at first
+login. It can be turned off at any time in **Settings → Security**; with it off, only advisories bundled with
+the installed release are evaluated.
+
 ## License
 
 [PolyForm Shield License 1.0.0](LICENSE) with the [Cyber Hive Security Use Agreement](USE-AGREEMENT).
