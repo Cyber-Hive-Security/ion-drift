@@ -39,6 +39,9 @@ export function SettingsAdvisoryFeed() {
       )}
       {user?.is_admin && data.consent !== "unanswered" && (
         <div className="mt-4">
+          {setConsent.isError && (
+            <p role="alert" className="mb-3 text-sm text-red-400">Could not save your choice. Try again.</p>
+          )}
           {data.consent === "off" ? (
             <button type="button" onClick={() => setConsent.mutate("on")} disabled={setConsent.isPending}
               className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground">

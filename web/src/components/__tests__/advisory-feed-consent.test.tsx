@@ -62,6 +62,32 @@ describe("AdvisoryFeedConsentGate", () => {
     await waitFor(() => expect(consentPosts(calls).map((c) => c.body)).toEqual([{ consent: "off" }]));
   });
 
+  it("traps keyboard focus inside the dialog in both steps", async () => {
+    mockFetchRoutes({ "GET /auth/status": admin, "GET /api/advisory/feed": status("unanswered") });
+    renderWithClient(
+      <>
+        <button type="button">outside before</button>
+        <AdvisoryFeedConsentGate />
+        <button type="button">outside after</button>
+      </>,
+    );
+    const dialog = await screen.findByRole("dialog");
+    const assertTrapped = async () => {
+      for (let i = 0; i < 5; i++) {
+        await userEvent.tab();
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      }
+      for (let i = 0; i < 5; i++) {
+        await userEvent.tab({ shift: true });
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      }
+    };
+    await assertTrapped();
+    await userEvent.click(screen.getByRole("button", { name: /^turn off$/i }));
+    expect(dialog).toHaveTextContent(/will not learn about new vulnerabilities/i);
+    await assertTrapped();
+  });
+
   it("non-admins see a banner instead of the dialog", async () => {
     mockFetchRoutes({ "GET /auth/status": viewer, "GET /api/advisory/feed": status("unanswered") });
     renderWithClient(<AdvisoryFeedConsentGate />);
@@ -101,5 +127,16 @@ describe("SettingsAdvisoryFeed", () => {
     renderWithClient(<SettingsAdvisoryFeed />);
     await userEvent.click(await screen.findByRole("button", { name: /^turn on$/i }));
     await waitFor(() => expect(consentPosts(calls).map((c) => c.body)).toEqual([{ consent: "on" }]));
+  });
+
+  it("shows an alert when saving from settings fails", async () => {
+    mockFetchRoutes({
+      "GET /auth/status": admin,
+      "GET /api/advisory/feed": status("off"),
+      "POST /api/advisory/feed/consent": { status: 500, body: { error: "boom" } },
+    });
+    renderWithClient(<SettingsAdvisoryFeed />);
+    await userEvent.click(await screen.findByRole("button", { name: /^turn on$/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not save/i);
   });
 });

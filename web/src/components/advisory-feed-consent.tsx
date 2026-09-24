@@ -27,6 +27,9 @@ export function AdvisoryFeedConsentGate() {
   return <ConsentDialog />;
 }
 
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 function ConsentDialog() {
   const [step, setStep] = useState<"choose" | "confirm-off">("choose");
   const setConsent = useSetAdvisoryFeedConsent();
@@ -36,11 +39,32 @@ function ConsentDialog() {
     dialogRef.current?.focus();
   }, [step]);
 
-  // No close button, no backdrop dismissal, no Escape: the only exits are the two answers.
-  const swallowEscape = (e: KeyboardEvent) => {
+  // No close button, no backdrop dismissal, no Escape, and Tab cannot leave:
+  // the only exits are the two answers.
+  const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+    if (focusable.length === 0) {
+      e.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === dialog || !dialog.contains(active))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !dialog.contains(active))) {
+      e.preventDefault();
+      first.focus();
     }
   };
 
@@ -52,7 +76,7 @@ function ConsentDialog() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="feed-consent-title"
-        onKeyDown={swallowEscape}
+        onKeyDown={onKeyDown}
         className="mx-4 w-full max-w-lg rounded-lg border border-border bg-card p-6 shadow-xl outline-none"
       >
         {step === "choose" ? (
