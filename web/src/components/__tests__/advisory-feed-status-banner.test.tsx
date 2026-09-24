@@ -27,6 +27,24 @@ describe("AdvisoryFeedStatusBanner", () => {
     expect(banner).toHaveTextContent("HTTP 503");
   });
 
+  it("says 'first fetch' when any source has never succeeded", async () => {
+    mockFetchRoutes({
+      "GET /api/advisory/feed": {
+        ...base,
+        consent: "on",
+        stale: true,
+        sources: [
+          { source: "nvd", last_success_at: null, last_attempt_at: 1_758_700_000, last_error: "HTTP 503", records: 0 },
+          { source: "kev", last_success_at: 1_758_699_400, last_attempt_at: 1_758_699_400, last_error: null, records: 4 },
+        ],
+      },
+    });
+    renderWithClient(<AdvisoryFeedStatusBanner />);
+    const banner = await screen.findByRole("status");
+    expect(banner).toHaveTextContent(/stale since first fetch/i);
+    expect(banner).toHaveTextContent("NVD last error: HTTP 503");
+  });
+
   it("is silent when the feed is on and fresh", async () => {
     mockFetchRoutes({ "GET /api/advisory/feed": { ...base, consent: "on" } });
     const { container } = renderWithClient(<AdvisoryFeedStatusBanner />);

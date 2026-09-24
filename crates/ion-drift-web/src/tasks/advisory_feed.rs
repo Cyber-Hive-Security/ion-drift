@@ -33,6 +33,8 @@ const MAX_PAGES: u64 = 10;
 /// NVD's unauthenticated limit is 5 requests per rolling 30 s.
 const PAGE_GAP: Duration = Duration::from_secs(7);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// Version deliberately omitted: the disclosure promises nothing about the installation is sent.
+pub(crate) const FEED_USER_AGENT: &str = "ion-drift";
 
 pub(crate) trait FeedTransport {
     async fn get(&self, url: &str) -> Result<Vec<u8>, String>;
@@ -50,7 +52,7 @@ impl FeedTransport for ReqwestTransport {
             .timeout(REQUEST_TIMEOUT)
             .header(
                 reqwest::header::USER_AGENT,
-                concat!("ion-drift/", env!("CARGO_PKG_VERSION")),
+                FEED_USER_AGENT,
             )
             .send()
             .await
@@ -212,6 +214,11 @@ mod tests {
     use super::*;
     use crate::advisory::feed::fixtures;
     use std::sync::Mutex;
+
+    #[test]
+    fn user_agent_discloses_nothing_about_the_installation() {
+        assert_eq!(FEED_USER_AGENT, "ion-drift");
+    }
     use tempfile::NamedTempFile;
 
     struct MockTransport {
