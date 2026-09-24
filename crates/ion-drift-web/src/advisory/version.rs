@@ -94,7 +94,8 @@ impl Eq for RouterOsVersion {}
 
 /// One affected range, in the shape shared by the NVD feed and the bundled
 /// catalog. Every bound is optional. A range with no bounds and no `exact`
-/// matches every version (NVD's wildcard CPE match).
+/// matches every version (NVD's wildcard CPE match). `exact` is exclusive with
+/// the bounds: a range that sets both is ambiguous and cannot be evaluated.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct VersionRange {
@@ -118,8 +119,24 @@ pub(crate) enum Applicability {
 }
 
 impl VersionRange {
-    /// `None` when a bound in this range cannot be parsed.
+    /// True when `exact` is set together with any start/end bound. Such a
+    /// range has no single meaning, so neither the catalog nor the matcher
+    /// accepts it.
+    pub(crate) fn mixes_exact_with_bounds(&self) -> bool {
+        self.exact.is_some()
+            && (self.start_including.is_some()
+                || self.start_excluding.is_some()
+                || self.end_including.is_some()
+                || self.end_excluding.is_some())
+    }
+
+    /// `None` when a bound in this range cannot be parsed, or when the range
+    /// mixes `exact` with bounds — letting either side win could turn an
+    /// in-range device into a false "not affected".
     fn contains(&self, v: &RouterOsVersion) -> Option<bool> {
+        if self.mixes_exact_with_bounds() {
+            return None;
+        }
         if let Some(exact) = &self.exact {
             return Some(*v == RouterOsVersion::parse(exact)?);
         }
@@ -302,5 +319,16 @@ mod tests {
             r#"[{"start_including":"7.0","end_excluding":"7.23.4"}]"#
         );
         assert!(serde_json::from_str::<Vec<VersionRange>>(r#"[{"lt":"7.16"}]"#).is_err());
+    }
+
+    #[test]
+    fn exact_combined_with_bounds_cannot_be_evaluated() {
+        let r = vec![VersionRange {
+            exact: Some("7.0".into()),
+            end_excluding: Some("7.24.2".into()),
+            ..Default::default()
+        }];
+        assert_eq!(evaluate("7.1", &r).0, Applicability::CannotEvaluate);
+        assert_eq!(evaluate("7.0", &r).0, Applicability::CannotEvaluate);
     }
 }

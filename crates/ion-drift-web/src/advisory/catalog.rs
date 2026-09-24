@@ -336,12 +336,20 @@ fn validate(
         .as_ref()
         .filter(|v| !v.is_null() && v.as_str().is_none_or(|s| !s.trim().is_empty()))
     {
-        let usable = serde_json::from_value::<Vec<crate::advisory::version::VersionRange>>(vc.clone())
-            .is_ok_and(|ranges| !ranges.is_empty());
-        if !usable {
+        let ranges = serde_json::from_value::<Vec<crate::advisory::version::VersionRange>>(vc.clone())
+            .ok()
+            .filter(|ranges| !ranges.is_empty());
+        let Some(ranges) = ranges else {
             return Err((
                 advisory_id,
                 "unrecognised version_constraint: expected a non-empty array of version ranges".to_string(),
+            ));
+        };
+        if ranges.iter().any(|r| r.mixes_exact_with_bounds()) {
+            return Err((
+                advisory_id,
+                "invalid version_constraint: exact cannot be combined with start/end bounds in one range"
+                    .to_string(),
             ));
         }
     }
@@ -798,5 +806,23 @@ mod tests {
         assert!(report.degraded);
         assert_eq!(report.advisories_loaded, 0);
         assert!(report.files_rejected[0].contains("version_constraint"));
+    }
+
+    #[tokio::test]
+    async fn exact_combined_with_bounds_version_constraint_is_rejected() {
+        let seed = TempDir::new().unwrap();
+        let data = TempDir::new().unwrap();
+        let db = TempDir::new().unwrap();
+        let body = valid_catalog(1, "api brute force").replace(
+            r#""version_constraint": null"#,
+            r#""version_constraint": [{"exact": "7.0", "end_excluding": "7.24.2"}]"#,
+        );
+        write(&seed, "mikrotik.json", &body);
+        let store = store_in(&db).await;
+        let report = load_catalog(&store, seed.path(), data.path()).await.expect("load");
+        assert!(report.degraded);
+        assert_eq!(report.advisories_loaded, 0);
+        assert!(report.files_rejected[0].contains("version_constraint"));
+        assert!(report.files_rejected[0].contains("exact"));
     }
 }
