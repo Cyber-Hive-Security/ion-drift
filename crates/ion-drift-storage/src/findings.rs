@@ -524,6 +524,35 @@ impl FindingsStore {
         }))
     }
 
+    /// Re-open an *acknowledged* finding whose condition an engine has seen
+    /// get worse. Acknowledgement accepts the risk the operator saw, not a
+    /// larger one; when the engine escalates severity it calls this so the
+    /// finding returns to the open queue.
+    ///
+    /// Only an `acknowledged` row changes. Ack stamps are cleared — they
+    /// belonged to the lesser condition. Returns `Ok(false)` when no row
+    /// matched, so repeated calls are idempotent.
+    pub async fn reopen_acknowledged_by_key(
+        &self,
+        module_name: &str,
+        finding_id: &str,
+    ) -> Result<bool, String> {
+        let db = self.db.lock().await;
+        let updated = db
+            .execute(
+                "UPDATE findings
+                 SET status = 'open',
+                     acknowledged_at = NULL,
+                     acknowledged_by = NULL
+                 WHERE module_name = ?1
+                   AND finding_id = ?2
+                   AND status = 'acknowledged'",
+                params![module_name, finding_id],
+            )
+            .map_err(|e| format!("reopen_acknowledged_by_key failed: {e}"))?;
+        Ok(updated > 0)
+    }
+
     pub async fn summary(&self) -> Result<FindingsSummary, String> {
         let db = self.db.lock().await;
         db.query_row(
@@ -1063,5 +1092,41 @@ mod tests {
             stale_prior.resolution_note.as_deref(),
             Some("auto-resolved: stale")
         );
+    }
+
+    fn escalation_finding(id: &str) -> FindingV1 {
+        FindingV1 {
+            finding_id: id.into(),
+            title: "t".into(),
+            narrative: "n".into(),
+            severity: FindingSeverity::Low,
+            category: "advisory_exposure".into(),
+            recommended_actions: vec![],
+            evidence: vec![],
+            device_macs: vec![],
+            timestamp_unix: 1,
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn reopen_acknowledged_by_key_only_touches_acknowledged_rows() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+        let id = store.upsert_finding("advisory", &escalation_finding("x:exposure"), None, None).await.unwrap();
+
+        // Open → untouched.
+        assert!(!store.reopen_acknowledged_by_key("advisory", "x:exposure").await.unwrap());
+
+        store.acknowledge(id, "scott").await.unwrap();
+        assert!(store.reopen_acknowledged_by_key("advisory", "x:exposure").await.unwrap());
+        let row = store.get_finding(id).await.unwrap().unwrap();
+        assert_eq!(row.status, FindingStatus::Open);
+        assert!(row.acknowledged_by.is_none());
+        assert!(row.acknowledged_at.is_none());
+
+        // Resolved → untouched (that is reopen_by_key's job).
+        store.resolve_by_key("advisory", "x:exposure", "gone").await.unwrap();
+        assert!(!store.reopen_acknowledged_by_key("advisory", "x:exposure").await.unwrap());
     }
 }
