@@ -19,6 +19,9 @@ use crate::staging::{stage_addresses, stage_service};
 pub(crate) const EXPOSURE_CATEGORY: &str = "advisory_exposure";
 const CEASED_NOTE: &str =
     "Exposure ceased: the service is disabled or no longer present on this device.";
+/// Start of the escalation note appended to a narrative. Always the last
+/// paragraph, so everything from this marker on is the note.
+const ESCALATION_MARKER: &str = "\n\nEscalated from ";
 
 pub(crate) fn exposure_finding_id(device_id: &str, service: &str, advisory_id: &str) -> String {
     format!("{}:{advisory_id}:exposure", surface_key(device_id, service))
@@ -61,8 +64,10 @@ pub(crate) fn assess(
         .collect();
     let mut out = ExposureAssessment::default();
     for adv in catalog.iter().filter(|a| a.requires_surface_class == "service") {
-        for name in &adv.requires_surface_names {
-            let id = exposure_finding_id(device_id, name, &adv.advisory_id);
+        for raw_name in &adv.requires_surface_names {
+            // Catalog names are stored raw; stage them exactly as router names are.
+            let name = stage_service(raw_name);
+            let id = exposure_finding_id(device_id, &name, &adv.advisory_id);
             match enabled.get(name.as_str()) {
                 Some(svc) => out.exposed.push(build_finding(&id, device_id, svc, adv, now)),
                 None => {
@@ -156,9 +161,15 @@ fn label(s: FindingSeverity) -> &'static str {
 ///   ceased earlier): reopened, since the exposure is back.
 /// - resolved by an operator: stays resolved. An operator's manual resolution
 ///   sticks; only the finding body is refreshed.
+///
+/// The escalation note ("Escalated from X to Y ...") is carried forward on
+/// later cycles while the finding stays at the severity it escalated to, so
+/// the rebuilt narrative does not drop it. If the escalation reopen fails, the
+/// finding is not written that cycle: the row stays acknowledged at its old
+/// severity and the escalation is re-detected next cycle.
 pub(crate) async fn reconcile(store: &FindingsStore, assessment: ExposureAssessment) -> Result<(), String> {
-    // Value: (status, severity, resolved by Drift itself).
-    let held: BTreeMap<String, (FindingStatus, FindingSeverity, bool)> = store
+    // Value: (status, severity, resolved by Drift itself, stored narrative).
+    let held: BTreeMap<String, (FindingStatus, FindingSeverity, bool, String)> = store
         .list_findings(&FindingsQuery {
             module_name: Some(ADVISORY_MODULE.to_string()),
             category: Some(EXPOSURE_CATEGORY.to_string()),
@@ -168,26 +179,32 @@ pub(crate) async fn reconcile(store: &FindingsStore, assessment: ExposureAssessm
         .into_iter()
         .map(|f| {
             let system_resolved = f.resolved_by.as_deref() == Some("system");
-            (f.finding_id, (f.status, f.severity, system_resolved))
+            (f.finding_id, (f.status, f.severity, system_resolved, f.narrative))
         })
         .collect();
 
     for mut finding in assessment.exposed {
         match held.get(&finding.finding_id) {
-            Some((FindingStatus::Acknowledged, prior, _)) if rank(finding.severity) > rank(*prior) => {
+            Some((FindingStatus::Acknowledged, prior, _, _)) if rank(finding.severity) > rank(*prior) => {
+                if let Err(e) = store.reopen_acknowledged_by_key(ADVISORY_MODULE, &finding.finding_id).await {
+                    warn!(finding_id = %finding.finding_id, error = %e, "advisory: exposure escalation reopen failed; finding left unchanged this cycle");
+                    continue;
+                }
                 finding.narrative.push_str(&format!(
-                    "\n\nEscalated from {} to {}: the service's address restriction was removed or \
+                    "{ESCALATION_MARKER}{} to {}: the service's address restriction was removed or \
                      widened after this finding was acknowledged, so it has been reopened for review.",
                     label(*prior),
                     label(finding.severity)
                 ));
-                if let Err(e) = store.reopen_acknowledged_by_key(ADVISORY_MODULE, &finding.finding_id).await {
-                    warn!(finding_id = %finding.finding_id, error = %e, "advisory: exposure escalation reopen failed");
-                }
             }
-            Some((FindingStatus::Resolved, _, true)) => {
+            Some((FindingStatus::Resolved, _, true, _)) => {
                 if let Err(e) = store.reopen_by_key(ADVISORY_MODULE, &finding.finding_id).await {
                     warn!(finding_id = %finding.finding_id, error = %e, "advisory: exposure reopen failed");
+                }
+            }
+            Some((_, prior, _, narrative)) if *prior == finding.severity => {
+                if let Some(at) = narrative.find(ESCALATION_MARKER) {
+                    finding.narrative.push_str(&narrative[at..]);
                 }
             }
             _ => {}
@@ -198,7 +215,7 @@ pub(crate) async fn reconcile(store: &FindingsStore, assessment: ExposureAssessm
     }
 
     for id in &assessment.not_exposed {
-        if matches!(held.get(id), Some((FindingStatus::Open | FindingStatus::Acknowledged, _, _))) {
+        if matches!(held.get(id), Some((FindingStatus::Open | FindingStatus::Acknowledged, _, _, _))) {
             if let Err(e) = store.resolve_by_key(ADVISORY_MODULE, id, CEASED_NOTE).await {
                 warn!(finding_id = %id, error = %e, "advisory: exposure resolve failed");
             }
@@ -373,5 +390,33 @@ mod tests {
 
         reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some(""))], &[advisory()], 3)).await.unwrap();
         assert_eq!(rows(&store).await[0].status, FindingStatus::Open);
+    }
+
+    #[tokio::test]
+    async fn escalation_note_persists_on_later_cycles() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("10.20.25.17/32"))], &[advisory()], 1)).await.unwrap();
+        store.acknowledge(rows(&store).await[0].id, "scott").await.unwrap();
+        let widened = [svc("api-ssl", false, Some(""))];
+        reconcile(&store, assess("dev1", &widened, &[advisory()], 2)).await.unwrap();
+        assert!(rows(&store).await[0].narrative.contains("Escalated from low to high"));
+
+        reconcile(&store, assess("dev1", &widened, &[advisory()], 3)).await.unwrap();
+        let r = rows(&store).await;
+        assert_eq!(r[0].status, FindingStatus::Open);
+        assert_eq!(r[0].severity, FindingSeverity::High);
+        assert!(r[0].narrative.contains("Escalated from low to high"));
+        assert_eq!(r[0].narrative.matches("Escalated from").count(), 1);
+    }
+
+    #[test]
+    fn catalog_surface_names_are_staged_before_matching() {
+        let mut adv = advisory();
+        adv.requires_surface_names = vec![" api-ssl ".into()];
+        let a = assess("dev1", &[svc("api-ssl", false, Some(""))], &[adv], 1);
+        assert_eq!(a.exposed.len(), 1);
+        assert_eq!(a.exposed[0].finding_id, ID);
+        assert!(a.not_exposed.is_empty());
     }
 }
