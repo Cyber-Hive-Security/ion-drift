@@ -15,6 +15,7 @@ pub mod catalog;
 pub mod consent;
 pub mod device_pass;
 pub mod exploitation;
+pub mod exposure;
 pub mod feed;
 pub mod signals;
 pub mod sustained;

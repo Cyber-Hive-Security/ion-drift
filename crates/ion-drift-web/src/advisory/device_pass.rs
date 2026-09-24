@@ -9,9 +9,11 @@ use std::collections::BTreeMap;
 use std::fmt::Display;
 
 use ion_drift_storage::{AdvisoryRecord, FeedCve, FeedKev};
+use mikrotik_core::resources::ip::IpService;
 use serde_json::Value;
 
 use crate::advisory::exploitation::now_unix;
+use crate::advisory::exposure;
 use crate::advisory::version::VersionRange;
 use crate::advisory::vulnerable::{self, VulnInput, VulnSource};
 use crate::router_queue::{Priority, QueuedRequest, RouterQueue};
@@ -75,9 +77,12 @@ pub(crate) fn merge_inputs(feed: Vec<FeedCve>, kev: Vec<FeedKev>, catalog: &[Adv
 #[derive(Debug, Default)]
 pub(crate) struct DeviceReads {
     pub version: Option<String>,
+    /// `None` when the read failed or was malformed — never an empty list, so
+    /// a failed read cannot look like "every service disabled".
+    pub services: Option<Vec<IpService>>,
 }
 
-/// Results arrive in request order: `[system/resource]`.
+/// Results arrive in request order: `[system/resource, ip/service]`.
 pub(crate) fn parse_device_reads<E: Display>(results: &[Result<Value, E>]) -> DeviceReads {
     let version = match results.first() {
         Some(Ok(v)) => v
@@ -87,7 +92,11 @@ pub(crate) fn parse_device_reads<E: Display>(results: &[Result<Value, E>]) -> De
             .filter(|s| !s.is_empty()),
         _ => None,
     };
-    DeviceReads { version }
+    let services = match results.get(1) {
+        Some(Ok(v)) => serde_json::from_value::<Vec<IpService>>(v.clone()).ok(),
+        _ => None,
+    };
+    DeviceReads { version, services }
 }
 
 struct Target {
@@ -131,7 +140,11 @@ pub(crate) async fn evaluate_devices(state: &AppState) -> Result<(), String> {
     for target in routeros_targets(state).await {
         let results = match target
             .queue
-            .submit(POLLER_ID, Priority::Low, vec![QueuedRequest::get("system/resource")])
+            .submit(
+                POLLER_ID,
+                Priority::Low,
+                vec![QueuedRequest::get("system/resource"), QueuedRequest::get("ip/service")],
+            )
             .await
         {
             Ok(r) => r,
@@ -141,16 +154,28 @@ pub(crate) async fn evaluate_devices(state: &AppState) -> Result<(), String> {
             }
         };
         let reads = parse_device_reads(&results);
-        let Some(version) = reads.version else {
-            tracing::warn!(device = %target.device_id, "advisory: no RouterOS version read; version findings unchanged");
-            continue;
-        };
-        let assessment = vulnerable::assess(&target.device_id, &version, &inputs, now);
-        if !assessment.cannot_evaluate.is_empty() {
-            tracing::debug!(device = %target.device_id, count = assessment.cannot_evaluate.len(), "advisory: CVEs not evaluable for this version");
+
+        match reads.version {
+            Some(version) => {
+                let assessment = vulnerable::assess(&target.device_id, &version, &inputs, now);
+                if !assessment.cannot_evaluate.is_empty() {
+                    tracing::debug!(device = %target.device_id, count = assessment.cannot_evaluate.len(), "advisory: CVEs not evaluable for this version");
+                }
+                if let Err(e) = vulnerable::reconcile(&state.findings_store, &assessment).await {
+                    tracing::warn!(device = %target.device_id, error = %e, "advisory: vulnerability reconcile failed");
+                }
+            }
+            None => tracing::warn!(device = %target.device_id, "advisory: no RouterOS version read; version findings unchanged"),
         }
-        if let Err(e) = vulnerable::reconcile(&state.findings_store, &assessment).await {
-            tracing::warn!(device = %target.device_id, error = %e, "advisory: vulnerability reconcile failed");
+
+        match reads.services {
+            Some(services) => {
+                let assessment = exposure::assess(&target.device_id, &services, &catalog, now);
+                if let Err(e) = exposure::reconcile(&state.findings_store, assessment).await {
+                    tracing::warn!(device = %target.device_id, error = %e, "advisory: exposure reconcile failed");
+                }
+            }
+            None => tracing::warn!(device = %target.device_id, "advisory: /ip/service read failed; exposure findings unchanged"),
         }
     }
     Ok(())
@@ -235,5 +260,27 @@ mod tests {
         assert!(parse_device_reads(&empty).version.is_none());
         let none: Vec<Result<serde_json::Value, String>> = vec![];
         assert!(parse_device_reads(&none).version.is_none());
+    }
+
+    #[test]
+    fn device_reads_extract_services() {
+        let ok: Vec<Result<serde_json::Value, String>> = vec![
+            Ok(serde_json::json!({"version": "7.24.1"})),
+            Ok(serde_json::json!([{ ".id": "*8", "name": "api-ssl", "disabled": "false", "address": "" }])),
+        ];
+        let reads = parse_device_reads(&ok);
+        assert_eq!(reads.services.unwrap()[0].name, "api-ssl");
+    }
+
+    #[test]
+    fn failed_service_read_yields_none_so_exposure_is_left_alone() {
+        let partial: Vec<Result<serde_json::Value, String>> =
+            vec![Ok(serde_json::json!({"version": "7.24.1"})), Err("timeout".into())];
+        let reads = parse_device_reads(&partial);
+        assert!(reads.version.is_some());
+        assert!(reads.services.is_none());
+        let malformed: Vec<Result<serde_json::Value, String>> =
+            vec![Ok(serde_json::json!({"version": "7.24.1"})), Ok(serde_json::json!({"not": "a list"}))];
+        assert!(parse_device_reads(&malformed).services.is_none());
     }
 }
