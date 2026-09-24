@@ -200,6 +200,26 @@ pub struct DnsConfig {
     pub cache_max_ttl: Option<u32>,
 }
 
+/// IP service — `/ip/service` (api, api-ssl, ssh, telnet, ftp, www, www-ssl, winbox).
+///
+/// `address` is the service's own source restriction: empty means any address
+/// that can reach the router may connect.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct IpService {
+    #[serde(rename = ".id")]
+    pub id: String,
+    pub name: String,
+    #[serde(default, deserialize_with = "ros_u32_opt")]
+    pub port: Option<u32>,
+    #[serde(deserialize_with = "ros_bool")]
+    pub disabled: bool,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default, deserialize_with = "ros_bool_opt")]
+    pub invalid: Option<bool>,
+}
+
 // ── Client methods ─────────────────────────────────────────────
 
 impl MikrotikClient {
@@ -252,6 +272,11 @@ impl MikrotikClient {
     pub async fn dns_config(&self) -> Result<DnsConfig, MikrotikError> {
         self.get("ip/dns").await
     }
+
+    /// `/ip/service` — management services and their source restrictions.
+    pub async fn ip_services(&self) -> Result<Vec<IpService>, MikrotikError> {
+        self.get("ip/service").await
+    }
 }
 
 #[cfg(test)]
@@ -284,5 +309,30 @@ mod tests {
         assert_eq!(entries[0].name, "example.com");
         assert!(entries[0].data.is_none());
         assert!(entries[0].is_static.is_none());
+    }
+
+    #[test]
+    fn ip_service_deserializes_router_payload() {
+        let payload = serde_json::json!([
+            { ".id": "*8", "address": "", "certificate": "none", "disabled": "false",
+              "invalid": "false", "name": "api-ssl", "port": "8729", "tls-version": "any", "vrf": "main" },
+            { ".id": "*3", "address": "10.20.25.17/32", "disabled": "true", "name": "api", "port": "8728" }
+        ]);
+        let svcs: Vec<IpService> = serde_json::from_value(payload).unwrap();
+        assert_eq!(svcs[0].name, "api-ssl");
+        assert_eq!(svcs[0].port, Some(8729));
+        assert!(!svcs[0].disabled);
+        assert_eq!(svcs[0].address.as_deref(), Some(""));
+        assert_eq!(svcs[1].address.as_deref(), Some("10.20.25.17/32"));
+        assert!(svcs[1].disabled);
+    }
+
+    #[test]
+    fn ip_service_tolerates_missing_optionals() {
+        let payload = serde_json::json!([{ ".id": "*1", "name": "ssh", "disabled": "false" }]);
+        let svcs: Vec<IpService> = serde_json::from_value(payload).unwrap();
+        assert!(svcs[0].port.is_none());
+        assert!(svcs[0].address.is_none());
+        assert!(svcs[0].invalid.is_none());
     }
 }
