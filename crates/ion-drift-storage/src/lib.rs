@@ -8,7 +8,7 @@ pub mod migrations;
 pub mod read_traits;
 pub mod switch;
 
-pub use advisory::{AdvisoryRecord, AdvisoryStore, AttackObservation};
+pub use advisory::{AdvisoryRecord, AdvisoryStore, AttackObservation, FeedCve, FeedKev, FeedSourceState};
 pub use dns::{DnsObservation, DnsStore, WatchlistEntry};
 pub use alerting::{AlertHistoryEntry, AlertRule, AlertStatus, DeliveryChannelConfig};
 pub use behavior::{BehaviorStore, Investigation, InvestigationStats, NewInvestigation};

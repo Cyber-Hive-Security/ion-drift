@@ -84,6 +84,42 @@ pub struct AuthFailure {
     pub observed_at: i64,
 }
 
+/// One RouterOS CVE as fetched from NVD, already staged by the web crate.
+/// `ranges_json` is the affected-version list in the web crate's
+/// `VersionRange` shape; storage keeps it opaque, like the catalog's other
+/// JSON columns. Sole writer: the advisory feed task.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FeedCve {
+    pub cve_id: String,
+    pub published: String,
+    pub last_modified: String,
+    pub description: String,
+    pub cvss_version: Option<String>,
+    pub cvss_score: Option<f64>,
+    pub cvss_vector: Option<String>,
+    pub cwe: Option<String>,
+    pub nvd_status: String,
+    pub ranges_json: String,
+}
+
+/// One CISA Known Exploited Vulnerabilities entry for a MikroTik product.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedKev {
+    pub cve_id: String,
+    pub date_added: String,
+    pub due_date: Option<String>,
+}
+
+/// Health of one feed source (`"nvd"` or `"kev"`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedSourceState {
+    pub source: String,
+    pub last_success_at: Option<i64>,
+    pub last_attempt_at: i64,
+    pub last_error: Option<String>,
+    pub records: i64,
+}
+
 pub struct AdvisoryStore {
     db: Arc<Mutex<Connection>>,
 }
@@ -93,7 +129,8 @@ impl AdvisoryStore {
     /// v1 = the Phase 1 baseline; v2 adds `advisory_auth_failure`, the
     /// cross-cycle auth-failure accumulator. Bump when appending a step to
     /// [`Self::MIGRATION_STEPS`] (see `crate::migrations`).
-    pub const SCHEMA_VERSION: u32 = 2;
+    /// v3 adds the vulnerability feed tables (feed_cve, feed_kev, feed_state).
+    pub const SCHEMA_VERSION: u32 = 3;
 
     /// Versioned migrations applied after the v1 baseline, in ascending
     /// order. Steps use plain `CREATE TABLE` (no `IF NOT EXISTS`) on
@@ -107,9 +144,10 @@ impl AdvisoryStore {
     /// writer (Phase 3, wired — see `tasks/advisory.rs` and
     /// `exploitation::note_auth_failures`). Same windowed counting +
     /// prune model as `advisory_attack_observation`.
-    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[(
-        2,
-        "
+    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[
+        (
+            2,
+            "
         CREATE TABLE advisory_auth_failure (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_id TEXT NOT NULL,
@@ -122,7 +160,44 @@ impl AdvisoryStore {
         CREATE INDEX idx_advisory_auth_failure_surface
             ON advisory_auth_failure(surface_key, observed_at DESC);
         ",
-    )];
+        ),
+        // v3 — vulnerability feed. The CHECK constraints are the backstop
+        // behind the web crate's staging layer: a future writer that bypasses
+        // staging still cannot store unbounded third-party text.
+        (
+            3,
+            "
+        CREATE TABLE feed_cve (
+            cve_id TEXT PRIMARY KEY CHECK (length(cve_id) BETWEEN 9 AND 32),
+            published TEXT NOT NULL CHECK (length(published) <= 40),
+            last_modified TEXT NOT NULL CHECK (length(last_modified) <= 40),
+            description TEXT NOT NULL CHECK (length(description) <= 4000),
+            cvss_version TEXT CHECK (cvss_version IS NULL OR length(cvss_version) <= 8),
+            cvss_score REAL CHECK (cvss_score IS NULL OR (cvss_score >= 0 AND cvss_score <= 10)),
+            cvss_vector TEXT CHECK (cvss_vector IS NULL OR length(cvss_vector) <= 256),
+            cwe TEXT CHECK (cwe IS NULL OR length(cwe) <= 64),
+            nvd_status TEXT NOT NULL CHECK (length(nvd_status) <= 40),
+            ranges_json TEXT NOT NULL CHECK (length(ranges_json) <= 16384),
+            fetched_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE feed_kev (
+            cve_id TEXT PRIMARY KEY CHECK (length(cve_id) BETWEEN 9 AND 32),
+            date_added TEXT NOT NULL CHECK (length(date_added) <= 40),
+            due_date TEXT CHECK (due_date IS NULL OR length(due_date) <= 40),
+            fetched_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE feed_state (
+            source TEXT PRIMARY KEY CHECK (source IN ('nvd', 'kev')),
+            last_success_at INTEGER,
+            last_attempt_at INTEGER NOT NULL,
+            last_error TEXT CHECK (last_error IS NULL OR length(last_error) <= 512),
+            records INTEGER NOT NULL DEFAULT 0
+        );
+        ",
+        ),
+    ];
 
     pub async fn new(db_path: &Path) -> Result<Self, String> {
         let mut conn =
@@ -462,6 +537,165 @@ impl AdvisoryStore {
             .map_err(|e| format!("row collect failed: {e}"))
     }
 
+    /// Replace the stored NVD set with a freshly fetched one, atomically.
+    ///
+    /// Refuses an empty set: a fetch that parsed cleanly but returned nothing
+    /// is far more likely an upstream fault than MikroTik having no CVEs, and
+    /// accepting it would silently clear every vulnerability finding. Any
+    /// insert failure rolls the whole replace back, keeping the prior set.
+    pub async fn replace_feed_cves(&self, cves: &[FeedCve], now: i64) -> Result<usize, String> {
+        if cves.is_empty() {
+            return Err("refusing to replace the NVD set with an empty one".to_string());
+        }
+        let mut db = self.db.lock().await;
+        let tx = db.transaction().map_err(|e| format!("begin feed_cve replace: {e}"))?;
+        tx.execute("DELETE FROM feed_cve", [])
+            .map_err(|e| format!("clear feed_cve: {e}"))?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO feed_cve (cve_id, published, last_modified, description,
+                        cvss_version, cvss_score, cvss_vector, cwe, nvd_status, ranges_json,
+                        fetched_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                )
+                .map_err(|e| format!("prepare feed_cve insert: {e}"))?;
+            for c in cves {
+                stmt.execute(params![
+                    c.cve_id, c.published, c.last_modified, c.description, c.cvss_version,
+                    c.cvss_score, c.cvss_vector, c.cwe, c.nvd_status, c.ranges_json, now
+                ])
+                .map_err(|e| format!("insert {}: {e}", c.cve_id))?;
+            }
+        }
+        tx.commit().map_err(|e| format!("commit feed_cve replace: {e}"))?;
+        Ok(cves.len())
+    }
+
+    /// Replace the stored KEV set, atomically. Refuses an empty set for the
+    /// same reason as [`Self::replace_feed_cves`].
+    pub async fn replace_feed_kev(&self, kev: &[FeedKev], now: i64) -> Result<usize, String> {
+        if kev.is_empty() {
+            return Err("refusing to replace the KEV set with an empty one".to_string());
+        }
+        let mut db = self.db.lock().await;
+        let tx = db.transaction().map_err(|e| format!("begin feed_kev replace: {e}"))?;
+        tx.execute("DELETE FROM feed_kev", [])
+            .map_err(|e| format!("clear feed_kev: {e}"))?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO feed_kev (cve_id, date_added, due_date, fetched_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                )
+                .map_err(|e| format!("prepare feed_kev insert: {e}"))?;
+            for k in kev {
+                stmt.execute(params![k.cve_id, k.date_added, k.due_date, now])
+                    .map_err(|e| format!("insert kev {}: {e}", k.cve_id))?;
+            }
+        }
+        tx.commit().map_err(|e| format!("commit feed_kev replace: {e}"))?;
+        Ok(kev.len())
+    }
+
+    pub async fn list_feed_cves(&self) -> Result<Vec<FeedCve>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db
+            .prepare(
+                "SELECT cve_id, published, last_modified, description, cvss_version,
+                        cvss_score, cvss_vector, cwe, nvd_status, ranges_json
+                 FROM feed_cve ORDER BY cve_id",
+            )
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(FeedCve {
+                    cve_id: r.get(0)?,
+                    published: r.get(1)?,
+                    last_modified: r.get(2)?,
+                    description: r.get(3)?,
+                    cvss_version: r.get(4)?,
+                    cvss_score: r.get(5)?,
+                    cvss_vector: r.get(6)?,
+                    cwe: r.get(7)?,
+                    nvd_status: r.get(8)?,
+                    ranges_json: r.get(9)?,
+                })
+            })
+            .map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("row collect failed: {e}"))
+    }
+
+    pub async fn list_feed_kev(&self) -> Result<Vec<FeedKev>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db
+            .prepare("SELECT cve_id, date_added, due_date FROM feed_kev ORDER BY cve_id")
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(FeedKev { cve_id: r.get(0)?, date_added: r.get(1)?, due_date: r.get(2)? })
+            })
+            .map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("row collect failed: {e}"))
+    }
+
+    /// Record the outcome of one fetch attempt for `source`. A failure updates
+    /// the attempt time and error but never touches `last_success_at` or
+    /// `records`, so staleness is measured from the last good fetch.
+    pub async fn record_feed_attempt(
+        &self,
+        source: &str,
+        now: i64,
+        outcome: Result<i64, &str>,
+    ) -> Result<(), String> {
+        let db = self.db.lock().await;
+        match outcome {
+            Ok(records) => db.execute(
+                "INSERT INTO feed_state (source, last_success_at, last_attempt_at, last_error, records)
+                 VALUES (?1, ?2, ?2, NULL, ?3)
+                 ON CONFLICT(source) DO UPDATE SET
+                    last_success_at = ?2, last_attempt_at = ?2, last_error = NULL, records = ?3",
+                params![source, now, records],
+            ),
+            Err(error) => {
+                let error: String = error.chars().take(512).collect();
+                db.execute(
+                    "INSERT INTO feed_state (source, last_success_at, last_attempt_at, last_error, records)
+                     VALUES (?1, NULL, ?2, ?3, 0)
+                     ON CONFLICT(source) DO UPDATE SET last_attempt_at = ?2, last_error = ?3",
+                    params![source, now, error],
+                )
+            }
+        }
+        .map_err(|e| format!("record feed attempt: {e}"))?;
+        Ok(())
+    }
+
+    pub async fn feed_states(&self) -> Result<Vec<FeedSourceState>, String> {
+        let db = self.db.lock().await;
+        let mut stmt = db
+            .prepare(
+                "SELECT source, last_success_at, last_attempt_at, last_error, records
+                 FROM feed_state ORDER BY source",
+            )
+            .map_err(|e| format!("prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(FeedSourceState {
+                    source: r.get(0)?,
+                    last_success_at: r.get(1)?,
+                    last_attempt_at: r.get(2)?,
+                    last_error: r.get(3)?,
+                    records: r.get(4)?,
+                })
+            })
+            .map_err(|e| format!("query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("row collect failed: {e}"))
+    }
+
     /// JSON columns decode lossily: a row written by a newer schema (or hand
     /// edited) degrades to an empty list rather than failing the whole read.
     ///
@@ -773,7 +1007,11 @@ mod tests {
         // A v2 binary opening a v1 database on disk: this is the upgrade path.
         let store = AdvisoryStore::new(f.path()).await.expect("v1 db must open");
 
-        assert_eq!(user_version(f.path()), 2, "v1 database migrates to v2");
+        assert_eq!(
+            user_version(f.path()),
+            i64::from(AdvisoryStore::SCHEMA_VERSION),
+            "v1 database migrates to the current schema"
+        );
         {
             let conn = Connection::open(f.path()).unwrap();
             assert!(
@@ -802,13 +1040,13 @@ mod tests {
 
         // First open migrates; drop the store so the file is released.
         drop(AdvisoryStore::new(f.path()).await.expect("migrating open"));
-        assert_eq!(user_version(f.path()), 2);
+        assert_eq!(user_version(f.path()), i64::from(AdvisoryStore::SCHEMA_VERSION));
 
         // Second open must be a no-op: the migration step uses plain
         // CREATE TABLE, so a wrongly re-run step fails loudly here instead
         // of passing silently.
         drop(AdvisoryStore::new(f.path()).await.expect("reopen at v2"));
-        assert_eq!(user_version(f.path()), 2);
+        assert_eq!(user_version(f.path()), i64::from(AdvisoryStore::SCHEMA_VERSION));
     }
 
     #[tokio::test]
@@ -816,7 +1054,11 @@ mod tests {
         let f = NamedTempFile::new().unwrap();
         let _store = AdvisoryStore::new(f.path()).await.unwrap();
 
-        assert_eq!(user_version(f.path()), 2, "fresh database lands on v2");
+        assert_eq!(
+            user_version(f.path()),
+            i64::from(AdvisoryStore::SCHEMA_VERSION),
+            "fresh database lands on the current schema"
+        );
         let conn = Connection::open(f.path()).unwrap();
         assert!(table_exists(&conn, "advisory_auth_failure"));
     }
@@ -907,5 +1149,115 @@ mod tests {
         let left = store.auth_failures_since(0).await.unwrap();
         assert_eq!(left.len(), 2);
         assert_eq!(left[1].observed_at, 200, "cutoff row is retained");
+    }
+
+    fn feed_cve(id: &str) -> FeedCve {
+        FeedCve {
+            cve_id: id.to_string(),
+            published: "2026-09-05T00:00:00.000".into(),
+            last_modified: "2026-09-10T00:00:00.000".into(),
+            description: "desc".into(),
+            cvss_version: Some("4.0".into()),
+            cvss_score: Some(9.2),
+            cvss_vector: Some("CVSS:4.0/AV:N".into()),
+            cwe: Some("CWE-88".into()),
+            nvd_status: "Analyzed".into(),
+            ranges_json: r#"[{"start_including":"7.0","end_excluding":"7.23.4"}]"#.into(),
+        }
+    }
+
+    fn ids(cves: &[FeedCve]) -> Vec<String> {
+        cves.iter().map(|c| c.cve_id.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn replace_feed_cves_swaps_the_whole_set() {
+        let f = NamedTempFile::new().unwrap();
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+        store.replace_feed_cves(&[feed_cve("CVE-2018-14847"), feed_cve("CVE-2026-86060")], 1).await.unwrap();
+        store.replace_feed_cves(&[feed_cve("CVE-2026-86060"), feed_cve("CVE-2026-67277")], 2).await.unwrap();
+        assert_eq!(ids(&store.list_feed_cves().await.unwrap()), vec!["CVE-2026-67277", "CVE-2026-86060"]);
+    }
+
+    #[tokio::test]
+    async fn replace_feed_cves_refuses_an_empty_set_and_keeps_data() {
+        let f = NamedTempFile::new().unwrap();
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+        store.replace_feed_cves(&[feed_cve("CVE-2026-86060")], 1).await.unwrap();
+        assert!(store.replace_feed_cves(&[], 2).await.is_err());
+        assert_eq!(ids(&store.list_feed_cves().await.unwrap()), vec!["CVE-2026-86060"]);
+    }
+
+    #[tokio::test]
+    async fn failed_replace_rolls_back_to_prior_data() {
+        let f = NamedTempFile::new().unwrap();
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+        store.replace_feed_cves(&[feed_cve("CVE-2026-86060")], 1).await.unwrap();
+        // Duplicate primary key mid-batch: the whole replace must roll back.
+        let dup = [feed_cve("CVE-2026-67277"), feed_cve("CVE-2026-67277")];
+        assert!(store.replace_feed_cves(&dup, 2).await.is_err());
+        assert_eq!(ids(&store.list_feed_cves().await.unwrap()), vec!["CVE-2026-86060"]);
+    }
+
+    #[tokio::test]
+    async fn check_constraint_rejects_oversized_description() {
+        let f = NamedTempFile::new().unwrap();
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+        let mut big = feed_cve("CVE-2026-86060");
+        big.description = "x".repeat(4001);
+        assert!(store.replace_feed_cves(&[big], 1).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn replace_feed_kev_round_trips_and_refuses_empty() {
+        let f = NamedTempFile::new().unwrap();
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+        let kev = FeedKev { cve_id: "CVE-2026-86060".into(), date_added: "2026-09-10".into(), due_date: Some("2026-10-01".into()) };
+        store.replace_feed_kev(std::slice::from_ref(&kev), 1).await.unwrap();
+        assert!(store.replace_feed_kev(&[], 2).await.is_err());
+        assert_eq!(store.list_feed_kev().await.unwrap(), vec![kev]);
+    }
+
+    #[tokio::test]
+    async fn feed_attempt_failure_keeps_last_success() {
+        let f = NamedTempFile::new().unwrap();
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+        store.record_feed_attempt("nvd", 100, Ok(5)).await.unwrap();
+        store.record_feed_attempt("nvd", 200, Err("HTTP 503")).await.unwrap();
+        let states = store.feed_states().await.unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].last_success_at, Some(100));
+        assert_eq!(states[0].last_attempt_at, 200);
+        assert_eq!(states[0].last_error.as_deref(), Some("HTTP 503"));
+        assert_eq!(states[0].records, 5);
+    }
+
+    #[tokio::test]
+    async fn feed_state_rejects_unknown_source() {
+        let f = NamedTempFile::new().unwrap();
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+        assert!(store.record_feed_attempt("evil", 1, Ok(1)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn v2_database_migrates_to_v3() {
+        let f = NamedTempFile::new().unwrap();
+        {
+            let _ = AdvisoryStore::new(f.path()).await.unwrap();
+        }
+        {
+            // Rewind the throwaway temp database to v2: remove the v3 tables and the stamp.
+            let c = Connection::open(f.path()).unwrap();
+            c.execute_batch(
+                "DROP TABLE feed_cve; DROP TABLE feed_kev; DROP TABLE feed_state;
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+        }
+        let store = AdvisoryStore::new(f.path()).await.unwrap();
+        store.replace_feed_cves(&[feed_cve("CVE-2026-86060")], 1).await.unwrap();
+        let c = Connection::open(f.path()).unwrap();
+        let version: u32 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, 3);
     }
 }
