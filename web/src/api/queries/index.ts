@@ -11,3 +11,4 @@ export * from './sankey';
 export * from './settings';
 export * from './stats';
 export * from './policy';
+export * from './advisory';
