@@ -327,6 +327,25 @@ fn validate(
         return Err((advisory_id, format!("unknown severity '{severity}'")));
     }
 
+    // A constraint is either absent or a non-empty list of version ranges the
+    // matcher can evaluate. Anything else is rejected rather than stored and
+    // silently ignored: an advisory must never claim coverage the engine
+    // cannot compute.
+    if let Some(vc) = raw
+        .version_constraint
+        .as_ref()
+        .filter(|v| !v.is_null() && v.as_str().is_none_or(|s| !s.trim().is_empty()))
+    {
+        let usable = serde_json::from_value::<Vec<crate::advisory::version::VersionRange>>(vc.clone())
+            .is_ok_and(|ranges| !ranges.is_empty());
+        if !usable {
+            return Err((
+                advisory_id,
+                "unrecognised version_constraint: expected a non-empty array of version ranges".to_string(),
+            ));
+        }
+    }
+
     // An unusable link costs the advisory that one link, not its narrative and
     // mitigations: those still describe a real exposure even when the catalog
     // names a behaviour this build has no detector for. Only an entry whose
@@ -744,5 +763,40 @@ mod tests {
             version_constraint_string(Some(serde_json::json!({ "lt": "7.16" }))),
             Some(r#"{"lt":"7.16"}"#.to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn version_constraint_ranges_are_accepted() {
+        let seed = TempDir::new().unwrap();
+        let data = TempDir::new().unwrap();
+        let db = TempDir::new().unwrap();
+        let body = valid_catalog(1, "api brute force").replace(
+            r#""version_constraint": null"#,
+            r#""version_constraint": [{"start_including": "7.0", "end_excluding": "7.24.2"}]"#,
+        );
+        write(&seed, "mikrotik.json", &body);
+        let store = store_in(&db).await;
+        let report = load_catalog(&store, seed.path(), data.path()).await.expect("load");
+        assert!(!report.degraded);
+        assert_eq!(report.advisories_loaded, 1);
+        let stored = store.list_advisories().await.unwrap();
+        let ranges: Vec<crate::advisory::version::VersionRange> =
+            serde_json::from_str(stored[0].version_constraint.as_deref().unwrap()).unwrap();
+        assert_eq!(ranges[0].end_excluding.as_deref(), Some("7.24.2"));
+    }
+
+    #[tokio::test]
+    async fn unrecognised_version_constraint_is_rejected() {
+        let seed = TempDir::new().unwrap();
+        let data = TempDir::new().unwrap();
+        let db = TempDir::new().unwrap();
+        let body = valid_catalog(1, "api brute force")
+            .replace(r#""version_constraint": null"#, r#""version_constraint": "< 7.16""#);
+        write(&seed, "mikrotik.json", &body);
+        let store = store_in(&db).await;
+        let report = load_catalog(&store, seed.path(), data.path()).await.expect("load");
+        assert!(report.degraded);
+        assert_eq!(report.advisories_loaded, 0);
+        assert!(report.files_rejected[0].contains("version_constraint"));
     }
 }
