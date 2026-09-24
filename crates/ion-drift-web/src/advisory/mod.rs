@@ -12,6 +12,7 @@
 //! needs code.
 
 pub mod catalog;
+pub mod consent;
 pub mod exploitation;
 pub mod feed;
 pub mod signals;

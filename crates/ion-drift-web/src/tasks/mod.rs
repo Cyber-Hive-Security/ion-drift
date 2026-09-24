@@ -1,4 +1,5 @@
 mod advisory;
+mod advisory_feed;
 mod behavior;
 mod cert;
 mod connections;
@@ -205,6 +206,9 @@ pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>
 
     // Advisory exploitation correlation (independent of the alert rules)
     advisory::spawn_advisory_evaluator(&state.task_supervisor, state.clone());
+
+    // Vulnerability feed (NVD + CISA KEV) — idle until an admin consents
+    advisory_feed::spawn_advisory_feed(&state.task_supervisor, state.clone());
 
     // DNS cache harvest + confusable-domain detection
     dns_cache::spawn_dns_cache_poller(&state.task_supervisor, state.clone());
