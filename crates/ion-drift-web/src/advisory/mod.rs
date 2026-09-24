@@ -18,3 +18,4 @@ pub mod feed;
 pub mod signals;
 pub mod sustained;
 pub mod version;
+pub mod vulnerable;
