@@ -1,4 +1,5 @@
 pub mod admin_modules;
+pub mod advisory_feed;
 pub mod alerts;
 pub mod arp;
 pub mod backbone;
@@ -470,6 +471,8 @@ pub fn router(
         .route("/findings/{id}", get(findings::detail))
         .route("/findings/{id}/acknowledge", post(findings::acknowledge))
         .route("/findings/{id}/resolve", post(findings::resolve))
+        .route("/advisory/feed", get(advisory_feed::feed_status))
+        .route("/advisory/feed/consent", post(advisory_feed::set_feed_consent))
         // Policy
         .route("/policy", get(policy::policy_overview).post(policy::create_policy))
         .route("/policy/{id}", put(policy::update_policy).delete(policy::delete_policy))
