@@ -20,6 +20,10 @@ pub(crate) const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DESCRIPTION: usize = 4000;
 const MAX_VERSION: usize = 32;
 const MAX_RANGES: usize = 64;
+/// Mirrors `feed_cve`'s `CHECK (length(ranges_json) <= 16384)` in advisory.db
+/// (SQLite `length()` counts characters). A record over it is skipped here:
+/// one failed insert rolls back the whole feed replace.
+const MAX_RANGES_JSON: usize = 16384;
 const ROUTEROS_CPE_PREFIX: &str = "cpe:2.3:o:mikrotik:routeros:";
 
 #[derive(Debug)]
@@ -28,7 +32,8 @@ pub(crate) struct NvdPage {
     pub start_index: u64,
     pub results_per_page: u64,
     pub cves: Vec<FeedCve>,
-    /// Records dropped: malformed, invalid id, duplicate, or no RouterOS range.
+    /// Records dropped: malformed, invalid id, duplicate, no RouterOS range,
+    /// or ranges too large for storage.
     pub skipped: usize,
 }
 
@@ -182,6 +187,10 @@ fn stage_nvd_item(item: serde_json::Value) -> Option<FeedCve> {
         .flat_map(|w| &w.description)
         .find(|d| d.lang == "en")
         .map(|d| stage_text(&d.value, 64));
+    let ranges_json = serde_json::to_string(&ranges).ok()?;
+    if ranges_json.chars().count() > MAX_RANGES_JSON {
+        return None;
+    }
     Some(FeedCve {
         cve_id,
         published: stage_text(&cve.published, 40),
@@ -192,7 +201,7 @@ fn stage_nvd_item(item: serde_json::Value) -> Option<FeedCve> {
         cvss_vector,
         cwe,
         nvd_status: stage_text(&cve.vuln_status, 40),
-        ranges_json: serde_json::to_string(&ranges).ok()?,
+        ranges_json,
     })
 }
 
@@ -213,21 +222,33 @@ fn routeros_ranges(configs: &[NvdConfiguration]) -> Vec<VersionRange> {
         if version_field == "-" && !has_bounds {
             continue;
         }
-        let bound = |b: &Option<String>| {
-            b.as_deref()
-                .map(|s| stage_text(s, MAX_VERSION))
-                .filter(|s| !s.is_empty())
-        };
+        let [start_including, start_excluding, end_including, end_excluding] = [
+            &m.version_start_including,
+            &m.version_start_excluding,
+            &m.version_end_including,
+            &m.version_end_excluding,
+        ]
+        .map(|b| b.as_deref().map(|s| stage_text(s, MAX_VERSION)));
+        // A bound that is present but stages to nothing (blank, or only
+        // scrubbed characters) must not silently vanish: with the others
+        // absent the range would serialize to `{}`, which matches every
+        // version. Skip the whole match instead.
+        if [&start_including, &start_excluding, &end_including, &end_excluding]
+            .iter()
+            .any(|b| b.as_deref().is_some_and(str::is_empty))
+        {
+            continue;
+        }
         let exact = match version_field {
             "*" | "" => None,
             v if !has_bounds => Some(stage_text(v, MAX_VERSION)),
             _ => None,
         };
         let range = VersionRange {
-            start_including: bound(&m.version_start_including),
-            start_excluding: bound(&m.version_start_excluding),
-            end_including: bound(&m.version_end_including),
-            end_excluding: bound(&m.version_end_excluding),
+            start_including,
+            start_excluding,
+            end_including,
+            end_excluding,
             exact,
         };
         if !out.contains(&range) {
@@ -465,5 +486,86 @@ mod tests {
         for bad in ["CVE-18-14847", "cve-2018-14847", "CVE-2018-123", "CVE-2018-14847x", "not-a-cve", ""] {
             assert!(!is_cve_id(bad), "{bad}");
         }
+    }
+
+    fn routeros_match(bounds: serde_json::Value) -> serde_json::Value {
+        let mut m = serde_json::json!({
+            "vulnerable": true,
+            "criteria": "cpe:2.3:o:mikrotik:routeros:*:*:*:*:*:*:*:*"
+        });
+        m.as_object_mut()
+            .unwrap()
+            .extend(bounds.as_object().unwrap().clone());
+        m
+    }
+
+    fn page_with(records: Vec<(&str, Vec<serde_json::Value>)>) -> NvdPage {
+        let vulns: Vec<_> = records
+            .into_iter()
+            .map(|(id, matches)| {
+                serde_json::json!({ "cve": {
+                    "id": id,
+                    "configurations": [ { "nodes": [ { "cpeMatch": matches } ] } ]
+                } })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "resultsPerPage": vulns.len(), "startIndex": 0, "totalResults": vulns.len(),
+            "vulnerabilities": vulns
+        })
+        .to_string();
+        parse_nvd(body.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn skips_record_whose_ranges_json_exceeds_storage_check() {
+        // 32-char bounds of quotes and backslashes: JSON-escaping doubles them,
+        // so 64 distinct ranges serialize well past 16384 characters.
+        let hostile = |i: usize, tag: char| format!("{i:02}{tag}{}", "\"\\".repeat(14) + "\"");
+        let matches: Vec<_> = (0..MAX_RANGES)
+            .map(|i| {
+                routeros_match(serde_json::json!({
+                    "versionStartIncluding": hostile(i, 'a'),
+                    "versionStartExcluding": hostile(i, 'b'),
+                    "versionEndIncluding": hostile(i, 'c'),
+                    "versionEndExcluding": hostile(i, 'd'),
+                }))
+            })
+            .collect();
+        assert_eq!(hostile(0, 'a').chars().count(), MAX_VERSION);
+        let page = page_with(vec![
+            ("CVE-2026-33333", matches),
+            ("CVE-2026-86060", vec![routeros_match(serde_json::json!({ "versionEndExcluding": "7.24.2" }))]),
+        ]);
+        assert_eq!(page.skipped, 1);
+        assert_eq!(page.cves.len(), 1);
+        assert_eq!(page.cves[0].cve_id, "CVE-2026-86060");
+        assert!(page.cves.iter().all(|c| c.ranges_json.chars().count() <= MAX_RANGES_JSON));
+    }
+
+    #[test]
+    fn blank_bound_alone_produces_no_cve() {
+        let page = page_with(vec![
+            ("CVE-2026-44444", vec![routeros_match(serde_json::json!({ "versionEndExcluding": " " }))]),
+            ("CVE-2026-55555", vec![routeros_match(serde_json::json!({ "versionEndExcluding": "\u{202E}" }))]),
+        ]);
+        assert!(page.cves.is_empty(), "a blank bound must never become a match-everything range");
+        assert_eq!(page.skipped, 2);
+    }
+
+    #[test]
+    fn blank_bound_beside_valid_match_keeps_only_the_valid_range() {
+        let page = page_with(vec![(
+            "CVE-2026-66666",
+            vec![
+                routeros_match(serde_json::json!({ "versionStartIncluding": "7.0", "versionEndExcluding": " " })),
+                routeros_match(serde_json::json!({ "versionStartIncluding": "7.24", "versionEndExcluding": "7.24.2" })),
+            ],
+        )]);
+        assert_eq!(page.cves.len(), 1);
+        let r = ranges_of(&page.cves[0]);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].start_including.as_deref(), Some("7.24"));
+        assert_eq!(r[0].end_excluding.as_deref(), Some("7.24.2"));
     }
 }
