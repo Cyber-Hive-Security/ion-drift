@@ -4,6 +4,11 @@
 //! in a published affected range. It does not claim the affected feature is
 //! enabled — fetched CVEs carry no machine-readable configuration condition —
 //! and every finding's narrative says so.
+//!
+//! Lifecycle: Drift resolves a finding only when the device is positively
+//! outside every affected range, and reopens only findings it resolved itself
+//! (`resolved_by = 'system'`) when the device falls back into a range. An
+//! operator's manual resolution always sticks.
 
 use std::collections::BTreeSet;
 
@@ -105,7 +110,7 @@ fn build_finding(
         VulnSource::Catalog => "Description from the Ion Drift advisory catalog.".to_string(),
     };
     let narrative = format!(
-        "{}\n\nYour RouterOS version ({version_label}) is in the affected range. Drift has not checked \
+        "{}\n\nYour RouterOS version is in the affected range. Drift has not checked \
          whether the affected feature is enabled on this router.{}\n\n{attribution}",
         input.description,
         match &input.kev_date_added {
@@ -148,24 +153,34 @@ fn build_finding(
 
 /// Apply one device's assessment. Resolves only findings for CVEs positively
 /// evaluated as not affected; `cannot_evaluate` CVEs are left exactly as they are.
+/// Reopens an affected finding only if Drift itself resolved it
+/// (`resolved_by = 'system'`, i.e. a regression after an upgrade); a finding an
+/// operator resolved is refreshed but stays resolved.
 pub(crate) async fn reconcile(store: &FindingsStore, assessment: &VulnAssessment) -> Result<(), String> {
-    let held: BTreeSet<String> = store
+    let rows = store
         .list_findings(&FindingsQuery {
             module_name: Some(ADVISORY_MODULE.to_string()),
             category: Some(VULN_CATEGORY.to_string()),
             ..Default::default()
         })
-        .await?
-        .into_iter()
-        .filter(|f| f.status != FindingStatus::Resolved)
-        .map(|f| f.finding_id)
-        .collect();
+        .await?;
+    let mut held = BTreeSet::new();
+    let mut system_resolved = BTreeSet::new();
+    for f in rows {
+        if f.status != FindingStatus::Resolved {
+            held.insert(f.finding_id);
+        } else if f.resolved_by.as_deref() == Some("system") {
+            system_resolved.insert(f.finding_id);
+        }
+    }
 
     for finding in &assessment.affected {
-        // Re-open first: upsert preserves lifecycle state, so a finding closed
-        // after an upgrade would otherwise stay resolved after a downgrade.
-        if let Err(e) = store.reopen_by_key(ADVISORY_MODULE, &finding.finding_id).await {
-            warn!(finding_id = %finding.finding_id, error = %e, "advisory: vulnerability reopen failed");
+        // Re-open first: upsert preserves lifecycle state, so a finding Drift
+        // closed after an upgrade would otherwise stay resolved after a downgrade.
+        if system_resolved.contains(&finding.finding_id) {
+            if let Err(e) = store.reopen_by_key(ADVISORY_MODULE, &finding.finding_id).await {
+                warn!(finding_id = %finding.finding_id, error = %e, "advisory: vulnerability reopen failed");
+            }
         }
         if let Err(e) = store.upsert_finding(ADVISORY_MODULE, finding, None, None).await {
             warn!(finding_id = %finding.finding_id, error = %e, "advisory: vulnerability upsert failed");
@@ -227,7 +242,10 @@ mod tests {
         assert_eq!(f.category, VULN_CATEGORY);
         assert_eq!(f.severity, FindingSeverity::Critical);
         assert!(f.title.contains("actively exploited"));
-        assert!(f.narrative.contains("Drift has not checked whether the affected feature is enabled"));
+        assert!(f.narrative.contains("Your RouterOS version is in the affected range."));
+        assert!(f.narrative.contains(
+            "Drift has not checked whether the affected feature is enabled on this router."
+        ));
         assert!(f.recommended_actions[0].contains("7.24.2"));
         assert!(f.recommended_actions.iter().any(|a| a.contains("nvd.nist.gov/vuln/detail/CVE-2026-86060")));
     }
@@ -272,6 +290,26 @@ mod tests {
         // Downgraded back into the range.
         reconcile(&store, &assess("dev1", "7.24.1", &inputs, 3)).await.unwrap();
         assert_eq!(vuln_rows(&store).await[0].status, FindingStatus::Open);
+    }
+
+    #[tokio::test]
+    async fn operator_resolution_survives_a_still_affected_pass() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+        let inputs = [input("CVE-2026-86060", Some(9.2), true)];
+        reconcile(&store, &assess("dev1", "7.24.1", &inputs, 1)).await.unwrap();
+        let row_id = vuln_rows(&store).await[0].id;
+        store
+            .resolve(row_id, "operator", Some("Accepted risk: SSH is LAN-only.".into()))
+            .await
+            .unwrap();
+
+        // Same affected version: Drift must not undo the operator's decision.
+        reconcile(&store, &assess("dev1", "7.24.1", &inputs, 2)).await.unwrap();
+        let rows = vuln_rows(&store).await;
+        assert_eq!(rows[0].status, FindingStatus::Resolved);
+        assert_eq!(rows[0].resolved_by.as_deref(), Some("operator"));
+        assert_eq!(rows[0].resolution_note.as_deref(), Some("Accepted risk: SSH is LAN-only."));
     }
 
     #[tokio::test]
