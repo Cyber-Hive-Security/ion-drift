@@ -71,9 +71,9 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - WAN scan pressure aggregation with time-series dashboard
 - Port flow baselines with network-wide anomaly classification (new port, volume spike, source anomaly, disappeared)
 - Two-layer correlation: device-level anomalies cross-linked with network-level port anomalies
-- **DNS policy deviation detection** with MITRE ATT&CK context — detects devices using unauthorized DNS servers, enriches with ATT&CK technique mappings (T1071.004, T1568, T1048.003, T1583.001), resolve actions create policies organically
+- **DNS policy deviation detection** with MITRE ATT&CK context — detects devices using unauthorized DNS servers, enriches with ATT&CK technique mappings (T1071.004, T1568, T1048.003, T1583.001), resolve actions build Drift's own authorization policies organically (stored in Drift, never pushed to the router)
 - **NTP policy deviation detection** with MITRE ATT&CK context — detects devices using unauthorized NTP servers (T1124), policies auto-synced from DHCP option 42
-- **Policy editor** — create, edit, and delete custom network policies via the UI. Admin policies protected from router sync overwrite. Router-synced policies locked (read-only)
+- **Policy editor** — create, edit, and delete network policies stored in Drift for deviation detection — never pushed to or enforced on the router. Admin policies protected from router-config sync overwrite; policies synced in from the router are locked (read-only)
 - **Deviation enrichment** — device hostnames, GeoIP org names for external IPs, per-VLAN severity, CSV export with formula injection defense
 - **Blocked connection filtering** — firewall-blocked connections (zero reply bytes) excluded from deviation detection. Router WAN IP excluded from detection via `ip/dhcp-client`
 - **Source of Authority (SoA) model** — every detection carries a classification (Authoritative, Observed, Inferred) and source tier (Router T1, Switch T2, SNMP T3). Enforced at the Rust type level via enums. Inferred data is never treated as fact.

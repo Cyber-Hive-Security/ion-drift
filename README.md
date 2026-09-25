@@ -19,9 +19,9 @@ See [FEATURES.md](FEATURES.md) for the full feature list.
 
 ### Policy Deviation Detection
 
-- **DNS Policy Deviation Detection** — Detects devices using unauthorized DNS servers by cross-referencing connection tracking with the infrastructure policy map. Enriched with MITRE ATT&CK technique context. Resolve actions create policies organically from observed traffic.
+- **DNS Policy Deviation Detection** — Detects devices using unauthorized DNS servers by cross-referencing connection tracking with the infrastructure policy map. Enriched with MITRE ATT&CK technique context. Resolve actions build Drift's own authorization policies organically from observed traffic.
 - **NTP Policy Deviation Detection** — Detects devices using unauthorized NTP servers. ATT&CK technique T1124 (System Time Discovery). Policies auto-synced from DHCP option 42.
-- **Policy Editor** — Create custom network policies directly. Admin policies survive router sync cycles. Router-synced policies are read-only with lock icon.
+- **Policy Editor** — Define network policies directly in Drift. Policies live in Drift and describe what it treats as authorized for deviation detection — Drift never pushes, writes, or enforces them on the router. Admin-created policies survive Drift's router-config sync; policies synced *in* from the router's config are read-only (lock icon).
 
 ## Findings
 
@@ -84,7 +84,7 @@ Firewall rule viewer with drop statistics and geo-enriched drop country attribut
 ![Firewall](caps/ion-drift-firewall.png)
 
 ### Policy Deviations
-Detects devices using unauthorized DNS and NTP servers by cross-referencing connection tracking with your router's DHCP and DNS configuration. Every deviation is enriched with [MITRE ATT&CK](https://attack.mitre.org/) technique context. Resolve actions — Authorize, Acknowledge, Flag All, Dismiss — create policies organically from observed traffic. Custom policies can be created via the built-in policy editor.
+Detects devices using unauthorized DNS and NTP servers by cross-referencing connection tracking with your router's DHCP and DNS configuration. Every deviation is enriched with [MITRE ATT&CK](https://attack.mitre.org/) technique context. Resolve actions — Authorize, Acknowledge, Flag All, Dismiss — build Drift's own authorization policies organically from observed traffic. Custom policies can be defined via the built-in policy editor. These policies live inside Drift for deviation detection; none are pushed to the router.
 
 On our own production network, the deviation detector flagged our authoritative DNS server for performing recursive resolution directly to root servers — bypassing our AdGuard ad-filtering pipeline entirely. A misconfiguration we'd missed for months, found and fixed in 20 minutes. If it catches that on a network run by the developers, it'll catch IoT devices hardcoding `8.8.8.8` on yours.
 
