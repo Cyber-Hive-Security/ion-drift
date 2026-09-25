@@ -6,7 +6,7 @@ use crate::log_parser::{self, LogsResponse, StructuredLogEntry};
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 
-use super::api_error;
+use super::{live_or_degrade, LiveOr};
 
 /// Replace ASCII/Unicode control characters (newlines, tabs, ANSI ESC, etc.)
 /// with '?' so attacker-influenceable router log fields can't inject control
@@ -32,7 +32,19 @@ pub async fn list(
     State(state): State<AppState>,
     Query(f): Query<LogFilter>,
 ) -> Result<Json<LogsResponse>, Response> {
-    let raw_entries = state.mikrotik.log_entries().await.map_err(api_error)?;
+    let raw_entries = match live_or_degrade(state.mikrotik.log_entries().await) {
+        LiveOr::Live(entries) => entries,
+        LiveOr::Degraded => {
+            // No buffered/stored router-log source exists, so serve an empty,
+            // graceful set (live_available: false) rather than a 502 (DRIFT P3).
+            return Ok(Json(LogsResponse {
+                entries: Vec::new(),
+                analytics: log_parser::compute_analytics(&[]),
+                live_available: false,
+                as_of: None,
+            }));
+        }
+    };
 
     // Strip control/ANSI characters from router-supplied log lines before
     // parsing. Fields like DHCP hostnames and firewall comments are
@@ -95,5 +107,10 @@ pub async fn list(
         entries = entries.split_off(len - limit);
     }
 
-    Ok(Json(LogsResponse { entries, analytics }))
+    Ok(Json(LogsResponse {
+        entries,
+        analytics,
+        live_available: true,
+        as_of: None,
+    }))
 }

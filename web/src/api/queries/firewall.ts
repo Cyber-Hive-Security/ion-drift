@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../client";
 import type {
+  Degradable,
   FilterRule,
   NatRule,
   MangleRule,
@@ -13,7 +14,7 @@ export function useFirewallFilter(chain?: string, options?: { enabled?: boolean 
   const params = chain ? `?chain=${encodeURIComponent(chain)}` : "";
   return useQuery({
     queryKey: ["firewall", "filter", chain],
-    queryFn: () => apiFetch<FilterRule[]>(`/api/firewall/filter${params}`),
+    queryFn: () => apiFetch<Degradable<FilterRule>>(`/api/firewall/filter${params}`),
     enabled: options?.enabled ?? true,
   });
 }

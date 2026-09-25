@@ -29,6 +29,7 @@ import { PageShell } from "@/components/layout/page-shell";
 import { LogsHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
+import { LiveDataBanner } from "@/components/live-data-banner";
 import { cn } from "@/lib/utils";
 import { countryFlag } from "@/lib/country";
 import type {
@@ -150,6 +151,11 @@ export function LogsPage() {
       isRefreshing={logs.isFetching}
       help={<LogsHelp />}
     >
+      <LiveDataBanner
+        liveAvailable={data?.live_available ?? true}
+        asOf={data?.as_of}
+      />
+
       {/* Summary Bar */}
       {analytics && <SummaryBar analytics={analytics} />}
 

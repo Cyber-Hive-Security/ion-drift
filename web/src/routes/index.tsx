@@ -12,6 +12,7 @@ import { UptimeCard } from "@/components/dashboard/uptime-card";
 import { TrafficCard } from "@/components/dashboard/traffic-card";
 import { DhcpCard } from "@/components/dashboard/dhcp-card";
 import { ConnectionsCard } from "@/components/dashboard/connections-card";
+import { LiveDataBanner } from "@/components/live-data-banner";
 import { FirewallDropsCard } from "@/components/dashboard/firewall-drops-card";
 import { VlanActivitySection } from "@/components/dashboard/vlan-activity";
 import { VlanTrafficBreakdown } from "@/components/dashboard/vlan-sankey";
@@ -224,6 +225,10 @@ export function DashboardPage() {
 
   return (
     <PageShell title="Dashboard" help={<DashboardHelp />}>
+      <LiveDataBanner
+        liveAvailable={connections.data?.live_available ?? true}
+        asOf={connections.data?.as_of}
+      />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <CardErrorBoundary name="Firewall Drops">
           {drops.data ? <Link to="/firewall" className="block"><FirewallDropsCard data={drops.data} /></Link> : <CardSkeleton title="Firewall Drops" />}
