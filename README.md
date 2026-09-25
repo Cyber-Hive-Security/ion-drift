@@ -25,7 +25,7 @@ See [FEATURES.md](FEATURES.md) for the full feature list.
 
 ## Findings
 
-Everything Drift flags converges on one page: **Findings**. Instead of scattering alerts across a dozen screens, Drift funnels vulnerability intelligence, service exposure, exploitation signals, confusable-domain detection, and policy deviations into a single triage surface with a consistent lifecycle.
+**Findings** is where Drift's vulnerability intelligence comes together: the RouterOS vulnerability feed, service-exposure and exploitation findings, confusable-domain detection, and anything your registered modules publish — all in one triage surface with a consistent lifecycle, filterable by status, severity, module, and category. (Behavior anomalies and policy deviations keep their own dedicated pages.)
 
 - **Vulnerability feed (NVD + CISA KEV).** Drift pulls RouterOS advisories daily. Every managed device whose firmware falls inside a published affected range gets a finding; CVEs CISA lists as actively exploited are raised to Critical. Findings state plainly that Drift checked the *version* — not whether the affected feature happens to be enabled — so a real exposure is never hidden behind a false "not applicable."
 - **Service exposure, early.** When a service tied to a known advisory is enabled (for example `api` / `api-ssl`), Drift raises an early-warning finding before anyone attacks it — High when the service is reachable from anywhere, Low when you have restricted it by address.

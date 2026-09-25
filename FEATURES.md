@@ -88,7 +88,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 ## Findings & Advisory Intelligence
 
-- **Unified Findings surface** — vulnerability, exposure, exploitation, confusable-domain, and policy-deviation findings converge on one triage page, filterable by status (open/acknowledged/resolved), severity, module, and category, with full-text search
+- **Unified Findings surface** — vulnerability, service-exposure, exploitation, confusable-domain, and module-published findings converge on one triage page, filterable by status (open/acknowledged/resolved), severity, module, and category, with full-text search
 - **Vulnerability feed (NVD + CISA KEV)** — daily pull of RouterOS advisories; every managed device whose firmware falls in a published affected range raises a finding; CVEs on the CISA Known Exploited Vulnerabilities list are raised to Critical
 - **Version-honest findings** — a vulnerability finding states that Drift matched the device *version*, not whether the affected feature is enabled, so a real exposure is never hidden behind a false "not applicable"
 - **Service exposure findings** (`advisory_exposure`) — a service tied to a known advisory (e.g. `api`/`api-ssl`) that is enabled raises an early-warning finding: High when reachable from anywhere, Low when restricted by `address`
