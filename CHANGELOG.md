@@ -31,6 +31,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Advisory catalog `version_constraint` must now be `null` or an array of version ranges.
 
+### Fixed
+
+- **Graceful degradation when the router is unreachable.** Connections, Logs, ARP, DHCP leases, pool
+  utilization, firewall filter, and network-map status now serve the last-known data with a
+  "showing last-known data" banner instead of returning a 502 error.
+
+### Security
+
+- Ship `session.secure = true` in the production config template, and warn at startup when session
+  cookies are configured without `Secure` on a non-loopback bind. (The Secure flag governs only the
+  browser-to-proxy leg, which is HTTPS.)
+- Stop forwarding `X-Forwarded-*`, `X-Real-IP`, and `Forwarded` headers to modules through the
+  reverse proxy: a registered module no longer receives the client's real IP or internal topology.
+- Strip control and bidirectional-override characters from module-published finding content before
+  storage.
+- Send a versionless `User-Agent` on outbound requests to modules.
+- Return a generic `400` from `/auth/callback` on a malformed request instead of a framework error
+  that names the missing query fields.
+- Escape `baseline_status` in the topology tooltip before it is rendered.
+
+### Internal
+
+- Abstract the router client behind a `RouterApi` trait and add end-to-end handler tests for the
+  degradation paths. No behavior change.
+
 ## [0.5.2b] - 2026-07-23
 
 ### Fixed
