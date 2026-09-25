@@ -19,7 +19,11 @@ use crate::staging::stage_text;
 pub(crate) const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DESCRIPTION: usize = 4000;
 const MAX_VERSION: usize = 32;
-const MAX_RANGES: usize = 64;
+/// Most distinct RouterOS ranges one CVE may carry. A record with more is
+/// skipped (counted in `skipped`), never stored with a partial list: a
+/// dropped range would evaluate a device on that version as not affected.
+/// Records under the cap can still be skipped by [`MAX_RANGES_JSON`].
+const MAX_RANGES: usize = 512;
 /// Mirrors `feed_cve`'s `CHECK (length(ranges_json) <= 16384)` in advisory.db
 /// (SQLite `length()` counts characters). A record over it is skipped here:
 /// one failed insert rolls back the whole feed replace.
@@ -205,7 +209,8 @@ fn stage_nvd_item(item: serde_json::Value) -> Option<FeedCve> {
     })
 }
 
-/// Vulnerable RouterOS matches only, deduplicated, capped at [`MAX_RANGES`].
+/// Vulnerable RouterOS matches only, deduplicated. More than [`MAX_RANGES`]
+/// distinct ranges returns an empty list so the record is skipped whole.
 /// A CPE version of `-` ("not applicable") with no bounds is skipped: turning
 /// it into a boundless range would claim every version is affected.
 fn routeros_ranges(configs: &[NvdConfiguration]) -> Vec<VersionRange> {
@@ -252,10 +257,10 @@ fn routeros_ranges(configs: &[NvdConfiguration]) -> Vec<VersionRange> {
             exact,
         };
         if !out.contains(&range) {
+            if out.len() == MAX_RANGES {
+                return Vec::new();
+            }
             out.push(range);
-        }
-        if out.len() >= MAX_RANGES {
-            break;
         }
     }
     out
@@ -541,6 +546,37 @@ mod tests {
         assert_eq!(page.cves.len(), 1);
         assert_eq!(page.cves[0].cve_id, "CVE-2026-86060");
         assert!(page.cves.iter().all(|c| c.ranges_json.chars().count() <= MAX_RANGES_JSON));
+    }
+
+    #[test]
+    fn record_with_more_ranges_than_the_cap_is_skipped_not_truncated() {
+        let exact = |i: usize| {
+            serde_json::json!({
+                "vulnerable": true,
+                "criteria": format!("cpe:2.3:o:mikrotik:routeros:7.{}.{}:*:*:*:*:*:*:*", i / 100, i % 100)
+            })
+        };
+        let page = page_with(vec![
+            ("CVE-2026-33334", (0..=MAX_RANGES).map(exact).collect()),
+            ("CVE-2026-86060", vec![routeros_match(serde_json::json!({ "versionEndExcluding": "7.24.2" }))]),
+        ]);
+        assert_eq!(page.skipped, 1, "a partial range list must never be stored");
+        assert_eq!(page.cves.len(), 1);
+        assert_eq!(page.cves[0].cve_id, "CVE-2026-86060");
+    }
+
+    #[test]
+    fn record_at_the_range_cap_is_kept_whole() {
+        let exact = |i: usize| {
+            serde_json::json!({
+                "vulnerable": true,
+                "criteria": format!("cpe:2.3:o:mikrotik:routeros:7.{}.{}:*:*:*:*:*:*:*", i / 100, i % 100)
+            })
+        };
+        let page = page_with(vec![("CVE-2026-33335", (0..MAX_RANGES).map(exact).collect())]);
+        assert_eq!(page.skipped, 0);
+        let ranges: Vec<VersionRange> = serde_json::from_str(&page.cves[0].ranges_json).unwrap();
+        assert_eq!(ranges.len(), MAX_RANGES);
     }
 
     #[test]

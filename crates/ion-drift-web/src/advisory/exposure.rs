@@ -14,7 +14,7 @@ use mikrotik_core::resources::ip::IpService;
 use tracing::warn;
 
 use crate::advisory::exploitation::{surface_key, ADVISORY_MODULE};
-use crate::staging::{stage_addresses, stage_service};
+use crate::staging::{scrub, stage_addresses, stage_service};
 
 pub(crate) const EXPOSURE_CATEGORY: &str = "advisory_exposure";
 const CEASED_NOTE: &str =
@@ -34,10 +34,14 @@ pub(crate) enum Scope {
 }
 
 /// Any open entry (`0.0.0.0/0`, `::/0`) or an empty list means unrestricted.
+/// Open entries are detected on the full raw list, before staging caps it at
+/// `MAX_LIST_ITEMS`: truncation must never hide an open entry and turn an
+/// unrestricted service into a restricted one.
 pub(crate) fn scope_of(address: Option<&str>) -> Scope {
     let raw: Vec<String> = address.unwrap_or("").split(',').map(str::to_owned).collect();
+    let open = raw.iter().any(|a| matches!(scrub(a).trim(), "0.0.0.0/0" | "::/0"));
     let list = stage_addresses(&raw);
-    if list.is_empty() || list.iter().any(|a| a == "0.0.0.0/0" || a == "::/0") {
+    if open || list.is_empty() {
         Scope::Unrestricted
     } else {
         Scope::Restricted(list)
@@ -263,6 +267,18 @@ mod tests {
         assert_eq!(scope_of(Some("10.20.25.17/32,0.0.0.0/0")), Scope::Unrestricted);
         assert_eq!(scope_of(Some("::/0")), Scope::Unrestricted);
         assert_eq!(scope_of(Some("10.20.25.17/32")), Scope::Restricted(vec!["10.20.25.17/32".into()]));
+    }
+
+    #[test]
+    fn open_entry_is_found_even_past_the_staging_list_cap() {
+        // `::/0` sorts after IPv4 prefixes, so list truncation would drop it.
+        let mut entries: Vec<String> = (1..=17).map(|i| format!("10.0.0.{i}/32")).collect();
+        entries.push("::/0".into());
+        assert_eq!(scope_of(Some(&entries.join(","))), Scope::Unrestricted);
+        // Scrubbed and padded open entries count too.
+        entries.pop();
+        entries.push(" 0.0.0.0/0\u{200B} ".into());
+        assert_eq!(scope_of(Some(&entries.join(","))), Scope::Unrestricted);
     }
 
     #[test]
