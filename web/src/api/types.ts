@@ -9,6 +9,7 @@ export interface UserInfo {
   user_id: string;
   username: string;
   email: string | null;
+  is_admin: boolean;
 }
 
 export interface AuthConfig {
