@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
-use super::api_error;
+use super::{iso_from_unix_secs, live_or_degrade, LiveOr};
 
 #[derive(Serialize, Clone)]
 pub struct DeviceStatus {
@@ -39,6 +39,16 @@ pub struct NetworkMapStatusResponse {
     pub devices: Vec<DeviceStatus>,
     pub interfaces: Vec<InterfaceStatus>,
     pub timestamp: i64,
+    /// `false` when the router is unreachable and this is the last cached
+    /// snapshot rather than a fresh poll (DRIFT P3). `true` on live/fresh data.
+    pub live_available: bool,
+    /// RFC3339 timestamp of the cached snapshot when degraded; `None` when live.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone)]
@@ -97,12 +107,34 @@ pub async fn status(
         }
     }
 
-    // Fetch all three concurrently
-    let (leases, arp_entries, ifaces) = tokio::try_join!(
-        async { state.mikrotik.dhcp_leases().await.map_err(api_error) },
-        async { state.mikrotik.arp_table().await.map_err(api_error) },
-        async { state.mikrotik.interfaces().await.map_err(api_error) },
-    )?;
+    // Fetch all three concurrently; if the router is unreachable, serve the last
+    // cached snapshot (marked live_available:false) instead of 502ing.
+    let (leases, arp_entries, ifaces) = match live_or_degrade(tokio::try_join!(
+        async { state.mikrotik.dhcp_leases().await },
+        async { state.mikrotik.arp_table().await },
+        async { state.mikrotik.interfaces().await },
+    )) {
+        LiveOr::Live(tuple) => tuple,
+        LiveOr::Degraded => {
+            let cache = state.network_map_cache.read().await;
+            let resp = match *cache {
+                Some(ref c) => {
+                    let mut data = c.data.clone();
+                    data.live_available = false;
+                    data.as_of = iso_from_unix_secs(data.timestamp);
+                    data
+                }
+                None => NetworkMapStatusResponse {
+                    devices: Vec::new(),
+                    interfaces: Vec::new(),
+                    timestamp: 0,
+                    live_available: false,
+                    as_of: None,
+                },
+            };
+            return Ok(Json(resp));
+        }
+    };
 
     // Build ARP IP set
     let arp_ips: HashSet<&str> = arp_entries.iter().map(|a| a.address.as_str()).collect();
@@ -228,6 +260,8 @@ pub async fn status(
         devices,
         interfaces,
         timestamp,
+        live_available: true,
+        as_of: None,
     };
 
     // Update cache

@@ -281,6 +281,17 @@ export interface LogAnalytics {
   volume_over_time: TimeCount[];
 }
 
+/**
+ * Envelope for list endpoints that gracefully degrade when the router is
+ * offline: `items` carries the (possibly last-known) rows, `live_available`
+ * is false when serving cached data, and `as_of` is the cache timestamp.
+ */
+export interface Degradable<T> {
+  items: T[];
+  live_available: boolean;
+  as_of?: string | null;
+}
+
 export interface LogsResponse {
   entries: StructuredLogEntry[];
   analytics: LogAnalytics;
@@ -549,6 +560,10 @@ export interface NetworkMapStatus {
   devices: DeviceStatus[];
   interfaces: InterfaceStatus[];
   timestamp: number;
+  /** False when the router is unreachable and this is the last cached snapshot. */
+  live_available?: boolean;
+  /** RFC3339 timestamp of the cached snapshot when degraded. */
+  as_of?: string | null;
 }
 
 // Behavior / Device Fingerprinting types (snake_case — custom Rust structs)

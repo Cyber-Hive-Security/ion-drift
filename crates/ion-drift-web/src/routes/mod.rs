@@ -104,6 +104,47 @@ pub(crate) fn live_or_degrade<T>(
     }
 }
 
+/// Envelope for endpoints that would otherwise return a bare JSON array, so the
+/// same `live_available`/`as_of` degradation signal can ride along (DRIFT P3).
+/// On the live path use [`Degradable::live`]; when serving cached/last-known
+/// data use [`Degradable::degraded`].
+#[derive(serde::Serialize)]
+pub(crate) struct Degradable<T> {
+    pub items: Vec<T>,
+    pub live_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
+}
+
+impl<T> Degradable<T> {
+    /// Live data straight from the router.
+    pub(crate) fn live(items: Vec<T>) -> Self {
+        Self {
+            items,
+            live_available: true,
+            as_of: None,
+        }
+    }
+
+    /// Degraded data served from an in-memory cache (or empty when none exists).
+    pub(crate) fn degraded(items: Vec<T>, as_of: Option<String>) -> Self {
+        Self {
+            items,
+            live_available: false,
+            as_of,
+        }
+    }
+}
+
+/// Format a Unix timestamp (seconds) as an RFC3339 string for `as_of` fields.
+/// Returns `None` for a non-positive/absent timestamp.
+pub(crate) fn iso_from_unix_secs(secs: i64) -> Option<String> {
+    if secs <= 0 {
+        return None;
+    }
+    chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
+}
+
 /// Extract the origin (scheme + host) from a full URL.
 fn extract_origin(url: &str) -> String {
     if let Some(scheme_end) = url.find("://") {

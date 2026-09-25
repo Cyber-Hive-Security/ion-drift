@@ -11,6 +11,7 @@ import { PageShell } from "@/components/layout/page-shell";
 import { FirewallHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
+import { LiveDataBanner } from "@/components/live-data-banner";
 import { formatBytes, formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { FilterRule, NatRule, MangleRule } from "@/api/types";
@@ -147,13 +148,16 @@ export function FirewallPage() {
   const query = queries[tab];
 
   // Number rules by their position in the API response (rule order)
+  // For the filter tab the response is a Degradable envelope ({ items, ... });
+  // nat/mangle still return bare arrays.
+  const activeRows = tab === "filter" ? (filter.data?.items ?? null) : (query.data ?? null);
   const numberedData = useMemo(() => {
-    if (!query.data) return [];
-    return (query.data as Array<{ chain: string }>).map((r, i) => ({
+    if (!activeRows) return [];
+    return (activeRows as Array<{ chain: string }>).map((r, i) => ({
       ...r,
       _ruleNum: i,
     }));
-  }, [query.data]);
+  }, [activeRows]);
 
   // Get unique chains for the current tab
   const chains = useMemo(() => {
@@ -234,7 +238,10 @@ export function FirewallPage() {
       )}
 
       {tab === "filter" && filter.data && (
-        <DataTable columns={filterColumns} data={filteredData as Numbered<FilterRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search filter rules..." rowStyle={filterHeatmap as (row: Numbered<FilterRule>) => CSSProperties | undefined} />
+        <>
+          <LiveDataBanner liveAvailable={filter.data.live_available} asOf={filter.data.as_of} />
+          <DataTable columns={filterColumns} data={filteredData as Numbered<FilterRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search filter rules..." rowStyle={filterHeatmap as (row: Numbered<FilterRule>) => CSSProperties | undefined} />
+        </>
       )}
       {tab === "nat" && nat.data && (
         <DataTable columns={natColumns} data={filteredData as Numbered<NatRule>[]} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search NAT rules..." rowStyle={natHeatmap as (row: Numbered<NatRule>) => CSSProperties | undefined} />

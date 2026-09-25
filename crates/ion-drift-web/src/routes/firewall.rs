@@ -3,9 +3,10 @@ use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::{api_error, internal_error};
+use super::{api_error, internal_error, live_or_degrade, Degradable, LiveOr};
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
+use mikrotik_core::resources::firewall::FilterRule;
 
 #[derive(Serialize)]
 pub struct DropCountryEntry {
@@ -100,24 +101,39 @@ pub struct ChainFilter {
     pub chain: Option<String>,
 }
 
+/// GET /api/firewall/filter
+///
+/// Degrades to the last-known rules from `firewall_rules_cache` when the router
+/// is unreachable, instead of 502ing (DRIFT P3). The cache holds only a
+/// monotonic `Instant`, so no wall-clock `as_of` is available on the degraded
+/// path.
 pub async fn filter(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
     Query(f): Query<ChainFilter>,
-) -> Result<Json<serde_json::Value>, Response> {
-    let mut rules = state
-        .mikrotik
-        .firewall_filter_rules()
-        .await
-        .map_err(api_error)?;
-
-    if let Some(ref chain) = f.chain {
-        rules.retain(|r| r.chain == *chain);
+) -> Result<Json<Degradable<FilterRule>>, Response> {
+    match live_or_degrade(state.mikrotik.firewall_filter_rules().await) {
+        LiveOr::Live(mut rules) => {
+            if let Some(ref chain) = f.chain {
+                rules.retain(|r| r.chain == *chain);
+            }
+            Ok(Json(Degradable::live(rules)))
+        }
+        LiveOr::Degraded => {
+            let cached = state.firewall_rules_cache.read().await;
+            let rules = filter_rules_by_chain(&cached.0, f.chain.as_deref());
+            Ok(Json(Degradable::degraded(rules, None)))
+        }
     }
+}
 
-    Ok(Json(serde_json::to_value(rules).map_err(|e| {
-        internal_error("serialize filter rules", e)
-    })?))
+/// Filter cached filter rules by chain (pure — unit-testable).
+fn filter_rules_by_chain(rules: &[FilterRule], chain: Option<&str>) -> Vec<FilterRule> {
+    rules
+        .iter()
+        .filter(|r| chain.map_or(true, |c| r.chain == c))
+        .cloned()
+        .collect()
 }
 
 pub async fn nat(
@@ -158,4 +174,53 @@ pub async fn mangle(
     Ok(Json(serde_json::to_value(rules).map_err(|e| {
         internal_error("serialize mangle rules", e)
     })?))
+}
+
+#[cfg(test)]
+mod degradation_tests {
+    use super::*;
+    use crate::routes::{live_or_degrade, Degradable, LiveOr};
+    use mikrotik_core::MikrotikError;
+
+    fn rule(id: &str, chain: &str) -> FilterRule {
+        serde_json::from_value(serde_json::json!({
+            ".id": id,
+            "chain": chain,
+            "action": "accept",
+        }))
+        .expect("valid FilterRule")
+    }
+
+    #[test]
+    fn filter_rules_by_chain_filters_and_passes_through() {
+        let rules = vec![rule("*1", "forward"), rule("*2", "input"), rule("*3", "forward")];
+        assert_eq!(filter_rules_by_chain(&rules, None).len(), 3);
+        let forward = filter_rules_by_chain(&rules, Some("forward"));
+        assert_eq!(forward.len(), 2);
+        assert!(forward.iter().all(|r| r.chain == "forward"));
+        assert_eq!(filter_rules_by_chain(&rules, Some("nope")).len(), 0);
+    }
+
+    #[test]
+    fn degraded_envelope_marks_unavailable() {
+        let env = Degradable::degraded(vec![rule("*1", "forward")], None);
+        assert!(!env.live_available);
+        assert_eq!(env.items.len(), 1);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["live_available"], serde_json::json!(false));
+        assert!(v.get("as_of").is_none());
+    }
+
+    #[test]
+    fn live_envelope_marks_available() {
+        let env = Degradable::live(vec![rule("*1", "forward")]);
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["live_available"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn erroring_call_maps_to_degraded() {
+        let r: Result<Vec<FilterRule>, MikrotikError> = Err(MikrotikError::AuthFailed);
+        assert!(matches!(live_or_degrade(r), LiveOr::Degraded));
+    }
 }

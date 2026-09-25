@@ -11,6 +11,7 @@ import { PageShell } from "@/components/layout/page-shell";
 import { IpHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
+import { LiveDataBanner } from "@/components/live-data-banner";
 import { Badge } from "@/components/badge";
 import { cn } from "@/lib/utils";
 import { DeviceLink } from "@/components/device-link";
@@ -332,13 +333,22 @@ export function IpPage() {
         <DataTable columns={routeColumns} data={routes.data} rowKey={(r) => r[".id"]} searchable searchPlaceholder="Search routes..." />
       )}
       {tab === "dhcp" && dhcpStatus.data && (
-        <DataTable columns={dhcpStatusColumns} data={dhcpStatus.data} rowKey={(r) => r.id} defaultSort={{ key: "address" }} searchable searchPlaceholder="Search leases..." />
+        <>
+          <LiveDataBanner liveAvailable={dhcpStatus.data.live_available} asOf={dhcpStatus.data.as_of} />
+          <DataTable columns={dhcpStatusColumns} data={dhcpStatus.data.items} rowKey={(r) => r.id} defaultSort={{ key: "address" }} searchable searchPlaceholder="Search leases..." />
+        </>
       )}
       {tab === "arp" && arp.data && (
-        <DataTable columns={arpColumns} data={arp.data} rowKey={(r) => r.id} searchable searchPlaceholder="Search ARP table..." />
+        <>
+          <LiveDataBanner liveAvailable={arp.data.live_available} asOf={arp.data.as_of} />
+          <DataTable columns={arpColumns} data={arp.data.items} rowKey={(r) => r.id} searchable searchPlaceholder="Search ARP table..." />
+        </>
       )}
       {tab === "utilization" && poolUtil.data && (
-        <EnhancedPoolUtilization data={poolUtil.data} />
+        <>
+          <LiveDataBanner liveAvailable={poolUtil.data.live_available} asOf={poolUtil.data.as_of} />
+          <EnhancedPoolUtilization data={poolUtil.data.items} />
+        </>
       )}
     </PageShell>
   );

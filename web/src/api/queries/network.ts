@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../client";
 import type {
+  Degradable,
   SystemResource,
   SystemIdentity,
   RouterInterface,
@@ -120,7 +121,7 @@ export function useVlanFlows() {
 export function useDhcpLeasesStatus(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["ip", "dhcp-leases-status"],
-    queryFn: () => apiFetch<DhcpLeaseStatus[]>("/api/ip/dhcp-leases-status"),
+    queryFn: () => apiFetch<Degradable<DhcpLeaseStatus>>("/api/ip/dhcp-leases-status"),
     refetchInterval: 60_000,
     enabled: options?.enabled ?? true,
   });
@@ -129,7 +130,7 @@ export function useDhcpLeasesStatus(options?: { enabled?: boolean }) {
 export function usePoolUtilization(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["ip", "pool-utilization"],
-    queryFn: () => apiFetch<PoolUtilization[]>("/api/ip/pool-utilization"),
+    queryFn: () => apiFetch<Degradable<PoolUtilization>>("/api/ip/pool-utilization"),
     enabled: options?.enabled ?? true,
   });
 }
@@ -162,7 +163,7 @@ export function useVlanConfigs() {
 export function useArpTable(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["ip", "arp"],
-    queryFn: () => apiFetch<ArpEntry[]>("/api/ip/arp"),
+    queryFn: () => apiFetch<Degradable<ArpEntry>>("/api/ip/arp"),
     enabled: options?.enabled ?? true,
   });
 }
