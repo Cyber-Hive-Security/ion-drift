@@ -8,15 +8,18 @@
 //! Lifecycle: Drift resolves a finding only when the device is positively
 //! outside every affected range, and reopens only findings it resolved itself
 //! (`resolved_by = 'system'`) when the device falls back into a range. An
-//! operator's manual resolution always sticks.
+//! acknowledged finding whose severity escalates (e.g. the CVE is added to
+//! CISA KEV) is reopened with a note. An operator's manual resolution always
+//! sticks.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingV1};
 use ion_drift_storage::{FindingStatus, FindingsQuery, FindingsStore};
 use tracing::warn;
 
 use crate::advisory::exploitation::ADVISORY_MODULE;
+use crate::advisory::exposure::{label, rank, ESCALATION_MARKER};
 use crate::advisory::version::{self, Applicability, VersionRange};
 
 pub(crate) const VULN_CATEGORY: &str = "advisory_vulnerable";
@@ -153,43 +156,77 @@ fn build_finding(
 
 /// Apply one device's assessment. Resolves only findings for CVEs positively
 /// evaluated as not affected; `cannot_evaluate` CVEs are left exactly as they are.
-/// Reopens an affected finding only if Drift itself resolved it
-/// (`resolved_by = 'system'`, i.e. a regression after an upgrade); a finding an
-/// operator resolved is refreshed but stays resolved.
+///
+/// Lifecycle rules for an affected finding:
+/// - acknowledged, and the severity escalated (e.g. High → Critical when CISA
+///   lists the CVE as exploited): reopened with an escalation note; unchanged
+///   or lowered severity keeps the acknowledgment.
+/// - resolved by Drift itself (`resolved_by = 'system'`, i.e. a regression
+///   after an upgrade): reopened.
+/// - resolved by an operator: refreshed but stays resolved.
+///
+/// The escalation note is carried forward on later cycles while the finding
+/// stays at the severity it escalated to. If the escalation reopen fails, the
+/// finding is not written that cycle: the row stays acknowledged at its old
+/// severity and the escalation is re-detected next cycle.
 pub(crate) async fn reconcile(store: &FindingsStore, assessment: &VulnAssessment) -> Result<(), String> {
-    let rows = store
+    // Value: (status, severity, resolved by Drift itself, stored narrative).
+    let held: BTreeMap<String, (FindingStatus, FindingSeverity, bool, String)> = store
         .list_findings(&FindingsQuery {
             module_name: Some(ADVISORY_MODULE.to_string()),
             category: Some(VULN_CATEGORY.to_string()),
             ..Default::default()
         })
-        .await?;
-    let mut held = BTreeSet::new();
-    let mut system_resolved = BTreeSet::new();
-    for f in rows {
-        if f.status != FindingStatus::Resolved {
-            held.insert(f.finding_id);
-        } else if f.resolved_by.as_deref() == Some("system") {
-            system_resolved.insert(f.finding_id);
-        }
-    }
+        .await?
+        .into_iter()
+        .map(|f| {
+            let system_resolved = f.resolved_by.as_deref() == Some("system");
+            (f.finding_id, (f.status, f.severity, system_resolved, f.narrative))
+        })
+        .collect();
 
     for finding in &assessment.affected {
-        // Re-open first: upsert preserves lifecycle state, so a finding Drift
-        // closed after an upgrade would otherwise stay resolved after a downgrade.
-        if system_resolved.contains(&finding.finding_id) {
-            if let Err(e) = store.reopen_by_key(ADVISORY_MODULE, &finding.finding_id).await {
-                warn!(finding_id = %finding.finding_id, error = %e, "advisory: vulnerability reopen failed");
+        let mut finding = finding.clone();
+        match held.get(&finding.finding_id) {
+            Some((FindingStatus::Acknowledged, prior, _, _)) if rank(finding.severity) > rank(*prior) => {
+                if let Err(e) = store.reopen_acknowledged_by_key(ADVISORY_MODULE, &finding.finding_id).await {
+                    warn!(finding_id = %finding.finding_id, error = %e, "advisory: vulnerability escalation reopen failed; finding left unchanged this cycle");
+                    continue;
+                }
+                finding.narrative.push_str(&format!(
+                    "{ESCALATION_MARKER}{} to {}: the vulnerability's severity rose after this finding \
+                     was acknowledged (for example, CISA listed it as actively exploited), so it has \
+                     been reopened for review.",
+                    label(*prior),
+                    label(finding.severity)
+                ));
             }
+            // Re-open first: upsert preserves lifecycle state, so a finding Drift
+            // closed after an upgrade would otherwise stay resolved after a downgrade.
+            Some((FindingStatus::Resolved, _, true, _)) => {
+                if let Err(e) = store.reopen_by_key(ADVISORY_MODULE, &finding.finding_id).await {
+                    warn!(finding_id = %finding.finding_id, error = %e, "advisory: vulnerability reopen failed");
+                }
+            }
+            Some((_, prior, _, narrative)) if *prior == finding.severity => {
+                if let Some(at) = narrative.find(ESCALATION_MARKER) {
+                    finding.narrative.push_str(&narrative[at..]);
+                }
+            }
+            _ => {}
         }
-        if let Err(e) = store.upsert_finding(ADVISORY_MODULE, finding, None, None).await {
+        if let Err(e) = store.upsert_finding(ADVISORY_MODULE, &finding, None, None).await {
             warn!(finding_id = %finding.finding_id, error = %e, "advisory: vulnerability upsert failed");
         }
     }
 
     let version_label = assessment.device_version.split_whitespace().next().unwrap_or("");
     let note = format!("No longer affected: RouterOS {version_label} is outside every affected range.");
-    for id in assessment.not_affected.intersection(&held) {
+    let unresolved = held
+        .iter()
+        .filter(|(_, (status, ..))| *status != FindingStatus::Resolved)
+        .map(|(id, _)| id);
+    for id in unresolved.filter(|id| assessment.not_affected.contains(*id)) {
         if let Err(e) = store.resolve_by_key(ADVISORY_MODULE, id, &note).await {
             warn!(finding_id = %id, error = %e, "advisory: vulnerability resolve failed");
         }
@@ -310,6 +347,56 @@ mod tests {
         assert_eq!(rows[0].status, FindingStatus::Resolved);
         assert_eq!(rows[0].resolved_by.as_deref(), Some("operator"));
         assert_eq!(rows[0].resolution_note.as_deref(), Some("Accepted risk: SSH is LAN-only."));
+    }
+
+    #[tokio::test]
+    async fn acknowledged_finding_reopens_when_it_becomes_actively_exploited() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+        reconcile(&store, &assess("dev1", "7.24.1", &[input("CVE-2026-86060", Some(8.8), false)], 1)).await.unwrap();
+        assert_eq!(vuln_rows(&store).await[0].severity, FindingSeverity::High);
+        store.acknowledge(vuln_rows(&store).await[0].id, "scott").await.unwrap();
+
+        // Same version, but CISA has since added the CVE to KEV.
+        let kev = [input("CVE-2026-86060", Some(8.8), true)];
+        reconcile(&store, &assess("dev1", "7.24.1", &kev, 2)).await.unwrap();
+        let rows = vuln_rows(&store).await;
+        assert_eq!(rows[0].status, FindingStatus::Open);
+        assert_eq!(rows[0].severity, FindingSeverity::Critical);
+        assert!(rows[0].narrative.contains("Escalated from high to critical"));
+
+        // The note survives the next rebuild of the narrative, exactly once.
+        reconcile(&store, &assess("dev1", "7.24.1", &kev, 3)).await.unwrap();
+        let rows = vuln_rows(&store).await;
+        assert_eq!(rows[0].status, FindingStatus::Open);
+        assert_eq!(rows[0].severity, FindingSeverity::Critical);
+        assert_eq!(rows[0].narrative.matches("Escalated from high to critical").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn acknowledged_finding_stays_acknowledged_while_nothing_changes() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+        let inputs = [input("CVE-2026-86060", Some(8.8), false)];
+        reconcile(&store, &assess("dev1", "7.24.1", &inputs, 1)).await.unwrap();
+        store.acknowledge(vuln_rows(&store).await[0].id, "scott").await.unwrap();
+        reconcile(&store, &assess("dev1", "7.24.1", &inputs, 2)).await.unwrap();
+        let rows = vuln_rows(&store).await;
+        assert_eq!(rows[0].status, FindingStatus::Acknowledged);
+        assert!(!rows[0].narrative.contains("Escalated from"));
+    }
+
+    #[tokio::test]
+    async fn operator_resolution_survives_an_escalation() {
+        let f = NamedTempFile::new().unwrap();
+        let store = FindingsStore::new(f.path()).unwrap();
+        reconcile(&store, &assess("dev1", "7.24.1", &[input("CVE-2026-86060", Some(8.8), false)], 1)).await.unwrap();
+        let row_id = vuln_rows(&store).await[0].id;
+        store.resolve(row_id, "operator", Some("Accepted risk.".into())).await.unwrap();
+        reconcile(&store, &assess("dev1", "7.24.1", &[input("CVE-2026-86060", Some(8.8), true)], 2)).await.unwrap();
+        let rows = vuln_rows(&store).await;
+        assert_eq!(rows[0].status, FindingStatus::Resolved);
+        assert_eq!(rows[0].resolved_by.as_deref(), Some("operator"));
     }
 
     #[tokio::test]

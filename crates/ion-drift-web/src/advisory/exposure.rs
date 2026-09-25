@@ -20,8 +20,9 @@ pub(crate) const EXPOSURE_CATEGORY: &str = "advisory_exposure";
 const CEASED_NOTE: &str =
     "Exposure ceased: the service is disabled or no longer present on this device.";
 /// Start of the escalation note appended to a narrative. Always the last
-/// paragraph, so everything from this marker on is the note.
-const ESCALATION_MARKER: &str = "\n\nEscalated from ";
+/// paragraph, so everything from this marker on is the note. Shared with
+/// vulnerability findings, which follow the same escalation rule.
+pub(crate) const ESCALATION_MARKER: &str = "\n\nEscalated from ";
 
 pub(crate) fn exposure_finding_id(device_id: &str, service: &str, advisory_id: &str) -> String {
     format!("{}:{advisory_id}:exposure", surface_key(device_id, service))
@@ -135,7 +136,7 @@ fn build_finding(finding_id: &str, device_id: &str, svc: &IpService, adv: &Advis
     }
 }
 
-fn rank(s: FindingSeverity) -> u8 {
+pub(crate) fn rank(s: FindingSeverity) -> u8 {
     match s {
         FindingSeverity::Critical => 4,
         FindingSeverity::High => 3,
@@ -145,7 +146,7 @@ fn rank(s: FindingSeverity) -> u8 {
     }
 }
 
-fn label(s: FindingSeverity) -> &'static str {
+pub(crate) fn label(s: FindingSeverity) -> &'static str {
     match s {
         FindingSeverity::Critical => "critical",
         FindingSeverity::High => "high",
