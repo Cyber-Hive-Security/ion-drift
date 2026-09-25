@@ -122,6 +122,13 @@ pub struct TimeCount {
 pub struct LogsResponse {
     pub entries: Vec<StructuredLogEntry>,
     pub analytics: LogAnalytics,
+    /// `false` when the router is unreachable. No buffered router-log fallback
+    /// exists, so `entries` and `analytics` are empty in that case (DRIFT P3).
+    pub live_available: bool,
+    /// Timestamp of the last-known data when degraded; always `None` for logs
+    /// today (no stored fallback) but kept for shape parity with other endpoints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
 }
 
 // ── Parsing ──────────────────────────────────────────────────────

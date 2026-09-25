@@ -72,6 +72,38 @@ pub(crate) fn internal_error(context: &str, e: impl std::fmt::Display) -> Respon
         .into_response()
 }
 
+/// Outcome of a live-router call that may gracefully degrade to stored data.
+///
+/// When the router (the live data source) is unreachable, endpoints backed by a
+/// persistent store degrade to a `200 OK` carrying `live_available: false` plus
+/// the last-known data, instead of the `502 BAD_GATEWAY` that [`api_error`]
+/// would produce. This keeps read-only views usable during a router outage
+/// (DRIFT P3 graceful degradation). Endpoints with no stored fallback return an
+/// empty, graceful set rather than 502.
+pub(crate) enum LiveOr<T> {
+    /// Live data was fetched from the router.
+    Live(T),
+    /// Router was unreachable; the caller should serve last-known/empty data.
+    Degraded,
+}
+
+/// Map a live-router call result into a [`LiveOr`]. On a [`mikrotik_core::MikrotikError`]
+/// the error is logged server-side (never sent to the client) and the caller is
+/// signalled to degrade instead of returning a 502.
+pub(crate) fn live_or_degrade<T>(
+    result: Result<T, mikrotik_core::MikrotikError>,
+) -> LiveOr<T> {
+    match result {
+        Ok(value) => LiveOr::Live(value),
+        Err(e) => {
+            tracing::warn!(
+                "router unavailable; serving last-known data (live_available=false): {e}"
+            );
+            LiveOr::Degraded
+        }
+    }
+}
+
 /// Extract the origin (scheme + host) from a full URL.
 fn extract_origin(url: &str) -> String {
     if let Some(scheme_end) = url.find("://") {

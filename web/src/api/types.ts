@@ -284,6 +284,10 @@ export interface LogAnalytics {
 export interface LogsResponse {
   entries: StructuredLogEntry[];
   analytics: LogAnalytics;
+  /** False when the router is unreachable; entries/analytics are then empty. */
+  live_available: boolean;
+  /** ISO timestamp of last-known data when degraded (always null for logs today). */
+  as_of?: string | null;
 }
 
 // Traffic types (snake_case — custom Rust structs, not RouterOS models)
@@ -350,6 +354,10 @@ export interface ConnectionSummary {
   other_count: number;
   max_entries: number | null;
   flagged_count: number;
+  /** False when the router is unreachable and figures come from stored history. */
+  live_available: boolean;
+  /** ISO timestamp of the most recent stored connection when degraded. */
+  as_of?: string | null;
 }
 
 // Full connections page types (snake_case — custom Rust structs)
@@ -393,6 +401,10 @@ export interface ConnectionsPageSummary {
 export interface ConnectionsPageResponse {
   connections: ConnectionEntry[];
   summary: ConnectionsPageSummary;
+  /** False when the router is unreachable and connections come from stored history. */
+  live_available: boolean;
+  /** ISO timestamp of the most recent stored connection when degraded. */
+  as_of?: string | null;
 }
 
 // ARP types (snake_case — custom Rust structs)
