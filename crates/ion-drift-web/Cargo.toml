@@ -40,6 +40,7 @@ dashmap = "6"
 dirs = "6"
 anyhow = "1"
 futures = "0.3"
+async-trait = "0.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "=0.10.9"
 aes-gcm = "=0.10.3"

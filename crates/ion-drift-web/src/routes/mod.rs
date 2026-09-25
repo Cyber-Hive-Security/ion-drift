@@ -33,6 +33,11 @@ pub mod vlan_activity;
 pub mod vlan_flows;
 pub mod vlans;
 
+/// End-to-end handler tests for the graceful-degradation endpoints, exercised
+/// against `MockRouter` + a full test `AppState` (see `crate::testkit`).
+#[cfg(test)]
+mod graceful_degradation_e2e;
+
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, State};

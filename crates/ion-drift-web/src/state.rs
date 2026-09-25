@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use mikrotik_core::MikrotikClient;
+use crate::router_api::RouterApi;
 use ion_drift_storage::{
     AdvisoryStore, BehaviorStore, DnsStore, FindingsStore, MetricsStore, SwitchStore,
 };
@@ -34,8 +34,9 @@ use crate::topology::NetworkTopology;
 /// Shared application state, passed to all Axum handlers via `State<AppState>`.
 #[derive(Clone)]
 pub struct AppState {
-    /// RouterOS REST API client.
-    pub mikrotik: MikrotikClient,
+    /// RouterOS REST API client, behind the `RouterApi` trait so handlers
+    /// can be tested against a mock (see `crate::testkit`).
+    pub mikrotik: Arc<dyn RouterApi + Send + Sync>,
     /// OpenID Connect client for Keycloak authentication (None if OIDC not configured).
     pub oidc_client: Option<OidcClient>,
     /// Shared HTTP client configured with the Smallstep CA cert.

@@ -11,7 +11,9 @@ pub async fn vlan_flows(
     RequireAuth(_session): RequireAuth,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let flows = mikrotik_core::VlanFlowManager::get_flows(&state.mikrotik)
+    let flows = state
+        .mikrotik
+        .vlan_flows()
         .await
         .map_err(api_error)?;
     Ok(Json(serde_json::to_value(flows).map_err(|e| internal_error("serialize vlan flows", e))?))

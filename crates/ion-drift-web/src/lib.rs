@@ -31,6 +31,7 @@ pub mod passive_discovery;
 pub mod modules_registry;
 pub mod poller_registry;
 pub mod provision;
+pub mod router_api;
 pub mod router_queue;
 pub mod routes;
 pub mod secrets;
@@ -47,3 +48,8 @@ pub mod task_supervisor;
 pub mod tasks;
 pub mod topology;
 pub mod topology_inference;
+
+/// Test-only harness: `MockRouter` + a full `AppState` builder used by the
+/// end-to-end handler tests. Compiled only under `cfg(test)`.
+#[cfg(test)]
+pub(crate) mod testkit;

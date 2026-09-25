@@ -15,21 +15,31 @@ use crate::dns::DnsResolver;
 use crate::state::AppState;
 
 /// Spawn all background tasks using shared application state.
-pub fn spawn_all(state: &AppState, dns_resolver: std::sync::Arc<dyn DnsResolver>) {
+///
+/// `router_client` is the primary router's concrete [`mikrotik_core::MikrotikClient`].
+/// The traffic and VLAN-metrics pollers depend on the concrete client
+/// (`TrafficTracker::poll` takes `&MikrotikClient`), which the `dyn RouterApi`
+/// state field can no longer provide, so it is passed in explicitly. This is
+/// the same client instance stored in `state.mikrotik`.
+pub fn spawn_all(
+    state: &AppState,
+    dns_resolver: std::sync::Arc<dyn DnsResolver>,
+    router_client: mikrotik_core::MikrotikClient,
+) {
     // Traffic polling
     traffic::spawn_traffic_poller(
         state.traffic_tracker.clone(),
         state.live_traffic.clone(),
         state.router_queue.clone(),
         state.config.polling.traffic_interval_secs,
-        state.mikrotik.clone(),
+        router_client.clone(),
         state.config.router.wan_interface.clone(),
     );
     traffic::spawn_vlan_metrics_poller(
         state.metrics_store.clone(),
         state.router_queue.clone(),
         state.config.polling.metrics_interval_secs,
-        state.mikrotik.clone(),
+        router_client.clone(),
     );
 
     // System metrics

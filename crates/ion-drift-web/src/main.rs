@@ -31,6 +31,7 @@ mod oui;
 mod passive_discovery;
 mod poller_registry;
 mod provision;
+mod router_api;
 mod router_queue;
 mod routes;
 mod secrets;
@@ -47,6 +48,13 @@ mod task_supervisor;
 mod tasks;
 pub mod topology;
 mod topology_inference;
+
+/// Test-only harness (`MockRouter` + full `AppState` builder) shared by the
+/// end-to-end handler tests. Declared in both the binary and library crate
+/// roots because each compiles the route modules (and their `#[cfg(test)]`
+/// submodules) as an independent unit.
+#[cfg(test)]
+mod testkit;
 
 use std::sync::Arc;
 
@@ -973,7 +981,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Build AppState
     let app_state = AppState {
-        mikrotik: mikrotik.clone(),
+        mikrotik: std::sync::Arc::new(mikrotik.clone())
+            as std::sync::Arc<dyn crate::router_api::RouterApi + Send + Sync>,
         oidc_client,
         http_client: http_client.clone(),
         sessions: sessions.clone(),
@@ -1019,8 +1028,11 @@ async fn main() -> anyhow::Result<()> {
         )),
     };
 
-    // Spawn all background tasks
-    tasks::spawn_all(&app_state, dns_resolver);
+    // Spawn all background tasks. The traffic/VLAN pollers need the concrete
+    // `MikrotikClient` (they call `TrafficTracker::poll(&MikrotikClient)`), which
+    // is no longer reachable through the `dyn RouterApi` state field, so the
+    // primary client is passed explicitly.
+    tasks::spawn_all(&app_state, dns_resolver, mikrotik.clone());
 
     // Start the module event dispatcher loop if the registry came up.
     if let Some(dispatcher) = app_state.module_event_dispatcher.clone() {
