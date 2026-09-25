@@ -30,11 +30,10 @@ See [FEATURES.md](FEATURES.md) for the full feature list.
 - **Vulnerability feed (NVD + CISA KEV).** Drift pulls RouterOS advisories daily. Every managed device whose firmware falls inside a published affected range gets a finding; CVEs CISA lists as actively exploited are raised to Critical. Findings state plainly that Drift checked the *version* — not whether the affected feature happens to be enabled — so a real exposure is never hidden behind a false "not applicable."
 - **Service exposure, early.** When a service tied to a known advisory is enabled (for example `api` / `api-ssl`), Drift raises an early-warning finding before anyone attacks it — High when the service is reachable from anywhere, Low when you have restricted it by address.
 - **Exploitation signals & confusable domains.** Sustained credential-failure patterns and UTS #39 look-alike domains (the `rnicrosoft.com`-style homoglyph tricks) surface here too, with the evidence that triggered them.
-- **Policy deviations.** DNS/NTP deviations, enriched with MITRE ATT&CK context, land in the same queue.
 
 **You decide before anything leaves your network.** The vulnerability feed stays off until an administrator confirms it — no outbound request is made until then. Turn it off later and Drift keeps checking against the data it already downloaded; it simply stops learning about newly published CVEs.
 
-**A lifecycle that respects your judgment.** Acknowledge a finding and it stays acknowledged — until the risk genuinely changes: an acknowledged vulnerability reopens, with a note naming the old and new severity, the day CISA marks it exploited; an exposure finding reopens if you remove the address restriction that kept it Low. Resolve a finding by hand and it *stays* resolved — Drift reopens only the findings it resolved itself (after an upgrade, if the version regresses; after you disable a service, if it is re-enabled).
+**A lifecycle that respects your judgment.** Acknowledge a finding and it stays acknowledged — until the risk genuinely changes: an acknowledged vulnerability reopens, with a note naming the old and new severity, the day CISA marks it exploited; an exposure finding reopens if you remove the address restriction that kept it Low. Resolve a vulnerability or exposure finding by hand and it *stays* resolved — Drift reopens those only when it resolved them itself (after an upgrade, if the version regresses; after you disable a service, if it is re-enabled). Exploitation findings are the exception: they reopen if the attack signal resumes, keeping your manual resolution as evidence.
 
 **Resilient when the router blips.** If the router is briefly unreachable, Findings — along with Connections, Logs, ARP, firewall, and the network map — keeps serving the last data it had behind a clear "showing last-known data" banner instead of failing the page.
 
@@ -108,18 +107,18 @@ Compiling Rust in release mode is resource-intensive. Do not attempt to build on
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
 | CPU | 4 vCPU | 8+ vCPU |
-| RAM | 4 GB | 8 GB |
+| RAM | 8 GB | 8 GB+ |
 | Disk | 10 GB free | 20 GB free |
-| Rust | 1.75+ (via [rustup](https://rustup.rs)) | Latest stable |
+| Rust | 1.85+ (via [rustup](https://rustup.rs)) | Latest stable |
 | Node.js | 20+ | 22 LTS |
 
-The release build can take 10-30 minutes depending on hardware. With less than 4GB of RAM, the Rust compiler will likely be killed by the OOM killer.
+The release build can take 10-30 minutes depending on hardware. With less than 8GB of RAM, the Rust compiler will likely be killed by the OOM killer.
 
 ## Quick Start
 
 **Before you start,** have these ready:
 - Your MikroTik router's hostname or IP address
-- A dedicated RouterOS API user with `api,read` policies (see [Router User Setup](#router-user-setup) below)
+- A dedicated RouterOS API user with `read,api,rest-api` policies (see [Router User Setup](#router-user-setup) below)
 - The router must have HTTPS enabled on port 443 with a TLS certificate
 
 **Step 1: Set up the config**
@@ -172,7 +171,7 @@ Pre-built images are published to `ghcr.io/cyber-hive-security/ion-drift` on eve
 Create a dedicated read-only user on your MikroTik router — **do not use the admin account:**
 
 ```routeros
-/user group add name=ion-drift policy=api,read,!write,!ftp,!local,!telnet,!ssh,!reboot,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon,!rest-api
+/user group add name=ion-drift policy=api,read,!write,!ftp,!local,!telnet,!ssh,!reboot,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon,rest-api
 /user add name=ion-drift group=ion-drift password=YourStrongPasswordHere
 ```
 
@@ -203,6 +202,8 @@ Ion Drift works with any OpenID Connect provider (Keycloak, Authentik, Authelia)
 ion-drift/
 ├── crates/
 │   ├── mikrotik-core/       # RouterOS REST + SNMP + SwOS client library
+│   ├── ion-drift-module-api/  # Stable module trait/type contract (semver)
+│   ├── ion-drift-module-host/ # Module runtime host (registry, event bus, storage)
 │   ├── ion-drift-storage/   # SQLite stores (behavior, switch, metrics, traffic)
 │   ├── ion-drift-cli/       # CLI binary (clap)
 │   └── ion-drift-web/       # Axum web server + background tasks
@@ -259,7 +260,7 @@ cd ..
 To build as a Docker image from source:
 
 ```bash
-# Requires 4+ vCPU and 4+ GB RAM available to Docker
+# Requires 4+ vCPU and 8+ GB RAM available to Docker
 docker compose -f docker-compose.build.yml up -d
 ```
 
@@ -269,7 +270,7 @@ docker compose -f docker-compose.build.yml up -d
 
 Ion Drift includes a stable plugin contract for extending the core with custom modules. Modules are self-contained Rust crates that plug into Drift via a single trait, run inside the Drift process, and can register HTTP routes, spawn supervised background tasks, read core state through narrow trait objects, publish and subscribe to events on the per-kind event bus, and own isolated SQLite storage.
 
-The contract crate is `ion-drift-module-api` (currently `1.0.0`, path-only). Modules depend only on the API crate; the runtime host (`ion-drift-module-host`) can evolve without forcing module recompiles.
+The contract crate is `ion-drift-module-api` (currently `1.1.0`, path-only). Modules depend only on the API crate; the runtime host (`ion-drift-module-host`) can evolve without forcing module recompiles.
 
 Highlights:
 
