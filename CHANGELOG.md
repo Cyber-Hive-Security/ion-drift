@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-25
+
 ### Added
 
 - **Vulnerability feed.** Daily NVD + CISA KEV pull for RouterOS. Every managed RouterOS device whose version
