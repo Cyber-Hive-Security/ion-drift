@@ -86,6 +86,21 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Anomaly CSV export with full context (severity, flow, VLAN, policy, traffic class, zones)
 - Full behavior engine reset with suppression rule preservation
 
+## Findings & Advisory Intelligence
+
+- **Unified Findings surface** — vulnerability, exposure, exploitation, confusable-domain, and policy-deviation findings converge on one triage page, filterable by status (open/acknowledged/resolved), severity, module, and category, with full-text search
+- **Vulnerability feed (NVD + CISA KEV)** — daily pull of RouterOS advisories; every managed device whose firmware falls in a published affected range raises a finding; CVEs on the CISA Known Exploited Vulnerabilities list are raised to Critical
+- **Version-honest findings** — a vulnerability finding states that Drift matched the device *version*, not whether the affected feature is enabled, so a real exposure is never hidden behind a false "not applicable"
+- **Service exposure findings** (`advisory_exposure`) — a service tied to a known advisory (e.g. `api`/`api-ssl`) that is enabled raises an early-warning finding: High when reachable from anywhere, Low when restricted by `address`
+- **Exploitation engine** (`advisory_exploitation`) — multi-phase sustained credential-failure detection (windowed, deduplicated, multi-source)
+- **Confusable-domain detection** — UTS #39 skeleton matching over observed DNS to catch homoglyph/look-alike domains
+- **Mandatory feed consent** — the feed is off until an administrator confirms it; no outbound request is made until then. Turned off, Drift keeps evaluating the last downloaded data but stops learning new CVEs; the consent decision (who and when) is recorded server-side
+- **Finding lifecycle** — severity bands; an acknowledged vulnerability reopens with a note when severity escalates (for example when CISA lists the CVE as exploited); an exposure finding reopens if the address restriction is removed
+- **Operator resolutions stick** — a manually resolved finding stays resolved; Drift reopens only findings it resolved itself (version regression after an upgrade, or a re-enabled service)
+- **Advisory catalog** — bundled advisories whose `version_constraint` is null or an array of version ranges (`exact` cannot combine with bounds)
+- **Last-known-data resilience** — when the router is unreachable, Findings and other live views serve the last data they had behind a "showing last-known data" banner instead of erroring
+- **Module-published findings** — external modules publish findings over the signed Module API (HMAC-SHA256); inbound finding content is length-clamped and stripped of control/bidirectional-override characters
+
 ## Visualization
 
 - Interactive network topology map with automatic layout and manual position persistence

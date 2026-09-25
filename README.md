@@ -38,7 +38,7 @@ Everything Drift flags converges on one page: **Findings**. Instead of scatterin
 
 **Resilient when the router blips.** If the router is briefly unreachable, Findings — along with Connections, Logs, ARP, firewall, and the network map — keeps serving the last data it had behind a clear "showing last-known data" banner instead of failing the page.
 
-<!-- ![Findings](caps/ion-drift-findings.png) -->
+![Findings](caps/ion-drift-findings.webp)
 
 ### What's Next for Findings
 
