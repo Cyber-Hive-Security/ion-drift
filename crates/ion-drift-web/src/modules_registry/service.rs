@@ -26,6 +26,10 @@ use super::store::{ModuleRegistryStore, NewModuleRegistration, RegisteredModule}
 /// door closed on obvious "password123" registrations.
 const MIN_SECRET_LEN: usize = 32;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Static, versionless User-Agent for outbound module traffic (I4b): a
+/// version string would let any registered module (or an on-path observer)
+/// fingerprint the exact Ion Drift build.
+pub(crate) const MODULES_USER_AGENT: &str = "ion-drift-modules";
 
 /// Inputs for [`ModuleRegistryService::register`].
 pub struct RegisterRequest {
@@ -49,7 +53,7 @@ impl ModuleRegistryService {
     pub fn new(store: Arc<ModuleRegistryStore>) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(PROBE_TIMEOUT)
-            .user_agent(concat!("ion-drift-modules/", env!("CARGO_PKG_VERSION")))
+            .user_agent(MODULES_USER_AGENT)
             // SSRF: never follow redirects — the guard validates the registered
             // host, and a 3xx must not be able to move the connection to an
             // unvetted (e.g. link-local metadata) target (DRIFT-2026-0001).
@@ -394,6 +398,44 @@ mod tests {
         let store = Arc::new(ModuleRegistryStore::new(tmp.path(), test_kek()).unwrap());
         let svc = ModuleRegistryService::new(store).unwrap();
         (svc, tmp)
+    }
+
+    #[tokio::test]
+    async fn outbound_user_agent_is_static_and_versionless() {
+        use axum::http::HeaderMap;
+        use std::sync::Mutex;
+
+        async fn echo_ua(
+            State(seen): State<Arc<Mutex<Option<String>>>>,
+            headers: HeaderMap,
+        ) -> &'static str {
+            *seen.lock().unwrap() = headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
+            "ok"
+        }
+        let seen = Arc::new(Mutex::new(None));
+        let app = Router::new()
+            .route("/manifest", get(echo_ua))
+            .with_state(Arc::clone(&seen));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (svc, _tmp) = build_service().await;
+        svc.http
+            .get(format!("http://{addr}/manifest"))
+            .send()
+            .await
+            .unwrap();
+
+        let ua = seen.lock().unwrap().clone().expect("UA header sent");
+        assert_eq!(ua, "ion-drift-modules");
+        assert!(!ua.contains('/'), "UA must not carry a version: {ua}");
+        assert!(!ua.contains(env!("CARGO_PKG_VERSION")), "UA leaks version: {ua}");
     }
 
     fn long_secret() -> String {
