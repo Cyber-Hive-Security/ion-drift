@@ -336,9 +336,9 @@ async fn try_publish(
         // already an enum (serde-validated); the free-form string/array fields
         // are not, so a compromised or buggy module could store megabyte
         // titles, thousands of device MACs, etc. into the operator console
-        // (DRIFT-2026-0005). Bound sizes and neutralize markup/control chars
+        // (DRIFT-2026-0005). Bound sizes and strip control/bidi characters
         // (L4, defense-in-depth); the CSP-guarded React UI also renders the
-        // content inertly as text.
+        // content inertly as text, so markup characters are left intact.
         let finding = clamp_finding(finding);
         if let Err(e) = state
             .findings_store
@@ -376,17 +376,18 @@ fn is_bidi_control(ch: char) -> bool {
 /// Content neutralization for module-authored text (L4, defense-in-depth on
 /// top of the CSP and React's inert text rendering):
 ///
-/// * `<` and `>` are removed — without them no HTML element/tag can be
-///   formed in any sink. `&`, `"` and `'` are deliberately kept: they are
-///   common in legitimate prose ("AT&T", "router's") and cannot open markup
-///   on their own; escaping them to entities would double-encode in React.
-/// * C0/C1 control characters and bidi controls are removed. When
+/// * C0/C1 control characters and bidi override characters are removed. When
 ///   `multiline` is set, `\n` and `\t` survive (narratives, actions);
 ///   single-line fields lose them.
+/// * Markup characters (`<`, `>`, `&`, `"`, `'`) are deliberately KEPT
+///   verbatim. The finding renderer emits every one of these fields as text
+///   (React/JSX, `JSON.stringify`), the CSP blocks execution, and there is no
+///   unsafe sink (audited), so they cannot form live markup. Stripping them
+///   would corrupt legitimate content such as "latency < 5ms" or "AT&T".
 fn neutralize_text(s: &str, multiline: bool) -> String {
     s.chars()
         .filter(|&ch| {
-            if ch == '<' || ch == '>' || is_bidi_control(ch) {
+            if is_bidi_control(ch) {
                 return false;
             }
             if ch.is_control() {
@@ -429,7 +430,7 @@ fn neutralize_mac(s: &str) -> Option<String> {
 
 /// Bound and neutralize the free-form fields of a module-supplied finding so
 /// a compromised module can't flood the operator console (DRIFT-2026-0005)
-/// or smuggle markup/control characters into it (L4). severity is a
+/// or smuggle control/bidi characters into it (L4). severity is a
 /// serde-validated enum and needs no clamping.
 fn clamp_finding(f: &FindingV1) -> FindingV1 {
     fn clamp_str(s: &str, max: usize) -> String {
@@ -640,8 +641,9 @@ mod tests {
         }
     }
 
+    // L4 (softened): only control and bidi-override characters are stripped.
+    // Markup characters (`< > & " '`) are intentionally preserved verbatim.
     fn assert_neutral(s: &str, allow_newlines: bool) {
-        assert!(!s.contains('<') && !s.contains('>'), "angle brackets survived: {s:?}");
         for ch in s.chars() {
             let ok_ws = allow_newlines && (ch == '\n' || ch == '\t');
             assert!(!ch.is_control() || ok_ws, "control char {ch:?} survived in {s:?}");
@@ -662,10 +664,11 @@ mod tests {
     }
 
     #[test]
-    fn clamp_finding_neutralizes_markup_and_control_chars() {
+    fn clamp_finding_strips_control_and_bidi_keeps_markup() {
         use ion_drift_module_api::FindingEvidence;
         let c = clamp_finding(&hostile_finding());
 
+        // Control + bidi characters are removed from every text field.
         assert_neutral(&c.finding_id, false);
         assert_neutral(&c.title, false);
         assert_neutral(&c.category, false);
@@ -680,18 +683,30 @@ mod tests {
         }
         assert_json_neutral(c.metadata.as_ref().unwrap());
 
-        // Tag-forming characters are gone, so no element can be injected.
-        assert!(!c.title.contains("<script"));
-        assert!(!c.narrative.contains("<img"));
-        // Legitimate text is preserved (tags removed, words kept).
+        // Markup characters now SURVIVE verbatim — the renderer emits these
+        // fields as text and the CSP blocks execution, so `<`/`>` are safe and
+        // stripping them would corrupt legitimate content.
+        assert!(c.title.contains("<script>alert(1)</script>"), "markup stripped: {:?}", c.title);
+        assert!(c.narrative.contains("<img src=x onerror=alert(1)>"));
+        // Legitimate words are preserved alongside the markup.
         assert!(c.title.contains("Beacon"));
         assert!(c.title.contains("to evil"));
         // Multi-line narrative keeps its newline/tab structure.
         assert!(c.narrative.contains("talked to\n\tC2"));
-        // Single-line fields fold CR/LF away.
+        // Single-line fields still fold CR/LF away (control chars).
         assert!(!c.title.contains('\n') && !c.title.contains('\r'));
+        // The C0 BEL and the bidi override that were embedded are gone.
+        assert!(!c.title.contains('\u{7}'));
+        assert!(!c.narrative.contains('\u{202e}'));
 
-        // device_macs keep only MAC-shaped characters; junk entries drop.
+        // Custom evidence label keeps its markup verbatim.
+        if let FindingEvidence::Custom { label, .. } = &c.evidence[0] {
+            assert_eq!(label, "<svg onload=alert(1)>");
+        }
+
+        // device_macs still accept only MAC-shaped entries; "<script>" is not
+        // MAC-shaped so it drops, and the control char is stripped from a
+        // valid one.
         assert_eq!(
             c.device_macs,
             vec!["aa:bb:cc:dd:ee:ff".to_string(), "AA-BB-CC-DD-EE-01".to_string()]
