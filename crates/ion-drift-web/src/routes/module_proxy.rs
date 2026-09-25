@@ -217,6 +217,8 @@ async fn proxy_impl(
     let mut builder = state.http.request(method, &target_url);
 
     for (hname, value) in req.headers() {
+        // `HeaderName::as_str` is always lowercase, so these literal matches are
+        // effectively case-insensitive.
         let s = hname.as_str();
         if matches!(
             s,
@@ -226,6 +228,20 @@ async fn proxy_impl(
                 | "cookie"
                 | "authorization"
                 | "content-length"
+                // Internal/forwarded headers (added by our reverse proxy) MUST NOT
+                // leak onward to the semi-trusted external module: they would
+                // expose the client's real IP and our internal topology
+                // (I4a). Drift still consumes X-Forwarded-For / X-Real-IP from the
+                // INBOUND request for rate limiting — that path is unaffected; we
+                // only stop passing them ONWARD.
+                | "x-forwarded-for"
+                | "x-forwarded-host"
+                | "x-forwarded-port"
+                | "x-forwarded-proto"
+                | "x-forwarded-server"
+                | "x-forwarded-prefix"
+                | "x-real-ip"
+                | "forwarded"
         ) {
             continue;
         }
@@ -419,6 +435,7 @@ mod tests {
         last_auth: Mutex<Option<String>>,
         last_body: Mutex<Option<Vec<u8>>>,
         last_custom: Mutex<Option<String>>,
+        last_header_names: Mutex<Option<Vec<String>>>,
     }
 
     async fn spawn_target() -> (String, Arc<TargetCapture>) {
@@ -441,6 +458,12 @@ mod tests {
                         .get("x-custom")
                         .and_then(|v| v.to_str().ok())
                         .map(String::from);
+                    *cap.last_header_names.lock().unwrap() = Some(
+                        req.headers()
+                            .keys()
+                            .map(|k| k.as_str().to_ascii_lowercase())
+                            .collect(),
+                    );
                     let body = axum::body::to_bytes(req.into_body(), 1 << 20)
                         .await
                         .unwrap_or_default()
@@ -578,6 +601,55 @@ mod tests {
         let forwarded = cap.last_auth.lock().unwrap().clone().unwrap();
         assert_eq!(forwarded, "Bearer api-token-at-least-32-chars-long-xyz0");
         assert!(!forwarded.contains("a-user-token-that-leaks"));
+    }
+
+    #[tokio::test]
+    async fn strips_internal_forwarded_headers_from_module_request() {
+        let (target, cap) = spawn_target().await;
+        let (router, _store, _tmp) = setup_proxy("m", &target, true).await;
+
+        // These are added by our own reverse proxy (Traefik) on the inbound leg;
+        // they must not leak onward to the semi-trusted external module (I4a).
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/m/ping")
+            .header("x-forwarded-for", "203.0.113.7")
+            .header("x-forwarded-host", "hiverouter.kaziik.xyz")
+            .header("x-forwarded-port", "443")
+            .header("x-forwarded-proto", "https")
+            .header("x-forwarded-server", "7394d40d0c24")
+            .header("x-forwarded-prefix", "/drift")
+            .header("x-real-ip", "203.0.113.7")
+            .header("forwarded", "for=203.0.113.7;proto=https")
+            // A legitimate custom header must still be forwarded.
+            .header("x-custom", "value-1")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let names = cap.last_header_names.lock().unwrap().clone().unwrap();
+        for leaked in [
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-port",
+            "x-forwarded-proto",
+            "x-forwarded-server",
+            "x-forwarded-prefix",
+            "x-real-ip",
+            "forwarded",
+        ] {
+            assert!(
+                !names.iter().any(|n| n == leaked),
+                "internal header {leaked} leaked to module; forwarded headers were {names:?}"
+            );
+        }
+        // The client's real IP must not reach the module by any of these headers.
+        assert_eq!(
+            cap.last_custom.lock().unwrap().as_deref(),
+            Some("value-1"),
+            "legitimate custom headers must still be forwarded"
+        );
     }
 
     #[tokio::test]
