@@ -751,14 +751,10 @@ async fn main() -> anyhow::Result<()> {
     let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
 
     // Cookie-hardening startup guard (WSTG-N13): warn loudly if the session
-    // cookie is configured in a browser-unsafe way. SameSite=None without
-    // Secure is rejected by browsers outright and removes the CSRF backstop.
-    if !config.session.secure {
-        tracing::warn!(
-            "session.secure=false — the session cookie will be sent over plaintext HTTP. \
-             Set secure=true in any TLS/proxied deployment."
-        );
-    }
+    // cookie is configured in a browser-unsafe way. The insecure-`secure`
+    // warning is emitted once, earlier, by the loopback-aware check above;
+    // here we only cover SameSite=None, which browsers reject outright and
+    // which removes the CSRF backstop.
     if config.session.same_site.eq_ignore_ascii_case("none") {
         tracing::warn!(
             "session.same_site=\"none\" — this removes the SameSite CSRF backstop and requires \
@@ -1294,9 +1290,9 @@ fn insecure_cookie_bind_warning(secure: bool, listen_addr: &str) -> Option<&'sta
         return None;
     }
     Some(
-        "session.secure=false on a non-loopback bind address: session cookies will be sent \
-         without the Secure attribute and can travel over plaintext HTTP. Serve Ion Drift \
-         behind TLS and set session.secure=true.",
+        "session.secure=false on a non-loopback bind address (WSTG-N13): session cookies will \
+         be sent without the Secure attribute and can travel over plaintext HTTP. Serve Ion \
+         Drift behind TLS and set session.secure=true in any TLS/proxied deployment.",
     )
 }
 
