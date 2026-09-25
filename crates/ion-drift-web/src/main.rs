@@ -394,14 +394,12 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Warn if session cookies will be sent over HTTP on a non-localhost bind
-    if !config.session.secure
-        && config.server.listen_addr != "127.0.0.1"
-        && config.server.listen_addr != "localhost"
+    // Warn if session cookies will be sent over HTTP on a non-loopback bind.
+    // Warn only; the configured value is left untouched.
+    if let Some(msg) =
+        insecure_cookie_bind_warning(config.session.secure, &config.server.listen_addr)
     {
-        tracing::warn!(
-            "Session cookie 'secure' flag is disabled on a non-localhost bind address. Cookies will be sent over HTTP."
-        );
+        tracing::warn!(listen = %config.server.listen_addr, "{msg}");
     }
 
     tracing::info!(
@@ -1272,5 +1270,58 @@ fn parse_args() -> CliArgs {
     CliArgs {
         config_path,
         dump_config,
+    }
+}
+
+/// Returns true when `listen_addr` binds only the loopback interface
+/// (`localhost`, any `127.0.0.0/8` address, `::1`, bracketed or not).
+fn is_loopback_bind(listen_addr: &str) -> bool {
+    let addr = listen_addr.trim();
+    if addr.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let addr = addr.trim_start_matches('[').trim_end_matches(']');
+    addr.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// L1 hardening: the startup warning emitted when the session cookie lacks
+/// the `Secure` attribute while the server listens beyond loopback (so the
+/// cookie can cross the network in plaintext). `None` when no warning is due.
+fn insecure_cookie_bind_warning(secure: bool, listen_addr: &str) -> Option<&'static str> {
+    if secure || is_loopback_bind(listen_addr) {
+        return None;
+    }
+    Some(
+        "session.secure=false on a non-loopback bind address: session cookies will be sent \
+         without the Secure attribute and can travel over plaintext HTTP. Serve Ion Drift \
+         behind TLS and set session.secure=true.",
+    )
+}
+
+#[cfg(test)]
+mod startup_warning_tests {
+    use super::{insecure_cookie_bind_warning, is_loopback_bind};
+
+    #[test]
+    fn loopback_binds_are_recognized() {
+        for a in ["127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST", "::1", "[::1]"] {
+            assert!(is_loopback_bind(a), "{a} should be loopback");
+        }
+        for a in ["0.0.0.0", "::", "10.20.25.18", "192.168.1.5", "example.com", ""] {
+            assert!(!is_loopback_bind(a), "{a} should not be loopback");
+        }
+    }
+
+    #[test]
+    fn warns_only_when_insecure_and_exposed() {
+        let msg = insecure_cookie_bind_warning(false, "0.0.0.0").expect("should warn");
+        assert!(msg.contains("session.secure=true"));
+        assert!(msg.contains("TLS"));
+        assert!(insecure_cookie_bind_warning(false, "::").is_some());
+        assert!(insecure_cookie_bind_warning(false, "127.0.0.1").is_none());
+        assert!(insecure_cookie_bind_warning(false, "::1").is_none());
+        assert!(insecure_cookie_bind_warning(true, "0.0.0.0").is_none());
     }
 }
