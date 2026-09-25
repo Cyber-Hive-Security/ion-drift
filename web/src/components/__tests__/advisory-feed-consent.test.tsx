@@ -1,7 +1,7 @@
 // Vulnerability feed consent: the dialog blocks admins until answered, cannot
 // be dismissed, and "off" requires a second, warned confirmation.
 
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { AdvisoryFeedConsentGate } from "../advisory-feed-consent";
@@ -86,6 +86,37 @@ describe("AdvisoryFeedConsentGate", () => {
     await userEvent.click(screen.getByRole("button", { name: /^turn off$/i }));
     expect(dialog).toHaveTextContent(/will not learn about new vulnerabilities/i);
     await assertTrapped();
+  });
+
+  it("keeps focus inside the dialog after a backdrop click", async () => {
+    mockFetchRoutes({ "GET /auth/status": admin, "GET /api/advisory/feed": status("unanswered") });
+    renderWithClient(
+      <>
+        <button type="button">outside before</button>
+        <AdvisoryFeedConsentGate />
+        <button type="button">outside after</button>
+      </>,
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(screen.getByTestId("feed-consent-backdrop"));
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await userEvent.tab();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await userEvent.tab({ shift: true });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("pulls focus back when something outside the dialog is focused", async () => {
+    mockFetchRoutes({ "GET /auth/status": admin, "GET /api/advisory/feed": status("unanswered") });
+    renderWithClient(
+      <>
+        <button type="button">outside</button>
+        <AdvisoryFeedConsentGate />
+      </>,
+    );
+    const dialog = await screen.findByRole("dialog");
+    act(() => screen.getByRole("button", { name: "outside" }).focus());
+    expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
   it("non-admins see a banner instead of the dialog", async () => {

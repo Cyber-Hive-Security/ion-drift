@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useAdvisoryFeedStatus, useSetAdvisoryFeedConsent } from "@/api/queries";
 
@@ -39,6 +39,28 @@ function ConsentDialog() {
     dialogRef.current?.focus();
   }, [step]);
 
+  // Once focus reaches <body> (a backdrop click, or a disabled button losing
+  // focus after a failed save) the dialog's keydown handler no longer sees
+  // Tab. Catch focus wherever it lands outside the dialog and pull it back.
+  useEffect(() => {
+    const onFocusIn = (e: FocusEvent) => {
+      const dialog = dialogRef.current;
+      if (dialog && e.target instanceof Node && !dialog.contains(e.target)) {
+        dialog.focus();
+      }
+    };
+    document.addEventListener("focusin", onFocusIn, true);
+    return () => document.removeEventListener("focusin", onFocusIn, true);
+  }, []);
+
+  const refocusFromBackdrop = (e: MouseEvent) => {
+    const dialog = dialogRef.current;
+    if (dialog && e.target instanceof Node && !dialog.contains(e.target)) {
+      e.preventDefault();
+      dialog.focus();
+    }
+  };
+
   // No close button, no backdrop dismissal, no Escape, and Tab cannot leave:
   // the only exits are the two answers.
   const onKeyDown = (e: KeyboardEvent) => {
@@ -69,7 +91,11 @@ function ConsentDialog() {
   };
 
   return (
-    <div data-testid="feed-consent-backdrop" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70">
+    <div
+      data-testid="feed-consent-backdrop"
+      onMouseDown={refocusFromBackdrop}
+      onClick={refocusFromBackdrop}
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70">
       <div
         ref={dialogRef}
         tabIndex={-1}
