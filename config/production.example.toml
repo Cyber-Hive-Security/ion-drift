@@ -81,8 +81,11 @@ wan_interface = "ether1"
 [session]
 cookie_name = "ion_drift_session"
 max_age_seconds = 86400
-# Set to true if serving over HTTPS (recommended for production)
-secure = false
+# Keep true whenever browsers reach Ion Drift over HTTPS -- directly or via a
+# TLS-terminating reverse proxy (Traefik, Nginx, Caddy). The Secure flag only
+# governs the browser<->proxy leg; a plain-HTTP proxy->Ion Drift hop does not
+# matter. Set false ONLY if browsers connect over plain HTTP (no TLS at all).
+secure = true
 same_site = "lax"
 # Idle/inactivity timeout in seconds (0 disables; capped at max_age_seconds).
 # Recommended for production: 43200 (12h).
