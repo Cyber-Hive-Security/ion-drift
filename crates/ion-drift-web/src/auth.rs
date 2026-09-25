@@ -756,13 +756,27 @@ pub struct AuthConfigResponse {
     pub oidc_provider_name: Option<String>,
 }
 
+/// Flat, field-name-free body returned for any malformed `/auth/callback`
+/// query (I1). axum's default `Query` rejection echoes serde/framework text
+/// such as "missing field `code`", which fingerprints the stack.
+pub(crate) const INVALID_CALLBACK_MSG: &str = "invalid callback request";
+
+/// Parse the `/auth/callback` query string, mapping every deserialization
+/// failure (missing/duplicate/malformed `code` or `state`) to a generic 400.
+pub(crate) fn parse_callback_query(uri: &axum::http::Uri) -> Result<CallbackParams, Response> {
+    Query::<CallbackParams>::try_from_uri(uri)
+        .map(|Query(p)| p)
+        .map_err(|_| json_error(StatusCode::BAD_REQUEST, INVALID_CALLBACK_MSG))
+}
+
 /// `GET /auth/callback` — Handle the OIDC redirect from Keycloak.
 pub async fn callback(
     State(state): State<AppState>,
-    Query(params): Query<CallbackParams>,
+    uri: axum::http::Uri,
     jar: CookieJar,
     headers: axum::http::HeaderMap,
 ) -> Result<(CookieJar, Redirect), Response> {
+    let params = parse_callback_query(&uri)?;
     // Verify the state is bound to THIS browser before doing anything else
     // (DRIFT-2026-0002). The login handler set an HttpOnly cookie to the state
     // value; require it to match the `state` query param. Constant-time compare.
@@ -1195,6 +1209,55 @@ fn extract_string_array_from_value(value: &serde_json::Value) -> Option<Vec<Stri
     value.as_array().map(|arr| {
         arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
     })
+}
+
+#[cfg(test)]
+mod callback_query_tests {
+    use super::{INVALID_CALLBACK_MSG, parse_callback_query};
+    use axum::http::{StatusCode, Uri};
+
+    async fn body_of(resp: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    async fn assert_generic_400(path: &str) {
+        let uri: Uri = path.parse().unwrap();
+        let resp = parse_callback_query(&uri).err().expect("should reject");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_of(resp).await;
+        assert_eq!(body, format!(r#"{{"error":"{INVALID_CALLBACK_MSG}"}}"#));
+        for leak in ["code", "state", "field", "deserialize", "query string"] {
+            assert!(!body.to_lowercase().contains(leak), "body leaks `{leak}`: {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_code_is_generic_400() {
+        assert_generic_400("/auth/callback?state=abc").await;
+    }
+
+    #[tokio::test]
+    async fn missing_state_is_generic_400() {
+        assert_generic_400("/auth/callback?code=xyz").await;
+    }
+
+    #[tokio::test]
+    async fn empty_or_provider_error_query_is_generic_400() {
+        assert_generic_400("/auth/callback").await;
+        assert_generic_400("/auth/callback?").await;
+        assert_generic_400("/auth/callback?error=access_denied").await;
+    }
+
+    #[test]
+    fn valid_query_parses_unchanged() {
+        let uri: Uri = "/auth/callback?code=c%2B1&state=s-2&session_state=x"
+            .parse()
+            .unwrap();
+        let p = parse_callback_query(&uri).ok().expect("valid query");
+        assert_eq!(p.code, "c+1");
+        assert_eq!(p.state, "s-2");
+    }
 }
 
 #[cfg(test)]

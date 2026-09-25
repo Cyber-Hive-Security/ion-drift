@@ -336,8 +336,9 @@ async fn try_publish(
         // already an enum (serde-validated); the free-form string/array fields
         // are not, so a compromised or buggy module could store megabyte
         // titles, thousands of device MACs, etc. into the operator console
-        // (DRIFT-2026-0005). Bound sizes; content is still module-authored and
-        // rendered inertly by the CSP-guarded React UI.
+        // (DRIFT-2026-0005). Bound sizes and strip control/bidi characters
+        // (L4, defense-in-depth); the CSP-guarded React UI also renders the
+        // content inertly as text, so markup characters are left intact.
         let finding = clamp_finding(finding);
         if let Err(e) = state
             .findings_store
@@ -365,12 +366,78 @@ async fn try_publish(
     Ok(envelope)
 }
 
-/// Bound the free-form fields of a module-supplied finding so a compromised
-/// module can't flood the operator console (DRIFT-2026-0005). severity is a
+/// Unicode bidirectional embedding/override/isolate controls (Cf, not Cc).
+/// They can visually reorder text in the operator console ("Trojan Source"
+/// style spoofing), so module-supplied text drops them too.
+fn is_bidi_control(ch: char) -> bool {
+    matches!(ch, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Content neutralization for module-authored text (L4, defense-in-depth on
+/// top of the CSP and React's inert text rendering):
+///
+/// * C0/C1 control characters and bidi override characters are removed. When
+///   `multiline` is set, `\n` and `\t` survive (narratives, actions);
+///   single-line fields lose them.
+/// * Markup characters (`<`, `>`, `&`, `"`, `'`) are deliberately KEPT
+///   verbatim. The finding renderer emits every one of these fields as text
+///   (React/JSX, `JSON.stringify`), the CSP blocks execution, and there is no
+///   unsafe sink (audited), so they cannot form live markup. Stripping them
+///   would corrupt legitimate content such as "latency < 5ms" or "AT&T".
+fn neutralize_text(s: &str, multiline: bool) -> String {
+    s.chars()
+        .filter(|&ch| {
+            if is_bidi_control(ch) {
+                return false;
+            }
+            if ch.is_control() {
+                return multiline && (ch == '\n' || ch == '\t');
+            }
+            true
+        })
+        .collect()
+}
+
+/// Recursively neutralize every string (values and object keys) inside a
+/// module-supplied JSON blob.
+fn neutralize_json(v: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::String(s) => Value::String(neutralize_text(s, true)),
+        Value::Array(a) => Value::Array(a.iter().map(neutralize_json).collect()),
+        Value::Object(m) => Value::Object(
+            m.iter()
+                .map(|(k, v)| (neutralize_text(k, false), neutralize_json(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Accept a module-supplied MAC only if, after dropping control characters
+/// and surrounding whitespace, it consists solely of MAC-notation characters
+/// (hex digits and the `:`, `-`, `.` separators). Anything else is not a MAC
+/// and is dropped rather than "repaired" (filtering `<script>` down to its
+/// hex letters would fabricate a bogus identifier).
+fn neutralize_mac(s: &str) -> Option<String> {
+    let cleaned: String = neutralize_text(s, false).trim().to_string();
+    let well_formed = !cleaned.is_empty()
+        && cleaned
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() || matches!(ch, ':' | '-' | '.'));
+    well_formed.then_some(cleaned)
+}
+
+/// Bound and neutralize the free-form fields of a module-supplied finding so
+/// a compromised module can't flood the operator console (DRIFT-2026-0005)
+/// or smuggle control/bidi characters into it (L4). severity is a
 /// serde-validated enum and needs no clamping.
 fn clamp_finding(f: &FindingV1) -> FindingV1 {
     fn clamp_str(s: &str, max: usize) -> String {
-        s.chars().take(max).collect()
+        neutralize_text(s, false).chars().take(max).collect()
+    }
+    fn clamp_multiline(s: &str, max: usize) -> String {
+        neutralize_text(s, true).chars().take(max).collect()
     }
     const MAX_TITLE: usize = 512;
     const MAX_NARRATIVE: usize = 8192;
@@ -389,18 +456,19 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
     let mut c = f.clone();
     c.finding_id = clamp_str(&f.finding_id, MAX_ID);
     c.title = clamp_str(&f.title, MAX_TITLE);
-    c.narrative = clamp_str(&f.narrative, MAX_NARRATIVE);
+    c.narrative = clamp_multiline(&f.narrative, MAX_NARRATIVE);
     c.category = clamp_str(&f.category, MAX_CATEGORY);
     c.recommended_actions = f
         .recommended_actions
         .iter()
         .take(MAX_ACTIONS)
-        .map(|s| clamp_str(s, 1024))
+        .map(|s| clamp_multiline(s, 1024))
         .collect();
     c.evidence.truncate(MAX_EVIDENCE);
     for ev in &mut c.evidence {
         if let FindingEvidence::Custom { label, payload } = ev {
             *label = clamp_str(label, MAX_EVIDENCE_LABEL);
+            *payload = neutralize_json(payload);
             let oversized = serde_json::to_string(payload)
                 .map(|s| s.len() > MAX_EVIDENCE_PAYLOAD_BYTES)
                 .unwrap_or(true);
@@ -409,6 +477,7 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
             }
         }
     }
+    c.metadata = c.metadata.as_ref().map(neutralize_json);
     if let Some(meta) = &c.metadata {
         let oversized = serde_json::to_string(meta)
             .map(|s| s.len() > MAX_META_BYTES)
@@ -421,7 +490,8 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
         .device_macs
         .iter()
         .take(MAX_MACS)
-        .map(|m| clamp_str(m, 64))
+        .filter_map(|m| neutralize_mac(m))
+        .map(|m| m.chars().take(64).collect())
         .collect();
     c
 }
@@ -542,6 +612,115 @@ mod tests {
         }
         // oversized metadata replaced with a marker
         assert_eq!(c.metadata, Some(serde_json::json!({ "_truncated": true })));
+    }
+
+    fn hostile_finding() -> FindingV1 {
+        use ion_drift_module_api::{FindingEvidence, FindingSeverity};
+        FindingV1 {
+            finding_id: "id-<1>\u{0}".into(),
+            title: "<script>alert(1)</script>Beacon\u{7}\r\n to evil".into(),
+            narrative: "Host <img src=x onerror=alert(1)> talked to\n\tC2 \u{1b}[31mred\u{202e}txt.exe"
+                .into(),
+            severity: FindingSeverity::High,
+            category: "dns<b>\u{8}".into(),
+            recommended_actions: vec!["Block <a href=javascript:alert(1)>it</a>\u{0}".into()],
+            evidence: vec![FindingEvidence::Custom {
+                label: "<svg onload=alert(1)>".into(),
+                payload: serde_json::json!({
+                    "<k>": "<iframe>\u{0}",
+                    "nested": ["<x>", 5, { "y": "a\u{7}b" }]
+                }),
+            }],
+            device_macs: vec![
+                "aa:bb:cc:dd:ee:ff".into(),
+                "<script>".into(),
+                "AA-BB-CC-DD-EE-01\u{0}".into(),
+            ],
+            timestamp_unix: 0,
+            metadata: Some(serde_json::json!({ "note": "<b>hi</b>\u{1}" })),
+        }
+    }
+
+    // L4 (softened): only control and bidi-override characters are stripped.
+    // Markup characters (`< > & " '`) are intentionally preserved verbatim.
+    fn assert_neutral(s: &str, allow_newlines: bool) {
+        for ch in s.chars() {
+            let ok_ws = allow_newlines && (ch == '\n' || ch == '\t');
+            assert!(!ch.is_control() || ok_ws, "control char {ch:?} survived in {s:?}");
+            assert!(!is_bidi_control(ch), "bidi control {ch:?} survived in {s:?}");
+        }
+    }
+
+    fn assert_json_neutral(v: &serde_json::Value) {
+        match v {
+            serde_json::Value::String(s) => assert_neutral(s, true),
+            serde_json::Value::Array(a) => a.iter().for_each(assert_json_neutral),
+            serde_json::Value::Object(m) => m.iter().for_each(|(k, v)| {
+                assert_neutral(k, false);
+                assert_json_neutral(v);
+            }),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn clamp_finding_strips_control_and_bidi_keeps_markup() {
+        use ion_drift_module_api::FindingEvidence;
+        let c = clamp_finding(&hostile_finding());
+
+        // Control + bidi characters are removed from every text field.
+        assert_neutral(&c.finding_id, false);
+        assert_neutral(&c.title, false);
+        assert_neutral(&c.category, false);
+        assert_neutral(&c.narrative, true);
+        c.recommended_actions.iter().for_each(|a| assert_neutral(a, true));
+        match &c.evidence[0] {
+            FindingEvidence::Custom { label, payload } => {
+                assert_neutral(label, false);
+                assert_json_neutral(payload);
+            }
+            _ => panic!("expected custom evidence"),
+        }
+        assert_json_neutral(c.metadata.as_ref().unwrap());
+
+        // Markup characters now SURVIVE verbatim — the renderer emits these
+        // fields as text and the CSP blocks execution, so `<`/`>` are safe and
+        // stripping them would corrupt legitimate content.
+        assert!(c.title.contains("<script>alert(1)</script>"), "markup stripped: {:?}", c.title);
+        assert!(c.narrative.contains("<img src=x onerror=alert(1)>"));
+        // Legitimate words are preserved alongside the markup.
+        assert!(c.title.contains("Beacon"));
+        assert!(c.title.contains("to evil"));
+        // Multi-line narrative keeps its newline/tab structure.
+        assert!(c.narrative.contains("talked to\n\tC2"));
+        // Single-line fields still fold CR/LF away (control chars).
+        assert!(!c.title.contains('\n') && !c.title.contains('\r'));
+        // The C0 BEL and the bidi override that were embedded are gone.
+        assert!(!c.title.contains('\u{7}'));
+        assert!(!c.narrative.contains('\u{202e}'));
+
+        // Custom evidence label keeps its markup verbatim.
+        if let FindingEvidence::Custom { label, .. } = &c.evidence[0] {
+            assert_eq!(label, "<svg onload=alert(1)>");
+        }
+
+        // device_macs still accept only MAC-shaped entries; "<script>" is not
+        // MAC-shaped so it drops, and the control char is stripped from a
+        // valid one.
+        assert_eq!(
+            c.device_macs,
+            vec!["aa:bb:cc:dd:ee:ff".to_string(), "AA-BB-CC-DD-EE-01".to_string()]
+        );
+    }
+
+    #[test]
+    fn clamp_finding_preserves_benign_punctuation() {
+        let mut f = hostile_finding();
+        f.title = "AT&T \"edge\" router's cert expired".into();
+        f.narrative = "Latency rose 5x; see O'Brien's note & ticket #42.".into();
+        let c = clamp_finding(&f);
+        assert_eq!(c.title, "AT&T \"edge\" router's cert expired");
+        assert_eq!(c.narrative, "Latency rose 5x; see O'Brien's note & ticket #42.");
     }
 
     #[test]
