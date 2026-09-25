@@ -96,7 +96,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - **Confusable-domain detection** — UTS #39 skeleton matching over observed DNS to catch homoglyph/look-alike domains
 - **Mandatory feed consent** — the feed is off until an administrator confirms it; no outbound request is made until then. Turned off, Drift keeps evaluating the last downloaded data but stops learning new CVEs; the consent decision (who and when) is recorded server-side
 - **Finding lifecycle** — severity bands; an acknowledged vulnerability reopens with a note when severity escalates (for example when CISA lists the CVE as exploited); an exposure finding reopens if the address restriction is removed
-- **Operator resolutions stick** — a manually resolved finding stays resolved; Drift reopens only findings it resolved itself (version regression after an upgrade, or a re-enabled service)
+- **Operator resolutions stick** — a manually resolved vulnerability or exposure finding stays resolved; Drift reopens those only when it resolved them itself (version regression after an upgrade, or a re-enabled service). Exploitation findings reopen when the attack signal resumes, preserving your resolution as evidence
 - **Advisory catalog** — bundled advisories whose `version_constraint` is null or an array of version ranges (`exact` cannot combine with bounds)
 - **Last-known-data resilience** — when the router is unreachable, Findings and other live views serve the last data they had behind a "showing last-known data" banner instead of erroring
 - **Module-published findings** — external modules publish findings over the signed Module API (HMAC-SHA256); inbound finding content is length-clamped and stripped of control/bidirectional-override characters
@@ -180,11 +180,11 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - Security headers (X-Frame-Options, CSP, X-Content-Type-Options, X-XSS-Protection)
 - CORS configuration derived from OIDC redirect URI
 
-## Module API (v1.0)
+## Module API (v1.1)
 
 Stable plugin contract for extending Drift core with custom modules. Modules run in-process via an explicit compile-time list, registered in `crates/ion-drift-web/src/modules.rs`. The default OSS list is empty; downstream builds compose modules via a build-time file overlay.
 
-- **`ion-drift-module-api`** — stable trait/type contract crate (semver 1.0). Module authors depend only on this; the runtime host can evolve without forcing recompiles.
+- **`ion-drift-module-api`** — stable trait/type contract crate (semver 1.1). Module authors depend only on this; the runtime host can evolve without forcing recompiles.
 - **`ion-drift-module-host`** — runtime registry, event bus, storage backend, panic guard. Internal to Drift.
 - **Single `Module` trait** with native `async fn` (Rust 1.75+, no `async-trait` crate). Adapter pattern in the host crate handles dyn-compat for `Arc<dyn Module>`.
 - **Capability-scoped runtime gating** — modules declare a `Capabilities` struct; the host builds a `ModuleContext` whose handles correspond exactly to declared capabilities. Undeclared state reads return `None`; undeclared events return `EventError::NotDeclared`.
