@@ -1,10 +1,11 @@
 //! Alert storage — types and SwitchStore methods for alert rules, history,
 //! delivery channels, cooldowns, and state cache.
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::SwitchStore;
+use crate::switch::DEFAULT_ALERT_RULES;
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -22,7 +23,35 @@ pub struct AlertRule {
     pub delivery_channels: String,
     pub created_at: String,
     pub updated_at: String,
+    /// True for the one row Drift seeded for this `event_type` — the row
+    /// [`SwitchStore::delete_alert_rule`] refuses to delete. Computed by the
+    /// same rule the guard uses ([`is_seeded_rule`]) and exposed so the UI can
+    /// hide its delete control on the backend's answer instead of guessing with
+    /// an id range; three different notions of "default" (`id <= 8` in the UI,
+    /// `id <= 10` in the old guard, seed identity in the new one) disagreed
+    /// about which rules were protected.
+    #[serde(default)]
+    pub is_default: bool,
 }
+
+/// True when this row is the rule Drift seeded for its `event_type`.
+///
+/// Two conditions, both required: the `event_type` is one Drift seeds, and this
+/// row is the lowest id among the rows carrying it. Seeding inserts only when no
+/// row for the `event_type` exists yet (see `switch.rs`), so the seeded row is
+/// always the first one written for it and therefore the lowest id.
+fn is_seeded_rule(id: i64, min_id_for_event_type: i64, event_type: &str) -> bool {
+    id == min_id_for_event_type
+        && DEFAULT_ALERT_RULES
+            .iter()
+            .any(|(_, ev, _, _)| *ev == event_type)
+}
+
+/// `MIN(id)` over the rows sharing a row's `event_type`, as a correlated
+/// subquery. Selected alongside the row so seed identity is decided by one
+/// query rather than a second round trip that could see a different database.
+const MIN_ID_FOR_EVENT_TYPE: &str =
+    "(SELECT MIN(id) FROM alert_rules AS seed WHERE seed.event_type = target.event_type)";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertHistoryEntry {
@@ -64,20 +93,25 @@ impl SwitchStore {
     pub async fn get_alert_rules(&self) -> Result<Vec<AlertRule>, String> {
         let db = self.db().await;
         let mut stmt = db
-            .prepare(
+            .prepare(&format!(
                 "SELECT id, name, enabled, event_type, severity_filter, vlan_filter,
                         disposition_filter, verdict_filter, cooldown_seconds,
-                        delivery_channels, created_at, updated_at
-                 FROM alert_rules ORDER BY id",
-            )
+                        delivery_channels, created_at, updated_at,
+                        {MIN_ID_FOR_EVENT_TYPE}
+                 FROM alert_rules AS target ORDER BY id",
+            ))
             .map_err(|e| format!("prepare failed: {e}"))?;
         let rows = stmt
             .query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let event_type: String = row.get(3)?;
+                let min_id_for_event_type: i64 = row.get(12)?;
                 Ok(AlertRule {
-                    id: row.get(0)?,
+                    id,
                     name: row.get(1)?,
                     enabled: row.get::<_, i32>(2)? != 0,
-                    event_type: row.get(3)?,
+                    is_default: is_seeded_rule(id, min_id_for_event_type, &event_type),
+                    event_type,
                     severity_filter: row.get(4)?,
                     vlan_filter: row.get(5)?,
                     disposition_filter: row.get(6)?,
@@ -299,11 +333,53 @@ impl SwitchStore {
         Ok(())
     }
 
+    /// Delete an operator-created alert rule.
+    ///
+    /// Protected: the actual seeded row, identified by [`is_seeded_rule`] — an
+    /// `event_type` in [`DEFAULT_ALERT_RULES`] *and* the lowest id among the
+    /// rows sharing it. Not the row id alone: seeding is idempotent per
+    /// `event_type`, so a rule added to the seed list later lands at whatever id
+    /// is free on that install, and the old `id <= 10` check both left that rule
+    /// unprotected and wrongly protected operator rules occupying a low id.
+    ///
+    /// And not the `event_type` alone either, which is what replaced the id
+    /// check: the create form offers exactly the seeded event types, so matching
+    /// on `event_type` made *every* rule an operator could create through the UI
+    /// permanently undeletable — including a second rule for a seeded event type
+    /// pointing at a different delivery channel, which is the ordinary reason to
+    /// add one.
+    ///
+    /// `event_type` rather than `name` because `update_alert_rule` cannot change
+    /// it. A name-based guard would hand the operator its own key: `PATCH
+    /// /api/alerts/rules/{id}` with a new name, then `DELETE`, and the seeded
+    /// rule is gone.
+    ///
+    /// One honest edge case: if an operator created a rule with an `event_type`
+    /// *before* the upgrade that adds it to the seed list, seeding skips it (a
+    /// row already exists) and their rule is the lowest-id row for that event
+    /// type, so it becomes the protected one. It is also the rule the detector
+    /// fires through, so the protection is not misplaced — but they cannot
+    /// delete it, only edit it, and any further rule they add for that event
+    /// type stays deletable.
     pub async fn delete_alert_rule(&self, id: i64) -> Result<(), String> {
-        if id <= 10 {
+        let db = self.db().await;
+        let existing: Option<(String, i64)> = db
+            .query_row(
+                &format!(
+                    "SELECT event_type, {MIN_ID_FOR_EVENT_TYPE}
+                     FROM alert_rules AS target WHERE id = ?1"
+                ),
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("delete failed: {e}"))?;
+        let Some((event_type, min_id_for_event_type)) = existing else {
+            return Err("rule not found".into());
+        };
+        if is_seeded_rule(id, min_id_for_event_type, &event_type) {
             return Err("cannot delete default rules".into());
         }
-        let db = self.db().await;
         let affected = db
             .execute("DELETE FROM alert_rules WHERE id = ?1", params![id])
             .map_err(|e| format!("delete failed: {e}"))?;

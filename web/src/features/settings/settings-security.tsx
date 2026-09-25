@@ -17,6 +17,7 @@ import {
   X,
   FileKey,
 } from "lucide-react";
+import { SettingsAdvisoryFeed } from "./settings-advisory-feed";
 
 // ── Secrets Section ─────────────────────────────────────────────
 
@@ -419,6 +420,7 @@ function EncryptionSection() {
 export function SettingsSecurity() {
   return (
     <div className="space-y-6">
+      <SettingsAdvisoryFeed />
       <SecretsSection />
       <CertWardenSection />
       <EncryptionSection />

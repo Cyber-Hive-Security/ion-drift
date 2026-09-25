@@ -14,6 +14,7 @@ import { PageShell } from "@/components/layout/page-shell";
 import { ConnectionsHelp } from "@/components/help-content";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
+import { LiveDataBanner } from "@/components/live-data-banner";
 import { DataTable, type Column } from "@/components/data-table";
 import { WorldMap } from "@/features/world-map/world-map";
 import { formatBytes, formatNumber } from "@/lib/format";
@@ -1586,6 +1587,8 @@ export function ConnectionsPage() {
         <ErrorDisplay message={error.message} onRetry={() => refetch()} />
       ) : !data ? null : (
         <>
+      <LiveDataBanner liveAvailable={data.live_available} asOf={data.as_of} />
+
       <SummaryBar data={data} />
 
       <ConnectionHistoryChart />

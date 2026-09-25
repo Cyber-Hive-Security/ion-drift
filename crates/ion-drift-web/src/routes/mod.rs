@@ -1,4 +1,5 @@
 pub mod admin_modules;
+pub mod advisory_feed;
 pub mod alerts;
 pub mod arp;
 pub mod backbone;
@@ -31,6 +32,11 @@ pub mod traffic;
 pub mod vlan_activity;
 pub mod vlan_flows;
 pub mod vlans;
+
+/// End-to-end handler tests for the graceful-degradation endpoints, exercised
+/// against `MockRouter` + a full test `AppState` (see `crate::testkit`).
+#[cfg(test)]
+mod graceful_degradation_e2e;
 
 use axum::Router;
 use axum::body::Body;
@@ -69,6 +75,79 @@ pub(crate) fn internal_error(context: &str, e: impl std::fmt::Display) -> Respon
         Json(serde_json::json!({ "error": "internal server error" })),
     )
         .into_response()
+}
+
+/// Outcome of a live-router call that may gracefully degrade to stored data.
+///
+/// When the router (the live data source) is unreachable, endpoints backed by a
+/// persistent store degrade to a `200 OK` carrying `live_available: false` plus
+/// the last-known data, instead of the `502 BAD_GATEWAY` that [`api_error`]
+/// would produce. This keeps read-only views usable during a router outage
+/// (DRIFT P3 graceful degradation). Endpoints with no stored fallback return an
+/// empty, graceful set rather than 502.
+pub(crate) enum LiveOr<T> {
+    /// Live data was fetched from the router.
+    Live(T),
+    /// Router was unreachable; the caller should serve last-known/empty data.
+    Degraded,
+}
+
+/// Map a live-router call result into a [`LiveOr`]. On a [`mikrotik_core::MikrotikError`]
+/// the error is logged server-side (never sent to the client) and the caller is
+/// signalled to degrade instead of returning a 502.
+pub(crate) fn live_or_degrade<T>(
+    result: Result<T, mikrotik_core::MikrotikError>,
+) -> LiveOr<T> {
+    match result {
+        Ok(value) => LiveOr::Live(value),
+        Err(e) => {
+            tracing::warn!(
+                "router unavailable; serving last-known data (live_available=false): {e}"
+            );
+            LiveOr::Degraded
+        }
+    }
+}
+
+/// Envelope for endpoints that would otherwise return a bare JSON array, so the
+/// same `live_available`/`as_of` degradation signal can ride along (DRIFT P3).
+/// On the live path use [`Degradable::live`]; when serving cached/last-known
+/// data use [`Degradable::degraded`].
+#[derive(serde::Serialize)]
+pub(crate) struct Degradable<T> {
+    pub items: Vec<T>,
+    pub live_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
+}
+
+impl<T> Degradable<T> {
+    /// Live data straight from the router.
+    pub(crate) fn live(items: Vec<T>) -> Self {
+        Self {
+            items,
+            live_available: true,
+            as_of: None,
+        }
+    }
+
+    /// Degraded data served from an in-memory cache (or empty when none exists).
+    pub(crate) fn degraded(items: Vec<T>, as_of: Option<String>) -> Self {
+        Self {
+            items,
+            live_available: false,
+            as_of,
+        }
+    }
+}
+
+/// Format a Unix timestamp (seconds) as an RFC3339 string for `as_of` fields.
+/// Returns `None` for a non-positive/absent timestamp.
+pub(crate) fn iso_from_unix_secs(secs: i64) -> Option<String> {
+    if secs <= 0 {
+        return None;
+    }
+    chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
 }
 
 /// Extract the origin (scheme + host) from a full URL.
@@ -470,6 +549,8 @@ pub fn router(
         .route("/findings/{id}", get(findings::detail))
         .route("/findings/{id}/acknowledge", post(findings::acknowledge))
         .route("/findings/{id}/resolve", post(findings::resolve))
+        .route("/advisory/feed", get(advisory_feed::feed_status))
+        .route("/advisory/feed/consent", post(advisory_feed::set_feed_consent))
         // Policy
         .route("/policy", get(policy::policy_overview).post(policy::create_policy))
         .route("/policy/{id}", put(policy::update_policy).delete(policy::delete_policy))

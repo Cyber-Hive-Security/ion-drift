@@ -48,6 +48,7 @@ After restart, navigate to `http://your-host:3000`. You'll see the login page. U
 **"Nothing happens when I click login"** — if the page appears to accept your password but doesn't log you in, check your `[session]` config:
 - `secure = true` (the default) means session cookies require HTTPS. If you're accessing over plain HTTP, the browser silently rejects the cookie.
 - Set `secure = false` if you're accessing Ion Drift directly over HTTP without a reverse proxy.
+- Behind a TLS-terminating reverse proxy (Traefik, Nginx, Caddy), keep `secure = true`: the `Secure` flag only concerns the browser-to-proxy connection, which is HTTPS. The proxy-to-Ion Drift hop being plain HTTP does not matter.
 
 ### 3. Connect Your Router
 

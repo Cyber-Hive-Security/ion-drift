@@ -38,6 +38,15 @@ wan_interface = "1-WAN"
 # Internal DNS server IP for PTR lookups (optional; falls back to system resolver)
 # Override: DRIFT_ROUTER_DNS_SERVER env var
 # dns_server = "192.168.1.1"
+# The source address the router sees ion-drift's own REST requests arriving from
+# (this host's IP on the path to the router). Optional. Setting it lets the
+# brute-force detector tell "our stored router password went stale" apart from
+# "someone is guessing that username", instead of reporting the first as an
+# attack. Leaving it unset never suppresses a detection.
+# Override: DRIFT_ROUTER_LOCAL_SOURCE_IP env var
+# A value that is not a valid IP address is logged as a warning and ignored
+# (falls back to loopback-only) — it never stops the server from starting.
+# local_source_ip = "10.20.25.27"
 
 # ── Authentication ─────────────────────────────────────────────────
 # By default, ion-drift uses local auth (username/password). The setup wizard
@@ -64,10 +73,12 @@ wan_interface = "1-WAN"
 # Only set DRIFT_SESSION_SECRET env var if using OIDC without mTLS bootstrap.
 cookie_name = "ion_drift_session"
 max_age_seconds = 86400
-# Set to true only if accessing Ion Drift over HTTPS (direct or via reverse proxy).
-# When false, session cookies work over plain HTTP. When true, browsers silently
-# reject cookies on HTTP connections — login appears to succeed but the session
-# is never stored.
+# This file is the bundled quick-start default (plain HTTP on :3000), so it
+# ships secure = false. Set secure = true for ANY deployment browsers reach over
+# HTTPS (directly or via a TLS-terminating reverse proxy -- the proxy->Ion Drift
+# hop being plain HTTP does not matter). When true, browsers silently reject the
+# cookie on plain-HTTP connections -- login appears to succeed but the session
+# is never stored. See config/production.example.toml for proxied deployments.
 secure = false
 same_site = "lax"
 # Idle/inactivity timeout in seconds. A session with no activity within this
@@ -122,3 +133,4 @@ idle_timeout_seconds = 43200
 # correlation_interval_secs = 120  # Identity correlation engine
 # topology_interval_secs = 120     # Network topology rebuild
 # policy_sync_interval_secs = 3600 # Infrastructure policy sync
+# dns_cache_interval_secs = 300    # DNS cache harvest (confusable-domain detection)

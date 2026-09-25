@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use mikrotik_core::MikrotikClient;
-use ion_drift_storage::{BehaviorStore, FindingsStore, MetricsStore, SwitchStore};
+use crate::router_api::RouterApi;
+use ion_drift_storage::{
+    AdvisoryStore, BehaviorStore, DnsStore, FindingsStore, MetricsStore, SwitchStore,
+};
 use mikrotik_core::TrafficTracker;
 use ion_drift_storage::behavior::VlanRegistry;
 use mikrotik_core::resources::firewall::FilterRule;
@@ -32,8 +34,9 @@ use crate::topology::NetworkTopology;
 /// Shared application state, passed to all Axum handlers via `State<AppState>`.
 #[derive(Clone)]
 pub struct AppState {
-    /// RouterOS REST API client.
-    pub mikrotik: MikrotikClient,
+    /// RouterOS REST API client, behind the `RouterApi` trait so handlers
+    /// can be tested against a mock (see `crate::testkit`).
+    pub mikrotik: Arc<dyn RouterApi + Send + Sync>,
     /// OpenID Connect client for Keycloak authentication (None if OIDC not configured).
     pub oidc_client: Option<OidcClient>,
     /// Shared HTTP client configured with the Smallstep CA cert.
@@ -61,6 +64,12 @@ pub struct AppState {
     /// Module-emitted findings store (SQLite). Receives finding events
     /// pushed in over the inbound publish endpoint.
     pub findings_store: Arc<FindingsStore>,
+    /// Advisory catalog + attack observations (SQLite). Content is loaded from
+    /// the JSON catalog at startup; core carries no advisory text of its own.
+    pub advisory_store: Arc<AdvisoryStore>,
+    /// Observed DNS names + confusable watchlist (SQLite). Watchlist content
+    /// is loaded from the JSON catalog at startup; core names no brands.
+    pub dns_store: Arc<DnsStore>,
     /// Cached firewall filter rules for behavior correlation.
     pub firewall_rules_cache: Arc<RwLock<(Vec<FilterRule>, std::time::Instant)>>,
     /// Encrypted secrets manager (None if bootstrap not configured).

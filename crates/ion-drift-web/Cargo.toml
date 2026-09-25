@@ -23,6 +23,8 @@ tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header",
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+idna = "1"
+unicode-security = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-manual-roots", "rustls-tls-webpki-roots"] }
@@ -38,6 +40,7 @@ dashmap = "6"
 dirs = "6"
 anyhow = "1"
 futures = "0.3"
+async-trait = "0.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "=0.10.9"
 aes-gcm = "=0.10.3"

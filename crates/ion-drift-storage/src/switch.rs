@@ -21,6 +21,31 @@ pub fn is_valid_mac(mac: &str) -> bool {
     })
 }
 
+/// Alert rules seeded into a fresh (or upgraded) `switch.db`, as
+/// `(name, event_type, severity_filter, cooldown_seconds)`.
+///
+/// Seeding is idempotent per `event_type` — a row is inserted only when none
+/// carries that `event_type` yet — so appending an entry here back-fills
+/// existing installs on the next boot. Because of that the row ids are *not*
+/// stable across installs, and the delete guard in [`crate::alerting`] does not
+/// use an id range: it protects the row whose `event_type` appears in this list
+/// *and* whose id is the lowest among the rows sharing that `event_type`, which
+/// is precisely the row this seeding wrote. A second rule an operator adds for
+/// the same `event_type` is theirs and stays deletable.
+pub const DEFAULT_ALERT_RULES: &[(&str, &str, Option<&str>, i64)] = &[
+    ("Critical Anomaly", "anomaly_critical", Some("critical"), 300),
+    ("Correlated Anomaly", "anomaly_correlated", Some("critical"), 300),
+    ("New Unknown Device", "device_new", None, 3600),
+    ("Flagged Device", "device_flagged", None, 300),
+    ("Port Violation", "port_violation", None, 600),
+    ("Warning Anomaly", "anomaly_warning", Some("warning"), 600),
+    ("Interface Down", "interface_down", None, 300),
+    ("Registered Device Offline", "device_offline", None, 3600),
+    ("DHCP Pool Exhaustion", "dhcp_pool_exhausted", None, 3600),
+    ("Firewall Drop Spike", "firewall_drop_spike", None, 600),
+    ("Auth Brute-Force", "auth_bruteforce", None, 600),
+];
+
 // ── Data types ──────────────────────────────────────────────────
 
 /// A single switch port metrics entry.
@@ -678,18 +703,7 @@ impl SwitchStore {
         }
 
         // Seed default alert rules (idempotent — check by event_type)
-        for (name, event_type, severity_filter, cooldown) in &[
-            ("Critical Anomaly", "anomaly_critical", Some("critical"), 300),
-            ("Correlated Anomaly", "anomaly_correlated", Some("critical"), 300),
-            ("New Unknown Device", "device_new", None, 3600),
-            ("Flagged Device", "device_flagged", None, 300),
-            ("Port Violation", "port_violation", None, 600),
-            ("Warning Anomaly", "anomaly_warning", Some("warning"), 600),
-            ("Interface Down", "interface_down", None, 300),
-            ("Registered Device Offline", "device_offline", None, 3600),
-            ("DHCP Pool Exhaustion", "dhcp_pool_exhausted", None, 3600),
-            ("Firewall Drop Spike", "firewall_drop_spike", None, 600),
-        ] {
+        for (name, event_type, severity_filter, cooldown) in DEFAULT_ALERT_RULES {
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM alert_rules WHERE event_type = ?1",
                 params![event_type],
@@ -2998,5 +3012,288 @@ mod tests {
 
         assert_eq!(count_a, 0, "dev-a data should be deleted");
         assert!(count_b > 0, "dev-b data should be untouched");
+    }
+
+    #[test]
+    fn default_alert_rules_include_auth_bruteforce() {
+        // The auth brute-force detector ships enabled-by-default; without a
+        // seeded rule it never fires on a fresh install or an upgrade.
+        let rule = DEFAULT_ALERT_RULES
+            .iter()
+            .find(|(_, event_type, _, _)| *event_type == "auth_bruteforce")
+            .expect("auth_bruteforce must be seeded");
+        assert_eq!(rule.0, "Auth Brute-Force");
+        assert_eq!(rule.3, 600);
+
+        // Event types are the seeding dedup key — duplicates would make
+        // seeding non-idempotent and the delete guard ambiguous.
+        let mut seen: Vec<&str> =
+            DEFAULT_ALERT_RULES.iter().map(|(_, ev, _, _)| *ev).collect();
+        let total = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), total, "duplicate event_type in seed list");
+    }
+
+    #[tokio::test]
+    async fn delete_guard_protects_seeded_pairs_not_low_ids() {
+        let store = SwitchStore::new(std::path::Path::new(":memory:")).unwrap();
+
+        // Free up a low id and hand it to an operator-created rule. The old
+        // guard was `id <= 10`, which would refuse this delete and — worse —
+        // allow deleting whichever seed happened to land above id 10.
+        {
+            let db = store.db().await;
+            db.execute("DELETE FROM alert_rules WHERE id = 3", [])
+                .unwrap();
+            db.execute(
+                "INSERT INTO alert_rules (id, name, enabled, event_type, cooldown_seconds, delivery_channels)
+                 VALUES (3, 'My Custom Rule', 1, 'custom_event', 300, '[\"ntfy\"]')",
+                [],
+            )
+            .unwrap();
+        }
+
+        store
+            .delete_alert_rule(3)
+            .await
+            .expect("operator rule on a low id must be deletable");
+
+        // Every remaining seeded rule is protected regardless of its id.
+        let rules = store.get_alert_rules().await.unwrap();
+        let mut protected = 0;
+        for rule in &rules {
+            let is_seed = DEFAULT_ALERT_RULES
+                .iter()
+                .any(|(n, ev, _, _)| *n == rule.name && *ev == rule.event_type);
+            assert!(is_seed, "unexpected non-seed rule {}", rule.name);
+            let err = store.delete_alert_rule(rule.id).await.unwrap_err();
+            assert_eq!(
+                err, "cannot delete default rules",
+                "rule {} was deletable",
+                rule.name
+            );
+            protected += 1;
+        }
+        assert_eq!(protected, DEFAULT_ALERT_RULES.len() - 1);
+
+        // A missing row still reports not-found rather than being protected.
+        let err = store.delete_alert_rule(9999).await.unwrap_err();
+        assert_eq!(err, "rule not found");
+    }
+
+    /// `name` is operator-mutable through `PATCH /api/alerts/rules/{id}`, so a
+    /// guard that matched on it handed the operator the key to itself: rename,
+    /// then delete, and the seeded rule is gone. `event_type` is the seeding
+    /// identity and `update_alert_rule` cannot touch it.
+    #[tokio::test]
+    async fn renamed_seeded_rule_is_still_protected() {
+        let store = SwitchStore::new(std::path::Path::new(":memory:")).unwrap();
+
+        let seeded = store
+            .get_alert_rules()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.event_type == "auth_bruteforce")
+            .expect("auth_bruteforce is seeded");
+
+        store
+            .update_alert_rule(seeded.id, Some("x"), None, None, None, None, None, None, None)
+            .await
+            .unwrap();
+
+        let err = store.delete_alert_rule(seeded.id).await.unwrap_err();
+        assert_eq!(
+            err, "cannot delete default rules",
+            "renaming a seeded rule must not make it deletable"
+        );
+        assert!(
+            store
+                .get_alert_rules()
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.event_type == "auth_bruteforce"),
+            "the brute-force detector's rule must survive"
+        );
+
+        // The converse: an operator rule reusing a seeded *name* is still
+        // deletable, because the name was never the identity.
+        {
+            let db = store.db().await;
+            db.execute(
+                "INSERT INTO alert_rules (name, enabled, event_type, cooldown_seconds, delivery_channels)
+                 VALUES ('Auth Brute-Force', 1, 'my_custom_event', 300, '[\"ntfy\"]')",
+                [],
+            )
+            .unwrap();
+        }
+        let mine = store
+            .get_alert_rules()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.event_type == "my_custom_event")
+            .expect("operator rule inserted");
+        assert!(!mine.is_default, "an operator rule is never a default rule");
+        store
+            .delete_alert_rule(mine.id)
+            .await
+            .expect("an operator rule reusing a seeded name must stay deletable");
+    }
+
+    /// The `event_type`-only guard that replaced the id range made *every* rule
+    /// an operator can create through the UI permanently undeletable: the create
+    /// form offers exactly the eleven seeded event types, and a second rule for
+    /// one of them — the same event routed to a different delivery channel — is
+    /// the ordinary reason to add a rule at all.
+    #[tokio::test]
+    async fn operator_rule_reusing_a_seeded_event_type_is_deletable() {
+        let store = SwitchStore::new(std::path::Path::new(":memory:")).unwrap();
+
+        let mine = store
+            .create_alert_rule(
+                "Brute force to email",
+                true,
+                "auth_bruteforce",
+                None,
+                None,
+                None,
+                None,
+                300,
+                r#"["smtp"]"#,
+            )
+            .await
+            .unwrap();
+
+        let rules = store.get_alert_rules().await.unwrap();
+        let seeded = rules
+            .iter()
+            .find(|r| r.event_type == "auth_bruteforce" && r.id != mine)
+            .expect("the seeded auth_bruteforce rule still exists");
+        assert!(seeded.id < mine, "the seeded row is the older, lower id");
+        assert!(
+            seeded.is_default,
+            "the API must report the seeded row as the default one"
+        );
+        assert!(
+            !rules.iter().find(|r| r.id == mine).unwrap().is_default,
+            "an operator's duplicate must not be reported as a default rule"
+        );
+
+        // The UI gates its delete control on this field, so it has to reach the
+        // wire — `GET /api/alerts/rules` serialises these rows verbatim.
+        let payload = serde_json::to_value(seeded).expect("serialise alert rule");
+        assert_eq!(
+            payload.get("is_default"),
+            Some(&serde_json::Value::Bool(true)),
+            "is_default must be part of the alert-rule API payload"
+        );
+
+        store
+            .delete_alert_rule(mine)
+            .await
+            .expect("a second rule for a seeded event type must be deletable");
+
+        // …and deleting it leaves the seeded rule, still protected, so the
+        // detector never loses the rule it fires through.
+        let after = store.get_alert_rules().await.unwrap();
+        assert!(after.iter().any(|r| r.id == seeded.id));
+        assert_eq!(
+            store.delete_alert_rule(seeded.id).await.unwrap_err(),
+            "cannot delete default rules"
+        );
+    }
+
+    /// Seed identity is both halves: an `event_type` Drift seeds *and* the
+    /// lowest id carrying it. Neither half protects on its own — the seeded row
+    /// keeps its protection however many duplicates sit above it, and a
+    /// lowest-id row for an event type Drift does not seed has none.
+    #[tokio::test]
+    async fn seeded_row_is_protected_by_min_id_not_event_type_alone() {
+        let store = SwitchStore::new(std::path::Path::new(":memory:")).unwrap();
+
+        let seeded_id = store
+            .get_alert_rules()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.event_type == "device_new")
+            .expect("device_new is seeded")
+            .id;
+
+        let mut duplicates = Vec::new();
+        for channel in [r#"["smtp"]"#, r#"["webhook"]"#] {
+            duplicates.push(
+                store
+                    .create_alert_rule(
+                        "New device elsewhere",
+                        true,
+                        "device_new",
+                        None,
+                        None,
+                        None,
+                        None,
+                        300,
+                        channel,
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        // Only the lowest id for the event type is the seeded one.
+        let rules = store.get_alert_rules().await.unwrap();
+        let defaults: Vec<i64> = rules
+            .iter()
+            .filter(|r| r.event_type == "device_new" && r.is_default)
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(defaults, vec![seeded_id], "exactly one row is the seeded one");
+
+        for id in &duplicates {
+            store
+                .delete_alert_rule(*id)
+                .await
+                .expect("a duplicate of a seeded event type is the operator's");
+        }
+        assert_eq!(
+            store.delete_alert_rule(seeded_id).await.unwrap_err(),
+            "cannot delete default rules",
+            "the seeded row keeps its protection after its duplicates are gone"
+        );
+
+        // The other half: being the lowest id for an event type protects
+        // nothing when Drift does not seed that event type.
+        let only_row = store
+            .create_alert_rule(
+                "Custom",
+                true,
+                "operator_only_event",
+                None,
+                None,
+                None,
+                None,
+                300,
+                r#"["ntfy"]"#,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .get_alert_rules()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == only_row)
+                .unwrap()
+                .is_default,
+            "lowest id for an unseeded event type is not a default rule"
+        );
+        store
+            .delete_alert_rule(only_row)
+            .await
+            .expect("an unseeded event type is never protected");
     }
 }

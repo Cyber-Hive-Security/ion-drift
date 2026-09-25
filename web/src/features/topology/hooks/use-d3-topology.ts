@@ -387,7 +387,7 @@ export function createTopologyMapInstance(
     if (node.baseline_status) {
       const bsLabel: Record<string, string> = { baselined: "Baselined", learning: "Learning", sparse: "Sparse" };
       const bsCol: Record<string, string> = { baselined: "#21D07A", learning: "#2FA4FF", sparse: "#FFAA00" };
-      lines.push(`<span style="color:#8A929D">Baseline:</span> <span style="color:${bsCol[node.baseline_status] || "#8A929D"}">${bsLabel[node.baseline_status] || node.baseline_status}</span>`);
+      lines.push(`<span style="color:#8A929D">Baseline:</span> <span style="color:${bsCol[node.baseline_status] || "#8A929D"}">${bsLabel[node.baseline_status] || escHtml(node.baseline_status)}</span>`);
     }
     if (node.switch_port) {
       lines.push(`<span style="color:#8A929D">Port:</span> ${escHtml(node.switch_port)}`);

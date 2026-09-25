@@ -6,6 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-25
+
+### Added
+
+- **Vulnerability feed.** Daily NVD + CISA KEV pull for RouterOS. Every managed RouterOS device whose version
+  falls in a published affected range gets a finding; CVEs CISA lists as exploited in the wild are Critical.
+  Findings state plainly that Drift checked the version, not whether the affected feature is enabled.
+- **Mandatory feed consent.** Administrators confirm the feed (on by default) or turn it off, with a warning,
+  before any outbound request is made. Settings → Security shows who decided and when. Turning the feed off
+  stops downloads: checks continue against the vulnerability data last downloaded (if any), but newly
+  published or newly exploited RouterOS vulnerabilities are not learned.
+- **Vulnerability escalation reopens.** An acknowledged vulnerability finding reopens, with a note naming the
+  old and new severity, when it escalates — for example when CISA lists the CVE as actively exploited.
+- **Service exposure findings.** Bundled advisories scoped to a service (CVE-2026-16347: `api`/`api-ssl`)
+  now raise an early-warning finding when the service is enabled — High when reachable from anywhere, Low
+  when restricted by `address` — without waiting for an attack. An acknowledged finding reopens if the
+  restriction is later removed.
+- **Operator resolutions stick.** A vulnerability or exposure finding an operator resolves manually stays
+  resolved. Drift reopens only findings it resolved itself — after an upgrade, if the version regresses;
+  after a service is disabled, if it is re-enabled.
+- **Feed health.** Findings shows a banner when the feed is off (stating the date of the data still being
+  checked), or when a feed source has not succeeded in three days or has never succeeded after being attempted.
+
+### Changed
+
+- Advisory catalog `version_constraint` must now be `null` or an array of version ranges.
+
+### Fixed
+
+- **Graceful degradation when the router is unreachable.** Connections, Logs, ARP, DHCP leases, pool
+  utilization, firewall filter, and network-map status now serve the last-known data with a
+  "showing last-known data" banner instead of returning a 502 error.
+
+### Security
+
+- Ship `session.secure = true` in the production config template, and warn at startup when session
+  cookies are configured without `Secure` on a non-loopback bind. (The Secure flag governs only the
+  browser-to-proxy leg, which is HTTPS.)
+- Stop forwarding `X-Forwarded-*`, `X-Real-IP`, and `Forwarded` headers to modules through the
+  reverse proxy: a registered module no longer receives the client's real IP or internal topology.
+- Strip control and bidirectional-override characters from module-published finding content before
+  storage.
+- Send a versionless `User-Agent` on outbound requests to modules.
+- Return a generic `400` from `/auth/callback` on a malformed request instead of a framework error
+  that names the missing query fields.
+- Escape `baseline_status` in the topology tooltip before it is rendered.
+
+### Internal
+
+- Abstract the router client behind a `RouterApi` trait and add end-to-end handler tests for the
+  degradation paths. No behavior change.
+
 ## [0.5.2b] - 2026-07-23
 
 ### Fixed

@@ -9,6 +9,7 @@ export interface UserInfo {
   user_id: string;
   username: string;
   email: string | null;
+  is_admin: boolean;
 }
 
 export interface AuthConfig {
@@ -280,9 +281,24 @@ export interface LogAnalytics {
   volume_over_time: TimeCount[];
 }
 
+/**
+ * Envelope for list endpoints that gracefully degrade when the router is
+ * offline: `items` carries the (possibly last-known) rows, `live_available`
+ * is false when serving cached data, and `as_of` is the cache timestamp.
+ */
+export interface Degradable<T> {
+  items: T[];
+  live_available: boolean;
+  as_of?: string | null;
+}
+
 export interface LogsResponse {
   entries: StructuredLogEntry[];
   analytics: LogAnalytics;
+  /** False when the router is unreachable; entries/analytics are then empty. */
+  live_available: boolean;
+  /** ISO timestamp of last-known data when degraded (always null for logs today). */
+  as_of?: string | null;
 }
 
 // Traffic types (snake_case — custom Rust structs, not RouterOS models)
@@ -349,6 +365,10 @@ export interface ConnectionSummary {
   other_count: number;
   max_entries: number | null;
   flagged_count: number;
+  /** False when the router is unreachable and figures come from stored history. */
+  live_available: boolean;
+  /** ISO timestamp of the most recent stored connection when degraded. */
+  as_of?: string | null;
 }
 
 // Full connections page types (snake_case — custom Rust structs)
@@ -392,6 +412,10 @@ export interface ConnectionsPageSummary {
 export interface ConnectionsPageResponse {
   connections: ConnectionEntry[];
   summary: ConnectionsPageSummary;
+  /** False when the router is unreachable and connections come from stored history. */
+  live_available: boolean;
+  /** ISO timestamp of the most recent stored connection when degraded. */
+  as_of?: string | null;
 }
 
 // ARP types (snake_case — custom Rust structs)
@@ -536,6 +560,10 @@ export interface NetworkMapStatus {
   devices: DeviceStatus[];
   interfaces: InterfaceStatus[];
   timestamp: number;
+  /** False when the router is unreachable and this is the last cached snapshot. */
+  live_available?: boolean;
+  /** RFC3339 timestamp of the cached snapshot when degraded. */
+  as_of?: string | null;
 }
 
 // Behavior / Device Fingerprinting types (snake_case — custom Rust structs)
@@ -1607,6 +1635,10 @@ export interface AlertRule {
   delivery_channels: string;
   created_at: string;
   updated_at: string;
+  /** Seeded by Drift and refused by DELETE /api/alerts/rules/{id}. The backend
+   *  decides this (the lowest-id row for a seeded event_type); never infer it
+   *  from the id here. */
+  is_default: boolean;
 }
 
 export interface AlertHistoryEntry {

@@ -1,3 +1,4 @@
+mod advisory;
 mod alerting;
 mod anomaly_correlator;
 mod attack_techniques;
@@ -6,6 +7,8 @@ mod behavior_engine;
 mod bootstrap;
 mod certwarden;
 mod config;
+mod confusable;
+mod staging;
 mod connection_store;
 mod correlation_engine;
 pub mod demo;
@@ -28,6 +31,7 @@ mod oui;
 mod passive_discovery;
 mod poller_registry;
 mod provision;
+mod router_api;
 mod router_queue;
 mod routes;
 mod secrets;
@@ -44,6 +48,13 @@ mod task_supervisor;
 mod tasks;
 pub mod topology;
 mod topology_inference;
+
+/// Test-only harness (`MockRouter` + full `AppState` builder) shared by the
+/// end-to-end handler tests. Declared in both the binary and library crate
+/// roots because each compiles the route modules (and their `#[cfg(test)]`
+/// submodules) as an independent unit.
+#[cfg(test)]
+mod testkit;
 
 use std::sync::Arc;
 
@@ -391,14 +402,12 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Warn if session cookies will be sent over HTTP on a non-localhost bind
-    if !config.session.secure
-        && config.server.listen_addr != "127.0.0.1"
-        && config.server.listen_addr != "localhost"
+    // Warn if session cookies will be sent over HTTP on a non-loopback bind.
+    // Warn only; the configured value is left untouched.
+    if let Some(msg) =
+        insecure_cookie_bind_warning(config.session.secure, &config.server.listen_addr)
     {
-        tracing::warn!(
-            "Session cookie 'secure' flag is disabled on a non-localhost bind address. Cookies will be sent over HTTP."
-        );
+        tracing::warn!(listen = %config.server.listen_addr, "{msg}");
     }
 
     tracing::info!(
@@ -670,23 +679,90 @@ async fn main() -> anyhow::Result<()> {
         ion_drift_storage::FindingsStore::new(&data_dir.join("findings.db"))
             .map_err(|e| anyhow::anyhow!("failed to init findings store: {e}"))?,
     );
+    let advisory_store = Arc::new(
+        ion_drift_storage::AdvisoryStore::new(&data_dir.join("advisory.db"))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to init advisory store: {e}"))?,
+    );
     let stats_store = Arc::new(
         stats_store::StatsStore::new(&data_dir.join("stats.db"))
             .map_err(|e| anyhow::anyhow!("failed to init stats store: {e}"))?,
     );
+    let dns_store = Arc::new(
+        ion_drift_storage::DnsStore::new(&data_dir.join("dns.db"))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to init dns store: {e}"))?,
+    );
+
+    // Load the advisory catalog once at startup. A bad catalog degrades the
+    // correlation, it does not stop the server — the loader keeps whatever it
+    // could parse and reports the rest.
+    {
+        let seed_dir = advisory_seed_dir();
+        let overlay_dir = data_dir.join("advisories");
+        match advisory::catalog::load_catalog(&advisory_store, &seed_dir, &overlay_dir).await {
+            Ok(report) if report.degraded => tracing::warn!(
+                advisories = report.advisories_loaded,
+                signals = report.signals_loaded,
+                rejected = ?report.files_rejected,
+                "advisory catalog loaded with rejections — correlation is degraded"
+            ),
+            // Zero advisories makes the whole engine inert, and the commonest
+            // cause is a relative seed path resolved against the wrong working
+            // directory. That must not read as a normal startup line.
+            Ok(report) if report.advisories_loaded == 0 => tracing::warn!(
+                seed_dir = %seed_dir.display(),
+                overlay_dir = %overlay_dir.display(),
+                "advisory catalog is empty — no advisories loaded, so exploitation \
+                 correlation cannot produce findings; check the seed directory \
+                 (override with DRIFT_ADVISORY_SEED_DIR)"
+            ),
+            Ok(report) => tracing::info!(
+                advisories = report.advisories_loaded,
+                signals = report.signals_loaded,
+                "advisory catalog loaded"
+            ),
+            Err(e) => tracing::warn!(error = %e, "advisory catalog load failed"),
+        }
+    }
+
+    // Load the confusable watchlist once at startup — same fail-soft contract
+    // as the advisory catalog above.
+    {
+        let seed_dir = confusable_seed_dir();
+        let overlay_dir = data_dir.join("confusable");
+        match confusable::catalog::load_watchlist(&dns_store, &seed_dir, &overlay_dir).await {
+            Ok(report) if report.degraded => tracing::warn!(
+                entries = report.entries_loaded,
+                rejected = ?report.files_rejected,
+                "confusable watchlist loaded with rejections — detection is degraded"
+            ),
+            // Zero entries makes the detector inert, and the commonest cause
+            // is a relative seed path resolved against the wrong working
+            // directory. That must not read as a normal startup line.
+            Ok(report) if report.entries_loaded == 0 => tracing::warn!(
+                seed_dir = %seed_dir.display(),
+                overlay_dir = %overlay_dir.display(),
+                "confusable watchlist is empty — no brands loaded, so the \
+                 confusable-domain detector cannot produce findings; check the \
+                 seed directory (override with DRIFT_CONFUSABLE_SEED_DIR)"
+            ),
+            Ok(report) => tracing::info!(
+                entries = report.entries_loaded,
+                "confusable watchlist loaded"
+            ),
+            Err(e) => tracing::warn!(error = %e, "confusable watchlist load failed"),
+        }
+    }
 
     // Live traffic buffer (300 entries = 5 min at 1 sample per second, but we poll every 10s so ~50 min)
     let live_traffic = Arc::new(LiveTrafficBuffer::new(300));
 
     // Cookie-hardening startup guard (WSTG-N13): warn loudly if the session
-    // cookie is configured in a browser-unsafe way. SameSite=None without
-    // Secure is rejected by browsers outright and removes the CSRF backstop.
-    if !config.session.secure {
-        tracing::warn!(
-            "session.secure=false — the session cookie will be sent over plaintext HTTP. \
-             Set secure=true in any TLS/proxied deployment."
-        );
-    }
+    // cookie is configured in a browser-unsafe way. The insecure-`secure`
+    // warning is emitted once, earlier, by the loopback-aware check above;
+    // here we only cover SameSite=None, which browsers reject outright and
+    // which removes the CSRF backstop.
     if config.session.same_site.eq_ignore_ascii_case("none") {
         tracing::warn!(
             "session.same_site=\"none\" — this removes the SameSite CSRF backstop and requires \
@@ -905,7 +981,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Build AppState
     let app_state = AppState {
-        mikrotik: mikrotik.clone(),
+        mikrotik: std::sync::Arc::new(mikrotik.clone())
+            as std::sync::Arc<dyn crate::router_api::RouterApi + Send + Sync>,
         oidc_client,
         http_client: http_client.clone(),
         sessions: sessions.clone(),
@@ -919,6 +996,8 @@ async fn main() -> anyhow::Result<()> {
         network_map_cache: Arc::new(tokio::sync::RwLock::new(None)),
         behavior_store: behavior_store.clone(),
         findings_store: findings_store.clone(),
+        advisory_store: advisory_store.clone(),
+        dns_store: dns_store.clone(),
         firewall_rules_cache: Arc::new(tokio::sync::RwLock::new((
             Vec::new(),
             std::time::Instant::now(),
@@ -949,8 +1028,11 @@ async fn main() -> anyhow::Result<()> {
         )),
     };
 
-    // Spawn all background tasks
-    tasks::spawn_all(&app_state, dns_resolver);
+    // Spawn all background tasks. The traffic/VLAN pollers need the concrete
+    // `MikrotikClient` (they call `TrafficTracker::poll(&MikrotikClient)`), which
+    // is no longer reachable through the `dyn RouterApi` state field, so the
+    // primary client is passed explicitly.
+    tasks::spawn_all(&app_state, dns_resolver, mikrotik.clone());
 
     // Start the module event dispatcher loop if the registry came up.
     if let Some(dispatcher) = app_state.module_event_dispatcher.clone() {
@@ -1036,6 +1118,41 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("ion-drift shutdown complete");
     Ok(())
+}
+
+/// Locate the bundled advisory catalog.
+///
+/// Container images ship it under `/app/seed/` — outside the data volume, the
+/// same convention the GeoIP databases use — while a source checkout reads it
+/// straight from the repo. `DRIFT_ADVISORY_SEED_DIR` overrides both. A missing
+/// directory is not an error: the loader treats an absent seed as "no bundled
+/// advisories" and the operator overlay still applies.
+fn advisory_seed_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("DRIFT_ADVISORY_SEED_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    let bundled = std::path::PathBuf::from("/app/seed/advisories");
+    if bundled.is_dir() {
+        return bundled;
+    }
+    std::path::PathBuf::from("data/advisories")
+}
+
+/// Where the bundled confusable watchlist lives. Same conventions as
+/// [`advisory_seed_dir`]: container images ship it under `/app/seed/`, a
+/// source checkout reads it straight from the repo, and
+/// `DRIFT_CONFUSABLE_SEED_DIR` overrides both. A missing directory is not an
+/// error: the loader treats an absent seed as "no bundled brands" and the
+/// operator overlay still applies.
+fn confusable_seed_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("DRIFT_CONFUSABLE_SEED_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    let bundled = std::path::PathBuf::from("/app/seed/confusable");
+    if bundled.is_dir() {
+        return bundled;
+    }
+    std::path::PathBuf::from("data/confusable")
 }
 
 /// Run the setup-mode server when no cert/secrets are present.
@@ -1161,5 +1278,58 @@ fn parse_args() -> CliArgs {
     CliArgs {
         config_path,
         dump_config,
+    }
+}
+
+/// Returns true when `listen_addr` binds only the loopback interface
+/// (`localhost`, any `127.0.0.0/8` address, `::1`, bracketed or not).
+fn is_loopback_bind(listen_addr: &str) -> bool {
+    let addr = listen_addr.trim();
+    if addr.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let addr = addr.trim_start_matches('[').trim_end_matches(']');
+    addr.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// L1 hardening: the startup warning emitted when the session cookie lacks
+/// the `Secure` attribute while the server listens beyond loopback (so the
+/// cookie can cross the network in plaintext). `None` when no warning is due.
+fn insecure_cookie_bind_warning(secure: bool, listen_addr: &str) -> Option<&'static str> {
+    if secure || is_loopback_bind(listen_addr) {
+        return None;
+    }
+    Some(
+        "session.secure=false on a non-loopback bind address (WSTG-N13): session cookies will \
+         be sent without the Secure attribute and can travel over plaintext HTTP. Serve Ion \
+         Drift behind TLS and set session.secure=true in any TLS/proxied deployment.",
+    )
+}
+
+#[cfg(test)]
+mod startup_warning_tests {
+    use super::{insecure_cookie_bind_warning, is_loopback_bind};
+
+    #[test]
+    fn loopback_binds_are_recognized() {
+        for a in ["127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST", "::1", "[::1]"] {
+            assert!(is_loopback_bind(a), "{a} should be loopback");
+        }
+        for a in ["0.0.0.0", "::", "10.20.25.18", "192.168.1.5", "example.com", ""] {
+            assert!(!is_loopback_bind(a), "{a} should not be loopback");
+        }
+    }
+
+    #[test]
+    fn warns_only_when_insecure_and_exposed() {
+        let msg = insecure_cookie_bind_warning(false, "0.0.0.0").expect("should warn");
+        assert!(msg.contains("session.secure=true"));
+        assert!(msg.contains("TLS"));
+        assert!(insecure_cookie_bind_warning(false, "::").is_some());
+        assert!(insecure_cookie_bind_warning(false, "127.0.0.1").is_none());
+        assert!(insecure_cookie_bind_warning(false, "::1").is_none());
+        assert!(insecure_cookie_bind_warning(true, "0.0.0.0").is_none());
     }
 }

@@ -23,6 +23,33 @@ See [FEATURES.md](FEATURES.md) for the full feature list.
 - **NTP Policy Deviation Detection** — Detects devices using unauthorized NTP servers. ATT&CK technique T1124 (System Time Discovery). Policies auto-synced from DHCP option 42.
 - **Policy Editor** — Create custom network policies directly. Admin policies survive router sync cycles. Router-synced policies are read-only with lock icon.
 
+## Findings
+
+Everything Drift flags converges on one page: **Findings**. Instead of scattering alerts across a dozen screens, Drift funnels vulnerability intelligence, service exposure, exploitation signals, confusable-domain detection, and policy deviations into a single triage surface with a consistent lifecycle.
+
+- **Vulnerability feed (NVD + CISA KEV).** Drift pulls RouterOS advisories daily. Every managed device whose firmware falls inside a published affected range gets a finding; CVEs CISA lists as actively exploited are raised to Critical. Findings state plainly that Drift checked the *version* — not whether the affected feature happens to be enabled — so a real exposure is never hidden behind a false "not applicable."
+- **Service exposure, early.** When a service tied to a known advisory is enabled (for example `api` / `api-ssl`), Drift raises an early-warning finding before anyone attacks it — High when the service is reachable from anywhere, Low when you have restricted it by address.
+- **Exploitation signals & confusable domains.** Sustained credential-failure patterns and UTS #39 look-alike domains (the `rnicrosoft.com`-style homoglyph tricks) surface here too, with the evidence that triggered them.
+- **Policy deviations.** DNS/NTP deviations, enriched with MITRE ATT&CK context, land in the same queue.
+
+**You decide before anything leaves your network.** The vulnerability feed stays off until an administrator confirms it — no outbound request is made until then. Turn it off later and Drift keeps checking against the data it already downloaded; it simply stops learning about newly published CVEs.
+
+**A lifecycle that respects your judgment.** Acknowledge a finding and it stays acknowledged — until the risk genuinely changes: an acknowledged vulnerability reopens, with a note naming the old and new severity, the day CISA marks it exploited; an exposure finding reopens if you remove the address restriction that kept it Low. Resolve a finding by hand and it *stays* resolved — Drift reopens only the findings it resolved itself (after an upgrade, if the version regresses; after you disable a service, if it is re-enabled).
+
+**Resilient when the router blips.** If the router is briefly unreachable, Findings — along with Connections, Logs, ARP, firewall, and the network map — keeps serving the last data it had behind a clear "showing last-known data" banner instead of failing the page.
+
+![Findings](caps/ion-drift-findings.webp)
+
+### What's Next for Findings
+
+Findings is where much of the near-term roadmap converges (the full path to 1.0 lives in [ROADMAP.md](ROADMAP.md)):
+
+- **Suppression, done right** — a suppression-rule editor with scope preview, so you can silence noise without hiding signal.
+- **Findings that reach you** — routing findings to the channels you actually watch: email, webhook, ntfy, Discord, and Matrix, each with a per-rule test that sends a synthetic event end to end.
+- **Deeper evidence** — a collapsible evidence-chain view for investigations, plus a verdict feedback loop that learns from your corrections.
+- **New classes of finding** — HTTP/TLS hygiene (TLS 1.0/1.1, self-signed and wildcard misuse inside the trust zone) and SMB/LDAP egress, plus router config-drift detection when a device diverges from its last approved snapshot.
+- **On the horizon** — opt-in, load-guarded data-plane fingerprinting (JA3/JA4, mDNS/SSDP, DHCP fingerprints) to surface signals the REST control plane cannot see.
+
 ## Screenshots
 
 ### Network Topology
@@ -288,7 +315,7 @@ For advanced configuration (OIDC, syslog, CertWarden, custom bind address), see 
 - Local auth with argon2id password hashing, or OIDC with any provider
 - HMAC-SHA256 signed sessions with HttpOnly/Secure cookies
 - CSRF protection, rate limiting, security headers
-- No telemetry, no phone-home — runs fully air-gapped
+- No telemetry, no phone-home — runs fully air-gapped with the vulnerability feed off (see [Outbound connections](#outbound-connections))
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
@@ -309,6 +336,23 @@ Ion Drift was built entirely by AI coding agents under the direction and archite
 No line of code was written by a human. Human contribution was limited to product vision, architecture direction, feature prioritization, acceptance testing, and deployment into the production homelab environment where Ion Drift runs today.
 
 This project demonstrates that AI coding agents can produce production-grade, security-conscious software when guided by a knowledgeable operator who understands the problem domain.
+
+## Outbound connections
+
+Ion Drift is self-hosted and sends no telemetry. It talks to the devices you configure and to services an
+administrator configures (for example an OIDC provider, MaxMind GeoIP downloads, alert webhooks, or CertWarden).
+The vulnerability feed is the only outbound connection Ion Drift makes on its own.
+
+The **vulnerability feed** downloads public RouterOS vulnerability data once a day from:
+
+- `services.nvd.nist.gov` — NIST National Vulnerability Database
+- `www.cisa.gov` — CISA Known Exploited Vulnerabilities catalog
+
+These are plain HTTPS downloads; nothing about your installation, network, or devices is sent. The feed is
+on by default, but **no request is made until an administrator confirms it** in the dialog shown at first
+login. It can be turned off at any time in **Settings → Security**. With it off, Ion Drift stops downloading
+vulnerability data: checks continue against the data it last downloaded (if any) and the advisories bundled with
+the installed release, but newly published or newly exploited RouterOS vulnerabilities are not learned.
 
 ## License
 

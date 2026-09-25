@@ -9,6 +9,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { LoginPage } from "./login";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { LicenseBanner } from "@/components/license-banner";
+import { AdvisoryFeedConsentGate } from "@/components/advisory-feed-consent";
 
 export function RootLayout() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -38,6 +39,7 @@ export function RootLayout() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onMenuToggle={() => setSidebarOpen((v) => !v)} pendingAnomalies={behaviorAlerts.data?.tier1_pending ?? 0} sidebarOpen={sidebarOpen} />
         <LicenseBanner />
+        <AdvisoryFeedConsentGate />
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>

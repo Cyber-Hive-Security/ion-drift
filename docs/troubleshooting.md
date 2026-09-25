@@ -23,7 +23,7 @@ Common issues and their solutions, organized by symptom.
 secure = false
 ```
 
-Only set `secure = true` if Ion Drift is behind a reverse proxy that terminates HTTPS (Traefik, Nginx, Caddy, etc.).
+Only use `secure = false` when browsers reach Ion Drift over plain HTTP. If browsers use HTTPS — directly or through a reverse proxy that terminates TLS (Traefik, Nginx, Caddy, etc.) — keep `secure = true`, even if the proxy talks to Ion Drift over plain HTTP internally.
 
 ### Wrong password gives error, correct password gives error too
 

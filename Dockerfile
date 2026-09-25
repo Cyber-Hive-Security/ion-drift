@@ -37,6 +37,16 @@ COPY docker/entrypoint.sh /entrypoint.sh
 #   -v /path/to/ca.crt:/app/certs/root_ca.crt:ro
 RUN mkdir -p /app/config /app/certs /app/data/certs /app/seed/geoip
 
+# Bundled advisory catalog. Same /app/seed convention as the GeoIP databases —
+# outside the data volume so an image upgrade always ships the current catalog,
+# while an operator overlay in the volume's `advisories/` directory still wins
+# per advisory on a higher catalog_version. Read in place; no entrypoint copy.
+COPY data/advisories/ /app/seed/advisories/
+
+# Bundled confusable-domain watchlist. Same convention: operator overlay in the
+# volume's `confusable/` directory layers over it per domain.
+COPY data/confusable/ /app/seed/confusable/
+
 # Bundle DB-IP Lite databases under /app/seed/ — outside the data-volume
 # mount path. The entrypoint seeds them into /app/data/ion-drift/geoip/
 # on every start so volumes that pre-date the bundling commit (or empty

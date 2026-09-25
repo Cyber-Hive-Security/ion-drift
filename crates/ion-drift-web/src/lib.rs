@@ -1,3 +1,4 @@
+pub mod advisory;
 pub mod alerting;
 pub mod anomaly_correlator;
 pub mod attack_techniques;
@@ -6,6 +7,8 @@ pub mod behavior_engine;
 pub mod bootstrap;
 pub mod certwarden;
 pub mod config;
+pub mod confusable;
+pub mod staging;
 pub mod connection_store;
 pub mod correlation_engine;
 pub mod demo;
@@ -28,6 +31,7 @@ pub mod passive_discovery;
 pub mod modules_registry;
 pub mod poller_registry;
 pub mod provision;
+pub mod router_api;
 pub mod router_queue;
 pub mod routes;
 pub mod secrets;
@@ -44,3 +48,8 @@ pub mod task_supervisor;
 pub mod tasks;
 pub mod topology;
 pub mod topology_inference;
+
+/// Test-only harness: `MockRouter` + a full `AppState` builder used by the
+/// end-to-end handler tests. Compiled only under `cfg(test)`.
+#[cfg(test)]
+pub(crate) mod testkit;

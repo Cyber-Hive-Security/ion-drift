@@ -23,6 +23,22 @@ The container writes to `XDG_DATA_HOME=/app/data`, so all state is under
 
 ## Backing up
 
+> **⚠ A backup is a credential.** The data volume holds `secrets.db` *and* the key
+> material that unwraps it (`kek.local`, `kek.salt`, `machine.key`). On a local-auth
+> install the archive is fully self-contained: restoring it alone produces a working
+> instance with decryptable router credentials — no password prompt, no external
+> dependency. Anyone who obtains the tarball obtains administrative access to your
+> network devices.
+>
+> Encrypt backups at rest (`age`, `gpg`, or your backup tool's own encryption) and
+> restrict access as tightly as you restrict access to the appliance host. Do not
+> drop them unencrypted on a NAS share, a cloud-sync folder, or anywhere broader than
+> the host itself.
+>
+> On mTLS/Keycloak installs the exposure is narrower — `secrets.db` also requires
+> Keycloak to be reachable with the same client credentials — but the archive should
+> still be treated as sensitive.
+
 SQLite databases must not be copied while the server is writing to them — a
 mid-write copy can be corrupt. Two safe options:
 
