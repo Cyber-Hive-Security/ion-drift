@@ -408,8 +408,9 @@ fn validate(
     Ok((MergedAdvisory { record, signals }, rejected_signals))
 }
 
-/// Flatten `version_constraint` into the JSON string the store holds. A bare
-/// string stays unquoted so a hand-written `"< 7.16"` survives the round trip.
+/// Flatten `version_constraint` into the JSON string the store holds. Only
+/// `null` or an array of version ranges reaches here: validation rejects a
+/// bare string such as `"< 7.16"` before the record is built.
 fn version_constraint_string(value: Option<serde_json::Value>) -> Option<String> {
     match value {
         None | Some(serde_json::Value::Null) => None,

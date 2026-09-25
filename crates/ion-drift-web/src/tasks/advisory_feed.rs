@@ -214,12 +214,12 @@ mod tests {
     use super::*;
     use crate::advisory::feed::fixtures;
     use std::sync::Mutex;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn user_agent_discloses_nothing_about_the_installation() {
         assert_eq!(FEED_USER_AGENT, "ion-drift");
     }
-    use tempfile::NamedTempFile;
 
     struct MockTransport {
         calls: Mutex<Vec<String>>,

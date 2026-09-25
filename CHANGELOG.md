@@ -12,7 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   falls in a published affected range gets a finding; CVEs CISA lists as exploited in the wild are Critical.
   Findings state plainly that Drift checked the version, not whether the affected feature is enabled.
 - **Mandatory feed consent.** Administrators confirm the feed (on by default) or turn it off, with a warning,
-  before any outbound request is made. Settings → Security shows who decided and when.
+  before any outbound request is made. Settings → Security shows who decided and when. Turning the feed off
+  stops downloads: checks continue against the vulnerability data last downloaded (if any), but newly
+  published or newly exploited RouterOS vulnerabilities are not learned.
+- **Vulnerability escalation reopens.** An acknowledged vulnerability finding reopens, with a note naming the
+  old and new severity, when it escalates — for example when CISA lists the CVE as actively exploited.
 - **Service exposure findings.** Bundled advisories scoped to a service (CVE-2026-16347: `api`/`api-ssl`)
   now raise an early-warning finding when the service is enabled — High when reachable from anywhere, Low
   when restricted by `address` — without waiting for an attack. An acknowledged finding reopens if the
@@ -20,7 +24,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Operator resolutions stick.** A vulnerability or exposure finding an operator resolves manually stays
   resolved. Drift reopens only findings it resolved itself — after an upgrade, if the version regresses;
   after a service is disabled, if it is re-enabled.
-- **Feed health.** Findings shows a banner when the feed is off or its data is more than three days old.
+- **Feed health.** Findings shows a banner when the feed is off (stating the date of the data still being
+  checked), or when a feed source has not succeeded in three days or has never succeeded after being attempted.
 
 ### Changed
 

@@ -1,9 +1,10 @@
 //! Per-device advisory pass.
 //!
 //! Each evaluator cycle reads every enabled RouterOS device once — through its
-//! router queue, never directly — and reconciles version findings for it. A
-//! device whose read fails is skipped for the cycle: a failed read is not
-//! evidence of anything, so it can neither raise nor resolve a finding.
+//! router queue, never directly — and reconciles its version (vulnerability)
+//! findings and its service exposure findings. A device whose read fails is
+//! skipped for the cycle: a failed read is not evidence of anything, so it can
+//! neither raise nor resolve a finding.
 
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -14,7 +15,7 @@ use serde_json::Value;
 
 use crate::advisory::exploitation::now_unix;
 use crate::advisory::exposure;
-use crate::advisory::version::VersionRange;
+use crate::advisory::version::{RouterOsVersion, VersionRange};
 use crate::advisory::vulnerable::{self, VulnInput, VulnSource};
 use crate::router_queue::{Priority, QueuedRequest, RouterQueue};
 use crate::staging::stage_text;
@@ -48,12 +49,15 @@ pub(crate) fn merge_inputs(feed: Vec<FeedCve>, kev: Vec<FeedKev>, catalog: &[Adv
         );
     }
     for a in catalog {
-        let Some(ranges) = a
-            .version_constraint
-            .as_deref()
-            .and_then(|vc| serde_json::from_str::<Vec<VersionRange>>(vc).ok())
-        else {
+        let Some(vc) = a.version_constraint.as_deref() else {
             continue;
+        };
+        let ranges = match serde_json::from_str::<Vec<VersionRange>>(vc) {
+            Ok(ranges) => ranges,
+            Err(e) => {
+                tracing::warn!(advisory = %a.advisory_id, error = %e, "advisory: stored version_constraint does not parse; advisory skipped");
+                continue;
+            }
         };
         let prior = by_id.remove(&a.advisory_id);
         by_id.insert(
@@ -157,6 +161,9 @@ pub(crate) async fn evaluate_devices(state: &AppState) -> Result<(), String> {
 
         match reads.version {
             Some(version) => {
+                if RouterOsVersion::parse(&version).is_none() {
+                    tracing::warn!(device = %target.device_id, version = %version, "advisory: RouterOS version does not parse; no CVE can be evaluated for this device");
+                }
                 let assessment = vulnerable::assess(&target.device_id, &version, &inputs, now);
                 if !assessment.cannot_evaluate.is_empty() {
                     tracing::debug!(device = %target.device_id, count = assessment.cannot_evaluate.len(), "advisory: CVEs not evaluable for this version");

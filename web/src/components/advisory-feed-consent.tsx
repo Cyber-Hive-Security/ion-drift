@@ -6,7 +6,7 @@ import { useAdvisoryFeedStatus, useSetAdvisoryFeedConsent } from "@/api/queries"
 export const FEED_HOSTS = ["services.nvd.nist.gov", "www.cisa.gov"] as const;
 
 export const FEED_OFF_WARNING =
-  "Ion Drift will not learn about new vulnerabilities. Only advisories bundled with this release will be checked, and newly published or actively exploited RouterOS vulnerabilities affecting your devices will not be reported.";
+  "Turning this off means Ion Drift stops downloading vulnerability data and will not learn about new vulnerabilities. Checks continue against data already downloaded (if any), but newly published or newly exploited RouterOS vulnerabilities will not be learned, so they will not be reported for your devices.";
 
 /**
  * Blocks administrators until they answer the vulnerability-feed question.

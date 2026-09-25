@@ -64,9 +64,10 @@ pub fn spawn_advisory_evaluator(supervisor: &TaskSupervisor, state: AppState) {
                 if let Err(e) = exploitation::evaluate(&state).await {
                     tracing::warn!(error = %e, "advisory: evaluation failed");
                 }
-                // Per-device pass (version and, from Task 11, exposure). Runs
-                // every cycle whether or not the feed is on: bundled advisories
-                // are evaluated either way.
+                // Per-device pass: version (vulnerability) and service exposure
+                // findings. Runs every cycle whether or not the feed is on: with
+                // it off, bundled advisories and the feed data last downloaded
+                // are still evaluated.
                 if let Err(e) = crate::advisory::device_pass::evaluate_devices(&state).await {
                     tracing::warn!(error = %e, "advisory: device pass failed");
                 }

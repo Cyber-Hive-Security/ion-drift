@@ -288,7 +288,7 @@ For advanced configuration (OIDC, syslog, CertWarden, custom bind address), see 
 - Local auth with argon2id password hashing, or OIDC with any provider
 - HMAC-SHA256 signed sessions with HttpOnly/Secure cookies
 - CSRF protection, rate limiting, security headers
-- No telemetry, no phone-home — runs fully air-gapped
+- No telemetry, no phone-home — runs fully air-gapped with the vulnerability feed off (see [Outbound connections](#outbound-connections))
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
@@ -312,7 +312,9 @@ This project demonstrates that AI coding agents can produce production-grade, se
 
 ## Outbound connections
 
-Ion Drift is self-hosted and sends no telemetry. With one exception, it only talks to devices you configure.
+Ion Drift is self-hosted and sends no telemetry. It talks to the devices you configure and to services an
+administrator configures (for example an OIDC provider, MaxMind GeoIP downloads, alert webhooks, or CertWarden).
+The vulnerability feed is the only outbound connection Ion Drift makes on its own.
 
 The **vulnerability feed** downloads public RouterOS vulnerability data once a day from:
 
@@ -321,8 +323,9 @@ The **vulnerability feed** downloads public RouterOS vulnerability data once a d
 
 These are plain HTTPS downloads; nothing about your installation, network, or devices is sent. The feed is
 on by default, but **no request is made until an administrator confirms it** in the dialog shown at first
-login. It can be turned off at any time in **Settings → Security**; with it off, only advisories bundled with
-the installed release are evaluated.
+login. It can be turned off at any time in **Settings → Security**. With it off, Ion Drift stops downloading
+vulnerability data: checks continue against the data it last downloaded (if any) and the advisories bundled with
+the installed release, but newly published or newly exploited RouterOS vulnerabilities are not learned.
 
 ## License
 

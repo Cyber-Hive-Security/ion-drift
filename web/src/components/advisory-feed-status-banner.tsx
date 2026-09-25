@@ -9,10 +9,17 @@ export function AdvisoryFeedStatusBanner() {
   if (!data) return null;
 
   if (data.consent === "off") {
+    // Turning the feed off stops downloads; checks keep using what was last stored.
+    const downloads = data.sources.map((s) => s.last_success_at).filter((t): t is number => t != null);
+    const newest = downloads.length === 0 ? null : Math.max(...downloads);
     return (
       <div role="status" className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-        The vulnerability feed is off. Only advisories bundled with this release are evaluated; newly published
-        RouterOS vulnerabilities are not reported. Change this in Settings → Security.
+        The vulnerability feed is off.{" "}
+        {newest == null
+          ? "Nothing was ever downloaded, so only advisories bundled with this release are evaluated."
+          : `Checks continue against vulnerability data last downloaded on ${new Date(newest * 1000).toLocaleDateString()}.`}{" "}
+        New vulnerabilities are not learned: newly published or newly exploited RouterOS vulnerabilities will not be
+        reported. An administrator can change this in Settings → Security.
       </div>
     );
   }

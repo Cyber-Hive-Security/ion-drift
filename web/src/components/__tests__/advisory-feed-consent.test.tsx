@@ -62,6 +62,17 @@ describe("AdvisoryFeedConsentGate", () => {
     await waitFor(() => expect(consentPosts(calls).map((c) => c.body)).toEqual([{ consent: "off" }]));
   });
 
+  it("off warning says existing data is still checked but nothing new is learned", async () => {
+    mockFetchRoutes({ "GET /auth/status": admin, "GET /api/advisory/feed": status("unanswered") });
+    renderWithClient(<AdvisoryFeedConsentGate />);
+    await userEvent.click(await screen.findByRole("button", { name: /^turn off$/i }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(/stops downloading vulnerability data/i);
+    expect(dialog).toHaveTextContent(/checks continue against data already downloaded/i);
+    expect(dialog).toHaveTextContent(/newly published or newly exploited RouterOS vulnerabilities will not be learned/i);
+    expect(dialog).not.toHaveTextContent(/only advisories bundled with this release will be checked/i);
+  });
+
   it("traps keyboard focus inside the dialog in both steps", async () => {
     mockFetchRoutes({ "GET /auth/status": admin, "GET /api/advisory/feed": status("unanswered") });
     renderWithClient(
