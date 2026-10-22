@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-22
+
+### Security
+
+- **eMudhra CA distrust.** Updated the bundled public root store (`webpki-roots` 1.0.7 → 1.0.10), which removes
+  "emSign ECC Root CA - G3". That root signed eight eMudhra intermediates whose private keys were found to be
+  recoverable (disclosed 2026-10-17; distrusted by Mozilla, Chrome, Apple and Microsoft). Affects Drift's outbound
+  HTTPS and SMTP connections. Intermediates reachable through Sectigo's cross-signature are not yet blocked.
+
 ## [0.5.3] - 2026-09-25
 
 ### Added

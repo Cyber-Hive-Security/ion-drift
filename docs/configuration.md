@@ -60,7 +60,7 @@ After login, go to **Settings → Devices** to add your MikroTik router:
 
 ### 4. TLS Certificate Trust
 
-- **Let's Encrypt or other public CA:** No additional config needed. The certificate is trusted automatically.
+- **Let's Encrypt or other public CA:** No additional config needed. The certificate is trusted automatically against the Mozilla root store bundled into Drift (`webpki-roots`), not the host or container OS store. CA distrust events (for example the October 2026 eMudhra removal in v0.5.4) therefore arrive with Drift releases, so keep Drift updated.
 - **Private/internal CA (Smallstep, EJBCA, self-signed):** Mount your CA's root certificate into the container and set `ca_cert_path` in `[router]`:
   ```yaml
   # docker-compose.yml
