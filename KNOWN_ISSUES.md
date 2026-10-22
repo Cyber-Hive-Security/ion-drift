@@ -6,9 +6,9 @@ Tracked issues from external code reviews and internal testing.
 
 ### [HIGH] Public Root Store Trusted Compromised eMudhra CA
 **Source:** Public disclosure 2026-10-17 (eMudhra intermediate key compromise; Mozilla bug 2083449)
-**Fixed:** v0.5.4 (partial; see below)
+**Fixed:** v0.5.4 (root), v0.5.5 (intermediates)
 
-Eight eMudhra intermediate CAs were found to have private keys recoverable from the certificates themselves. Drift's outbound HTTPS and SMTP clients trust the bundled Mozilla root store (`webpki-roots`), which still included the parent root "emSign ECC Root CA - G3". Fixed by updating `webpki-roots` 1.0.7 → 1.0.10, which removes that root. **Remaining:** the same intermediates also chain through a Sectigo cross-signature that the root store still trusts, and a root store cannot exclude individual intermediates. Blocking the eight intermediates by public key is planned; see SECURITY.md → Known Limitations.
+Eight eMudhra intermediate CAs were found to have private keys recoverable from the certificates themselves. Drift's outbound HTTPS and SMTP clients trust the bundled Mozilla root store (`webpki-roots`), which still included the parent root "emSign ECC Root CA - G3". v0.5.4 updated `webpki-roots` 1.0.7 → 1.0.10, which removes that root. The same intermediates also chain through a Sectigo cross-signature that the root store still trusts, and a root store cannot exclude individual intermediates. v0.5.5 closed that path by updating `rustls-webpki` to 0.103.16, which rejects any certificate path containing the eight intermediates' public keys (RUSTSEC-2026-0382).
 
 ### [HIGH] Session Secret Fail-Open on Decrypt Error (main.rs)
 **Source:** External security review 2026-03-25

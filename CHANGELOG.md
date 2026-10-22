@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-10-22
+
+### Security
+
+- **Compromised eMudhra intermediates rejected.** Updated `rustls-webpki` to 0.103.16, which rejects any certificate
+  path containing the eight emSign intermediates whose private keys are now public, including paths through
+  Sectigo's cross-signature that 0.5.4's root-store update could not block (RUSTSEC-2026-0382).
+- **rustls 0.23.46.** Fixes RUSTSEC-2026-0346 (session secrets in `Debug` output), RUSTSEC-2026-0347 (ECH rejection
+  data ordering), RUSTSEC-2026-0348 (Brotli certificate decompression allocation) and RUSTSEC-2026-0349 (key-share
+  prediction downgrade). Drift does not enable ECH or the `brotli` feature or log session values, so the practical
+  exposure was limited to the key-share downgrade.
+- Replaced yanked `chacha20` 0.10.0 with 0.10.2.
+
 ## [0.5.4] - 2026-10-22
 
 ### Security
@@ -13,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **eMudhra CA distrust.** Updated the bundled public root store (`webpki-roots` 1.0.7 → 1.0.10), which removes
   "emSign ECC Root CA - G3". That root signed eight eMudhra intermediates whose private keys were found to be
   recoverable (disclosed 2026-10-17; distrusted by Mozilla, Chrome, Apple and Microsoft). Affects Drift's outbound
-  HTTPS and SMTP connections. Intermediates reachable through Sectigo's cross-signature are not yet blocked.
+  HTTPS and SMTP connections. Intermediates reachable through Sectigo's cross-signature are blocked in 0.5.5.
 
 ## [0.5.3] - 2026-09-25
 
