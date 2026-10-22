@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   prediction downgrade). Drift does not enable ECH or the `brotli` feature or log session values, so the practical
   exposure was limited to the key-share downgrade.
 - Replaced yanked `chacha20` 0.10.0 with 0.10.2.
+- **Web UI dependency `seroval` 1.7.0** (critical: GHSA-mv8w-475r-vwqw, GHSA-p6vx-979v-rg4c, GHSA-jp82-f5mq-hwhp),
+  pulled in by the router library and shipped in the browser bundle. Build and test tooling (vite, vitest, postcss
+  and others) also updated; those never ship.
+- `quinn-proto` 0.11.19 (RUSTSEC-2026-0338 to 0342). It was listed in the lockfile but never compiled into Drift.
 
 ## [0.5.4] - 2026-10-22
 
