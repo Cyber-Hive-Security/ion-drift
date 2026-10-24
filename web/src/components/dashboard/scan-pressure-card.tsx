@@ -69,11 +69,11 @@ export function ScanPressureCard() {
   const lastBucket = data[data.length - 1];
   let topPorts: { port: number; count: number }[] = [];
   if (lastBucket?.top_ports) {
-    try { topPorts = JSON.parse(lastBucket.top_ports); } catch {}
+    try { topPorts = JSON.parse(lastBucket.top_ports); } catch { /* malformed JSON: keep default */ }
   }
   let topCountries: { country: string; count: number }[] = [];
   if (lastBucket?.top_countries) {
-    try { topCountries = JSON.parse(lastBucket.top_countries); } catch {}
+    try { topCountries = JSON.parse(lastBucket.top_countries); } catch { /* malformed JSON: keep default */ }
   }
 
   return (

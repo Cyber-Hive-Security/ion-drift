@@ -217,7 +217,7 @@ function HistoryFilterBar({
         <div className="mt-2 grid grid-cols-2 gap-2 rounded-lg border border-border bg-card p-3 sm:grid-cols-3 lg:grid-cols-4">
           <FilterInput
             label="Source IP"
-            placeholder="10.20.25.100"
+            placeholder="198.51.100.10"
             value={filters.src_ip}
             onChange={(v) => onChange({ ...filters, src_ip: v })}
           />

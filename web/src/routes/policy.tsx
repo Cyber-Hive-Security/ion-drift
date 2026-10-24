@@ -246,7 +246,7 @@ function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
     setError(null);
 
     const parsedTargets = targets.split("\n").map((t) => t.trim()).filter(Boolean);
-    const parsedPort = port ? parseInt(port, 10) : null;
+    const parsedPort = port ? Number.parseInt(port, 10) : null;
     const vlanScope = globalScope ? null : selectedVlans.length > 0 ? selectedVlans : null;
 
     try {
@@ -331,7 +331,7 @@ function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
               value={targets}
               onChange={(e) => setTargets(e.target.value)}
               rows={4}
-              placeholder={"10.20.25.5\n10.20.25.6\n192.168.1.0/24"}
+              placeholder={"198.51.100.5\n198.51.100.6\n192.168.1.0/24"}
               className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 font-mono text-sm"
             />
           </div>

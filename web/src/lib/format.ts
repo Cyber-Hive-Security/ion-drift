@@ -16,8 +16,8 @@ export function formatUptime(uptime: string): string {
   const parts: string[] = [];
   if (weeks) parts.push(`${weeks}w`);
   if (days) parts.push(`${days}d`);
-  parts.push(`${parseInt(hours)}h`);
-  parts.push(`${parseInt(minutes)}m`);
+  parts.push(`${Number.parseInt(hours)}h`);
+  parts.push(`${Number.parseInt(minutes)}m`);
   return parts.join(" ");
 }
 

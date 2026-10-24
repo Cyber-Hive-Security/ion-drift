@@ -11,8 +11,8 @@ interface SystemInfoBarProps {
 export function SystemInfoBar({ resource, device }: SystemInfoBarProps) {
   const isSwos = resource.platform === "SwOS";
   const cpuLoad = resource["cpu-load"];
-  const totalMem = parseInt(String(resource["total-memory"])) || 0;
-  const freeMem = parseInt(String(resource["free-memory"])) || 0;
+  const totalMem = Number.parseInt(String(resource["total-memory"])) || 0;
+  const freeMem = Number.parseInt(String(resource["free-memory"])) || 0;
   const memPct = totalMem > 0 ? Math.round(((totalMem - freeMem) / totalMem) * 100) : 0;
 
   return (

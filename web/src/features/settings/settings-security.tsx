@@ -200,7 +200,7 @@ function SecretsSection() {
                     placeholder={`New ${secretLabels[secret.name]?.toLowerCase() || "value"}`}
                     autoFocus
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") handleSave(secret.name);
+                      if (e.key === "Enter") void handleSave(secret.name);
                       if (e.key === "Escape") {
                         setEditingSecret(null);
                         setEditValue("");

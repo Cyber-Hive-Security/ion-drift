@@ -99,7 +99,7 @@ function AlertRulesSection() {
               await createRule.mutateAsync({
                 name: newRule.name,
                 event_type: newRule.event_type,
-                cooldown_seconds: parseInt(newRule.cooldown_seconds) || 300,
+                cooldown_seconds: Number.parseInt(newRule.cooldown_seconds) || 300,
               });
               setShowAdd(false);
               setNewRule({ name: "", event_type: "anomaly_critical", cooldown_seconds: "300" });
