@@ -338,6 +338,30 @@ pub struct DeviceProfile {
     pub learning_until: i64,
     pub baseline_status: String,
     pub notes: Option<String>,
+    /// Distinct days with observations in the last 7, refreshed on each promotion pass.
+    pub days_seen: i64,
+    /// When the most recently discovered flow tuple was first seen; `None` without observations.
+    pub last_new_flow: Option<i64>,
+}
+
+const PROFILE_COLUMNS: &str = "mac, hostname, manufacturer, current_ip, current_vlan, \
+     first_seen, last_seen, learning_until, baseline_status, notes, days_seen, last_new_flow";
+
+fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceProfile> {
+    Ok(DeviceProfile {
+        mac: row.get(0)?,
+        hostname: row.get(1)?,
+        manufacturer: row.get(2)?,
+        current_ip: row.get(3)?,
+        current_vlan: row.get(4)?,
+        first_seen: row.get(5)?,
+        last_seen: row.get(6)?,
+        learning_until: row.get(7)?,
+        baseline_status: row.get(8)?,
+        notes: row.get(9)?,
+        days_seen: row.get(10)?,
+        last_new_flow: row.get(11)?,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -824,7 +848,9 @@ impl BehaviorStore {
                 last_seen INTEGER NOT NULL,
                 learning_until INTEGER NOT NULL,
                 baseline_status TEXT NOT NULL DEFAULT 'learning',
-                notes TEXT
+                notes TEXT,
+                days_seen INTEGER NOT NULL DEFAULT 0,
+                last_new_flow INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS device_baselines (
@@ -1127,6 +1153,18 @@ impl BehaviorStore {
             tracing::info!("Phase 3 migration: added service metadata + SoA classification to policy_deviations");
         }
 
+        // Migration: coverage columns on device_profiles (0.5.6 baseline promotion)
+        let has_days_seen: bool = conn
+            .prepare("SELECT days_seen FROM device_profiles LIMIT 0")
+            .is_ok();
+        if !has_days_seen {
+            conn.execute_batch(
+                "ALTER TABLE device_profiles ADD COLUMN days_seen INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE device_profiles ADD COLUMN last_new_flow INTEGER;",
+            )
+            .map_err(|e| format!("migration (profile coverage columns) failed: {e}"))?;
+        }
+
         crate::migrations::stamp(&conn, "behavior.db", Self::SCHEMA_VERSION)?;
 
         Ok(Self {
@@ -1146,7 +1184,7 @@ impl BehaviorStore {
     ) -> Result<(), String> {
         let db = self.db.lock().await;
         let now = now_unix();
-        let learning_until = now + 7 * 86400;
+        let learning_until = now + Self::LEARNING_WINDOW_SECS;
         db.execute(
             "INSERT INTO device_profiles (mac, hostname, manufacturer, current_ip, current_vlan, first_seen, last_seen, learning_until)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
@@ -1165,24 +1203,9 @@ impl BehaviorStore {
     pub async fn get_profile(&self, mac: &str) -> Result<Option<DeviceProfile>, String> {
         let db = self.db.lock().await;
         db.query_row(
-            "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
-                    first_seen, last_seen, learning_until, baseline_status, notes
-             FROM device_profiles WHERE mac = ?1",
+            &format!("SELECT {PROFILE_COLUMNS} FROM device_profiles WHERE mac = ?1"),
             params![mac],
-            |row| {
-                Ok(DeviceProfile {
-                    mac: row.get(0)?,
-                    hostname: row.get(1)?,
-                    manufacturer: row.get(2)?,
-                    current_ip: row.get(3)?,
-                    current_vlan: row.get(4)?,
-                    first_seen: row.get(5)?,
-                    last_seen: row.get(6)?,
-                    learning_until: row.get(7)?,
-                    baseline_status: row.get(8)?,
-                    notes: row.get(9)?,
-                })
-            },
+            profile_from_row,
         )
         .optional()
         .map_err(|e| format!("get_profile failed: {e}"))
@@ -1209,9 +1232,7 @@ impl BehaviorStore {
         // Build "WHERE mac IN (?, ?, ...)" with dynamic placeholders
         let placeholders: Vec<&str> = macs.iter().map(|_| "?").collect();
         let sql = format!(
-            "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
-                    first_seen, last_seen, learning_until, baseline_status, notes
-             FROM device_profiles WHERE mac IN ({})",
+            "SELECT {PROFILE_COLUMNS} FROM device_profiles WHERE mac IN ({})",
             placeholders.join(", ")
         );
 
@@ -1220,20 +1241,7 @@ impl BehaviorStore {
         // Bind each MAC as a parameter
         let params_vec: Vec<&dyn rusqlite::types::ToSql> = macs.iter().map(|m| m as &dyn rusqlite::types::ToSql).collect();
         let rows = stmt
-            .query_map(params_vec.as_slice(), |row| {
-                Ok(DeviceProfile {
-                    mac: row.get(0)?,
-                    hostname: row.get(1)?,
-                    manufacturer: row.get(2)?,
-                    current_ip: row.get(3)?,
-                    current_vlan: row.get(4)?,
-                    first_seen: row.get(5)?,
-                    last_seen: row.get(6)?,
-                    learning_until: row.get(7)?,
-                    baseline_status: row.get(8)?,
-                    notes: row.get(9)?,
-                })
-            })
+            .query_map(params_vec.as_slice(), profile_from_row)
             .map_err(|e| format!("bulk profile query: {e}"))?;
 
         let mut map = HashMap::with_capacity(macs.len());
@@ -1248,26 +1256,11 @@ impl BehaviorStore {
         let db = self.db.lock().await;
         let mut stmt = db
             .prepare(
-                "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
-                        first_seen, last_seen, learning_until, baseline_status, notes
-                 FROM device_profiles ORDER BY last_seen DESC",
+                &format!("SELECT {PROFILE_COLUMNS} FROM device_profiles ORDER BY last_seen DESC"),
             )
             .map_err(|e| format!("prepare failed: {e}"))?;
         let rows = stmt
-            .query_map([], |row| {
-                Ok(DeviceProfile {
-                    mac: row.get(0)?,
-                    hostname: row.get(1)?,
-                    manufacturer: row.get(2)?,
-                    current_ip: row.get(3)?,
-                    current_vlan: row.get(4)?,
-                    first_seen: row.get(5)?,
-                    last_seen: row.get(6)?,
-                    learning_until: row.get(7)?,
-                    baseline_status: row.get(8)?,
-                    notes: row.get(9)?,
-                })
-            })
+            .query_map([], profile_from_row)
             .map_err(|e| format!("query failed: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("row collect failed: {e}"))
@@ -1277,26 +1270,11 @@ impl BehaviorStore {
         let db = self.db.lock().await;
         let mut stmt = db
             .prepare(
-                "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
-                        first_seen, last_seen, learning_until, baseline_status, notes
-                 FROM device_profiles WHERE current_vlan = ?1 ORDER BY last_seen DESC",
+                &format!("SELECT {PROFILE_COLUMNS} FROM device_profiles WHERE current_vlan = ?1 ORDER BY last_seen DESC"),
             )
             .map_err(|e| format!("prepare failed: {e}"))?;
         let rows = stmt
-            .query_map(params![vlan], |row| {
-                Ok(DeviceProfile {
-                    mac: row.get(0)?,
-                    hostname: row.get(1)?,
-                    manufacturer: row.get(2)?,
-                    current_ip: row.get(3)?,
-                    current_vlan: row.get(4)?,
-                    first_seen: row.get(5)?,
-                    last_seen: row.get(6)?,
-                    learning_until: row.get(7)?,
-                    baseline_status: row.get(8)?,
-                    notes: row.get(9)?,
-                })
-            })
+            .query_map(params![vlan], profile_from_row)
             .map_err(|e| format!("query failed: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("row collect failed: {e}"))
@@ -1414,17 +1392,18 @@ impl BehaviorStore {
             .map_err(|e| format!("row collect failed: {e}"))
     }
 
-    /// Minimum distinct baseline entries for a device to be considered "baselined".
-    /// Below this threshold, the device is promoted to "sparse" instead.
-    const MIN_BASELINE_ENTRIES: i64 = 10;
-    /// Minimum total observation count for "baselined" promotion after learning period.
-    const MIN_OBSERVATION_COUNT: i64 = 200;
-    /// Observation count that triggers early "baselined" promotion before learning_until.
-    /// Active servers and workstations hit this in 3-4 days.
-    const FAST_TRACK_OBSERVATION_COUNT: i64 = 5000;
-    /// Devices with fewer than this many baseline observations after the learning
-    /// period are promoted to "sparse" — not enough data for meaningful baselines.
-    const SPARSE_THRESHOLD: i64 = 50;
+    /// Learning window granted at enrollment.
+    const LEARNING_WINDOW_SECS: i64 = 7 * 86400;
+    /// One extension granted when the window ends with partial coverage.
+    const EXTENSION_SECS: i64 = 3 * 86400;
+    /// Days seen (of the last 7) for a stable device to graduate before the window ends.
+    const FAST_TRACK_DAYS: i64 = 3;
+    /// Days seen (of the last 7) to graduate when the window ends, stable or not.
+    const COVERAGE_DAYS: i64 = 5;
+    /// Fewer days seen than this at window end means the device is sparse.
+    const SPARSE_DAYS: i64 = 2;
+    /// A device is stable when no flow tuple was first seen within this period.
+    const STABLE_SECS: i64 = 2 * 86400;
 
     /// Recompute baselines for a single device from its observations.
     /// Does NOT handle promotion — use `promote_eligible_devices()` instead.
@@ -1486,103 +1465,108 @@ impl BehaviorStore {
         Ok(())
     }
 
-    /// Promote eligible devices from `learning` to `baselined` or `sparse`.
+    /// Promote devices out of `learning`, and `sparse` devices that have since become active.
     ///
-    /// Dual-threshold promotion:
-    /// 1. **Time-gated:** `learning_until <= now` AND observation_count >= MIN_OBSERVATION_COUNT
-    ///    → promoted to `baselined` (normal 7-day graduation)
-    /// 2. **Fast-tracked:** observation_count >= FAST_TRACK_OBSERVATION_COUNT regardless of time
-    ///    → promoted to `baselined` (active devices graduate early)
-    /// 3. **Sparse:** time expired AND observation_count < SPARSE_THRESHOLD
-    ///    → promoted to `sparse` (barely active, thin baseline)
-    /// 4. **Stays learning:** time expired but observations between SPARSE_THRESHOLD and
-    ///    MIN_OBSERVATION_COUNT → learning_until extended by 3 days (needs more data)
+    /// A baseline needs coverage (the device was seen on enough distinct days of the
+    /// last seven) and stability (no new flow tuple in the last two days). Neither
+    /// depends on the poll interval or on how many flows a device has, so a camera
+    /// with one flow and a workstation with fifty are judged the same way.
     ///
-    /// This is decoupled from baseline recomputation so it can run on a
-    /// short cadence (e.g. every 5 minutes) independent of nightly maintenance.
+    /// - stable and seen on `FAST_TRACK_DAYS` days: baselined, at any time
+    /// - window ended and seen on `COVERAGE_DAYS` days: baselined, stable or not
+    /// - window ended and seen on fewer than `SPARSE_DAYS` days: sparse
+    /// - window ended with partial coverage: one `EXTENSION_SECS` extension, then sparse
+    /// - sparse devices are re-evaluated every pass and graduate by the same rules
+    ///
+    /// Each pass records `days_seen` and `last_new_flow` on the profile so the UI can
+    /// say why a device is still learning. Newly baselined devices get their
+    /// baselines recomputed at once so detection never runs against an empty set.
     pub async fn promote_eligible_devices(&self) -> Result<(usize, usize), String> {
-        let db = self.db.lock().await;
         let now = now_unix();
-
-        // Find all learning devices — both time-expired and potential fast-tracks
-        let mut stmt = db
-            .prepare(
-                "SELECT mac, learning_until FROM device_profiles
-                 WHERE baseline_status = 'learning'",
-            )
-            .map_err(|e| format!("prepare failed: {e}"))?;
-        let learning_devices: Vec<(String, i64)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| format!("query failed: {e}"))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("collect failed: {e}"))?;
-
+        let window_start = now - Self::LEARNING_WINDOW_SECS;
         let mut promoted_baselined = 0usize;
         let mut promoted_sparse = 0usize;
+        let mut newly_baselined: Vec<String> = Vec::new();
 
-        for (mac, learning_until) in &learning_devices {
-            let time_expired = *learning_until <= now;
-
-            // Count distinct baseline entries
-            let baseline_count: i64 = db
-                .query_row(
-                    "SELECT COUNT(*) FROM device_baselines WHERE mac = ?1",
-                    params![mac],
-                    |row| row.get(0),
+        {
+            let db = self.db.lock().await;
+            let mut stmt = db
+                .prepare(
+                    "SELECT mac, baseline_status, first_seen, learning_until FROM device_profiles
+                     WHERE baseline_status IN ('learning', 'sparse')",
                 )
-                .map_err(|e| format!("baseline count failed: {e}"))?;
+                .map_err(|e| format!("prepare failed: {e}"))?;
+            let candidates: Vec<(String, String, i64, i64)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+                .map_err(|e| format!("query failed: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("collect failed: {e}"))?;
 
-            // Count total observations
-            let obs_count: i64 = db
-                .query_row(
-                    "SELECT COUNT(*) FROM device_observations WHERE mac = ?1",
-                    params![mac],
-                    |row| row.get(0),
-                )
-                .map_err(|e| format!("observation count failed: {e}"))?;
-
-            // Fast-track: very active devices graduate early regardless of time
-            let fast_track = obs_count >= Self::FAST_TRACK_OBSERVATION_COUNT
-                && baseline_count >= Self::MIN_BASELINE_ENTRIES;
-
-            let new_status = if fast_track {
-                promoted_baselined += 1;
-                "baselined"
-            } else if time_expired && baseline_count >= Self::MIN_BASELINE_ENTRIES
-                && obs_count >= Self::MIN_OBSERVATION_COUNT
-            {
-                // Normal graduation: time expired + sufficient data
-                promoted_baselined += 1;
-                "baselined"
-            } else if time_expired && obs_count < Self::SPARSE_THRESHOLD {
-                // Barely active device — sparse
-                promoted_sparse += 1;
-                "sparse"
-            } else if time_expired {
-                // Time expired but between sparse and baselined thresholds —
-                // extend learning by 3 days to collect more data
-                let extended = now + 3 * 86400;
+            for (mac, status, first_seen, learning_until) in &candidates {
+                let days_seen: i64 = db
+                    .query_row(
+                        "SELECT COUNT(DISTINCT timestamp / 86400) FROM device_observations
+                         WHERE mac = ?1 AND timestamp >= ?2",
+                        params![mac, window_start],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("days_seen failed: {e}"))?;
+                let last_new_flow: Option<i64> = db
+                    .query_row(
+                        "SELECT MAX(first_ts) FROM (
+                             SELECT MIN(timestamp) AS first_ts FROM device_observations
+                             WHERE mac = ?1 AND timestamp >= ?2
+                             GROUP BY protocol, dst_port, dst_subnet, direction)",
+                        params![mac, window_start],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("last_new_flow failed: {e}"))?;
                 db.execute(
-                    "UPDATE device_profiles SET learning_until = ?2 WHERE mac = ?1",
-                    params![mac, extended],
+                    "UPDATE device_profiles SET days_seen = ?2, last_new_flow = ?3 WHERE mac = ?1",
+                    params![mac, days_seen, last_new_flow],
                 )
-                .map_err(|e| format!("extend learning failed: {e}"))?;
-                tracing::debug!(
-                    mac = %mac, obs_count, baseline_count,
-                    "learning extended 3 days — insufficient data for baseline"
-                );
-                continue; // Don't update baseline_status
-            } else {
-                continue; // Still within learning period, not fast-tracked
-            };
+                .map_err(|e| format!("coverage update failed: {e}"))?;
 
-            db.execute(
-                "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
-                params![mac, new_status],
-            )
-            .map_err(|e| format!("promote failed: {e}"))?;
+                let stable = last_new_flow.is_some_and(|t| t <= now - Self::STABLE_SECS);
+                let expired = *learning_until <= now;
+                let extended =
+                    *learning_until >= first_seen + Self::LEARNING_WINDOW_SECS + Self::EXTENSION_SECS;
+
+                let new_status = if (stable && days_seen >= Self::FAST_TRACK_DAYS)
+                    || (expired && days_seen >= Self::COVERAGE_DAYS)
+                {
+                    "baselined"
+                } else if status == "sparse" || !expired {
+                    continue;
+                } else if days_seen >= Self::SPARSE_DAYS && !extended {
+                    db.execute(
+                        "UPDATE device_profiles SET learning_until = ?2 WHERE mac = ?1",
+                        params![mac, now + Self::EXTENSION_SECS],
+                    )
+                    .map_err(|e| format!("extend learning failed: {e}"))?;
+                    tracing::debug!(mac = %mac, days_seen, "learning extended once: partial coverage");
+                    continue;
+                } else {
+                    "sparse"
+                };
+
+                db.execute(
+                    "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
+                    params![mac, new_status],
+                )
+                .map_err(|e| format!("promote failed: {e}"))?;
+                if new_status == "baselined" {
+                    promoted_baselined += 1;
+                    newly_baselined.push(mac.clone());
+                } else {
+                    promoted_sparse += 1;
+                }
+            }
         }
 
+        for mac in &newly_baselined {
+            self.recompute_baselines(mac, Self::LEARNING_WINDOW_SECS).await?;
+        }
         Ok((promoted_baselined, promoted_sparse))
     }
 
