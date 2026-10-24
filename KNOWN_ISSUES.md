@@ -142,6 +142,28 @@ MNDP on the management VLAN created false direct paths between non-adjacent devi
 
 Inference binding results were not pre-populating the identity builder, so stale bindings persisted even after new inference data was available. Inference results now pre-populate the identity builder.
 
+## Open
+
+### [LOW] Per-device queues are never removed when a device is deleted or disabled
+**Source:** 0.5.6 clippy cleanup (2026-10-24)
+
+`DeviceQueueRegistry::remove` had no callers and was deleted as dead code. Nothing removes a device's queue when the device is deleted or disabled, so the registry grows for the life of the process. Harmless at homelab scale; wire removal into the device delete/disable path when the poll cadence tiers land in 0.5.7.
+
+### [LOW] Infrastructure evidence vectors are not capped
+**Source:** 0.5.6 clippy cleanup (2026-10-24)
+
+`push_evidence` and `MAX_EVIDENCE_ENTRIES` were never called and were deleted. Evidence chains on inferred nodes and edges grow without a bound within a snapshot. Snapshots are rebuilt each cycle, so growth is per cycle, not cumulative.
+
+### [LOW] Mixed line endings across the repository
+**Source:** 0.5.6 release work (2026-10-24)
+
+234 tracked files use CRLF and the rest use LF. Any editor or tool that normalizes on save produces a whole-file diff, which happened once during this release and was reverted. Fix: add `.gitattributes` with `* text=auto eol=lf` and renormalize in one dedicated commit after coordinating with every active checkout, since pulling that commit touches every file.
+
+### [LOW] Remaining ESLint warnings in the web app
+**Source:** 0.5.6 ESLint introduction (2026-10-24)
+
+Lint passes with 23 warnings: 12 `react-hooks/exhaustive-deps`, 8 `@typescript-eslint/no-explicit-any` (`vlan-sankey.tsx:310,312`, `port-sankey.tsx:476,478`, `world-map.tsx:373,374,381,404`), 1 `react-hooks/preserve-manual-memoization` (`connections.tsx:1318`), 1 `react-hooks/incompatible-library`. `no-explicit-any` and `preserve-manual-memoization` are set to `warn` in `web/eslint.config.js` with comments; flip them to `error` once the sites are typed.
+
 ## Accepted
 
 ### [LOW] Module API v1.0 — Connection / Snapshot / DeviceManager state reads not yet wired
@@ -181,6 +203,20 @@ The provisioning permission pre-check endpoint returned the raw RouterOS policy 
 `DEFAULT_ROUTER_HOST` (`192.168.88.1`) and `DEFAULT_ROUTER_USERNAME` (`admin`) are MikroTik factory defaults used as config fallbacks. Validation logic prevents silent use — the setup wizard requires explicit credentials. These defaults match the vendor's factory configuration and are documented in the Quick Start guide.
 
 ## Won't Fix
+
+### [INFO] SonarQube findings reviewed and left as-is (2026-10-24 scan)
+**Source:** SonarQube TypeScript scan, 2026-10-24
+
+- `typescript:S2871` (7 "critical bugs"): `Array.prototype.sort()` without a comparator on arrays of VLAN names, firewall chains, protocols, log topics, and module names. These are ASCII identifiers; code-unit order is the intended order. Adding `localeCompare` would change nothing visible and add a dependency on locale.
+- `typescript:S2245` (6 "vulnerabilities"): `Math.random()` positions decorative background stars on the topology map. Not security relevant.
+- `typescript:S5332` (3 of 4): `http://` URLs in test fixtures. The one UI placeholder was changed to `https://`.
+- `typescript:S9379` (7 of 8): `autoFocus` on inputs that appear as the result of a user action (inline edit, modal). Each carries an `eslint-disable-next-line` with the reason; the one page-load case was removed.
+
+### [INFO] `#[allow(unused_imports)]` on `modules_registry` re-exports
+**Source:** 0.5.6 clippy cleanup (2026-10-24)
+
+The web crate builds as both lib and bin and re-declares its modules in `lib.rs` and `main.rs`. Public re-exports used only by lib consumers (integration tests, future modules) are unused in the bin build, so clippy flags them there. The allow is item-level with a comment. The real fix, having the bin depend on the lib, is a larger change deferred past 0.5.6.
+
 
 ### [LOW] Panic Message Information Leak (task_supervisor.rs)
 **Source:** External review 2026-03-25

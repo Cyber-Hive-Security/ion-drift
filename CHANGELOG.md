@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-10-24
+
+Maintenance release: no feature or behavior changes.
+
+### Changed
+
+- **Clippy at zero, blocking in CI.** 300 unique warnings cleared across the workspace: nested `if`s collapsed into
+  let-chains, dead code removed, remaining `too_many_arguments`/`result_large_err` cases carry an item-level allow with
+  a one-line reason. The CI job now runs `cargo clippy --workspace --all-targets -- -D warnings`.
+- **ESLint for the web app.** ESLint 9 flat config (typescript-eslint, react-hooks, jsx-a11y) added and run in CI.
+  Form labels are associated with their controls, clickable rows and cards are keyboard reachable, and `autoFocus`
+  stays only where a field opens on user action.
+- **SonarQube findings resolved.** `Number.isNaN`/`Number.parseInt` throughout; three regexes with super-linear
+  backtracking rewritten (Cisco port names, trailing port numbers, uptime) with tests; the setup-wizard retry and the
+  secret editor no longer drop promise rejections, and the secret editor shows a save error. Default string sorts and
+  the decorative `Math.random()` star field were reviewed and left as-is (see KNOWN_ISSUES).
+- **Internal identifiers removed.** Lab addresses, hostnames, and user paths in tests, the example config, UI
+  placeholders, and docs replaced with RFC 5737 documentation ranges and `example.com`.
+  `scripts/check-internal-identifiers.sh` runs in pre-commit and CI, scans staged content, and fails closed.
+- `ROADMAP.md` rewritten for the standalone Drift 1.0 train (0.5.7 to 1.0); companion-product work moved to post-1.0.
+
+### Fixed
+
+- `TempDir::into_path` deprecation in storage tests; `cfg(fuzzing)` declared as a known cfg in `mikrotik-core`.
+- `modules_registry` re-exports restored after an over-eager auto-fix; the bin target does not use them, so the
+  unused-import lint is silenced there with a comment.
+
 ## [0.5.5] - 2026-10-22
 
 ### Security

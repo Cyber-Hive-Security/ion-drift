@@ -42,13 +42,15 @@ jobs:
       - name: npm ci
         run: npm ci
 
-      - name: typecheck
-        run: npx tsc --noEmit
+      - name: lint (eslint + jsx-a11y)
+        run: npm run lint
 
       - name: test (vitest smoke floor)
         run: npm test
 
-      - name: build
+      # `tsc -b` inside the build is the typecheck; `tsc --noEmit` on the
+      # references-only root tsconfig checks nothing.
+      - name: typecheck + build
         run: npm run build
 
   secrets:
@@ -82,11 +84,8 @@ jobs:
           command: check
 
   clippy:
-    name: Clippy (informational)
+    name: Clippy (blocking)
     runs-on: ubuntu-24.04
-    # Existing warning debt (~200) means a hard gate would be red forever.
-    # Visible-but-non-blocking until the debt is paid down, then flip to -D warnings.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
@@ -100,4 +99,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo clippy
-        run: cargo clippy --workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
