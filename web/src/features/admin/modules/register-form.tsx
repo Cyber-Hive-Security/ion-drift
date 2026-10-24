@@ -87,7 +87,7 @@ export function RegisterModuleForm({ onDone }: Props) {
         </p>
       </div>
 
-      <Field label="Module URL" hint="e.g. http://10.20.25.50:3099" error={fieldErrors.url}>
+      <Field label="Module URL" hint="e.g. https://modules.example.com:3099" error={fieldErrors.url}>
         <input
           type="url"
           required
@@ -96,7 +96,7 @@ export function RegisterModuleForm({ onDone }: Props) {
             setUrl(e.target.value);
             setFieldErrors((prev) => ({ ...prev, url: undefined }));
           }}
-          placeholder="http://host:port"
+          placeholder="https://host:port"
           aria-invalid={fieldErrors.url ? true : undefined}
           className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring aria-[invalid]:border-destructive"
         />

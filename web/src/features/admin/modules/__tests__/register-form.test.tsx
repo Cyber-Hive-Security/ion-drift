@@ -38,7 +38,7 @@ describe("RegisterModuleForm validation", () => {
     const user = userEvent.setup();
     renderWithClient(<RegisterModuleForm onDone={vi.fn()} />);
 
-    await user.type(screen.getByPlaceholderText("http://host:port"), "not a url");
+    await user.type(screen.getByPlaceholderText("https://host:port"), "not a url");
     const [secret, token] = screen
       .getAllByDisplayValue("")
       .filter((el) => (el as HTMLInputElement).type === "password");
@@ -64,7 +64,7 @@ describe("RegisterModuleForm validation", () => {
     await user.click(screen.getByRole("button", { name: /register/i }));
     expect(await screen.findByText(/module url is required/i)).toBeInTheDocument();
 
-    await user.type(screen.getByPlaceholderText("http://host:port"), "h");
+    await user.type(screen.getByPlaceholderText("https://host:port"), "h");
     expect(screen.queryByText(/module url is required/i)).not.toBeInTheDocument();
     // Other fields' errors remain until they are edited.
     expect(screen.getByText(/shared secret is required/i)).toBeInTheDocument();

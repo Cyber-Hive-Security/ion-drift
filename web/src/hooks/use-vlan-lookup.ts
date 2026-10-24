@@ -20,14 +20,14 @@ export interface VlanLookup {
 
 const DEFAULT_COLOR = "#888888";
 
-/** Parse CIDR like "10.20.25.0/24" into network number and mask bits. */
+/** Parse CIDR like "192.168.1.0/24" into network number and mask bits. */
 function parseCidr(cidr: string): { network: number; mask: number } | null {
   const [ipPart, prefixStr] = cidr.split("/");
   if (!ipPart || !prefixStr) return null;
-  const prefix = parseInt(prefixStr, 10);
-  if (isNaN(prefix) || prefix < 0 || prefix > 32) return null;
+  const prefix = Number.parseInt(prefixStr, 10);
+  if (Number.isNaN(prefix) || prefix < 0 || prefix > 32) return null;
   const octets = ipPart.split(".").map(Number);
-  if (octets.length !== 4 || octets.some((o) => isNaN(o) || o < 0 || o > 255))
+  if (octets.length !== 4 || octets.some((o) => Number.isNaN(o) || o < 0 || o > 255))
     return null;
   const ip =
     ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>>
@@ -38,7 +38,7 @@ function parseCidr(cidr: string): { network: number; mask: number } | null {
 
 function ipToU32(ip: string): number | null {
   const octets = ip.split(".").map(Number);
-  if (octets.length !== 4 || octets.some((o) => isNaN(o) || o < 0 || o > 255))
+  if (octets.length !== 4 || octets.some((o) => Number.isNaN(o) || o < 0 || o > 255))
     return null;
   return (
     ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>>
@@ -69,7 +69,7 @@ export function useVlanLookup(): VlanLookup {
             vlanId: cfg.vlan_id,
             network: parsed.network,
             mask: parsed.mask,
-            prefixLen: parseInt(prefixStr, 10),
+            prefixLen: Number.parseInt(prefixStr, 10),
             name: cfg.name,
           });
         }

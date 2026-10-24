@@ -25,6 +25,7 @@ function SecretsSection() {
   const { data, isLoading, error } = useSecretsStatus();
   const [editingSecret, setEditingSecret] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
 
   const updateSecrets = useUpdateSecrets();
@@ -58,9 +59,13 @@ function SecretsSection() {
     if (!editValue.trim()) return;
     const payload: Record<string, string> = {};
     payload[secretName] = editValue;
-    await updateSecrets.mutateAsync(payload);
-    setEditingSecret(null);
-    setEditValue("");
+    try {
+      await updateSecrets.mutateAsync(payload);
+      setEditingSecret(null);
+      setEditValue("");
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Failed to save secret");
+    }
   };
 
   const handleRegenerate = async () => {
@@ -195,13 +200,16 @@ function SecretsSection() {
                   <input
                     type={isPasswordField(secret.name) ? "password" : "text"}
                     value={editValue}
-                    onChange={(e) => setEditValue(e.target.value)}
+                    onChange={(e) => {
+                      setEditValue(e.target.value);
+                      setSaveError(null);
+                    }}
                     className="w-48 rounded border border-border bg-background px-2 py-1 text-xs focus:border-primary focus:outline-none"
                     placeholder={`New ${secretLabels[secret.name]?.toLowerCase() || "value"}`}
                     // eslint-disable-next-line jsx-a11y/no-autofocus -- field opens on user action
                     autoFocus
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") handleSave(secret.name);
+                      if (e.key === "Enter") void handleSave(secret.name);
                       if (e.key === "Escape") {
                         setEditingSecret(null);
                         setEditValue("");
@@ -209,7 +217,7 @@ function SecretsSection() {
                     }}
                   />
                   <button
-                    onClick={() => handleSave(secret.name)}
+                    onClick={() => void handleSave(secret.name)}
                     disabled={
                       updateSecrets.isPending || !editValue.trim()
                     }
@@ -226,12 +234,16 @@ function SecretsSection() {
                   >
                     <X className="h-3 w-3" />
                   </button>
+                  {saveError && (
+                    <span className="text-xs text-destructive">{saveError}</span>
+                  )}
                 </div>
               ) : (
                 <button
                   onClick={() => {
                     setEditingSecret(secret.name);
                     setEditValue("");
+                    setSaveError(null);
                   }}
                   className="rounded bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
                 >

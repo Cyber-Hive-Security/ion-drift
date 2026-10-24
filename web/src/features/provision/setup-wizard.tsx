@@ -800,7 +800,7 @@ export function SetupWizard() {
       .filter((r: ApplyItemResult) => !r.success)
       .map((r: ApplyItemResult) => r.id);
     if (failedIds.length > 0) {
-      handleApply(failedIds);
+      void handleApply(failedIds);
     }
   };
 

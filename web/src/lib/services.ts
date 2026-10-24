@@ -36,8 +36,8 @@ const WELL_KNOWN_PORTS: Record<number, string> = {
 };
 
 export function portLabel(port: string): string {
-  const n = parseInt(port, 10);
-  if (isNaN(n)) return port;
+  const n = Number.parseInt(port, 10);
+  if (Number.isNaN(n)) return port;
   const name = WELL_KNOWN_PORTS[n];
   return name ? `${port} / ${name}` : port;
 }

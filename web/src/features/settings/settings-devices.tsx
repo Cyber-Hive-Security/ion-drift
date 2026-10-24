@@ -76,7 +76,7 @@ export function SettingsDevices() {
     setTestResult(null);
     const payload: TestConnectionRequest = {
       host: form.host,
-      port: parseInt(form.port) || (form.device_type === "snmp_switch" ? 161 : form.device_type === "swos_switch" ? 80 : 443),
+      port: Number.parseInt(form.port) || (form.device_type === "snmp_switch" ? 161 : form.device_type === "swos_switch" ? 80 : 443),
       tls: form.tls,
       device_type: form.device_type,
       username: form.username,
@@ -97,11 +97,11 @@ export function SettingsDevices() {
       id: form.id,
       name: form.name,
       host: form.host,
-      port: parseInt(form.port) || defaultPort,
+      port: Number.parseInt(form.port) || defaultPort,
       tls: form.tls,
       device_type: form.device_type,
       model: form.model || undefined,
-      poll_interval_secs: parseInt(form.poll_interval_secs) || 60,
+      poll_interval_secs: Number.parseInt(form.poll_interval_secs) || 60,
       username: form.username,
       password: form.password,
       ...overrides,
@@ -183,10 +183,10 @@ export function SettingsDevices() {
     const data: UpdateDeviceRequest = {
       name: editForm.name || undefined,
       model: editForm.model || undefined,
-      poll_interval_secs: parseInt(editForm.poll_interval_secs) || 60,
+      poll_interval_secs: Number.parseInt(editForm.poll_interval_secs) || 60,
     };
     // Only send connection fields if they changed from the original
-    const newPort = parseInt(editForm.port) || 443;
+    const newPort = Number.parseInt(editForm.port) || 443;
     if (editOriginal && editForm.host !== editOriginal.host) data.host = editForm.host;
     if (editOriginal && newPort !== editOriginal.port) data.port = newPort;
     if (editOriginal && editForm.tls !== editOriginal.tls) data.tls = editForm.tls;
