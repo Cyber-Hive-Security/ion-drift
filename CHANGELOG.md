@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.5.6] - 2026-10-24
 
-Maintenance release: no feature changes. User-visible changes are limited to the two items under Fixed below.
+Maintenance release: no feature changes. User-visible changes are limited to the three items under Fixed below.
 
 ### Changed
 
@@ -29,6 +29,7 @@ Maintenance release: no feature changes. User-visible changes are limited to the
 
 ### Fixed
 
+- **Devices with few distinct flows never finished learning.** Cameras, thermostats, and single-purpose servers could stay in `learning` indefinitely: promotion required ten distinct flow tuples, and the 3-day extension repeated without limit. Graduation now measures coverage (days seen in the last 7) and stability (no new flow tuple for 48 hours), sparse devices are re-evaluated every pass, and the profile records both values (`days_seen`, `last_new_flow`, added to `device_profiles` automatically on first start). The Learning Until cell on the Behavior page shows them on hover. On first start after upgrading, devices the old rule had stuck in learning or sparse are re-evaluated and may graduate in bulk within ten minutes.
 - The secret editor on the Security settings page now shows a save error instead of silently dropping the rejection.
 - Uptime strings are parsed from the start of the string (`formatUptime`); RouterOS always supplies a bare uptime, so output is unchanged for real data.
 - `TempDir::into_path` deprecation in storage tests; `cfg(fuzzing)` declared as a known cfg in `mikrotik-core`.
