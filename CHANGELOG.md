@@ -14,7 +14,7 @@ Maintenance release: no feature changes. User-visible changes are limited to the
 
 - **Clippy at zero, blocking in CI.** 300 unique warnings cleared across the workspace: nested `if`s collapsed into
   let-chains, dead code removed, remaining `too_many_arguments`/`result_large_err` cases carry an item-level allow with
-  a one-line reason. The CI job now runs `cargo clippy --workspace --all-targets -- -D warnings`.
+  a one-line reason. The CI job now runs `cargo clippy --workspace --locked --all-targets -- -D warnings`.
 - **ESLint for the web app.** ESLint 9 flat config (typescript-eslint, react-hooks, jsx-a11y) added and run in CI.
   Form labels are associated with their controls, clickable rows and cards are keyboard reachable, and `autoFocus`
   stays only where a field opens on user action.
