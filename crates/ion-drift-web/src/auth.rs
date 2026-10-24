@@ -114,10 +114,6 @@ pub struct SessionStore {
 }
 
 impl SessionStore {
-    pub fn new(max_age_seconds: u64, db_path: &Path, session_secret: &str) -> anyhow::Result<Self> {
-        Self::with_idle_timeout(max_age_seconds, 0, db_path, session_secret)
-    }
-
     pub fn with_idle_timeout(
         max_age_seconds: u64,
         idle_timeout_seconds: u64,
@@ -376,7 +372,7 @@ impl SessionStore {
                 is_current: current_key.as_deref() == Some(entry.key().as_str()),
             });
         }
-        out.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+        out.sort_by_key(|x| std::cmp::Reverse(x.last_accessed));
         out
     }
 
@@ -537,32 +533,9 @@ impl LoginRateLimiter {
         }
     }
 
-    /// Check if a key is rate-limited. Returns Ok(()) if allowed, Err(seconds_until_retry) if blocked.
-    pub fn check(&self, key: &str) -> Result<(), u64> {
-        let now = now_secs();
-        if let Some(entry) = self.attempts.get(key) {
-            let (count, last) = *entry;
-            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
-            let cooldown = match count {
-                0..=1 => 0,
-                2 => 1,
-                3 => 2,
-                4 => 4,
-                5 => 8,
-                6 => 16,
-                _ => 30,
-            };
-            let elapsed = now.saturating_sub(last);
-            if elapsed < cooldown {
-                return Err(cooldown - elapsed);
-            }
-        }
-        Ok(())
-    }
-
     /// Atomically record an attempt and return `Err(retry_after)` if the key is
-    /// now in cooldown. Unlike [`check`](Self::check), this reserves the slot
-    /// BEFORE the expensive password verification, so a concurrent burst of
+    /// now in cooldown. This reserves the slot BEFORE the
+    /// expensive password verification, so a concurrent burst of
     /// wrong-password requests can't all be admitted before the first one
     /// finishes and records a failure (review ID-03). On a successful login the
     /// caller must call [`record_success`](Self::record_success) to refund.
@@ -578,9 +551,8 @@ impl LoginRateLimiter {
             .or_insert((1, now));
         let count = entry.0;
         drop(entry); // release the shard lock before returning
-        // Because reserve() counts the attempt up front (unlike check(), which
-        // only counted failures), allow the first two attempts free before the
-        // backoff ramp — preserving the prior two-strikes UX.
+        // reserve() counts the attempt up front, so allow the first two
+        // attempts free before the backoff ramp (two-strikes UX).
         let cooldown = match count {
             0..=2 => 0,
             3 => 1,
@@ -595,18 +567,6 @@ impl LoginRateLimiter {
         } else {
             Ok(())
         }
-    }
-
-    /// Record a failed attempt.
-    pub fn record_failure(&self, key: &str) {
-        let now = now_secs();
-        self.attempts
-            .entry(key.to_string())
-            .and_modify(|(count, last)| {
-                *count = count.saturating_add(1);
-                *last = now;
-            })
-            .or_insert((1, now));
     }
 
     /// Clear attempts for a key (on successful login).
@@ -769,6 +729,7 @@ pub(crate) const INVALID_CALLBACK_MSG: &str = "invalid callback request";
 
 /// Parse the `/auth/callback` query string, mapping every deserialization
 /// failure (missing/duplicate/malformed `code` or `state`) to a generic 400.
+#[allow(clippy::result_large_err)] // Err is an axum Response (handler error type); boxing it would ripple through every caller
 pub(crate) fn parse_callback_query(uri: &axum::http::Uri) -> Result<CallbackParams, Response> {
     Query::<CallbackParams>::try_from_uri(uri)
         .map(|Query(p)| p)
@@ -1257,7 +1218,7 @@ mod callback_query_tests {
         let uri: Uri = "/auth/callback?code=c%2B1&state=s-2&session_state=x"
             .parse()
             .unwrap();
-        let p = parse_callback_query(&uri).ok().expect("valid query");
+        let p = parse_callback_query(&uri).expect("valid query");
         assert_eq!(p.code, "c+1");
         assert_eq!(p.state, "s-2");
     }
@@ -1322,7 +1283,7 @@ mod session_hash_tests {
     #[tokio::test]
     async fn sessions_are_stored_by_hash_not_raw_token() {
         let tmp = NamedTempFile::new().unwrap();
-        let store = SessionStore::new(3600, tmp.path(), "test-signing-secret").unwrap();
+        let store = SessionStore::with_idle_timeout(3600, 0, tmp.path(), "test-signing-secret").unwrap();
         let token = store.issue_session_id().await.unwrap();
         store.insert_session(token.clone(), sample_data());
 

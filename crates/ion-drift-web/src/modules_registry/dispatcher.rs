@@ -186,6 +186,7 @@ impl EventDispatcher {
     }
 
     /// Snapshot current stats. Keyed by module name.
+    #[allow(dead_code)] // used via the lib target (integration tests); the bin target never calls it
     pub async fn stats_snapshot(&self) -> HashMap<String, DeliveryStats> {
         self.stats.read().await.clone()
     }
@@ -466,7 +467,7 @@ mod tests {
         });
 
         let behavior = *state.behavior.lock().unwrap();
-        let resp = match behavior {
+        match behavior {
             MockBehavior::AlwaysOk => StatusCode::OK,
             MockBehavior::AlwaysFail => {
                 state.fail_count.fetch_add(1, Ordering::SeqCst);
@@ -480,8 +481,7 @@ mod tests {
                     StatusCode::OK
                 }
             }
-        };
-        resp
+        }
     }
 
     async fn spawn_mock(behavior: MockBehavior) -> (String, Arc<MockState>) {

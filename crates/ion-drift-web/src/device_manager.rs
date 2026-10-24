@@ -69,22 +69,6 @@ impl DeviceClient {
             _ => None,
         }
     }
-
-    /// Get the SwOS client, if this is a SwOS device.
-    pub fn as_swos(&self) -> Option<&SwosClient> {
-        match self {
-            DeviceClient::SwOs(c) => Some(c),
-            _ => None,
-        }
-    }
-
-    /// Get the SNMP client, if this is an SNMP device.
-    pub fn as_snmp(&self) -> Option<&SnmpClient> {
-        match self {
-            DeviceClient::Snmp(c) => Some(c),
-            _ => None,
-        }
-    }
 }
 
 /// A device entry with its client, record, and runtime status.
@@ -391,13 +375,6 @@ impl DeviceManager {
             }
     }
 
-    /// Update the device record (after DB update).
-    pub fn update_record(&mut self, id: &str, record: DeviceRecord) {
-        if let Some(entry) = self.devices.get_mut(id) {
-            entry.record = record;
-        }
-    }
-
     /// Replace the runtime client and record after a device update.
     ///
     /// Handles enabled/disabled transitions: if the device is now disabled it
@@ -424,11 +401,6 @@ impl DeviceManager {
                 });
             }
         }
-    }
-
-    /// Check if any devices are registered.
-    pub fn is_empty(&self) -> bool {
-        self.devices.is_empty()
     }
 }
 

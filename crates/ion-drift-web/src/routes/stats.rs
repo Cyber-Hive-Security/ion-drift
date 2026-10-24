@@ -501,7 +501,7 @@ pub async fn diagnostic_report(
         .into_iter()
         .map(|(page, total_views)| PageAggregate { page, total_views })
         .collect();
-    by_page.sort_by(|a, b| b.total_views.cmp(&a.total_views));
+    by_page.sort_by_key(|x| std::cmp::Reverse(x.total_views));
 
     let page_views = PageViewSummary {
         days_covered: 30,

@@ -73,13 +73,6 @@ pub fn parse_routeros_syslog(line: &str) -> Option<SyslogEvent> {
         .and_then(|s| s.split([',', ' ']).next())
         .map(String::from);
 
-    // Extract in-interface
-    let in_interface = msg
-        .find("in:")
-        .map(|i| &msg[i + 3..])
-        .and_then(|s| s.split([' ', ',']).next())
-        .map(String::from);
-
     // Derive action from chain/prefix
     let action = if chain.contains("drop") || msg.contains("DROP") {
         Some("drop".to_string())
@@ -96,11 +89,9 @@ pub fn parse_routeros_syslog(line: &str) -> Option<SyslogEvent> {
         protocol: protocol.to_string(),
         src_ip: src_ip.to_string(),
         dst_ip: dst_ip.to_string(),
-        src_port: None,
         dst_port: dst_port_num,
         src_mac,
         action,
-        in_interface,
         timestamp,
     })
 }

@@ -345,7 +345,7 @@ fn is_ip_field(key: &str) -> bool {
     matches!(
         key,
         "address" | "src_address" | "dst_address" | "src-address" | "dst-address"
-            | "gateway" | "dst-address" | "network" | "best_ip" | "current_ip"
+            | "gateway" | "network" | "best_ip" | "current_ip"
             | "target_ip" | "ip" | "local-address" | "remote-address"
             | "active-address" | "server-address" | "dns-server"
             | "ntp-server" | "dhcp_gateway" | "target"
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(&octets[..2], &["10", "249"]);
         // 3rd octet is remapped, not the original
         let remapped: u16 = octets[2].parse().unwrap();
-        assert!(remapped >= 10 && remapped % 2 == 0, "VLAN ID should be remapped to even number >= 10");
+        assert!(remapped >= 10 && remapped.is_multiple_of(2), "VLAN ID should be remapped to even number >= 10");
     }
 
     #[test]
@@ -594,7 +594,7 @@ mod tests {
         let remapped = s.sanitize_vlan_name("25");
         assert_ne!(remapped, "25");
         let id: u16 = remapped.parse().unwrap();
-        assert!(id >= 10 && id % 2 == 0, "remapped VLAN ID should be even >= 10, got {id}");
+        assert!(id >= 10 && id.is_multiple_of(2), "remapped VLAN ID should be even >= 10, got {id}");
     }
 
     #[test]

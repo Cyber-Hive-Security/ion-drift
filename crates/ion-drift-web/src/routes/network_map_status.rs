@@ -47,10 +47,6 @@ pub struct NetworkMapStatusResponse {
     pub as_of: Option<String>,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 #[derive(Clone)]
 pub struct NetworkMapStatusCache {
     pub data: NetworkMapStatusResponse,

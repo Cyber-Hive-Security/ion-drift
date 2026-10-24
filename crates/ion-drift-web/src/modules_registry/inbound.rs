@@ -138,11 +138,6 @@ impl NonceCache {
         let key = (module.to_string(), nonce.to_string());
         guard.insert(key, now_unix).is_some()
     }
-
-    /// Number of cached entries (for tests/diagnostics).
-    pub async fn len(&self) -> usize {
-        self.inner.lock().await.len()
-    }
 }
 
 /// Build the unauthenticated inbound router. The body-size limit and

@@ -38,6 +38,7 @@ const WIRED_DEVICE_TYPES: &[&str] = &["camera", "printer", "server", "switch", "
 /// Each unique (device_id, port_name) pair in the observation window
 /// becomes a candidate. Additionally, wireless parent and human override
 /// candidates may be added.
+#[allow(clippy::too_many_arguments)] // internal builder; a parameter struct would add indirection without clarity
 pub fn generate_candidates(
     mac: &str,
     observations: &[MacObservation],

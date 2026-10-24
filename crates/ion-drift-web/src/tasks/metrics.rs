@@ -14,7 +14,7 @@ pub fn spawn_metrics_poller(
     queue: RouterQueue,
     interval_secs: u64,
 ) {
-    let cleanup_ticks = if interval_secs > 0 { 3600 / interval_secs } else { 60 };
+    let cleanup_ticks = 3600u64.checked_div(interval_secs).unwrap_or(60);
     tokio::spawn(async move {
         let mut tick_count: u64 = 0;
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));

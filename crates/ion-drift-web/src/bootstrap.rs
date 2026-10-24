@@ -22,7 +22,6 @@ const BACKOFF_DELAYS: &[u64] = &[5, 10, 30, 60, 120, 300];
 pub struct BootstrapResult {
     pub kek: Key<Aes256Gcm>,
     pub fingerprint: String,
-    pub was_generated: bool,
 }
 
 /// Build an mTLS-capable reqwest client for Keycloak bootstrap.
@@ -137,7 +136,6 @@ async fn try_bootstrap(
         return Ok(BootstrapResult {
             kek,
             fingerprint,
-            was_generated: false,
         });
     }
 
@@ -156,7 +154,6 @@ async fn try_bootstrap(
     Ok(BootstrapResult {
         kek,
         fingerprint,
-        was_generated: true,
     })
 }
 
@@ -394,7 +391,6 @@ fn load_cached_kek(data_dir: &Path, key_path: &str) -> Option<BootstrapResult> {
     Some(BootstrapResult {
         kek,
         fingerprint,
-        was_generated: false,
     })
 }
 
@@ -490,7 +486,6 @@ pub fn load_local_kek(data_dir: &Path) -> anyhow::Result<Option<BootstrapResult>
     Ok(Some(BootstrapResult {
         kek,
         fingerprint,
-        was_generated: false,
     }))
 }
 
@@ -534,7 +529,6 @@ pub fn derive_kek_from_password(password: &str, data_dir: &Path) -> anyhow::Resu
     Ok(BootstrapResult {
         kek,
         fingerprint,
-        was_generated: true,
     })
 }
 

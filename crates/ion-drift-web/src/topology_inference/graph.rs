@@ -35,8 +35,6 @@ pub struct InfrastructureGraph {
     pub trunk_ports: HashSet<(String, String)>,
     /// Trunk peer map: (device_id, port_name_lowercase) → peer_device_id.
     pub trunk_peers: HashMap<(String, String), String>,
-    /// The router device ID (root of the tree).
-    pub router_id: String,
     /// Maximum depth in the graph (for normalization).
     pub max_depth: u32,
 }
@@ -59,7 +57,6 @@ impl InfrastructureGraph {
         ip_to_device: &HashMap<String, String>,
     ) -> Self {
         let mut graph = Self {
-            router_id: router_id.to_string(),
             ..Default::default()
         };
 

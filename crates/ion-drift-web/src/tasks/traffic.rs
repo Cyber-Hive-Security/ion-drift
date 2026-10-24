@@ -27,7 +27,7 @@ pub fn spawn_traffic_poller(
         let mut prev_tx: Option<u64> = None;
         let mut prev_time: Option<std::time::Instant> = None;
         let mut tick_count: u64 = 0;
-        let lifetime_ticks = if interval_secs > 0 { 900 / interval_secs } else { 90 };
+        let lifetime_ticks = 900u64.checked_div(interval_secs).unwrap_or(90);
 
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.tick().await; // skip immediate tick

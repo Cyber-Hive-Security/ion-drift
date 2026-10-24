@@ -16,6 +16,7 @@ use crate::router_queue::RouterQueue;
 /// Collect device observations, detect anomalies, and detect blocked attempts at a configurable interval.
 /// After detection, runs the investigation engine on any new uninvestigated anomalies.
 /// 3-minute startup delay to let the server stabilize.
+#[allow(clippy::too_many_arguments)] // internal builder; a parameter struct would add indirection without clarity
 pub fn spawn_behavior_collector(
     store: Arc<ion_drift_storage::BehaviorStore>,
     queue: RouterQueue,

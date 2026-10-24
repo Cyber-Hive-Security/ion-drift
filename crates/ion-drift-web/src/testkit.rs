@@ -362,8 +362,9 @@ pub(crate) async fn test_app_state(
         mikrotik: router,
         oidc_client: None,
         http_client: reqwest::Client::new(),
-        sessions: crate::auth::SessionStore::new(
+        sessions: crate::auth::SessionStore::with_idle_timeout(
             3600,
+            0,
             &d.join("sessions.db"),
             "test-session-secret-0123456789abcd",
         )
@@ -429,7 +430,6 @@ pub(crate) async fn test_app_state(
         )),
         event_bus,
         module_registry,
-        module_shutdown,
         infrastructure_snapshot: Arc::new(RwLock::new(
             crate::infrastructure_snapshot::InfrastructureSnapshotState::new(),
         )),

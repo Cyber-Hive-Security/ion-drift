@@ -701,7 +701,9 @@ async fn collect_new_device_alerts(
     let channels = parse_channels(&rule.delivery_channels);
 
     // Find devices with first_seen in the last 2 minutes and disposition = 'unknown'
-    let rows: Vec<(String, Option<String>, Option<String>, Option<String>, Option<i64>)> = {
+    /// (mac, best_ip, hostname, manufacturer, vlan_id)
+    type NewDeviceRow = (String, Option<String>, Option<String>, Option<String>, Option<i64>);
+    let rows: Vec<NewDeviceRow> = {
         let db = switch_store.db().await;
         let mut stmt = match db.prepare(
             "SELECT mac_address, best_ip, hostname, manufacturer, vlan_id
@@ -762,7 +764,9 @@ async fn collect_flagged_device_alerts(
     let channels = parse_channels(&rule.delivery_channels);
 
     // Get all flagged devices
-    let flagged: Vec<(String, Option<String>, Option<String>, Option<i64>)> = {
+    /// (mac, best_ip, hostname, vlan_id)
+    type FlaggedDeviceRow = (String, Option<String>, Option<String>, Option<i64>);
+    let flagged: Vec<FlaggedDeviceRow> = {
         let db = switch_store.db().await;
         let mut stmt = match db.prepare(
             "SELECT mac_address, best_ip, hostname, vlan_id
@@ -1012,7 +1016,9 @@ async fn collect_device_offline_alerts(
     let channels = parse_channels(&rule.delivery_channels);
 
     // Check confirmed devices that haven't been seen in > 5 minutes
-    let devices: Vec<(String, Option<String>, Option<String>, Option<i64>, i64)> = {
+    /// (mac, best_ip, hostname, vlan_id, last_seen)
+    type ConfirmedDeviceRow = (String, Option<String>, Option<String>, Option<i64>, i64);
+    let devices: Vec<ConfirmedDeviceRow> = {
         let db = switch_store.db().await;
         let mut stmt = match db.prepare(
             "SELECT mac_address, best_ip, hostname, vlan_id, last_seen

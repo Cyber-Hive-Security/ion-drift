@@ -83,7 +83,7 @@ pub async fn drops(
                 count,
             })
             .collect();
-        entries.sort_by(|a, b| b.count.cmp(&a.count));
+        entries.sort_by_key(|x| std::cmp::Reverse(x.count));
         entries.truncate(5);
         (entries, logs_unavailable)
     };

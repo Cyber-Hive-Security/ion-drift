@@ -136,9 +136,4 @@ impl PollerRegistry {
             tracing::info!(device = %device_id, "poller stopped");
         }
     }
-
-    /// Check if a poller is running for a device.
-    pub fn has_poller(&self, device_id: &str) -> bool {
-        self.tasks.contains_key(device_id)
-    }
 }

@@ -64,7 +64,7 @@ pub const OBSERVATION_WINDOW_SECS: i64 = 600;
 pub fn state_from_row(row: &AttachmentStateRow) -> AttachmentState {
     AttachmentState {
         mac_address: row.mac_address.clone(),
-        state: AttachmentStateKind::from_str(&row.state),
+        state: AttachmentStateKind::parse(&row.state),
         current_device_id: row.current_device_id.clone(),
         current_port_name: row.current_port_name.clone(),
         previous_device_id: row.previous_device_id.clone(),
@@ -96,6 +96,7 @@ pub fn state_to_row(s: &AttachmentState) -> AttachmentStateRow {
 /// Resolve attachment for a single MAC address.
 ///
 /// This is the core pipeline: generate → prune → score → update state.
+#[allow(clippy::too_many_arguments)] // internal builder; a parameter struct would add indirection without clarity
 pub fn resolve_mac(
     mac: &str,
     observations: &[MacObservation],
@@ -215,6 +216,7 @@ pub fn resolve_mac(
 /// Score candidates for a MAC without mutating any state.
 ///
 /// Used by diagnostic API endpoints to show live scoring data.
+#[allow(clippy::too_many_arguments)] // internal builder; a parameter struct would add indirection without clarity
 pub fn score_mac_candidates(
     mac: &str,
     observations: &[MacObservation],
