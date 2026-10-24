@@ -8,3 +8,10 @@ describe("cisco port names", () => {
     expect(portSortKey("Fa0/1")).toBe(1);
   });
 });
+
+describe("trailing-number port names", () => {
+  it("uses the trailing digit run", () => {
+    expect(portSortKey("vlan-uplink12")).toBe(12);
+    expect(portSortKey("sfp-sfpplus3")).toBe(3);
+  });
+});

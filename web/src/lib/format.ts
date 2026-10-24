@@ -9,7 +9,7 @@ export function formatBytes(bytes: number, decimals = 2): string {
 export function formatUptime(uptime: string): string {
   // RouterOS format: "14d03:22:01" or "3w2d03:22:01" or "03:22:01"
   const match = uptime.match(
-    /(?:(\d+)w)?(?:(\d+)d)?(\d{2}):(\d{2}):(\d{2})/,
+    /^(?:(\d+)w)?(?:(\d+)d)?(\d{2}):(\d{2}):(\d{2})/,
   );
   if (!match) return uptime;
   const [, weeks, days, hours, minutes] = match;

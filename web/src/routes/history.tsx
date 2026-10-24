@@ -223,7 +223,7 @@ function HistoryFilterBar({
           />
           <FilterInput
             label="Dest IP"
-            placeholder="1.1.1.1"
+            placeholder="198.51.100.1"
             value={filters.dst_ip}
             onChange={(v) => onChange({ ...filters, dst_ip: v })}
           />

@@ -41,7 +41,7 @@ function extractPortNumber(portName: string): number | null {
   }
 
   // Last resort: any trailing number after a prefix
-  const trailingMatch = portName.match(/(\d+)$/);
+  const trailingMatch = portName.match(/(?:^|\D)(\d+)$/);
   if (trailingMatch) return Number.parseInt(trailingMatch[1]);
 
   return null;
