@@ -234,8 +234,8 @@ function HistoryFilterBar({
             onChange={(v) => onChange({ ...filters, dst_port: v })}
           />
           <div>
-            <label className="mb-1 block text-[10px] font-medium text-muted-foreground">Protocol</label>
-            <select
+            <label htmlFor="history-protocol" className="mb-1 block text-[10px] font-medium text-muted-foreground">Protocol</label>
+            <select id="history-protocol"
               value={filters.protocol}
               onChange={(e) => onChange({ ...filters, protocol: e.target.value })}
               className="w-full rounded border border-border bg-background px-2 py-1 text-xs"

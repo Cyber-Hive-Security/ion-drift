@@ -296,8 +296,8 @@ export function SettingsDevices() {
                 </h3>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-muted-foreground mb-1">Display Name</label>
-                    <input
+                    <label htmlFor="device-display-name" className="block text-xs text-muted-foreground mb-1">Display Name</label>
+                    <input id="device-display-name"
                       type="text"
                       value={editForm.name}
                       onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
@@ -305,8 +305,8 @@ export function SettingsDevices() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-muted-foreground mb-1">Host</label>
-                    <input
+                    <label htmlFor="device-host" className="block text-xs text-muted-foreground mb-1">Host</label>
+                    <input id="device-host"
                       type="text"
                       value={editForm.host}
                       onChange={(e) => setEditForm({ ...editForm, host: e.target.value })}
@@ -315,8 +315,8 @@ export function SettingsDevices() {
                   </div>
                   <div className="flex gap-3">
                     <div className="flex-1">
-                      <label className="block text-xs text-muted-foreground mb-1">Port</label>
-                      <input
+                      <label htmlFor="device-port" className="block text-xs text-muted-foreground mb-1">Port</label>
+                      <input id="device-port"
                         type="number"
                         value={editForm.port}
                         onChange={(e) => setEditForm({ ...editForm, port: e.target.value })}
@@ -335,8 +335,8 @@ export function SettingsDevices() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs text-muted-foreground mb-1">Model</label>
-                    <input
+                    <label htmlFor="device-model" className="block text-xs text-muted-foreground mb-1">Model</label>
+                    <input id="device-model"
                       type="text"
                       value={editForm.model}
                       onChange={(e) => setEditForm({ ...editForm, model: e.target.value })}
@@ -344,8 +344,8 @@ export function SettingsDevices() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-muted-foreground mb-1">Username</label>
-                    <input
+                    <label htmlFor="device-username" className="block text-xs text-muted-foreground mb-1">Username</label>
+                    <input id="device-username"
                       type="text"
                       value={editForm.username}
                       onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
@@ -353,10 +353,10 @@ export function SettingsDevices() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-muted-foreground mb-1">
+                    <label htmlFor="device-password" className="block text-xs text-muted-foreground mb-1">
                       Password <span className="text-muted-foreground/60">(leave blank to keep current)</span>
                     </label>
-                    <input
+                    <input id="device-password"
                       type="password"
                       value={editForm.password}
                       placeholder="unchanged"
@@ -365,8 +365,8 @@ export function SettingsDevices() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-muted-foreground mb-1">Poll Interval (seconds)</label>
-                    <input
+                    <label htmlFor="device-poll-interval" className="block text-xs text-muted-foreground mb-1">Poll Interval (seconds)</label>
+                    <input id="device-poll-interval"
                       type="number"
                       value={editForm.poll_interval_secs}
                       onChange={(e) => setEditForm({ ...editForm, poll_interval_secs: e.target.value })}
@@ -415,10 +415,10 @@ export function SettingsDevices() {
           </h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">
+              <label htmlFor="device-device-id" className="block text-xs text-muted-foreground mb-1">
                 Device ID
               </label>
-              <input
+              <input id="device-device-id"
                 type="text"
                 placeholder="e.g. crs326-office"
                 value={form.id}
@@ -427,10 +427,10 @@ export function SettingsDevices() {
               />
             </div>
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">
+              <label htmlFor="device-display-name-2" className="block text-xs text-muted-foreground mb-1">
                 Display Name
               </label>
-              <input
+              <input id="device-display-name-2"
                 type="text"
                 placeholder="e.g. CRS326 Office"
                 value={form.name}
@@ -439,10 +439,10 @@ export function SettingsDevices() {
               />
             </div>
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">
+              <label htmlFor="device-host-2" className="block text-xs text-muted-foreground mb-1">
                 Host
               </label>
-              <input
+              <input id="device-host-2"
                 type="text"
                 placeholder="e.g. 10.2.2.2"
                 value={form.host}
@@ -452,10 +452,10 @@ export function SettingsDevices() {
             </div>
             <div className="flex gap-3">
               <div className="flex-1">
-                <label className="block text-xs text-muted-foreground mb-1">
+                <label htmlFor="device-port-2" className="block text-xs text-muted-foreground mb-1">
                   Port
                 </label>
-                <input
+                <input id="device-port-2"
                   type="number"
                   value={form.port}
                   onChange={(e) => setForm({ ...form, port: e.target.value })}
@@ -476,10 +476,10 @@ export function SettingsDevices() {
               </div>
             </div>
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">
+              <label htmlFor="device-type" className="block text-xs text-muted-foreground mb-1">
                 Type
               </label>
-              <select
+              <select id="device-type"
                 value={form.device_type}
                 onChange={(e) => {
                   const dt = e.target.value as "router" | "switch" | "swos_switch" | "snmp_switch";
@@ -502,10 +502,10 @@ export function SettingsDevices() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">
+              <label htmlFor="device-model-2" className="block text-xs text-muted-foreground mb-1">
                 Model (optional)
               </label>
-              <input
+              <input id="device-model-2"
                 type="text"
                 placeholder="e.g. CRS326-24G-2S+"
                 value={form.model}
@@ -515,8 +515,8 @@ export function SettingsDevices() {
             </div>
             {form.device_type === "snmp_switch" && (
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">SNMP Version</label>
-              <select
+              <label htmlFor="device-snmp-version" className="block text-xs text-muted-foreground mb-1">SNMP Version</label>
+              <select id="device-snmp-version"
                 value={form.snmp_version}
                 onChange={(e) => setForm({ ...form, snmp_version: e.target.value as "v2c" | "v3" })}
                 className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
@@ -561,8 +561,8 @@ export function SettingsDevices() {
             {form.device_type === "snmp_switch" && form.snmp_version === "v3" && (
             <>
               <div>
-                <label className="block text-xs text-muted-foreground mb-1">Auth Protocol</label>
-                <select
+                <label htmlFor="device-auth-protocol" className="block text-xs text-muted-foreground mb-1">Auth Protocol</label>
+                <select id="device-auth-protocol"
                   value={form.snmp_auth_protocol}
                   onChange={(e) => setForm({ ...form, snmp_auth_protocol: e.target.value as "SHA" | "MD5" })}
                   className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
@@ -572,8 +572,8 @@ export function SettingsDevices() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-muted-foreground mb-1">Privacy Password <span className="text-muted-foreground/60">(optional)</span></label>
-                <input
+                <label htmlFor="device-privacy-password" className="block text-xs text-muted-foreground mb-1">Privacy Password <span className="text-muted-foreground/60">(optional)</span></label>
+                <input id="device-privacy-password"
                   type="password"
                   placeholder="Leave empty for authNoPriv"
                   value={form.snmp_priv_password}
@@ -582,8 +582,8 @@ export function SettingsDevices() {
                 />
               </div>
               <div>
-                <label className="block text-xs text-muted-foreground mb-1">Privacy Protocol</label>
-                <select
+                <label htmlFor="device-privacy-protocol" className="block text-xs text-muted-foreground mb-1">Privacy Protocol</label>
+                <select id="device-privacy-protocol"
                   value={form.snmp_priv_protocol}
                   onChange={(e) => setForm({ ...form, snmp_priv_protocol: e.target.value as "DES" | "AES128" })}
                   className="w-full rounded border border-border bg-background px-2.5 py-1.5 text-sm"
@@ -595,10 +595,10 @@ export function SettingsDevices() {
             </>
             )}
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">
+              <label htmlFor="device-poll-interval-2" className="block text-xs text-muted-foreground mb-1">
                 Poll Interval (seconds)
               </label>
-              <input
+              <input id="device-poll-interval-2"
                 type="number"
                 value={form.poll_interval_secs}
                 onChange={(e) =>

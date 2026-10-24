@@ -116,7 +116,7 @@ export function Header({ onMenuToggle, pendingAnomalies = 0, sidebarOpen }: Head
       {/* Alert slide-in panel */}
       {panelOpen && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/30" onClick={() => setPanelOpen(false)} />
+          <div role="presentation" className="fixed inset-0 z-40 bg-black/30" onClick={() => setPanelOpen(false)} />
           <AlertPanel onClose={() => setPanelOpen(false)} onMarkAllRead={markAllRead} />
         </>
       )}

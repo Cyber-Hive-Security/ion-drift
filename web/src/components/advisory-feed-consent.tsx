@@ -93,6 +93,7 @@ function ConsentDialog() {
   return (
     <div
       data-testid="feed-consent-backdrop"
+      role="presentation"
       onMouseDown={refocusFromBackdrop}
       onClick={refocusFromBackdrop}
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70">
