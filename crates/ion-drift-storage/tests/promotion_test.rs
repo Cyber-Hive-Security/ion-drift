@@ -20,7 +20,7 @@ fn now() -> i64 {
 }
 
 /// Start of the current UTC day: observations placed just after it always
-/// fall in today's bucket and in the past.
+/// fall in today's bucket.
 fn today_start() -> i64 {
     now() / DAY * DAY
 }
@@ -173,6 +173,6 @@ async fn coverage_is_recorded_on_the_profile() {
     store.promote_eligible_devices().await.expect("promote");
 
     let p = profile(&store).await;
-    assert!(p.days_seen >= 2, "49 hours span at least two days, got {}", p.days_seen);
+    assert!(p.days_seen >= 3, "49 hourly samples span at least three UTC days, got {}", p.days_seen);
     assert_eq!(p.last_new_flow, Some(t0 - 49 * HOUR));
 }

@@ -338,7 +338,7 @@ pub struct DeviceProfile {
     pub learning_until: i64,
     pub baseline_status: String,
     pub notes: Option<String>,
-    /// Distinct days with observations in the last 7, refreshed on each promotion pass.
+    /// Distinct days with observations in the last 7, refreshed on each promotion pass while the device is learning or sparse; frozen at graduation.
     pub days_seen: i64,
     /// When the most recently discovered flow tuple was first seen; `None` without observations.
     pub last_new_flow: Option<i64>,
@@ -826,12 +826,21 @@ impl BehaviorStore {
 
     /// Schema version stamped into `PRAGMA user_version`. Bump when adding a
     /// versioned migration (see `crate::migrations`). v1 = the 0.5.x baseline.
-    pub const SCHEMA_VERSION: u32 = 1;
+    pub const SCHEMA_VERSION: u32 = 2;
+
+    /// Versioned migrations applied after the v1 baseline, in ascending order.
+    ///
+    /// v2 — coverage columns for baseline promotion (0.5.6).
+    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[(
+        2,
+        "ALTER TABLE device_profiles ADD COLUMN days_seen INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE device_profiles ADD COLUMN last_new_flow INTEGER;",
+    )];
 
     pub fn new(db_path: &Path) -> Result<Self, String> {
-        let conn =
+        let mut conn =
             Connection::open(db_path).map_err(|e| format!("failed to open behavior db: {e}"))?;
-        crate::migrations::open_guard(&conn, "behavior.db", Self::SCHEMA_VERSION)?;
+        let db_version = crate::migrations::open_guard(&conn, "behavior.db", Self::SCHEMA_VERSION)?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .map_err(|e| format!("pragma failed: {e}"))?;
@@ -848,9 +857,7 @@ impl BehaviorStore {
                 last_seen INTEGER NOT NULL,
                 learning_until INTEGER NOT NULL,
                 baseline_status TEXT NOT NULL DEFAULT 'learning',
-                notes TEXT,
-                days_seen INTEGER NOT NULL DEFAULT 0,
-                last_new_flow INTEGER
+                notes TEXT
             );
 
             CREATE TABLE IF NOT EXISTS device_baselines (
@@ -1153,18 +1160,7 @@ impl BehaviorStore {
             tracing::info!("Phase 3 migration: added service metadata + SoA classification to policy_deviations");
         }
 
-        // Migration: coverage columns on device_profiles (0.5.6 baseline promotion)
-        let has_days_seen: bool = conn
-            .prepare("SELECT days_seen FROM device_profiles LIMIT 0")
-            .is_ok();
-        if !has_days_seen {
-            conn.execute_batch(
-                "ALTER TABLE device_profiles ADD COLUMN days_seen INTEGER NOT NULL DEFAULT 0;
-                 ALTER TABLE device_profiles ADD COLUMN last_new_flow INTEGER;",
-            )
-            .map_err(|e| format!("migration (profile coverage columns) failed: {e}"))?;
-        }
-
+        crate::migrations::apply_versioned(&mut conn, "behavior.db", db_version, Self::MIGRATION_STEPS)?;
         crate::migrations::stamp(&conn, "behavior.db", Self::SCHEMA_VERSION)?;
 
         Ok(Self {
@@ -1565,7 +1561,9 @@ impl BehaviorStore {
         }
 
         for mac in &newly_baselined {
-            self.recompute_baselines(mac, Self::LEARNING_WINDOW_SECS).await?;
+            if let Err(e) = self.recompute_baselines(mac, Self::LEARNING_WINDOW_SECS).await {
+                tracing::warn!(mac = %mac, "baseline recompute after graduation failed: {e}");
+            }
         }
         Ok((promoted_baselined, promoted_sparse))
     }
