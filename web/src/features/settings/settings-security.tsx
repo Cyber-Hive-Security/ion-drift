@@ -198,6 +198,7 @@ function SecretsSection() {
                     onChange={(e) => setEditValue(e.target.value)}
                     className="w-48 rounded border border-border bg-background px-2 py-1 text-xs focus:border-primary focus:outline-none"
                     placeholder={`New ${secretLabels[secret.name]?.toLowerCase() || "value"}`}
+                    // eslint-disable-next-line jsx-a11y/no-autofocus -- field opens on user action
                     autoFocus
                     onKeyDown={(e) => {
                       if (e.key === "Enter") handleSave(secret.name);

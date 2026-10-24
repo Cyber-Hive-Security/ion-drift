@@ -196,6 +196,7 @@ function DeviceTypeCell({
 
   return (
     <select
+      // eslint-disable-next-line jsx-a11y/no-autofocus -- field opens on user action
       autoFocus
       className="rounded border border-border bg-background px-1.5 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
       defaultValue={identity.device_type || ""}
@@ -248,6 +249,7 @@ function LabelCell({
 
   return (
     <input
+      // eslint-disable-next-line jsx-a11y/no-autofocus -- field opens on user action
       autoFocus
       type="text"
       value={value}
@@ -297,6 +299,7 @@ function DispositionCell({
 
   return (
     <select
+      // eslint-disable-next-line jsx-a11y/no-autofocus -- field opens on user action
       autoFocus
       className="rounded border border-border bg-background px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
       defaultValue={disp}
@@ -356,6 +359,7 @@ function SwitchBindingCell({
   return (
     <div className="flex flex-col gap-1">
       <select
+        // eslint-disable-next-line jsx-a11y/no-autofocus -- field opens on user action
         autoFocus
         className="rounded border border-border bg-background px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
         value={switchId}
@@ -1076,8 +1080,8 @@ export default function IdentityManagerPage() {
       {showFilters && (
         <div className="mb-4 flex flex-wrap gap-3 rounded-lg border border-border bg-muted/30 p-3">
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase text-muted-foreground">Device Type</label>
-            <select
+            <label htmlFor="identity-device-type" className="text-[10px] uppercase text-muted-foreground">Device Type</label>
+            <select id="identity-device-type"
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
               className="rounded border border-border bg-background px-2 py-1 text-xs"
@@ -1091,8 +1095,8 @@ export default function IdentityManagerPage() {
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase text-muted-foreground">Source</label>
-            <select
+            <label htmlFor="identity-source" className="text-[10px] uppercase text-muted-foreground">Source</label>
+            <select id="identity-source"
               value={filterSource}
               onChange={(e) => setFilterSource(e.target.value)}
               className="rounded border border-border bg-background px-2 py-1 text-xs"
@@ -1106,8 +1110,8 @@ export default function IdentityManagerPage() {
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase text-muted-foreground">Status</label>
-            <select
+            <label htmlFor="identity-status" className="text-[10px] uppercase text-muted-foreground">Status</label>
+            <select id="identity-status"
               value={filterConfirmed}
               onChange={(e) => setFilterConfirmed(e.target.value)}
               className="rounded border border-border bg-background px-2 py-1 text-xs"
@@ -1118,8 +1122,8 @@ export default function IdentityManagerPage() {
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase text-muted-foreground">VLAN</label>
-            <select
+            <label htmlFor="identity-vlan" className="text-[10px] uppercase text-muted-foreground">VLAN</label>
+            <select id="identity-vlan"
               value={filterVlan}
               onChange={(e) => setFilterVlan(e.target.value)}
               className="rounded border border-border bg-background px-2 py-1 text-xs"
@@ -1133,8 +1137,8 @@ export default function IdentityManagerPage() {
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase text-muted-foreground">Disposition</label>
-            <select
+            <label htmlFor="identity-disposition" className="text-[10px] uppercase text-muted-foreground">Disposition</label>
+            <select id="identity-disposition"
               value={filterDisposition}
               onChange={(e) => setFilterDisposition(e.target.value)}
               className="rounded border border-border bg-background px-2 py-1 text-xs"
