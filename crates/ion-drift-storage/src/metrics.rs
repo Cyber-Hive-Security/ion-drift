@@ -388,6 +388,7 @@ impl MetricsStore {
     // ── Log aggregates ───────────────────────────────────────────
 
     /// Record an hourly log aggregate.
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn record_log_aggregate(
         &self,
         period_start: i64,

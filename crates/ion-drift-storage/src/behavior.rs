@@ -36,6 +36,7 @@ pub enum VlanSensitivity {
 }
 
 impl VlanSensitivity {
+    #[allow(clippy::should_implement_trait)] // infallible parse (unknown -> Monitor); FromStr would change the public signature
     pub fn from_str(s: &str) -> Self {
         match s {
             "strictest" => Self::Strictest,
@@ -92,7 +93,7 @@ impl VlanRegistry {
         }
 
         // Sort by longest prefix first for most-specific match
-        subnets.sort_by(|a, b| b.prefix_len.cmp(&a.prefix_len));
+        subnets.sort_by_key(|s| std::cmp::Reverse(s.prefix_len));
 
         Self {
             names,
@@ -543,6 +544,9 @@ pub struct NewPolicyDeviation {
     pub classification: DataClassification,
     pub observed_from: SourceTier,
 }
+
+/// Row shape returned by the observation query: (mac, vlan, src, dst, f64, f64, count).
+type ObservationRow = (String, Option<i64>, String, String, f64, f64, i64);
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct PolicyDeviationCounts {
@@ -1444,7 +1448,7 @@ impl BehaviorStore {
 
         // ?3 = interval seconds between observations (60s typically)
         let interval_secs: f64 = 60.0;
-        let rows: Vec<(String, Option<i64>, String, String, f64, f64, i64)> = stmt
+        let rows: Vec<ObservationRow> = stmt
             .query_map(params![mac, cutoff, interval_secs], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -1684,6 +1688,7 @@ impl BehaviorStore {
     /// Check for recent elevated observations (multi-window persistence).
     /// Returns the count of recent observations in the given flow that exceed
     /// the specified byte threshold within the last `window_secs`.
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn count_elevated_observations(
         &self,
         mac: &str,
@@ -2749,7 +2754,7 @@ impl BehaviorStore {
             *port_counts.entry(*port).or_default() += 1;
         }
         let mut top_ports: Vec<_> = port_counts.into_iter().collect();
-        top_ports.sort_by(|a, b| b.1.cmp(&a.1));
+        top_ports.sort_by_key(|p| std::cmp::Reverse(p.1));
         top_ports.truncate(10);
         let top_ports_json = serde_json::to_string(&top_ports.iter().map(|(p, c)| serde_json::json!({"port": p, "count": c})).collect::<Vec<_>>()).unwrap_or_default();
 
@@ -2761,7 +2766,7 @@ impl BehaviorStore {
             }
         }
         let mut top_countries: Vec<_> = country_counts.into_iter().collect();
-        top_countries.sort_by(|a, b| b.1.cmp(&a.1));
+        top_countries.sort_by_key(|c| std::cmp::Reverse(c.1));
         top_countries.truncate(10);
         let top_countries_json = serde_json::to_string(&top_countries.iter().map(|(c, n)| serde_json::json!({"country": c, "count": n})).collect::<Vec<_>>()).unwrap_or_default();
 
@@ -2822,6 +2827,7 @@ impl BehaviorStore {
     // ── Policy Methods ──
 
     /// Upsert an infrastructure policy entry.
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn upsert_policy(
         &self,
         service: &str,
@@ -3320,29 +3326,16 @@ impl BehaviorStore {
     /// Get summary counts of deviations by status.
     pub async fn policy_deviation_counts(&self) -> Result<PolicyDeviationCounts, String> {
         let db = self.db.lock().await;
-        let mut counts = PolicyDeviationCounts::default();
-
-        counts.total = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE status != 'dismissed'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.new = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE status = 'new'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.acknowledged = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE status = 'acknowledged'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.resolved = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE status = 'resolved'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.dns = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'dns%'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.ntp = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'ntp%'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.gateway = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'gateway%'", [], |row| row.get(0),
-        ).unwrap_or(0);
+        let count = |sql: &str| -> i64 { db.query_row(sql, [], |row| row.get(0)).unwrap_or(0) };
+        let counts = PolicyDeviationCounts {
+            total: count("SELECT COUNT(*) FROM policy_deviations WHERE status != 'dismissed'"),
+            new: count("SELECT COUNT(*) FROM policy_deviations WHERE status = 'new'"),
+            acknowledged: count("SELECT COUNT(*) FROM policy_deviations WHERE status = 'acknowledged'"),
+            resolved: count("SELECT COUNT(*) FROM policy_deviations WHERE status = 'resolved'"),
+            dns: count("SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'dns%'"),
+            ntp: count("SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'ntp%'"),
+            gateway: count("SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'gateway%'"),
+        };
 
         Ok(counts)
     }

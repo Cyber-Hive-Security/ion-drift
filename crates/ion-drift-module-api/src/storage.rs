@@ -15,6 +15,10 @@ use std::sync::Arc;
 
 use crate::error::StorageError;
 
+/// Boxed closure run against the connection by [`StorageBackend::write_any`].
+pub type WriteAnyFn =
+    Box<dyn FnOnce(&mut rusqlite::Connection) -> Box<dyn std::any::Any + Send> + Send>;
+
 /// Boxed future type alias used by the backend trait.
 pub type BoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -82,12 +86,7 @@ pub trait StorageBackend: Send + Sync + 'static {
     /// `ModuleStorage::write` wrapper provides the typed interface.
     fn write_any(
         &self,
-        f: Box<
-            dyn FnOnce(
-                    &mut rusqlite::Connection,
-                )
-                    -> Box<dyn std::any::Any + Send> + Send,
-        >,
+        f: WriteAnyFn,
     ) -> BoxedFuture<'_, Result<Box<dyn std::any::Any + Send>, StorageError>>;
 
     fn run_migrations<'a>(

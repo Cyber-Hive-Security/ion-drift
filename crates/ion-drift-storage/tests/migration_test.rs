@@ -4,7 +4,7 @@ use ion_drift_storage::{BehaviorStore, MetricsStore, SwitchStore};
 use tempfile::tempdir;
 
 fn db_path(name: &str) -> PathBuf {
-    tempdir().expect("tempdir").into_path().join(name)
+    tempdir().expect("tempdir").keep().join(name)
 }
 
 #[test]

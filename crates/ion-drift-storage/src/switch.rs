@@ -1175,6 +1175,7 @@ impl SwitchStore {
     // ── Neighbor discovery ──────────────────────────────────────
 
     /// Upsert a neighbor discovery entry.
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn upsert_neighbor(
         &self,
         device_id: &str,
@@ -1240,6 +1241,7 @@ impl SwitchStore {
     /// Device type fields use a confidence hierarchy: a new device_type only overwrites
     /// an existing one if the new confidence is >= the existing, AND the record is not
     /// human-confirmed (human_confirmed = 1 locks the device_type).
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn upsert_network_identity(
         &self,
         mac_address: &str,
@@ -2375,6 +2377,7 @@ impl SwitchStore {
     }
 
     /// Create a backbone link. Normalizes so device_a < device_b lexicographically.
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn create_backbone_link(
         &self,
         device_a: &str,
