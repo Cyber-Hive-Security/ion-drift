@@ -11,14 +11,14 @@ use crate::topology_inference::graph::InfrastructureGraph;
 use crate::topology_inference::resolver::{self, InferenceMode};
 use tokio::sync::RwLock;
 
-use crate::device_manager::{DeviceManager, DeviceStatus};
-use crate::device_resolution::{self, DeviceResolutionMaps as NewResolutionMaps};
+use crate::device_manager::DeviceManager;
+use crate::device_resolution::DeviceResolutionMaps as NewResolutionMaps;
 use crate::dns::DnsResolver;
 use crate::infrastructure_snapshot::{
-    self, EvidenceAuthority, InfraNodeSource, InfrastructureSnapshotState,
+    EvidenceAuthority, InfraNodeSource, InfrastructureSnapshotState,
     ResolvedEdge, ResolvedInfraNode, ResolvedInfrastructureSnapshot, ResolutionEvidence,
     ResolutionMethod, SnapshotStatus, SourceEpoch, EdgeSource, EdgeCorroboration,
-    SNAPSHOT_SCHEMA_VERSION, push_evidence,
+    SNAPSHOT_SCHEMA_VERSION,
 };
 use crate::oui::OuiDb;
 use crate::router_queue::{RouterQueue, Priority, QueuedRequest};
@@ -320,11 +320,10 @@ async fn run_correlation(
     }
 
     // Batch-store all port role probabilities
-    if !all_role_probs.is_empty() {
-        if let Err(e) = store.set_port_role_probabilities_batch(&all_role_probs).await {
+    if !all_role_probs.is_empty()
+        && let Err(e) = store.set_port_role_probabilities_batch(&all_role_probs).await {
             tracing::warn!("port role probabilities batch store: {e}");
         }
-    }
 
     // ── 1b. Build switch-local MAC set ────────────────────────────
     let mut all_infra_device_ids = device_ids.clone();
@@ -337,11 +336,10 @@ async fn run_correlation(
         let existing = store.get_network_identities().await.unwrap_or_default();
         let mut purged = 0u32;
         for ident in &existing {
-            if is_switch_local_mac(&ident.mac_address, &switch_local_macs) {
-                if let Ok(true) = store.delete_network_identity(&ident.mac_address).await {
+            if is_switch_local_mac(&ident.mac_address, &switch_local_macs)
+                && let Ok(true) = store.delete_network_identity(&ident.mac_address).await {
                     purged += 1;
                 }
-            }
         }
         if purged > 0 {
             tracing::info!(count = purged, "purged infrastructure MAC identities");
@@ -492,11 +490,10 @@ async fn run_correlation(
         });
     }
 
-    if !pending_observations.is_empty() {
-        if let Err(e) = store.insert_mac_observations(&pending_observations).await {
+    if !pending_observations.is_empty()
+        && let Err(e) = store.insert_mac_observations(&pending_observations).await {
             tracing::warn!(count = pending_observations.len(), "MAC observation insert: {e}");
         }
-    }
 
     // Prune observations older than 20 minutes (retention window)
     match store.prune_old_observations(1200).await {
@@ -554,8 +551,8 @@ async fn run_correlation(
                 let mut written = 0u32;
                 let mut router_skipped = 0u32;
                 for r in &results {
-                    if r.binding_changed && r.confidence > 0.5 {
-                        if let Some(ref winner) = r.winner {
+                    if r.binding_changed && r.confidence > 0.5
+                        && let Some(ref winner) = r.winner {
                             // Gate: never write router bindings back
                             if infra_graph.nodes.get(&winner.device_id)
                                 .map(|n| n.is_router)
@@ -585,7 +582,6 @@ async fn run_correlation(
                                 ),
                             }
                         }
-                    }
                 }
                 tracing::info!(
                     mode = "active", total = total, changed = changed,
@@ -622,17 +618,16 @@ async fn run_correlation(
     if inference_mode == InferenceMode::Active {
         let attachment_states = store.get_all_attachment_states().await.unwrap_or_default();
         for att in &attachment_states {
-            if let Some(ref dev_id) = att.current_device_id {
-                if att.confidence > 0.3 && att.state != "unknown" {
+            if let Some(ref dev_id) = att.current_device_id
+                && att.confidence > 0.3 && att.state != "unknown" {
                     let mac = att.mac_address.to_uppercase();
                     let builder = identity_map
                         .entry(mac)
-                        .or_insert_with(IdentityBuilder::default);
+                        .or_default();
                     builder.switch_device_id = Some(dev_id.clone());
                     builder.switch_port = att.current_port_name.clone();
                     builder.binding_priority = 500; // Inference priority — highest
                 }
-            }
         }
     }
 
@@ -690,7 +685,7 @@ async fn run_correlation(
 
         let builder = identity_map
             .entry(entry.mac_address.to_uppercase())
-            .or_insert_with(IdentityBuilder::default);
+            .or_default();
 
         // Skip switch binding for MACs where inference is authoritative
         let mac_upper = entry.mac_address.to_uppercase();
@@ -722,8 +717,8 @@ async fn run_correlation(
             if inference_bound_macs.contains(mac_key) { continue; }
             let dev = builder.switch_device_id.clone();
             let port = builder.switch_port.clone();
-            if let (Some(dev), Some(port)) = (dev, port) {
-                if trunk_ports.contains(&(dev.clone(), canonicalize_port_name(&port))) {
+            if let (Some(dev), Some(port)) = (dev, port)
+                && trunk_ports.contains(&(dev.clone(), canonicalize_port_name(&port))) {
                     let canonical = canonicalize_port_name(port.split(',').next().unwrap_or(&port));
                     if let Some(peer_id) =
                         trunk_peer.get(&(dev.clone(), canonical))
@@ -739,7 +734,6 @@ async fn run_correlation(
                         }
                     }
                 }
-            }
         }
         if redirected > 0 {
             tracing::info!(count = redirected, "trunk port MACs redirected to downstream peer");
@@ -844,7 +838,7 @@ async fn run_correlation(
         }
         let builder = identity_map
             .entry(mac)
-            .or_insert_with(IdentityBuilder::default);
+            .or_default();
 
         if let Some(ref addr) = nb.address {
             builder.best_ip = Some(addr.clone());
@@ -857,13 +851,12 @@ async fn run_correlation(
             builder.remote_platform = Some(platform.clone());
             // LLDP platform often reveals device type at high confidence
             let plat_lower = platform.to_lowercase();
-            if plat_lower.contains("routeros") || plat_lower.contains("mikrotik") {
-                if builder.device_type_confidence < 0.95 {
+            if (plat_lower.contains("routeros") || plat_lower.contains("mikrotik"))
+                && builder.device_type_confidence < 0.95 {
                     builder.device_type = Some("network_equipment".to_string());
                     builder.device_type_source = Some("lldp".to_string());
                     builder.device_type_confidence = 0.95;
                 }
-            }
         }
         builder.discovery_protocol = Some("LLDP/MNDP".to_string());
     }
@@ -882,7 +875,7 @@ async fn run_correlation(
                     let mac_upper = mac.to_uppercase();
                     let builder = identity_map
                         .entry(mac_upper)
-                        .or_insert_with(IdentityBuilder::default);
+                        .or_default();
                     if builder.best_ip.is_none() {
                         builder.best_ip = Some(entry.address.clone());
                     }
@@ -906,14 +899,13 @@ async fn run_correlation(
                     let mac_upper = mac.to_uppercase();
                     let builder = identity_map
                         .entry(mac_upper)
-                        .or_insert_with(IdentityBuilder::default);
+                        .or_default();
                     // DHCP address is authoritative — prefer over ARP
                     builder.best_ip = Some(lease.address.clone());
-                    if let Some(ref hostname) = lease.host_name {
-                        if !hostname.is_empty() && builder.hostname.is_none() {
+                    if let Some(ref hostname) = lease.host_name
+                        && !hostname.is_empty() && builder.hostname.is_none() {
                             builder.hostname = Some(hostname.clone());
                         }
-                    }
                 }
             }
         }
@@ -931,16 +923,13 @@ async fn run_correlation(
     if !ips_needing_ptr.is_empty() {
         let mut resolved = 0u32;
         for (mac, ip) in &ips_needing_ptr {
-            if let Ok(addr) = ip.parse::<IpAddr>() {
-                if let Some(hostname) = dns_resolver.reverse_lookup(addr).await {
-                    if !hostname.is_empty() {
-                        if let Some(builder) = identity_map.get_mut(mac) {
+            if let Ok(addr) = ip.parse::<IpAddr>()
+                && let Some(hostname) = dns_resolver.reverse_lookup(addr).await
+                    && !hostname.is_empty()
+                        && let Some(builder) = identity_map.get_mut(mac) {
                             builder.hostname = Some(hostname);
                             resolved += 1;
                         }
-                    }
-                }
-            }
         }
         if resolved > 0 {
             tracing::debug!(resolved, total = ips_needing_ptr.len(), "PTR lookups");
@@ -952,13 +941,11 @@ async fn run_correlation(
     //   10.2.2.x → VLAN 2, 172.20.6.x → VLAN 6, 10.20.25.x → VLAN 25,
     //   192.168.90.x → VLAN 90, etc.
     for builder in identity_map.values_mut() {
-        if builder.vlan_id.is_none() {
-            if let Some(ref ip) = builder.best_ip {
-                if let Some(vlan) = vlan_from_ip(ip, &vlan_subnets) {
+        if builder.vlan_id.is_none()
+            && let Some(ref ip) = builder.best_ip
+                && let Some(vlan) = vlan_from_ip(ip, &vlan_subnets) {
                     builder.vlan_id = Some(vlan);
                 }
-            }
-        }
     }
 
     // Enrich with OUI manufacturer + device type inference
@@ -1118,11 +1105,10 @@ async fn run_correlation(
         // devices seen with a generic identity (e.g., "MikroTik") from one switch
         // but a real identity from another.
         for nb in &all_neighbors {
-            if let Some(ref mac) = nb.mac_address {
-                if let Some(resolved) = new_resolution.resolve_neighbor(nb) {
+            if let Some(ref mac) = nb.mac_address
+                && let Some(resolved) = new_resolution.resolve_neighbor(nb) {
                     infra_mac_to_id.insert(mac.to_uppercase(), resolved.device_id);
                 }
-            }
         }
 
         // Find the router device_id for WAN neighbor filtering.
@@ -1138,20 +1124,17 @@ async fn run_correlation(
         for nb in &all_neighbors {
             // Skip WAN-facing neighbors: same logic as topology.rs — neighbors
             // reported by the router on the WAN interface are ISP/external equipment.
-            if let Some(ref rid) = router_device_id {
-                if nb.device_id == *rid && nb.interface == wan_interface {
+            if let Some(ref rid) = router_device_id
+                && nb.device_id == *rid && nb.interface == wan_interface {
                     wan_neighbor_count += 1;
                     continue;
                 }
-            }
 
             // Skip neighbors hidden via neighbor aliases
-            if let Some(ref mac) = nb.mac_address {
-                if hidden_macs.contains(&mac.to_uppercase()) { continue; }
-            }
-            if let Some(ref ident) = nb.identity {
-                if hidden_identities.contains(&ident.to_lowercase()) { continue; }
-            }
+            if let Some(ref mac) = nb.mac_address
+                && hidden_macs.contains(&mac.to_uppercase()) { continue; }
+            if let Some(ref ident) = nb.identity
+                && hidden_identities.contains(&ident.to_lowercase()) { continue; }
 
             let source_device = nb.device_id.clone();
 
@@ -1193,22 +1176,20 @@ async fn run_correlation(
                 // Unresolved neighbor — try additional resolution before creating an inferred node.
 
                 // Check if identity says NOT infrastructure (workstations, phones, cameras)
-                if let Some(ref mac) = nb.mac_address {
-                    if let Some(ident) = identity_by_mac.get(&mac.to_uppercase()) {
-                        if identity_overrides_lldp(ident) {
+                if let Some(ref mac) = nb.mac_address
+                    && let Some(ident) = identity_by_mac.get(&mac.to_uppercase())
+                        && identity_overrides_lldp(ident) {
                             continue;
                         }
-                    }
-                }
 
                 // Skip neighbors with empty identity AND no platform — these are
                 // endpoints that happen to show up in the neighbor table, not infrastructure.
-                let has_identity = nb.identity.as_deref().map_or(false, |s| !s.is_empty());
+                let has_identity = nb.identity.as_deref().is_some_and(|s| !s.is_empty());
                 if !has_identity {
                     // No identity at all — only keep if we can identify it via MAC
                     // as a known infrastructure device from identities
-                    let is_known_infra = nb.mac_address.as_deref().map_or(false, |mac| {
-                        identity_by_mac.get(&mac.to_uppercase()).map_or(false, |ident| {
+                    let is_known_infra = nb.mac_address.as_deref().is_some_and(|mac| {
+                        identity_by_mac.get(&mac.to_uppercase()).is_some_and(|ident| {
                             ident.is_infrastructure == Some(true)
                                 || is_infrastructure_type(ident.device_type.as_deref())
                         })
@@ -1220,8 +1201,8 @@ async fn run_correlation(
 
                 // Last-chance resolution: try to match by MAC against registered infra MACs
                 // that we've already collected. Also try IP match against identity store.
-                if let Some(ref mac) = nb.mac_address {
-                    if let Some(existing) = infra_mac_to_id.get(&mac.to_uppercase()) {
+                if let Some(ref mac) = nb.mac_address
+                    && let Some(existing) = infra_mac_to_id.get(&mac.to_uppercase()) {
                         // Already have an infra node for this MAC — just add edge
                         edges.push(ResolvedEdge {
                             source_device: source_device.clone(),
@@ -1243,19 +1224,18 @@ async fn run_correlation(
                         });
                         continue;
                     }
-                }
 
                 // Try IP match against network identities — catches devices on
                 // management VLANs whose VLAN IP differs from the registered host IP
-                if let Some(ref addr) = nb.address {
-                    if !addr.starts_with("fe80") {
+                if let Some(ref addr) = nb.address
+                    && !addr.starts_with("fe80") {
                         let ip_match = existing_identities.iter().find(|ident| {
                             ident.best_ip.as_deref() == Some(addr.as_str())
                                 && ident.switch_device_id.is_some()
                         });
-                        if let Some(ident) = ip_match {
-                            if let Some(ref dev_id) = ident.switch_device_id {
-                                if seen_device_ids.contains(dev_id) {
+                        if let Some(ident) = ip_match
+                            && let Some(ref dev_id) = ident.switch_device_id
+                                && seen_device_ids.contains(dev_id) {
                                     edges.push(ResolvedEdge {
                                         source_device: source_device.clone(),
                                         target_device: dev_id.clone(),
@@ -1276,10 +1256,7 @@ async fn run_correlation(
                                     });
                                     continue;
                                 }
-                            }
-                        }
                     }
-                }
 
                 tracing::debug!(
                     source = %nb.device_id,
@@ -1657,9 +1634,9 @@ fn compute_port_role_probabilities(
     }
 
     // ── Access signals ───────────────────────────────────────
-    if mac_count >= 1 && mac_count <= 3 && !has_lldp && vlan_count <= 1 {
+    if (1..=3).contains(&mac_count) && !has_lldp && vlan_count <= 1 {
         access += 0.8;
-    } else if mac_count >= 1 && mac_count <= 10 && !has_lldp {
+    } else if (1..=10).contains(&mac_count) && !has_lldp {
         access += 0.5;
     }
 
@@ -1789,12 +1766,11 @@ async fn build_switch_local_mac_set(
 
         let mut count = 0u32;
         for entry in &entries {
-            if entry.is_local {
-                if let Some(val) = mac_to_u64(&entry.mac_address) {
+            if entry.is_local
+                && let Some(val) = mac_to_u64(&entry.mac_address) {
                     local_macs.insert(val);
                     count += 1;
                 }
-            }
         }
 
         if count > 0 {

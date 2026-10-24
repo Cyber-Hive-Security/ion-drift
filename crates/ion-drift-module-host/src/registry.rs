@@ -245,8 +245,8 @@ impl ModuleRegistry {
                 .get(name)
                 .cloned()
                 .unwrap_or(toml::Value::Table(toml::map::Map::new()));
-            if let toml::Value::Table(ref t) = module_config_value {
-                if let Some(toml::Value::Boolean(false)) = t.get("enabled") {
+            if let toml::Value::Table(ref t) = module_config_value
+                && let Some(toml::Value::Boolean(false)) = t.get("enabled") {
                     tracing::info!(module = %name, "module disabled in config; skipping");
                     loaded.push(LoadedModule {
                         name,
@@ -261,7 +261,6 @@ impl ModuleRegistry {
                     });
                     continue;
                 }
-            }
 
             // Build storage if requested
             let storage = match capabilities.storage {

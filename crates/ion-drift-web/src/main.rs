@@ -139,7 +139,7 @@ async fn main() -> anyhow::Result<()> {
 
             let has_secrets = sm.has_secrets().await?;
             let has_env_vars =
-                !config.router.password.is_empty() && config.oidc.as_ref().map_or(false, |o| !o.client_secret.is_empty());
+                !config.router.password.is_empty() && config.oidc.as_ref().is_some_and(|o| !o.client_secret.is_empty());
 
             if has_secrets {
                 // Decrypt from DB and inject into config
@@ -809,15 +809,14 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Load persisted monitored regions from database (overrides TOML default if set)
-    if let Ok(Some(json)) = switch_store.get_setting("monitored_regions").await {
-        if let Ok(regions) = serde_json::from_str::<Vec<String>>(&json) {
+    if let Ok(Some(json)) = switch_store.get_setting("monitored_regions").await
+        && let Ok(regions) = serde_json::from_str::<Vec<String>>(&json) {
             geo_cache.set_monitored_regions(regions);
         }
-    }
 
     // Auto-download MaxMind databases if credentials are available but files are missing
-    if !geo_cache.has_maxmind() {
-        if let Some(ref sm) = secrets_manager {
+    if !geo_cache.has_maxmind()
+        && let Some(ref sm) = secrets_manager {
             let sm_read = sm.read().await;
             let account_id = sm_read
                 .decrypt_secret(secrets::SECRET_MAXMIND_ACCOUNT_ID)
@@ -850,7 +849,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-    }
 
     // Build VlanRegistry from database VLAN configs
     let vlan_registry = {
@@ -923,7 +921,7 @@ async fn main() -> anyhow::Result<()> {
     // it always returns `Vec::new()`. External modules are loaded at
     // runtime via the ModuleRegistryStore (Module API v1.1), not
     // compiled in. See docs/ai/arch/modules.md.
-    let mut module_registry_value =
+    let module_registry_value =
         ion_drift_module_host::ModuleRegistry::load(modules::load(), host_deps).await;
 
     // Log the loaded module list at startup so operators can tell which
@@ -950,7 +948,7 @@ async fn main() -> anyhow::Result<()> {
         Option<Arc<modules_registry::ModuleRegistryService>>,
         Option<Arc<modules_registry::EventDispatcher>>,
     ) = if let Some(sm_lock) = &secrets_manager {
-        let kek = sm_lock.read().await.kek().clone();
+        let kek = *sm_lock.read().await.kek();
         let db_path = data_dir.join("secrets.db");
         match modules_registry::ModuleRegistryStore::new(&db_path, kek) {
             Ok(store) => {

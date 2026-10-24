@@ -242,9 +242,7 @@ impl ModuleRegistryStore {
                 |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
             )
             .optional()?
-            .map(|(c, n)| (c, n))
         }
-        .map(|x| x)
         .unwrap_or((Vec::new(), Vec::new()));
         if ciphertext.is_empty() {
             return Ok(None);

@@ -438,15 +438,12 @@ pub async fn diagnostic_report(
             .collect();
         for s in &all_states {
             *state_distribution.entry(s.state.clone()).or_default() += 1;
-            if let (Some(inf_dev), Some(_inf_port)) = (&s.current_device_id, &s.current_port_name) {
-                if let Some(ident) = identity_map.get(&s.mac_address.to_uppercase()) {
-                    if let Some(ref id_dev) = ident.switch_device_id {
-                        if id_dev != inf_dev {
+            if let (Some(inf_dev), Some(_inf_port)) = (&s.current_device_id, &s.current_port_name)
+                && let Some(ident) = identity_map.get(&s.mac_address.to_uppercase())
+                    && let Some(ref id_dev) = ident.switch_device_id
+                        && id_dev != inf_dev {
                             divergences += 1;
                         }
-                    }
-                }
-            }
         }
         InferenceHealth { tracked_macs, avg_confidence, divergences, state_distribution }
     };

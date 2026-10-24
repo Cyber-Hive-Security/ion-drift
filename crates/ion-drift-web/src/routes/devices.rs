@@ -473,8 +473,8 @@ pub async fn create_device(
     );
 
     // Start the poller for this device immediately (no server restart needed)
-    if let Some(entry) = dm.get_device(&req.device.id) {
-        if entry.record.enabled {
+    if let Some(entry) = dm.get_device(&req.device.id)
+        && entry.record.enabled {
             let ros_queue = match &entry.client {
                 crate::device_manager::DeviceClient::RouterOs(client) => {
                     let mut dq = state.device_queues.write().await;
@@ -490,7 +490,6 @@ pub async fn create_device(
                 ros_queue,
             );
         }
-    }
 
     Ok(Json(serde_json::json!({
         "id": req.device.id,

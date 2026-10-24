@@ -79,7 +79,7 @@ pub fn spawn_traffic_poller(
             }
 
             // Poll lifetime totals every ~15 minutes
-            if tick_count % lifetime_ticks == 0 {
+            if tick_count.is_multiple_of(lifetime_ticks) {
                 match tracker.poll(&client).await {
                     Ok(t) => tracing::debug!(
                         "traffic poll: rx={}, tx={}", t.rx_bytes, t.tx_bytes
@@ -143,11 +143,10 @@ pub fn spawn_vlan_metrics_poller(
                 }
             }
 
-            if !entries.is_empty() {
-                if let Err(e) = store.record_vlan_metrics(&entries).await {
+            if !entries.is_empty()
+                && let Err(e) = store.record_vlan_metrics(&entries).await {
                     tracing::warn!("VLAN poller: record failed: {e}");
                 }
-            }
         }
     });
 }

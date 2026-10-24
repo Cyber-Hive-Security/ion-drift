@@ -153,7 +153,7 @@ pub fn spawn_behavior_collector(
             }
 
             // Promote eligible devices every 10 minutes (10 × 60s cycles)
-            if cycle_count % 10 == 0 {
+            if cycle_count.is_multiple_of(10) {
                 match store.promote_eligible_devices().await {
                     Ok((baselined, sparse)) => {
                         if baselined > 0 || sparse > 0 {

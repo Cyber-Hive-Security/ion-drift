@@ -385,11 +385,10 @@ impl DeviceManager {
     /// Record a hardware/firmware limitation discovered during polling.
     /// Deduplicates — the same limitation string won't be added twice.
     pub fn add_limitation(&mut self, id: &str, limitation: String) {
-        if let Some(entry) = self.devices.get_mut(id) {
-            if !entry.limitations.contains(&limitation) {
+        if let Some(entry) = self.devices.get_mut(id)
+            && !entry.limitations.contains(&limitation) {
                 entry.limitations.push(limitation);
             }
-        }
     }
 
     /// Update the device record (after DB update).

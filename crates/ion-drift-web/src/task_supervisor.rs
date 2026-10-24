@@ -51,6 +51,12 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const HEALTHY_RESET: Duration = Duration::from_secs(300); // 5 minutes
 
+impl Default for TaskSupervisor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskSupervisor {
     pub fn new() -> Self {
         Self::with_backoff(INITIAL_BACKOFF, MAX_BACKOFF, HEALTHY_RESET)

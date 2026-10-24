@@ -2122,11 +2122,10 @@ fn build_filter_clause(filters: &HistoryFilters) -> (String, Vec<BindValue>) {
         conditions.push(format!("closed = ?{}", values.len() + 1));
         values.push(BindValue::Int(if v { 1 } else { 0 }));
     }
-    if let Some(v) = filters.flagged {
-        if v {
+    if let Some(v) = filters.flagged
+        && v {
             conditions.push("flagged = 1".into());
         }
-    }
     if let Some(ref v) = filters.after {
         conditions.push(format!("first_seen >= ?{}", values.len() + 1));
         values.push(BindValue::Text(v.clone()));

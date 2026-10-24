@@ -506,8 +506,8 @@ async fn evaluate_cycle(
 
     // Enrich anomaly alerts with investigation verdicts and filter by verdict_filter
     for alert in &mut pending_alerts {
-        if let Some(anomaly_id) = alert.anomaly_id {
-            if let Ok(Some(inv)) = behavior_store.get_investigation_by_anomaly(anomaly_id).await {
+        if let Some(anomaly_id) = alert.anomaly_id
+            && let Ok(Some(inv)) = behavior_store.get_investigation_by_anomaly(anomaly_id).await {
                 // Enrich title and body with verdict
                 let verdict_label = inv.verdict.to_uppercase();
                 alert.title = format!("[{}] {}", verdict_label, alert.title);
@@ -520,13 +520,12 @@ async fn evaluate_cycle(
                 alert.investigation_verdict = Some(inv.verdict.clone());
                 alert.investigation_summary = Some(inv.summary.clone());
             }
-        }
     }
 
     // Apply verdict_filter: drop alerts whose investigation verdict doesn't match the rule filter
     pending_alerts.retain(|alert| {
-        if let Some(rule) = enabled_rules.iter().find(|r| r.id == alert.rule_id) {
-            if let Some(ref filter) = rule.verdict_filter {
+        if let Some(rule) = enabled_rules.iter().find(|r| r.id == alert.rule_id)
+            && let Some(ref filter) = rule.verdict_filter {
                 // verdict_filter is a comma-separated list of accepted verdicts
                 let accepted: Vec<&str> = filter.split(',').map(|s| s.trim()).collect();
                 if let Some(ref verdict) = alert.investigation_verdict {
@@ -534,7 +533,6 @@ async fn evaluate_cycle(
                 }
                 // No verdict yet — keep the alert (investigation may not have run)
             }
-        }
         true
     });
 
@@ -1137,8 +1135,8 @@ async fn collect_dhcp_pool_alerts(state: &AppState, rule: &AlertRule, alerts: &m
         let mut total = 0u64;
         for range_str in pool.ranges.split(',') {
             let range_str = range_str.trim();
-            if let Some((start_s, end_s)) = range_str.split_once('-') {
-                if let (Ok(start), Ok(end)) = (
+            if let Some((start_s, end_s)) = range_str.split_once('-')
+                && let (Ok(start), Ok(end)) = (
                     start_s.trim().parse::<std::net::Ipv4Addr>(),
                     end_s.trim().parse::<std::net::Ipv4Addr>(),
                 ) {
@@ -1148,7 +1146,6 @@ async fn collect_dhcp_pool_alerts(state: &AppState, rule: &AlertRule, alerts: &m
                         total += (e - s + 1) as u64;
                     }
                 }
-            }
         }
         if total > 0 {
             pool_capacity.insert(pool.name.clone(), total);

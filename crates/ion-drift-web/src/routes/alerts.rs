@@ -107,8 +107,8 @@ pub async fn update_channel(
         };
 
         for &(field, secret_key) in secret_fields {
-            if let Some(value) = body.config.get(field).and_then(|v| v.as_str()) {
-                if !value.is_empty() {
+            if let Some(value) = body.config.get(field).and_then(|v| v.as_str())
+                && !value.is_empty() {
                     if let Some(ref sm) = state.secrets_manager {
                         let sm_guard = sm.read().await;
                         if let Err(e) = sm_guard.encrypt_secret(secret_key, value).await {
@@ -121,7 +121,6 @@ pub async fn update_channel(
                         ).into_response();
                     }
                 }
-            }
         }
     }
 

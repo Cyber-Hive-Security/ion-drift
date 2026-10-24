@@ -62,6 +62,7 @@ struct SubnetEntry {
 /// Runtime VLAN registry loaded from database VlanConfig entries.
 /// Provides all the lookup functions the behavior engine needs.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct VlanRegistry {
     /// VLAN ID → name.
     names: HashMap<u16, String>,
@@ -71,15 +72,6 @@ pub struct VlanRegistry {
     subnets: Vec<SubnetEntry>,
 }
 
-impl Default for VlanRegistry {
-    fn default() -> Self {
-        Self {
-            names: HashMap::new(),
-            sensitivities: HashMap::new(),
-            subnets: Vec::new(),
-        }
-    }
-}
 
 impl VlanRegistry {
     /// Build a VlanRegistry from a list of VlanConfig entries.
@@ -93,11 +85,10 @@ impl VlanRegistry {
             names.insert(vid, cfg.name.clone());
             sensitivities.insert(vid, VlanSensitivity::from_str(&cfg.sensitivity));
 
-            if let Some(subnet_str) = &cfg.subnet {
-                if let Some(entry) = Self::parse_cidr(subnet_str, vid) {
+            if let Some(subnet_str) = &cfg.subnet
+                && let Some(entry) = Self::parse_cidr(subnet_str, vid) {
                     subnets.push(entry);
                 }
-            }
         }
 
         // Sort by longest prefix first for most-specific match
@@ -2926,14 +2917,12 @@ impl BehaviorStore {
         for row in rows {
             let policy = row.map_err(|e| format!("row error: {e}"))?;
             // Filter by VLAN if specified
-            if let Some(v) = vlan {
-                if let Some(ref scope) = policy.vlan_scope {
-                    if !scope.contains(&v) {
+            if let Some(v) = vlan
+                && let Some(ref scope) = policy.vlan_scope
+                    && !scope.contains(&v) {
                         continue;
                     }
-                }
                 // vlan_scope == None means global (all VLANs) — include it
-            }
             results.push(policy);
         }
         Ok(results)

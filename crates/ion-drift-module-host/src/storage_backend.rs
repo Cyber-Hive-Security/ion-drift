@@ -71,7 +71,7 @@ impl StorageBackend for SqliteBackend {
                 let mut guard = conn
                     .lock()
                     .map_err(|_| StorageError::Sqlite("module storage mutex poisoned".into()))?;
-                Ok::<_, StorageError>(f(&mut *guard))
+                Ok::<_, StorageError>(f(&mut guard))
             })
             .await
             .map_err(|e| StorageError::Io(format!("spawn_blocking: {e}")))?

@@ -5,7 +5,7 @@
 //! - Cyber Hive Security Use Agreement (free personal home use, commercial license required otherwise)
 
 use chrono::NaiveDate;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 /// CHS Ed25519 public key for license verification (hex-encoded, compiled in).

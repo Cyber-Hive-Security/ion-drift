@@ -24,6 +24,12 @@ pub struct DemoSanitizer {
     next_vlan_id: Mutex<u16>,
 }
 
+impl Default for DemoSanitizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DemoSanitizer {
     pub fn new() -> Self {
         Self {
@@ -116,12 +122,11 @@ impl DemoSanitizer {
             }
             serde_json::Value::Number(n) => {
                 // Remap numeric VLAN ID fields
-                if is_vlan_id_field(key_lower) {
-                    if let Some(id) = n.as_u64() {
+                if is_vlan_id_field(key_lower)
+                    && let Some(id) = n.as_u64() {
                         let fake = self.remap_vlan_id(id as u16);
                         *value = serde_json::Value::Number(serde_json::Number::from(fake));
                     }
-                }
             }
             serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
                 self.sanitize_value(value);
@@ -328,7 +333,7 @@ impl DemoSanitizer {
     /// HMAC-like hash using SHA-256 with the fixed seed.
     fn hash_bytes(&self, input: &[u8]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.seed);
+        hasher.update(self.seed);
         hasher.update(input);
         hasher.finalize().into()
     }

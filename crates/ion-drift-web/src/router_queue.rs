@@ -237,12 +237,11 @@ impl CircuitBreaker {
     }
 
     fn is_open(&self) -> bool {
-        if let Some(until) = self.open_until {
-            if Instant::now() < until {
+        if let Some(until) = self.open_until
+            && Instant::now() < until {
                 return true;
             }
             // Circuit half-open — will close on next success
-        }
         false
     }
 }

@@ -255,7 +255,7 @@ fn extract_field(text: &str, key: &str) -> Option<String> {
     let start = text.find(key)? + key.len();
     let rest = &text[start..];
     let end = rest
-        .find(|c: char| c == ',' || c == ' ' || c == '\n')
+        .find([',', ' ', '\n'])
         .unwrap_or(rest.len());
     let val = rest[..end].trim();
     if val.is_empty() {
@@ -270,17 +270,16 @@ fn extract_proto(text: &str) -> Option<String> {
     let start = text.find("proto ")? + 6;
     let rest = &text[start..];
     // If it starts with a word followed by " (", include the parenthetical
-    let word_end = rest.find(|c: char| c == ',' || c == ' ').unwrap_or(rest.len());
+    let word_end = rest.find([',', ' ']).unwrap_or(rest.len());
     let word = &rest[..word_end];
 
     // Check if there's a parenthetical like "(SYN)" or "(type 8, code 0)"
     if rest.len() > word_end && rest[word_end..].starts_with(' ') {
         let after_word = &rest[word_end + 1..];
-        if after_word.starts_with('(') {
-            if let Some(paren_end) = after_word.find(')') {
+        if after_word.starts_with('(')
+            && let Some(paren_end) = after_word.find(')') {
                 return Some(format!("{} {}", word, &after_word[..=paren_end]));
             }
-        }
     }
 
     Some(word.to_string())
@@ -540,8 +539,8 @@ pub fn compute_analytics(entries: &[StructuredLogEntry]) -> LogAnalytics {
         }
 
         // Action
-        if let Some(ref parsed) = entry.parsed {
-            if let Some(ref action) = parsed.action {
+        if let Some(ref parsed) = entry.parsed
+            && let Some(ref action) = parsed.action {
                 *by_action.entry(action.clone()).or_default() += 1;
 
                 // Drops analytics
@@ -574,7 +573,6 @@ pub fn compute_analytics(entries: &[StructuredLogEntry]) -> LogAnalytics {
                     }
                 }
             }
-        }
 
         // Volume over time (group by minute)
         // Timestamps look like "2026-02-20 14:30:45"

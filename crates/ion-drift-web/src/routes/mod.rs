@@ -369,7 +369,7 @@ async fn demo_sanitize_layer(
         .headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map_or(false, |ct| ct.contains("application/json"));
+        .is_some_and(|ct| ct.contains("application/json"));
 
     if !is_json {
         return Response::from_parts(parts, body);

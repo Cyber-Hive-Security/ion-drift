@@ -184,14 +184,13 @@ impl ModuleRegistryService {
         // at registration) so a domain that rebinds to a blocked address after
         // registration — or a stored URL reached via test_connection/refresh —
         // is still caught (DRIFT-2026-0001 DNS-rebind + re-probe gap).
-        if let Some(host) = base.host_str() {
-            if crate::ssrf::host_resolves_to_blocked(host, true) {
+        if let Some(host) = base.host_str()
+            && crate::ssrf::host_resolves_to_blocked(host, true) {
                 return Err(anyhow!(
                     "module host resolves to a blocked address range at probe time \
                      (link-local/unspecified/broadcast)"
                 ));
             }
-        }
         let manifest_url = Url::parse(&format!(
             "{}/manifest",
             base.as_str().trim_end_matches('/')

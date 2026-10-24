@@ -347,17 +347,15 @@ fn parse_speed_mbps(s: &str) -> Option<u32> {
         return num_str.parse::<u32>().ok();
     }
     // Try "10Gbps", "1Gbps" format (RouterOS v7 SFP+/ethernet)
-    if let Some(num_str) = s.strip_suffix("Gbps") {
-        if let Ok(gig) = num_str.parse::<f64>() {
+    if let Some(num_str) = s.strip_suffix("Gbps")
+        && let Ok(gig) = num_str.parse::<f64>() {
             return Some((gig * 1000.0) as u32);
         }
-    }
     // Try "1G", "2.5G", "10G" format (SwOS gigabit)
-    if let Some(num_str) = s.strip_suffix('G') {
-        if let Ok(gig) = num_str.parse::<f64>() {
+    if let Some(num_str) = s.strip_suffix('G')
+        && let Ok(gig) = num_str.parse::<f64>() {
             return Some((gig * 1000.0) as u32);
         }
-    }
     // Try "100M", "10M" format (SwOS megabit)
     if let Some(num_str) = s.strip_suffix('M') {
         return num_str.parse::<u32>().ok();
@@ -709,14 +707,13 @@ impl SwitchStore {
                 params![event_type],
                 |row| row.get(0),
             ).unwrap_or(0);
-            if count == 0 {
-                if let Err(e) = conn.execute(
+            if count == 0
+                && let Err(e) = conn.execute(
                     "INSERT INTO alert_rules (name, enabled, event_type, severity_filter, cooldown_seconds, delivery_channels) VALUES (?1, 1, ?2, ?3, ?4, '[\"ntfy\"]')",
                     params![name, event_type, severity_filter, cooldown],
                 ) {
                     tracing::warn!("failed to seed alert rule {name}: {e}");
                 }
-            }
         }
 
         // Idempotent schema migrations — add previous binding columns to mac_attachment_state
@@ -2501,14 +2498,13 @@ impl SwitchStore {
             ],
         )?;
         // If the row already existed but interface_name is NULL, backfill it
-        if affected == 0 {
-            if let Some(ref iface) = config.interface_name {
+        if affected == 0
+            && let Some(ref iface) = config.interface_name {
                 let _ = db.execute(
                     "UPDATE vlan_config SET interface_name = ?1 WHERE vlan_id = ?2 AND interface_name IS NULL",
                     params![iface, config.vlan_id as i64],
                 );
             }
-        }
         Ok(affected > 0)
     }
 

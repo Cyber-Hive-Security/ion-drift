@@ -52,6 +52,12 @@ pub struct MaxMindProvider {
     source: RwLock<String>,
 }
 
+impl Default for MaxMindProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MaxMindProvider {
     pub fn new() -> Self {
         Self {

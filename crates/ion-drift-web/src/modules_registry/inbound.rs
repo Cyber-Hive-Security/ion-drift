@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     body::Bytes,
@@ -123,7 +123,7 @@ impl NonceCache {
         let mut guard = self.inner.lock().await;
 
         let n = self.inserts.fetch_add(1, Ordering::Relaxed);
-        if n % NONCE_GC_INTERVAL == 0 || guard.len() >= MAX_NONCE_ENTRIES {
+        if n.is_multiple_of(NONCE_GC_INTERVAL) || guard.len() >= MAX_NONCE_ENTRIES {
             guard.retain(|_, t| now_unix.saturating_sub(*t) < NONCE_TTL_SECS);
         }
         // Hard backstop: if still at capacity after GC (sustained flood), drop
@@ -136,10 +136,7 @@ impl NonceCache {
         }
 
         let key = (module.to_string(), nonce.to_string());
-        match guard.insert(key, now_unix) {
-            Some(_) => true,  // already present
-            None => false,
-        }
+        guard.insert(key, now_unix).is_some()
     }
 
     /// Number of cached entries (for tests/diagnostics).
@@ -781,11 +778,6 @@ mod tests {
             payload: serde_json::Value::Null,
         });
         assert!(wire_to_event(&EventKind::ModuleCustom, wire, "m").is_none());
-    }
-
-    #[allow(dead_code)]
-    fn _duration_used_marker() -> Duration {
-        Duration::from_secs(1)
     }
 }
 

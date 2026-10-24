@@ -524,6 +524,12 @@ pub struct LoginRateLimiter {
     attempts: Arc<DashMap<String, (u32, u64)>>,
 }
 
+impl Default for LoginRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LoginRateLimiter {
     pub fn new() -> Self {
         Self {
@@ -1042,18 +1048,17 @@ pub async fn local_login(
         tracing::warn!(username = %req.username, client_ip = %client_ip, "login rate limited by username");
         return Err(json_error(
             StatusCode::TOO_MANY_REQUESTS,
-            &format!("too many login attempts, retry in {retry_after}s"),
+            format!("too many login attempts, retry in {retry_after}s"),
         ));
     }
-    if let Some(ref ip_key) = ip_key {
-        if let Err(retry_after) = state.login_limiter.reserve(ip_key) {
+    if let Some(ref ip_key) = ip_key
+        && let Err(retry_after) = state.login_limiter.reserve(ip_key) {
             tracing::warn!(client_ip = %client_ip, "login rate limited by IP");
             return Err(json_error(
                 StatusCode::TOO_MANY_REQUESTS,
-                &format!("too many login attempts, retry in {retry_after}s"),
+                format!("too many login attempts, retry in {retry_after}s"),
             ));
         }
-    }
 
     let sm = state.secrets_manager.as_ref().ok_or_else(|| {
         json_error(StatusCode::SERVICE_UNAVAILABLE, "local auth not available")
@@ -1176,17 +1181,15 @@ fn extract_oidc_roles(jwt: &str, roles_claim: &str) -> Vec<String> {
         return roles;
     }
     // Fallback: try "roles" at root
-    if roles_claim != "roles" {
-        if let Some(roles) = extract_string_array(&value, "roles") {
+    if roles_claim != "roles"
+        && let Some(roles) = extract_string_array(&value, "roles") {
             return roles;
         }
-    }
     // Fallback: try "groups" at root
-    if roles_claim != "groups" {
-        if let Some(roles) = extract_string_array(&value, "groups") {
+    if roles_claim != "groups"
+        && let Some(roles) = extract_string_array(&value, "groups") {
             return roles;
         }
-    }
     Vec::new()
 }
 

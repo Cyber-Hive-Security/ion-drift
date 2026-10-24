@@ -178,11 +178,10 @@ async fn poll_snmp_switch(
     // only removes entries whose port_name isn't in the canonical set.
     // This preserves valid metric history needed for rate calculations while
     // cleaning up entries from partial ifName walk failures.
-    if !physical_port_names.is_empty() {
-        if let Err(e) = store.purge_stale_port_data(device_id, &physical_port_names).await {
+    if !physical_port_names.is_empty()
+        && let Err(e) = store.purge_stale_port_data(device_id, &physical_port_names).await {
             tracing::warn!(device = %device_id, "purge stale port data: {e}");
         }
-    }
 
     // Collect interface MACs for is_local detection
     let local_macs: Vec<String> = interfaces
@@ -212,7 +211,7 @@ async fn poll_snmp_switch(
         .collect();
 
     if !physical.is_empty() {
-        if cycle % 10 == 0 {
+        if cycle.is_multiple_of(10) {
             let names: Vec<_> = physical.iter().map(|i| format!("{}(idx={},spd={})", i.canonical_name, i.index, i.speed_mbps)).collect();
             tracing::debug!(device = %device_id, ports = ?names, "SNMP physical ports writing metrics");
         }
@@ -349,7 +348,7 @@ async fn poll_snmp_switch(
     }
 
     // ── VLAN membership (every 4th cycle to reduce load) ────────────
-    if cycle % 4 == 0 {
+    if cycle.is_multiple_of(4) {
         match client.get_vlan_membership().await {
             Ok(vlans) => {
                 let mut membership_entries = Vec::new();

@@ -9,11 +9,10 @@
 //! All queries are against local SQLite + in-memory caches.
 //! No external API calls in the hot path. Target: <500ms per anomaly.
 
-use std::net::IpAddr;
 use std::sync::Arc;
 
 use ion_drift_storage::behavior::{
-    BehaviorStore, DeviceAnomaly, DeviceProfile, NewInvestigation, VlanRegistry, VlanSensitivity,
+    BehaviorStore, DeviceAnomaly, NewInvestigation, VlanRegistry, VlanSensitivity,
 };
 use tokio::sync::RwLock;
 
@@ -334,7 +333,7 @@ impl InvestigationEngine {
 
     fn gather_destination_context(
         &self,
-        anomaly: &DeviceAnomaly,
+        _anomaly: &DeviceAnomaly,
         details: &serde_json::Value,
     ) -> DestinationContext {
         // Extract destination IP from anomaly details
@@ -353,7 +352,7 @@ impl InvestigationEngine {
                     .as_ref()
                     .and_then(|s| s.strip_prefix("AS"))
                     .and_then(|s| s.parse::<u32>().ok());
-                let is_cdn = asn_num.map_or(false, |n| CDN_ASNS.contains(&n));
+                let is_cdn = asn_num.is_some_and(|n| CDN_ASNS.contains(&n));
                 (
                     Some(geo.country_code),
                     geo.city,
@@ -520,8 +519,8 @@ impl InvestigationEngine {
         };
 
         // Rule P4: ION-CRITICAL firewall rule match
-        if let Some(ref comment) = fw.rule_comment {
-            if comment.to_uppercase().contains("[ION-CRITICAL]") {
+        if let Some(ref comment) = fw.rule_comment
+            && comment.to_uppercase().contains("[ION-CRITICAL]") {
                 evidence.push(EvidenceStep {
                     check: "ION-CRITICAL tag".into(),
                     result: format!("Matched critical firewall rule: {comment}"),
@@ -534,11 +533,10 @@ impl InvestigationEngine {
                     evidence,
                 );
             }
-        }
 
         // Rule P5: ION-IGNORE firewall rule match
-        if let Some(ref comment) = fw.rule_comment {
-            if comment.to_uppercase().contains("[ION-IGNORE]") {
+        if let Some(ref comment) = fw.rule_comment
+            && comment.to_uppercase().contains("[ION-IGNORE]") {
                 evidence.push(EvidenceStep {
                     check: "ION-IGNORE tag".into(),
                     result: format!("Matched operator-ignored firewall rule: {comment}"),
@@ -551,11 +549,10 @@ impl InvestigationEngine {
                     evidence,
                 );
             }
-        }
 
         // Rules P1-P3: Policy-based rules (only if a service policy exists)
-        if let Some(service) = service_for_policy {
-            if !dst_ip.is_empty() {
+        if let Some(service) = service_for_policy
+            && !dst_ip.is_empty() {
                 let has_policy = self.behavior_store
                     .has_policy_for_service(service, protocol.as_deref(), dst_port)
                     .await
@@ -676,7 +673,6 @@ impl InvestigationEngine {
                     }
                 }
             }
-        }
 
         // Rule 1: Flagged device — always suspicious
         if device.disposition.as_deref() == Some("flagged") {
@@ -768,9 +764,9 @@ impl InvestigationEngine {
         }
 
         // Rule 6: New port is a roaming/infrastructure protocol
-        if anomaly.anomaly_type == "new_port" {
-            if let Some(port) = dst_port {
-                if ROAMING_PORTS.contains(&port) {
+        if anomaly.anomaly_type == "new_port"
+            && let Some(port) = dst_port
+                && ROAMING_PORTS.contains(&port) {
                     evidence.push(EvidenceStep {
                         check: "Roaming protocol".into(),
                         result: format!("Port {port} is a standard infrastructure protocol"),
@@ -783,12 +779,10 @@ impl InvestigationEngine {
                         evidence,
                     );
                 }
-            }
-        }
 
         // Rule 7: Volume spike on sparse baseline — moderate concern
-        if anomaly.anomaly_type == "volume_spike" {
-            if let Some(ratio) = traffic.volume_ratio {
+        if anomaly.anomaly_type == "volume_spike"
+            && let Some(ratio) = traffic.volume_ratio {
                 evidence.push(EvidenceStep {
                     check: "Volume ratio".into(),
                     result: format!("{ratio:.1}x baseline"),
@@ -813,7 +807,6 @@ impl InvestigationEngine {
                     );
                 }
             }
-        }
 
         // Rule 8: New destination to a flagged country
         if anomaly.anomaly_type == "new_destination" && dest.is_flagged_country {
@@ -886,7 +879,7 @@ impl InvestigationEngine {
         anomaly: &DeviceAnomaly,
         device: &DeviceContext,
         dest: &DestinationContext,
-        verdict: &str,
+        _verdict: &str,
         reason: &str,
     ) -> String {
         let device_name = device

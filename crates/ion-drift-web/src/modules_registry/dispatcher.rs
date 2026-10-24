@@ -216,11 +216,10 @@ impl EventDispatcher {
                     warn!(module = %module.name, "circuit opened mid-retry; abandoning delivery");
                     return;
                 }
-                if let Some(delay) = self.config.retry_backoffs.get(attempt) {
-                    if !delay.is_zero() {
+                if let Some(delay) = self.config.retry_backoffs.get(attempt)
+                    && !delay.is_zero() {
                         tokio::time::sleep(*delay).await;
                     }
-                }
             }
 
             match self

@@ -36,11 +36,10 @@ pub fn spawn_metrics_poller(
             }
 
             // Cleanup all tables every ~1 hour
-            if tick_count % cleanup_ticks == 0 {
-                if let Err(e) = store.cleanup(7 * 86400).await {
+            if tick_count.is_multiple_of(cleanup_ticks)
+                && let Err(e) = store.cleanup(7 * 86400).await {
                     tracing::warn!("metrics cleanup failed: {e}");
                 }
-            }
         }
     });
 }

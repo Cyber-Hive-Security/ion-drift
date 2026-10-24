@@ -664,12 +664,11 @@ fn redact_secret_keys(value: &mut toml::Value) {
     match value {
         toml::Value::Table(table) => {
             for (k, v) in table.iter_mut() {
-                if key_is_secret(k) {
-                    if let toml::Value::String(_) = v {
+                if key_is_secret(k)
+                    && let toml::Value::String(_) = v {
                         *v = toml::Value::String("[REDACTED]".to_string());
                         continue;
                     }
-                }
                 redact_secret_keys(v);
             }
         }

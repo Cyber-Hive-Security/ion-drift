@@ -131,7 +131,7 @@ pub async fn filter(
 fn filter_rules_by_chain(rules: &[FilterRule], chain: Option<&str>) -> Vec<FilterRule> {
     rules
         .iter()
-        .filter(|r| chain.map_or(true, |c| r.chain == c))
+        .filter(|r| chain.is_none_or(|c| r.chain == c))
         .cloned()
         .collect()
 }

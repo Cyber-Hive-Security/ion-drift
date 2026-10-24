@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use ion_drift_storage::switch::NeighborEntry;
 
-use crate::device_manager::{DeviceEntry, DeviceManager, DeviceStatus};
+use crate::device_manager::{DeviceManager, DeviceStatus};
 use crate::infrastructure_snapshot::{EvidenceAuthority, ResolutionMethod};
 
 // ── Constants ───────────────────────────────────────────────────
@@ -304,8 +304,8 @@ impl DeviceResolutionMaps {
         }
 
         // Cap cardinality — evict oldest if at limit
-        if self.learned.len() >= MAX_LEARNED_MAPPINGS && !self.learned.contains_key(&key) {
-            if let Some(oldest_key) = self
+        if self.learned.len() >= MAX_LEARNED_MAPPINGS && !self.learned.contains_key(&key)
+            && let Some(oldest_key) = self
                 .learned
                 .iter()
                 .min_by_key(|(_, v)| v.learned_at_secs)
@@ -313,7 +313,6 @@ impl DeviceResolutionMaps {
             {
                 self.learned.remove(&oldest_key);
             }
-        }
 
         self.learned.insert(
             key,

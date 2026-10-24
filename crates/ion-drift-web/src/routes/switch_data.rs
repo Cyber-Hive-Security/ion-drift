@@ -450,11 +450,10 @@ pub async fn device_port_utilization(
 }
 
 fn resolve_speed(speed_str: Option<&str>) -> (f64, String) {
-    if let Some(s) = speed_str {
-        if let Some(mbps) = parse_speed_mbps(s) {
+    if let Some(s) = speed_str
+        && let Some(mbps) = parse_speed_mbps(s) {
             return (mbps, "polled".into());
         }
-    }
     (1000.0, "default".into())
 }
 

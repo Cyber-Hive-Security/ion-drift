@@ -74,8 +74,8 @@ pub fn generate_candidates(
     // If identity VLAN is wireless, the actual attachment point might be
     // upstream of the WAP (which may not be a managed switch). Candidate
     // generation handles this by inheriting from the identity binding.
-    if let Some(vlan) = identity_vlan {
-        if wireless_vlans.contains(&vlan) {
+    if let Some(vlan) = identity_vlan
+        && wireless_vlans.contains(&vlan) {
             // Check if we already have a candidate matching the identity binding
             let already_present = identity_device
                 .zip(identity_port)
@@ -84,8 +84,8 @@ pub fn generate_candidates(
                 })
                 .unwrap_or(true);
 
-            if !already_present {
-                if let (Some(dev), Some(port)) = (identity_device, identity_port) {
+            if !already_present
+                && let (Some(dev), Some(port)) = (identity_device, identity_port) {
                     candidates.push(AttachmentCandidate {
                         mac: mac.to_string(),
                         device_id: dev.to_string(),
@@ -97,9 +97,7 @@ pub fn generate_candidates(
                         suppression_reason: None,
                     });
                 }
-            }
         }
-    }
 
     // ── AP feeder → WirelessParent candidate generation ──────────────
     // For each WiredPort candidate on an AP feeder port, generate
@@ -138,8 +136,8 @@ pub fn generate_candidates(
     }
 
     // Human override: always a candidate if confirmed
-    if human_confirmed {
-        if let (Some(dev), Some(port)) = (identity_device, identity_port) {
+    if human_confirmed
+        && let (Some(dev), Some(port)) = (identity_device, identity_port) {
             let already_present = candidates.iter().any(|c| c.device_id == dev && c.port_name == port);
             if !already_present {
                 candidates.push(AttachmentCandidate {
@@ -154,7 +152,6 @@ pub fn generate_candidates(
                 });
             }
         }
-    }
 
     candidates
 }

@@ -220,11 +220,10 @@ pub(crate) async fn reconcile(store: &FindingsStore, assessment: ExposureAssessm
     }
 
     for id in &assessment.not_exposed {
-        if matches!(held.get(id), Some((FindingStatus::Open | FindingStatus::Acknowledged, _, _, _))) {
-            if let Err(e) = store.resolve_by_key(ADVISORY_MODULE, id, CEASED_NOTE).await {
+        if matches!(held.get(id), Some((FindingStatus::Open | FindingStatus::Acknowledged, _, _, _)))
+            && let Err(e) = store.resolve_by_key(ADVISORY_MODULE, id, CEASED_NOTE).await {
                 warn!(finding_id = %id, error = %e, "advisory: exposure resolve failed");
             }
-        }
     }
     Ok(())
 }

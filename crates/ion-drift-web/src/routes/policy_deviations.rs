@@ -98,11 +98,10 @@ pub async fn list_deviations(
         .unwrap_or_default();
     let mut ip_to_hostname = std::collections::HashMap::new();
     for p in &all_profiles {
-        if let (Some(ip), Some(hostname)) = (&p.current_ip, &p.hostname) {
-            if !hostname.is_empty() {
+        if let (Some(ip), Some(hostname)) = (&p.current_ip, &p.hostname)
+            && !hostname.is_empty() {
                 ip_to_hostname.insert(ip.clone(), hostname.clone());
             }
-        }
     }
 
     let enriched: Vec<EnrichedDeviation> = deviations

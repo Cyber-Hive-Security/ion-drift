@@ -447,15 +447,14 @@ pub fn spawn_device_health_check(supervisor: &TaskSupervisor, device_manager: Ar
 
             for (device_id, client, last_poll, poll_interval_secs) in &devices {
                 // Skip if this device was polled recently by its own poller
-                if let Some(last) = last_poll {
-                    if now.duration_since(*last) < Duration::from_secs(*poll_interval_secs) {
+                if let Some(last) = last_poll
+                    && now.duration_since(*last) < Duration::from_secs(*poll_interval_secs) {
                         tracing::trace!(
                             device = %device_id,
                             "health check: skipping, recently polled"
                         );
                         continue;
                     }
-                }
 
                 let status = match client.test_connection().await {
                     Ok(identity) => DeviceStatus::Online { identity },

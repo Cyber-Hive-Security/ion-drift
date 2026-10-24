@@ -324,11 +324,10 @@ async fn auto_resolve_links(
         }
 
         // Auto-resolve links older than 7 days
-        if let Ok(created) = chrono_like_age_seconds(&link.created_at) {
-            if created > 7 * 86400 {
+        if let Ok(created) = chrono_like_age_seconds(&link.created_at)
+            && created > 7 * 86400 {
                 conn_store.resolve_link(link.id, "auto")?;
             }
-        }
     }
 
     Ok(())
@@ -357,8 +356,8 @@ async fn find_matching_behavior_anomaly(
         }
 
         // Check if the anomaly details reference the same port
-        if let Some(ref details) = anomaly.details {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(details) {
+        if let Some(ref details) = anomaly.details
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(details) {
                 let detail_port = json.get("dst_port").and_then(|v| v.as_i64());
                 let detail_proto = json.get("protocol").and_then(|v| v.as_str());
 
@@ -368,7 +367,6 @@ async fn find_matching_behavior_anomaly(
                     return Some(anomaly.id);
                 }
             }
-        }
     }
     None
 }
@@ -460,7 +458,7 @@ fn chrono_like_age_seconds(iso: &str) -> Result<i64, ()> {
 
 fn month_days(month: i64) -> i64 {
     const CUMULATIVE: [i64; 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-    if month >= 1 && month <= 12 {
+    if (1..=12).contains(&month) {
         CUMULATIVE[month as usize]
     } else {
         0

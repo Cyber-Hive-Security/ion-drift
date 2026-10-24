@@ -307,9 +307,9 @@ async fn read_kek_attribute(
         .await
         .map_err(|e| anyhow::anyhow!("failed to parse user: {e}"))?;
 
-    if let Some(attrs) = user.attributes {
-        if let Some(values) = attrs.get(&config.kek_attribute) {
-            if let Some(b64_value) = values.first() {
+    if let Some(attrs) = user.attributes
+        && let Some(values) = attrs.get(&config.kek_attribute)
+            && let Some(b64_value) = values.first() {
                 if b64_value.is_empty() {
                     return Ok(None);
                 }
@@ -318,8 +318,6 @@ async fn read_kek_attribute(
                     .map_err(|e| anyhow::anyhow!("failed to decode KEK attribute: {e}"))?;
                 return Ok(Some(kek_bytes));
             }
-        }
-    }
 
     Ok(None)
 }
@@ -419,7 +417,7 @@ pub fn cache_kek_locally(kek: &Key<Aes256Gcm>, data_dir: &Path) -> anyhow::Resul
         let mut key = [0u8; 32];
         OsRng.try_fill_bytes(&mut key)
             .map_err(|e| anyhow::anyhow!("OS RNG failed generating machine key: {e}"))?;
-        std::fs::write(&machine_key_path, &key)?;
+        std::fs::write(&machine_key_path, key)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -515,7 +513,7 @@ pub fn derive_kek_from_password(password: &str, data_dir: &Path) -> anyhow::Resu
         let mut s = [0u8; 16];
         OsRng.try_fill_bytes(&mut s)
             .map_err(|e| anyhow::anyhow!("OS RNG failed generating salt: {e}"))?;
-        std::fs::write(&salt_path, &s)?;
+        std::fs::write(&salt_path, s)?;
         tracing::info!("generated random KEK salt at {}", salt_path.display());
         s
     };
