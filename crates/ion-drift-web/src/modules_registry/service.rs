@@ -165,7 +165,7 @@ impl ModuleRegistryService {
     async fn fetch_manifest(&self, base: &Url) -> anyhow::Result<Manifest> {
         // Re-run the SSRF host guard immediately before every probe (not just
         // at registration) so a domain that rebinds to a blocked address after
-        // registration — or a stored URL reached via test_connection/refresh —
+        // registration — or a stored URL reached via test_connection —
         // is still caught (DRIFT-2026-0001 DNS-rebind + re-probe gap).
         if let Some(host) = base.host_str()
             && crate::ssrf::host_resolves_to_blocked(host, true) {

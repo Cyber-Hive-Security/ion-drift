@@ -949,7 +949,11 @@ async fn main() -> anyhow::Result<()> {
         Option<Arc<modules_registry::ModuleRegistryService>>,
         Option<Arc<modules_registry::EventDispatcher>>,
     );
-    let (module_registry_store, module_registry_service, module_event_dispatcher): ModuleRegistryParts = if let Some(sm_lock) = &secrets_manager {
+    let (
+        module_registry_store,
+        module_registry_service,
+        module_event_dispatcher,
+    ): ModuleRegistryParts = if let Some(sm_lock) = &secrets_manager {
         let kek = *sm_lock.read().await.kek();
         let db_path = data_dir.join("secrets.db");
         match modules_registry::ModuleRegistryStore::new(&db_path, kek) {

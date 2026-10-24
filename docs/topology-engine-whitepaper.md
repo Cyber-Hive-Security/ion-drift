@@ -151,7 +151,6 @@ or randomness is involved.
 | `LAYER_SPACING` | 300 px | Vertical distance between layers |
 | `NODE_SPACING` | 120 px | Horizontal distance between nodes in a sector |
 | `TOP_MARGIN` | 150 px | Top padding |
-| `ENDPOINT_OFFSET` | 200 px | Extra vertical offset for endpoint layer |
 | `SECTOR_PADDING` | 40 px | Padding inside each VLAN sector box |
 | `VLAN_SECTOR_MIN_W` | 200 px | Minimum sector width |
 

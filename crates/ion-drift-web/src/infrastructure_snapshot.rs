@@ -120,7 +120,7 @@ pub struct ResolvedInfraNode {
     /// Answers: "How did we determine what this device is?"
     pub resolution_method: ResolutionMethod,
 
-    /// Capped at [`MAX_EVIDENCE_ENTRIES`]. Newest kept, oldest dropped (FIFO).
+    /// Evidence chain that produced this node.
     pub evidence: Vec<ResolutionEvidence>,
 
     /// Whether this node has conflicting or ambiguous resolution.

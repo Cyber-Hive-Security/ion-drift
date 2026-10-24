@@ -11,7 +11,7 @@
 //! 3. Normalized/fuzzy identity (confidence 0.75)
 //! 4. IP address, skip fe80:: link-local (confidence 0.80)
 //! 5. MAC address fallback (confidence 0.60)
-//! 6. Learned mapping, if not expired and above confidence floor (confidence varies)
+//! 6. Learned mapping, if above confidence floor (confidence varies)
 //!
 //! Confidence values are **ordinal heuristics**, not calibrated probabilities.
 //! They support ranking and gating decisions, not statistical inference.
@@ -43,7 +43,7 @@ pub struct ResolvedNeighborMatch {
     pub confidence: f32,
 }
 
-/// A learned mapping with the metadata needed for TTL expiry.
+/// A learned mapping with the metadata used for oldest-entry eviction.
 #[derive(Debug, Clone)]
 pub struct LearnedMapping {
     pub device_id: String,
@@ -69,14 +69,14 @@ pub struct DeviceResolutionMaps {
     ip_to_device: HashMap<String, String>,
     /// MAC address (uppercase) → device_id
     mac_to_device: HashMap<String, String>,
-    /// Learned mappings with metadata for TTL and auditing.
+    /// Learned mappings with metadata for oldest-entry eviction.
     learned: HashMap<String, LearnedMapping>,
 }
 
 impl DeviceResolutionMaps {
     /// Build resolution maps from DeviceManager entries.
     ///
-    /// Optionally carries forward prior learned mappings (already TTL-filtered).
+    /// Optionally carries forward prior learned mappings.
     pub fn build(
         device_manager: &DeviceManager,
         prior_learned: Option<HashMap<String, LearnedMapping>>,
