@@ -220,7 +220,7 @@ async fn run_passive_discovery(
     Ok(())
 }
 
-/// Parse an IP address that may contain an embedded port (e.g. "10.20.25.8:443").
+/// Parse an IP address that may contain an embedded port (e.g. "192.168.1.8:443").
 /// Returns (ip, Option<port>).
 fn parse_ip_port(addr: &str) -> (String, Option<u32>) {
     if let Some(colon_pos) = addr.rfind(':') {

@@ -264,9 +264,9 @@ mod tests {
         assert_eq!(scope_of(None), Scope::Unrestricted);
         assert_eq!(scope_of(Some("")), Scope::Unrestricted);
         assert_eq!(scope_of(Some("0.0.0.0/0")), Scope::Unrestricted);
-        assert_eq!(scope_of(Some("10.20.25.17/32,0.0.0.0/0")), Scope::Unrestricted);
+        assert_eq!(scope_of(Some("192.168.1.17/32,0.0.0.0/0")), Scope::Unrestricted);
         assert_eq!(scope_of(Some("::/0")), Scope::Unrestricted);
-        assert_eq!(scope_of(Some("10.20.25.17/32")), Scope::Restricted(vec!["10.20.25.17/32".into()]));
+        assert_eq!(scope_of(Some("192.168.1.17/32")), Scope::Restricted(vec!["192.168.1.17/32".into()]));
     }
 
     #[test]
@@ -296,13 +296,13 @@ mod tests {
 
     #[test]
     fn restricted_enabled_service_is_low_with_scope_in_evidence() {
-        let a = assess("dev1", &[svc("api-ssl", false, Some("10.20.25.17/32"))], &[advisory()], 1);
+        let a = assess("dev1", &[svc("api-ssl", false, Some("192.168.1.17/32"))], &[advisory()], 1);
         let f = &a.exposed[0];
         assert_eq!(f.severity, FindingSeverity::Low);
         let ion_drift_module_api::FindingEvidence::Custom { payload, .. } = &f.evidence[0] else {
             panic!("expected custom evidence")
         };
-        assert_eq!(payload["scope"], serde_json::json!(["10.20.25.17/32"]));
+        assert_eq!(payload["scope"], serde_json::json!(["192.168.1.17/32"]));
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
     async fn acknowledged_low_reopens_when_widened_to_unrestricted() {
         let f = NamedTempFile::new().unwrap();
         let store = FindingsStore::new(f.path()).unwrap();
-        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("10.20.25.17/32"))], &[advisory()], 1)).await.unwrap();
+        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("192.168.1.17/32"))], &[advisory()], 1)).await.unwrap();
         store.acknowledge(rows(&store).await[0].id, "scott").await.unwrap();
 
         reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some(""))], &[advisory()], 2)).await.unwrap();
@@ -351,7 +351,7 @@ mod tests {
     async fn acknowledged_finding_stays_acknowledged_while_config_is_unchanged() {
         let f = NamedTempFile::new().unwrap();
         let store = FindingsStore::new(f.path()).unwrap();
-        let reads = [svc("api-ssl", false, Some("10.20.25.17/32"))];
+        let reads = [svc("api-ssl", false, Some("192.168.1.17/32"))];
         reconcile(&store, assess("dev1", &reads, &[advisory()], 1)).await.unwrap();
         store.acknowledge(rows(&store).await[0].id, "scott").await.unwrap();
         reconcile(&store, assess("dev1", &reads, &[advisory()], 2)).await.unwrap();
@@ -412,7 +412,7 @@ mod tests {
     async fn escalation_note_persists_on_later_cycles() {
         let f = NamedTempFile::new().unwrap();
         let store = FindingsStore::new(f.path()).unwrap();
-        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("10.20.25.17/32"))], &[advisory()], 1)).await.unwrap();
+        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("192.168.1.17/32"))], &[advisory()], 1)).await.unwrap();
         store.acknowledge(rows(&store).await[0].id, "scott").await.unwrap();
         let widened = [svc("api-ssl", false, Some(""))];
         reconcile(&store, assess("dev1", &widened, &[advisory()], 2)).await.unwrap();

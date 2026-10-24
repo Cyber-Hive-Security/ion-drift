@@ -303,8 +303,8 @@ fn extract_addresses(text: &str) -> (Option<String>, Option<u16>, Option<String>
     };
 
     let addr_section = &text[comma_pos..];
-    // addr_section is like "10.20.25.15:54329->10.20.25.255:32414, len 49"
-    // or "10.20.30.88->10.20.30.1, len 84" (ICMP)
+    // addr_section is like "192.168.1.15:54329->192.168.1.255:32414, len 49"
+    // or "192.168.1.88->192.168.1.1, len 84" (ICMP)
 
     let arrow = match addr_section.find("->") {
         Some(p) => p,

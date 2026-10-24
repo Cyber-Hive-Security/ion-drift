@@ -612,7 +612,7 @@ mod tests {
             .method(Method::GET)
             .uri("/m/ping")
             .header("x-forwarded-for", "203.0.113.7")
-            .header("x-forwarded-host", "hiverouter.kaziik.xyz")
+            .header("x-forwarded-host", "router.example.com")
             .header("x-forwarded-port", "443")
             .header("x-forwarded-proto", "https")
             .header("x-forwarded-server", "7394d40d0c24")

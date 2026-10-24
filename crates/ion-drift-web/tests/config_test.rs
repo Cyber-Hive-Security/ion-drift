@@ -87,24 +87,24 @@ fn local_source_ip_is_env_overridable_and_bad_values_are_dropped() {
     std::fs::write(&path, "[server]\n[router]\nhost = \"192.168.1.1\"\n").expect("write config");
 
     // SAFETY: see the doc comment — this variable is confined to this test.
-    unsafe { std::env::set_var("DRIFT_ROUTER_LOCAL_SOURCE_IP", "10.20.25.27") };
+    unsafe { std::env::set_var("DRIFT_ROUTER_LOCAL_SOURCE_IP", "192.168.1.27") };
     let config = ServerConfig::load(&path).expect("load with env override");
     assert_eq!(
         config.router.local_source_ip.as_deref(),
-        Some("10.20.25.27"),
+        Some("192.168.1.27"),
         "the env var must reach [router] local_source_ip"
     );
 
     // A compose file routinely hands over a padded value; the comparison in
     // `alerting::is_own_source` is on parsed addresses, so store it canonical.
-    unsafe { std::env::set_var("DRIFT_ROUTER_LOCAL_SOURCE_IP", "  10.20.25.27  ") };
+    unsafe { std::env::set_var("DRIFT_ROUTER_LOCAL_SOURCE_IP", "  192.168.1.27  ") };
     let config = ServerConfig::load(&path).expect("load with padded env override");
-    assert_eq!(config.router.local_source_ip.as_deref(), Some("10.20.25.27"));
+    assert_eq!(config.router.local_source_ip.as_deref(), Some("192.168.1.27"));
 
     // A typo must not sit there looking configured while matching nothing: it is
     // dropped, so the documented loopback-only fallback is what actually runs.
     // And it must never stop a monitoring server from starting.
-    unsafe { std::env::set_var("DRIFT_ROUTER_LOCAL_SOURCE_IP", "10.20.25.27:443") };
+    unsafe { std::env::set_var("DRIFT_ROUTER_LOCAL_SOURCE_IP", "192.168.1.27:443") };
     let config = ServerConfig::load(&path).expect("a bad value must not fail startup");
     assert_eq!(config.router.local_source_ip, None);
 
@@ -123,8 +123,8 @@ fn local_source_ip_validator_rejects_non_addresses() {
     use ion_drift_web::config::validate_local_source_ip;
 
     assert_eq!(
-        validate_local_source_ip(Some("10.20.25.27")),
-        Some("10.20.25.27".parse().unwrap())
+        validate_local_source_ip(Some("192.168.1.27")),
+        Some("192.168.1.27".parse().unwrap())
     );
     assert_eq!(
         validate_local_source_ip(Some(" 2001:db8::1 ")),
@@ -136,9 +136,9 @@ fn local_source_ip_validator_rejects_non_addresses() {
         "",
         "   ",
         "not-an-ip",
-        "10.20.25.27:443",
-        "10.20.25.0/24",
-        "10.20.25.999",
+        "192.168.1.27:443",
+        "192.168.1.0/24",
+        "192.168.1.999",
         "localhost",
     ] {
         assert_eq!(

@@ -68,6 +68,9 @@ jobs:
       - name: gitleaks (history + working tree)
         run: gitleaks git --no-banner --redact --verbose .
 
+      - name: internal identifiers (lab addresses, hostnames, user paths)
+        run: scripts/check-internal-identifiers.sh
+
   deny:
     name: cargo-deny (advisories, licenses, bans, sources)
     runs-on: ubuntu-24.04

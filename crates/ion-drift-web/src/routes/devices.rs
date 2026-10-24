@@ -891,7 +891,7 @@ mod tests {
     fn host_accepts_bare_hostnames_and_ips() {
         assert!(is_structural_host("router.lan"));
         assert!(is_structural_host("mikrotik-01"));
-        assert!(is_structural_host("10.20.25.1"));
+        assert!(is_structural_host("192.168.1.1"));
         assert!(is_structural_host("8.8.8.8"));
         assert!(is_structural_host("fe80::1")); // structurally valid; SSRF-blocked separately
     }

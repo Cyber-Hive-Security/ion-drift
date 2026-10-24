@@ -33,7 +33,7 @@ pub(crate) const MODULES_USER_AGENT: &str = "ion-drift-modules";
 
 /// Inputs for [`ModuleRegistryService::register`].
 pub struct RegisterRequest {
-    /// Base URL of the module, e.g. `http://10.20.25.50:3099`.
+    /// Base URL of the module, e.g. `http://192.168.1.50:3099`.
     pub url: String,
     /// HMAC-SHA256 shared secret used to sign outbound event deliveries.
     /// The operator generates this on the module side and pastes it here.
@@ -511,7 +511,7 @@ mod tests {
     fn url_parse_allows_loopback_and_private() {
         // Modules legitimately run on the LAN or the same host.
         assert!(parse_module_url("http://127.0.0.1:9201").is_ok());
-        assert!(parse_module_url("http://10.20.25.27:9201").is_ok());
+        assert!(parse_module_url("http://192.168.1.27:9201").is_ok());
         assert!(parse_module_url("http://192.168.1.50:8080").is_ok());
     }
 

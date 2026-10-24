@@ -938,7 +938,7 @@ async fn run_correlation(
 
     // Infer VLAN from IP when not already set.
     // In this environment the third octet of the IP maps to the VLAN ID:
-    //   10.2.2.x → VLAN 2, 172.20.6.x → VLAN 6, 10.20.25.x → VLAN 25,
+    //   10.2.2.x → VLAN 2, 172.20.6.x → VLAN 6, 192.168.1.x → VLAN 25,
     //   192.168.90.x → VLAN 90, etc.
     for builder in identity_map.values_mut() {
         if builder.vlan_id.is_none()
@@ -1722,7 +1722,7 @@ fn vlan_from_ip(ip: &str, vlan_subnets: &[(u32, String)]) -> Option<u32> {
     None
 }
 
-/// Parse a CIDR string like "10.20.25.0/24" into (network_u32, mask_bits).
+/// Parse a CIDR string like "192.168.1.0/24" into (network_u32, mask_bits).
 fn parse_cidr(cidr: &str) -> Option<(u32, u32)> {
     let parts: Vec<&str> = cidr.split('/').collect();
     if parts.len() != 2 {
@@ -1818,7 +1818,7 @@ async fn sync_vlan_config_from_batch(
     let mut iface_subnet: HashMap<String, String> = HashMap::new();
     for addr in &ip_addrs {
         if !addr.disabled {
-            // addr.address is "10.20.25.1/24", addr.network is "10.20.25.0"
+            // addr.address is "192.168.1.1/24", addr.network is "192.168.1.0"
             // Combine network + mask from address for proper CIDR
             if let Some(mask) = addr.address.split('/').nth(1) {
                 iface_subnet.insert(

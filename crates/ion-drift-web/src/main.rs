@@ -1315,7 +1315,7 @@ mod startup_warning_tests {
         for a in ["127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST", "::1", "[::1]"] {
             assert!(is_loopback_bind(a), "{a} should be loopback");
         }
-        for a in ["0.0.0.0", "::", "10.20.25.18", "192.168.1.5", "example.com", ""] {
+        for a in ["0.0.0.0", "::", "192.168.1.18", "192.168.1.5", "example.com", ""] {
             assert!(!is_loopback_bind(a), "{a} should not be loopback");
         }
     }
