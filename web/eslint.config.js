@@ -17,9 +17,8 @@ export default tseslint.config(
       ...jsxA11y.configs.recommended.rules,
       // Existing d3/sankey code uses `any` in 8 places; downgraded pending typed rewrite.
       "@typescript-eslint/no-explicit-any": "warn",
-      // routes/connections.tsx:1313 useMemo deps are finer-grained than the compiler infers; follow-up.
+      // routes/connections.tsx:1318 useMemo deps are finer-grained than the compiler infers; follow-up.
       "react-hooks/preserve-manual-memoization": "warn",
-      "@typescript-eslint/no-floating-promises": "off",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     },
   },

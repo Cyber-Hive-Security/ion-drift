@@ -461,8 +461,8 @@ mod tests {
         assert_eq!(octets[0], "10");
         assert_eq!(octets[1], "249");
         // 3rd octet is remapped (first VLAN seen gets 10)
-        let vlan25_remapped: u16 = octets[2].parse().unwrap();
-        assert_eq!(vlan25_remapped, 10, "first VLAN seen should remap to 10");
+        let vlan1_remapped: u16 = octets[2].parse().unwrap();
+        assert_eq!(vlan1_remapped, 10, "first VLAN seen should remap to 10");
 
         // Second unique VLAN gets 12
         let result2 = s.sanitize_ip("192.168.99.5");
@@ -471,7 +471,7 @@ mod tests {
         let vlan99_remapped: u16 = octets2[2].parse().unwrap();
         assert_eq!(vlan99_remapped, 12, "second VLAN seen should remap to 12");
 
-        // Same VLAN (25) gets same remapped ID
+        // Same VLAN (1) gets same remapped ID
         let result3 = s.sanitize_ip("192.168.1.100");
         let octets3: Vec<&str> = result3.split('.').collect();
         assert_eq!(octets3[2], "10", "same VLAN must get same remapped ID");
@@ -533,7 +533,7 @@ mod tests {
     fn sanitize_hostname() {
         let s = DemoSanitizer::new();
         let result = s.sanitize_hostname("spike.example.com");
-        assert!(!result.contains("kaziik"));
+        assert!(!result.contains("example"));
         assert!(!result.contains("spike"));
     }
 

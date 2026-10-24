@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.5.6] - 2026-10-24
 
-Maintenance release: no feature or behavior changes.
+Maintenance release: no feature changes. User-visible changes are limited to the two items under Fixed below.
 
 ### Changed
 
@@ -23,12 +23,14 @@ Maintenance release: no feature or behavior changes.
   secret editor no longer drop promise rejections, and the secret editor shows a save error. Default string sorts and
   the decorative `Math.random()` star field were reviewed and left as-is (see KNOWN_ISSUES).
 - **Internal identifiers removed.** Lab addresses, hostnames, and user paths in tests, the example config, UI
-  placeholders, and docs replaced with RFC 5737 documentation ranges and `example.com`.
+  placeholders, and docs replaced with RFC 1918 and RFC 5737 example ranges and `example.com`.
   `scripts/check-internal-identifiers.sh` runs in pre-commit and CI, scans staged content, and fails closed.
 - `ROADMAP.md` rewritten for the standalone Drift 1.0 train (0.5.7 to 1.0); companion-product work moved to post-1.0.
 
 ### Fixed
 
+- The secret editor on the Security settings page now shows a save error instead of silently dropping the rejection.
+- Uptime strings are parsed from the start of the string (`formatUptime`); RouterOS always supplies a bare uptime, so output is unchanged for real data.
 - `TempDir::into_path` deprecation in storage tests; `cfg(fuzzing)` declared as a known cfg in `mikrotik-core`.
 - `modules_registry` re-exports restored after an over-eager auto-fix; the bin target does not use them, so the
   unused-import lint is silenced there with a comment.

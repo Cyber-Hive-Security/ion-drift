@@ -89,6 +89,7 @@ type SharedMetrics = Arc<Mutex<QueueMetrics>>;
 #[derive(Clone)]
 pub struct RouterQueue {
     tx: mpsc::Sender<QueuedBatch>,
+    metrics: SharedMetrics,
 }
 
 impl RouterQueue {
@@ -100,9 +101,10 @@ impl RouterQueue {
             ..Default::default()
         }));
 
-        tokio::spawn(queue_worker(rx, client, base_gap, metrics));
+        let worker_metrics = metrics.clone();
+        tokio::spawn(queue_worker(rx, client, base_gap, worker_metrics));
 
-        Self { tx }
+        Self { tx, metrics }
     }
 
     /// Submit a batch of requests. Returns responses in order.
@@ -150,6 +152,12 @@ impl RouterQueue {
             .map_err(|e| format!("queue error: {e}"))?;
         let value = result.map_err(|e| format!("{e}"))?;
         serde_json::from_value(value).map_err(|e| format!("deserialize {path}: {e}"))
+    }
+
+    /// Get current queue metrics.
+    #[allow(dead_code)] // read by the 0.6 poller-diagnostics endpoint, see ROADMAP.md
+    pub async fn metrics(&self) -> QueueMetrics {
+        self.metrics.lock().await.clone()
     }
 }
 

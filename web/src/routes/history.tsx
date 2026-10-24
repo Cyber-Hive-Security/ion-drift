@@ -296,10 +296,12 @@ function FilterInput({
   onChange: (v: string) => void;
   type?: string;
 }) {
+  const id = "history-filter-" + label.toLowerCase().replace(/\W+/g, "-");
   return (
     <div>
-      <label className="mb-1 block text-[10px] font-medium text-muted-foreground">{label}</label>
+      <label htmlFor={id} className="mb-1 block text-[10px] font-medium text-muted-foreground">{label}</label>
       <input
+        id={id}
         type={type}
         placeholder={placeholder}
         value={value}

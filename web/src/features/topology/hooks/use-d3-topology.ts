@@ -790,7 +790,6 @@ export function createTopologyMapInstance(
         .attr("stroke-width", 1)
         .attr("cursor", "nwse-resize")
         .call(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           d3.drag<SVGRectElement, unknown>()
             .on("start", function () {
               origBboxX = group.bbox_x;

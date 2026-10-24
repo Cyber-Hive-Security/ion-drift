@@ -528,10 +528,11 @@ export function SettingsDevices() {
             )}
             {(form.device_type !== "snmp_switch" || form.snmp_version === "v3") && (
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">
+              <label htmlFor="device-username-2" className="block text-xs text-muted-foreground mb-1">
                 {form.device_type === "snmp_switch" ? "Security Name" : "Username"}
               </label>
               <input
+                id="device-username-2"
                 type="text"
                 placeholder={form.device_type === "snmp_switch" ? "snmpuser" : "admin"}
                 value={form.username}
@@ -543,12 +544,13 @@ export function SettingsDevices() {
             </div>
             )}
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">
+              <label htmlFor="device-password-2" className="block text-xs text-muted-foreground mb-1">
                 {form.device_type === "snmp_switch"
                   ? form.snmp_version === "v3" ? "Auth Password" : "Community String"
                   : "Password"}
               </label>
               <input
+                id="device-password-2"
                 type="password"
                 placeholder={form.device_type === "snmp_switch" && form.snmp_version === "v2c" ? "public" : undefined}
                 value={form.password}

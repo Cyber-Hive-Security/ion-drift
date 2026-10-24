@@ -147,7 +147,12 @@ Inference binding results were not pre-populating the identity builder, so stale
 ### [LOW] Per-device queues are never removed when a device is deleted or disabled
 **Source:** 0.5.6 clippy cleanup (2026-10-24)
 
-`DeviceQueueRegistry::remove` had no callers and was deleted as dead code. Nothing removes a device's queue when the device is deleted or disabled, so the registry grows for the life of the process. Harmless at homelab scale; wire removal into the device delete/disable path when the poll cadence tiers land in 0.5.7.
+`DeviceQueueRegistry::remove` had no callers and was deleted as dead code. Nothing removes a device's queue when the device is deleted or disabled, so the registry grows for the life of the process. Harmless at homelab scale; wire removal into the device delete/disable path when the poll cadence tiers land in 0.5.7. `RouterQueue` records `QueueMetrics` but no endpoint reads them yet; the `metrics()` accessor is kept for the 0.6 poller-diagnostics endpoint.
+
+### [LOW] Learned device-mapping TTL, link-down invalidation, and audit were never wired
+**Source:** 0.5.6 clippy cleanup (2026-10-24)
+
+`expire_learned`, `invalidate_for_port`, `audit_learned`, and `take_learned` had no callers and were deleted. Behavior is unchanged because correlation rebuilds the device maps each cycle, so nothing learned persists long enough to need expiry or invalidation.
 
 ### [LOW] Infrastructure evidence vectors are not capped
 **Source:** 0.5.6 clippy cleanup (2026-10-24)
@@ -162,7 +167,7 @@ Inference binding results were not pre-populating the identity builder, so stale
 ### [LOW] Remaining ESLint warnings in the web app
 **Source:** 0.5.6 ESLint introduction (2026-10-24)
 
-Lint passes with 23 warnings: 12 `react-hooks/exhaustive-deps`, 8 `@typescript-eslint/no-explicit-any` (`vlan-sankey.tsx:310,312`, `port-sankey.tsx:476,478`, `world-map.tsx:373,374,381,404`), 1 `react-hooks/preserve-manual-memoization` (`connections.tsx:1318`), 1 `react-hooks/incompatible-library`. `no-explicit-any` and `preserve-manual-memoization` are set to `warn` in `web/eslint.config.js` with comments; flip them to `error` once the sites are typed.
+Lint passes with 22 warnings: 12 `react-hooks/exhaustive-deps`, 8 `@typescript-eslint/no-explicit-any` (`vlan-sankey.tsx:310,312`, `port-sankey.tsx:476,478`, `world-map.tsx:373,374,381,404`), 1 `react-hooks/preserve-manual-memoization` (`connections.tsx:1318`), 1 `react-hooks/incompatible-library`. `no-explicit-any` and `preserve-manual-memoization` are set to `warn` in `web/eslint.config.js` with comments; flip them to `error` once the sites are typed.
 
 ## Accepted
 
@@ -210,7 +215,7 @@ The provisioning permission pre-check endpoint returned the raw RouterOS policy 
 - `typescript:S2871` (7 "critical bugs"): `Array.prototype.sort()` without a comparator on arrays of VLAN names, firewall chains, protocols, log topics, and module names. These are ASCII identifiers; code-unit order is the intended order. Adding `localeCompare` would change nothing visible and add a dependency on locale.
 - `typescript:S2245` (6 "vulnerabilities"): `Math.random()` positions decorative background stars on the topology map. Not security relevant.
 - `typescript:S5332` (3 of 4): `http://` URLs in test fixtures. The one UI placeholder was changed to `https://`.
-- `typescript:S9379` (7 of 8): `autoFocus` on inputs that appear as the result of a user action (inline edit, modal). Each carries an `eslint-disable-next-line` with the reason; the one page-load case was removed.
+- `typescript:S9379` (8): `autoFocus` on inputs that appear as the result of a user action (inline edit, modal). Each carries an `eslint-disable-next-line` with the reason; the login page keeps it as the sole-purpose-form exception.
 
 ### [INFO] `#[allow(unused_imports)]` on `modules_registry` re-exports
 **Source:** 0.5.6 clippy cleanup (2026-10-24)

@@ -140,7 +140,7 @@ mod tests {
     fn allows_lan_and_public() {
         // RFC1918 + ULA + public are allowed (Ion Drift talks to the LAN).
         assert!(!ip_is_blocked("192.168.1.1".parse().unwrap(), false));
-        assert!(!ip_is_blocked("192.168.1.1".parse().unwrap(), false));
+        assert!(!ip_is_blocked("10.0.0.1".parse().unwrap(), false));
         assert!(!ip_is_blocked(IpAddr::V6(v6("fc00::1")), false)); // ULA allowed
         assert!(!ip_is_blocked("1.1.1.1".parse().unwrap(), false));
     }

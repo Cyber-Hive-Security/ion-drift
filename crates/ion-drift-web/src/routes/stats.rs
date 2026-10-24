@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::middleware::RequireAdmin;
-#[allow(unused_imports)]
 use crate::middleware::RequireAuth;
 use crate::state::AppState;
 use super::internal_error;

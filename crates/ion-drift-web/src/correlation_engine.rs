@@ -939,8 +939,8 @@ async fn run_correlation(
     }
 
     // Infer VLAN from IP when not already set.
-    // In this environment the third octet of the IP maps to the VLAN ID:
-    //   10.2.2.x → VLAN 2, 172.20.6.x → VLAN 6, 192.168.1.x → VLAN 25,
+    // The third octet of the IP maps to the VLAN ID:
+    //   10.2.2.x → VLAN 2, 172.20.6.x → VLAN 6, 192.168.25.x → VLAN 25,
     //   192.168.90.x → VLAN 90, etc.
     for builder in identity_map.values_mut() {
         if builder.vlan_id.is_none()
