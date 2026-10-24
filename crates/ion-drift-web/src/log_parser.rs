@@ -594,7 +594,7 @@ pub fn compute_analytics(entries: &[StructuredLogEntry]) -> LogAnalytics {
             flagged,
         })
         .collect();
-    top_dropped_sources.sort_by(|a, b| b.count.cmp(&a.count));
+    top_dropped_sources.sort_by_key(|x| std::cmp::Reverse(x.count));
     top_dropped_sources.truncate(10);
 
     let mut top_targeted_ports: Vec<PortCount> = targeted_ports
@@ -605,14 +605,14 @@ pub fn compute_analytics(entries: &[StructuredLogEntry]) -> LogAnalytics {
             protocol: Some(protocol),
         })
         .collect();
-    top_targeted_ports.sort_by(|a, b| b.count.cmp(&a.count));
+    top_targeted_ports.sort_by_key(|x| std::cmp::Reverse(x.count));
     top_targeted_ports.truncate(10);
 
     let mut drops_per_interface: Vec<InterfaceCount> = drops_by_iface
         .into_iter()
         .map(|(interface, count)| InterfaceCount { interface, count })
         .collect();
-    drops_per_interface.sort_by(|a, b| b.count.cmp(&a.count));
+    drops_per_interface.sort_by_key(|x| std::cmp::Reverse(x.count));
 
     let mut volume_over_time: Vec<TimeCount> = volume_by_minute
         .into_iter()

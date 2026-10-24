@@ -27,6 +27,7 @@ use crate::task_supervisor::TaskSupervisor;
 /// Spawn the correlation engine on a configurable interval to:
 /// 1. Classify port roles (access/trunk/uplink/unused)
 /// 2. Build unified network identities from MAC/neighbor/OUI/ARP/DHCP data
+#[allow(clippy::too_many_arguments)] // internal builder; a parameter struct would add indirection without clarity
 pub fn spawn_correlation_engine(
     supervisor: &TaskSupervisor,
     switch_store: Arc<SwitchStore>,
@@ -78,6 +79,7 @@ pub fn spawn_correlation_engine(
     })});
 }
 
+#[allow(clippy::too_many_arguments)] // internal builder; a parameter struct would add indirection without clarity
 async fn run_correlation(
     store: &SwitchStore,
     oui_db: &OuiDb,
@@ -1582,9 +1584,7 @@ async fn run_correlation(
 fn classify_port_role(mac_count: u32, vlan_count: u32, has_lldp: bool) -> String {
     if vlan_count > 1 {
         "trunk".to_string()
-    } else if has_lldp {
-        "uplink".to_string()
-    } else if mac_count > 10 {
+    } else if has_lldp || mac_count > 10 {
         "uplink".to_string()
     } else if mac_count == 0 {
         "unused".to_string()

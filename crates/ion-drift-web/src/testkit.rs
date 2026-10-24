@@ -429,7 +429,6 @@ pub(crate) async fn test_app_state(
         )),
         event_bus,
         module_registry,
-        module_shutdown,
         infrastructure_snapshot: Arc::new(RwLock::new(
             crate::infrastructure_snapshot::InfrastructureSnapshotState::new(),
         )),

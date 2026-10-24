@@ -48,9 +48,4 @@ impl AttackTechniqueDb {
             .cloned()
             .unwrap_or_default()
     }
-
-    /// Get a technique by ID.
-    pub fn get(&self, id: &str) -> Option<&AttackTechnique> {
-        self.techniques.get(id)
-    }
 }

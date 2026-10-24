@@ -30,7 +30,7 @@ impl AttachmentStateKind {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "candidate" => Self::Candidate,
             "probable" => Self::Probable,

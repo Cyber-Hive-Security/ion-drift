@@ -18,13 +18,6 @@ use serde::{Deserialize, Serialize};
 
 use ion_drift_storage::switch::NetworkIdentity;
 
-// ── Constants ───────────────────────────────────────────────────
-
-/// Maximum evidence entries per resolved node or edge.
-/// Prevents memory growth from flapping LLDP neighbors or MAC spoofing.
-/// FIFO: newest entries kept when cap is reached.
-pub const MAX_EVIDENCE_ENTRIES: usize = 5;
-
 // ── Snapshot ────────────────────────────────────────────────────
 
 /// A complete, versioned snapshot of the resolved network infrastructure.
@@ -127,7 +120,6 @@ pub struct ResolvedInfraNode {
     /// Answers: "How did we determine what this device is?"
     pub resolution_method: ResolutionMethod,
 
-    /// Evidence chain that produced this node.
     /// Capped at [`MAX_EVIDENCE_ENTRIES`]. Newest kept, oldest dropped (FIFO).
     pub evidence: Vec<ResolutionEvidence>,
 
@@ -239,14 +231,6 @@ pub struct ResolutionEvidence {
     pub observed_at: i64,
 }
 
-/// Push evidence into a bounded vec, maintaining FIFO with [`MAX_EVIDENCE_ENTRIES`] cap.
-pub fn push_evidence(evidence: &mut Vec<ResolutionEvidence>, entry: ResolutionEvidence) {
-    if evidence.len() >= MAX_EVIDENCE_ENTRIES {
-        evidence.remove(0);
-    }
-    evidence.push(entry);
-}
-
 // ── VLAN membership ─────────────────────────────────────────────
 
 /// VLAN membership with source distinction.
@@ -323,7 +307,7 @@ pub struct ResolvedEdge {
     /// Confidence in this edge's existence (0.0–1.0).
     pub confidence: f32,
 
-    /// Evidence chain. Capped at [`MAX_EVIDENCE_ENTRIES`].
+    /// Evidence chain.
     pub evidence: Vec<ResolutionEvidence>,
 }
 

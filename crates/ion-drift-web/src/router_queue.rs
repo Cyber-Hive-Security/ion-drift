@@ -89,7 +89,6 @@ type SharedMetrics = Arc<Mutex<QueueMetrics>>;
 #[derive(Clone)]
 pub struct RouterQueue {
     tx: mpsc::Sender<QueuedBatch>,
-    metrics: SharedMetrics,
 }
 
 impl RouterQueue {
@@ -101,10 +100,9 @@ impl RouterQueue {
             ..Default::default()
         }));
 
-        let worker_metrics = metrics.clone();
-        tokio::spawn(queue_worker(rx, client, base_gap, worker_metrics));
+        tokio::spawn(queue_worker(rx, client, base_gap, metrics));
 
-        Self { tx, metrics }
+        Self { tx }
     }
 
     /// Submit a batch of requests. Returns responses in order.
@@ -153,34 +151,12 @@ impl RouterQueue {
         let value = result.map_err(|e| format!("{e}"))?;
         serde_json::from_value(value).map_err(|e| format!("deserialize {path}: {e}"))
     }
-
-    /// Submit a batch and deserialize each response into the same type.
-    /// Returns results in the same order as the requests.
-    pub async fn submit_typed<T: serde::de::DeserializeOwned>(
-        &self,
-        poller_id: &str,
-        priority: Priority,
-        requests: Vec<QueuedRequest>,
-    ) -> Result<Vec<Result<T, String>>, String> {
-        let results = self.submit(poller_id, priority, requests).await
-            .map_err(|e| format!("queue error: {e}"))?;
-        Ok(results.into_iter().map(|r| {
-            let value = r.map_err(|e| format!("{e}"))?;
-            serde_json::from_value(value).map_err(|e| format!("deserialize: {e}"))
-        }).collect())
-    }
-
-    /// Get current queue metrics.
-    pub async fn metrics(&self) -> QueueMetrics {
-        self.metrics.lock().await.clone()
-    }
 }
 
 #[derive(Debug)]
 pub enum QueueError {
     QueueClosed,
     WorkerDropped,
-    Superseded,
 }
 
 impl std::fmt::Display for QueueError {
@@ -188,7 +164,6 @@ impl std::fmt::Display for QueueError {
         match self {
             Self::QueueClosed => write!(f, "router queue closed"),
             Self::WorkerDropped => write!(f, "queue worker dropped response"),
-            Self::Superseded => write!(f, "batch superseded by newer submission"),
         }
     }
 }

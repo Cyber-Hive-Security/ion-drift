@@ -67,11 +67,6 @@ impl MaxMindProvider {
         }
     }
 
-    /// Which database source is loaded: "maxmind", "dbip", or "none".
-    pub fn source_name(&self) -> String {
-        self.source.read().map(|s| s.clone()).unwrap_or_else(|_| "none".to_string())
-    }
-
     fn lookup_asn(&self, ip: &IpAddr) -> (Option<String>, Option<String>, Option<String>) {
         let asn_reader = match self.mmdb_asn.read().ok() {
             Some(guard) => guard,

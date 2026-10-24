@@ -158,6 +158,7 @@ impl SecretsManager {
     /// Borrow the KEK so sibling stores (e.g. `ModuleRegistryStore`)
     /// can encrypt with the same key without the caller having to
     /// route it around separately.
+    #[allow(dead_code)] // used by the bin target (main.rs); the lib target never calls it
     pub(crate) fn kek(&self) -> &Key<Aes256Gcm> {
         &self.kek
     }
@@ -397,13 +398,6 @@ impl SecretsManager {
             maxmind_account_id: maxmind_account,
             maxmind_license_key: maxmind_license,
         }))
-    }
-
-    /// Delete a single secret.
-    pub async fn delete_secret(&self, name: &str) -> anyhow::Result<()> {
-        let db = self.db.lock().await;
-        db.execute("DELETE FROM encrypted_secrets WHERE name = ?1", params![name])?;
-        Ok(())
     }
 
     /// Get the current key fingerprint.
@@ -936,20 +930,6 @@ impl SecretsManager {
         let db = self.db.lock().await;
         let count: i64 = db.query_row("SELECT COUNT(*) FROM local_users", [], |row| row.get(0))?;
         Ok(count > 0)
-    }
-
-    /// List all local users (without password hashes).
-    pub async fn list_local_users(&self) -> anyhow::Result<Vec<LocalUser>> {
-        let db = self.db.lock().await;
-        let mut stmt = db.prepare("SELECT username, role, created_at FROM local_users ORDER BY created_at")?;
-        let users = stmt.query_map([], |row| {
-            Ok(LocalUser {
-                username: row.get(0)?,
-                role: row.get(1)?,
-                created_at: row.get(2)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
-        Ok(users)
     }
 }
 

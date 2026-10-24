@@ -943,11 +943,13 @@ async fn main() -> anyhow::Result<()> {
 
     // External-module registry (Module API v1.1). Shares secrets.db
     // with SecretsManager so both use the same KEK.
-    let (module_registry_store, module_registry_service, module_event_dispatcher): (
+    /// Optional (store, service, event dispatcher) of the module registry.
+    type ModuleRegistryParts = (
         Option<Arc<modules_registry::ModuleRegistryStore>>,
         Option<Arc<modules_registry::ModuleRegistryService>>,
         Option<Arc<modules_registry::EventDispatcher>>,
-    ) = if let Some(sm_lock) = &secrets_manager {
+    );
+    let (module_registry_store, module_registry_service, module_event_dispatcher): ModuleRegistryParts = if let Some(sm_lock) = &secrets_manager {
         let kek = *sm_lock.read().await.kek();
         let db_path = data_dir.join("secrets.db");
         match modules_registry::ModuleRegistryStore::new(&db_path, kek) {
@@ -1020,7 +1022,6 @@ async fn main() -> anyhow::Result<()> {
         device_queues: device_queues.clone(),
         event_bus: event_bus.clone(),
         module_registry: module_registry.clone(),
-        module_shutdown: module_shutdown.clone(),
         infrastructure_snapshot: Arc::new(tokio::sync::RwLock::new(
             infrastructure_snapshot::InfrastructureSnapshotState::new(),
         )),

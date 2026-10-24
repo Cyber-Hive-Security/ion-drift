@@ -69,18 +69,6 @@ pub enum LicenseMode {
     },
 }
 
-impl LicenseMode {
-    /// Whether a banner should be shown (community nag, expiry warning, or expired).
-    pub fn should_show_banner(&self) -> bool {
-        match self {
-            LicenseMode::Community { acknowledged: false } => true,
-            LicenseMode::Licensed { expiry_warning_days: Some(_), .. } => true,
-            LicenseMode::Expired { .. } => true,
-            _ => false,
-        }
-    }
-}
-
 /// Validate a license key string.
 ///
 /// Key format: base64url(json_payload) + "." + base64url(ed25519_signature)
@@ -131,14 +119,6 @@ pub fn validate_license_key(key: &str) -> Result<LicensePayload, String> {
         .map_err(|e| format!("invalid license key: bad payload: {e}"))?;
 
     Ok(payload)
-}
-
-/// Validate a key and check if it's expired. Returns the payload and whether it's expired.
-pub fn validate_license_key_with_expiry(key: &str) -> Result<(LicensePayload, bool), String> {
-    let payload = validate_license_key(key)?;
-    let today = chrono::Utc::now().date_naive();
-    let expired = payload.expires < today;
-    Ok((payload, expired))
 }
 
 /// Determine the current license mode from stored state.

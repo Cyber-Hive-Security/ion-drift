@@ -63,12 +63,6 @@ impl ModuleRegistryService {
         Ok(Self { store, http })
     }
 
-    /// For tests: build with a custom reqwest client.
-    #[cfg(test)]
-    pub fn with_client(store: Arc<ModuleRegistryStore>, http: reqwest::Client) -> Self {
-        Self { store, http }
-    }
-
     /// Register a new module.
     ///
     /// Probes `GET <url>/manifest`, validates the returned manifest
@@ -153,10 +147,6 @@ impl ModuleRegistryService {
         Ok(Some(hex::encode(digest)[..8].to_string()))
     }
 
-    pub async fn get_by_name(&self, name: &str) -> anyhow::Result<Option<RegisteredModule>> {
-        self.store.get_by_name(name).await
-    }
-
     /// Probe a registered module's `/manifest` endpoint and touch its
     /// `last_seen_at` on success. Does not persist the manifest.
     pub async fn test_connection(&self, name: &str) -> anyhow::Result<Manifest> {
@@ -169,13 +159,6 @@ impl ModuleRegistryService {
         let manifest = self.fetch_manifest(&base).await?;
         validate_manifest(&manifest)?;
         self.store.touch_last_seen(name).await?;
-        Ok(manifest)
-    }
-
-    /// Probe the module, replace the cached manifest with the fresh copy.
-    pub async fn refresh_manifest(&self, name: &str) -> anyhow::Result<Manifest> {
-        let manifest = self.test_connection(name).await?;
-        self.store.update_manifest(name, &manifest).await?;
         Ok(manifest)
     }
 
@@ -596,11 +579,11 @@ mod tests {
         .await
         .unwrap();
 
-        let before = svc.get_by_name("probe-me").await.unwrap().unwrap();
+        let before = svc.store.get_by_name("probe-me").await.unwrap().unwrap();
         assert!(before.last_seen_at.is_none());
 
         let _m = svc.test_connection("probe-me").await.unwrap();
-        let after = svc.get_by_name("probe-me").await.unwrap().unwrap();
+        let after = svc.store.get_by_name("probe-me").await.unwrap().unwrap();
         assert!(after.last_seen_at.is_some());
     }
 }

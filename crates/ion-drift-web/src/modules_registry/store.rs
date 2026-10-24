@@ -185,17 +185,6 @@ impl ModuleRegistryStore {
         Ok(n > 0)
     }
 
-    /// Replace a module's cached manifest. Returns true if a row changed.
-    pub async fn update_manifest(&self, name: &str, manifest: &Manifest) -> anyhow::Result<bool> {
-        let manifest_json = serde_json::to_string(manifest)?;
-        let db = self.db.lock().await;
-        let n = db.execute(
-            "UPDATE registered_modules SET manifest_json = ?1, updated_at = ?2 WHERE name = ?3",
-            params![manifest_json, now_unix(), name],
-        )?;
-        Ok(n > 0)
-    }
-
     /// Update `last_seen_at` to the current time. No-op if not found.
     pub async fn touch_last_seen(&self, name: &str) -> anyhow::Result<()> {
         let db = self.db.lock().await;
@@ -441,27 +430,5 @@ mod tests {
             .unwrap();
         assert!(store.unregister("m").await.unwrap());
         assert!(store.list().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn update_manifest_persists() {
-        let tmp = NamedTempFile::new().unwrap();
-        let store = ModuleRegistryStore::new(tmp.path(), test_kek()).unwrap();
-        let m = sample_manifest("m");
-        store
-            .register(NewModuleRegistration {
-                name: "m",
-                url: "http://x",
-                manifest: &m,
-                shared_secret: "a",
-                api_token: "b",
-            })
-            .await
-            .unwrap();
-        let mut m2 = m.clone();
-        m2.version = "0.2.0".into();
-        assert!(store.update_manifest("m", &m2).await.unwrap());
-        let got = store.get_by_name("m").await.unwrap().unwrap();
-        assert_eq!(got.manifest.version, "0.2.0");
     }
 }

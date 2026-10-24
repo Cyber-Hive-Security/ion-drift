@@ -114,6 +114,7 @@ pub struct SessionStore {
 }
 
 impl SessionStore {
+    #[allow(dead_code)] // used by testkit and tests; the bin target's production path uses with_idle_timeout
     pub fn new(max_age_seconds: u64, db_path: &Path, session_secret: &str) -> anyhow::Result<Self> {
         Self::with_idle_timeout(max_age_seconds, 0, db_path, session_secret)
     }
@@ -376,7 +377,7 @@ impl SessionStore {
                 is_current: current_key.as_deref() == Some(entry.key().as_str()),
             });
         }
-        out.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+        out.sort_by_key(|x| std::cmp::Reverse(x.last_accessed));
         out
     }
 
@@ -538,6 +539,7 @@ impl LoginRateLimiter {
     }
 
     /// Check if a key is rate-limited. Returns Ok(()) if allowed, Err(seconds_until_retry) if blocked.
+    #[allow(dead_code)] // exercised by the unit tests; not yet wired into a login path
     pub fn check(&self, key: &str) -> Result<(), u64> {
         let now = now_secs();
         if let Some(entry) = self.attempts.get(key) {
@@ -598,6 +600,7 @@ impl LoginRateLimiter {
     }
 
     /// Record a failed attempt.
+    #[allow(dead_code)] // exercised by the unit tests; not yet wired into a login path
     pub fn record_failure(&self, key: &str) {
         let now = now_secs();
         self.attempts
@@ -769,6 +772,7 @@ pub(crate) const INVALID_CALLBACK_MSG: &str = "invalid callback request";
 
 /// Parse the `/auth/callback` query string, mapping every deserialization
 /// failure (missing/duplicate/malformed `code` or `state`) to a generic 400.
+#[allow(clippy::result_large_err)] // Err is an axum Response (handler error type); boxing it would ripple through every caller
 pub(crate) fn parse_callback_query(uri: &axum::http::Uri) -> Result<CallbackParams, Response> {
     Query::<CallbackParams>::try_from_uri(uri)
         .map(|Query(p)| p)
@@ -1257,7 +1261,7 @@ mod callback_query_tests {
         let uri: Uri = "/auth/callback?code=c%2B1&state=s-2&session_state=x"
             .parse()
             .unwrap();
-        let p = parse_callback_query(&uri).ok().expect("valid query");
+        let p = parse_callback_query(&uri).expect("valid query");
         assert_eq!(p.code, "c+1");
         assert_eq!(p.state, "s-2");
     }

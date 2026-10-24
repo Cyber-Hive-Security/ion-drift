@@ -152,7 +152,6 @@ fn resolve_vlan_config(
     }
 }
 
-/// Sorted VLAN order for consistent horizontal layout.
 // VLAN_ORDER removed — now derived from database VlanConfig at runtime.
 
 // ── Layout constants ─────────────────────────────────────────────
@@ -163,7 +162,6 @@ const VLAN_SECTOR_MIN_W: f64 = 200.0;
 const VLAN_SECTOR_EMPTY_W: f64 = 150.0;
 const NODE_SPACING: f64 = 120.0;
 const TOP_MARGIN: f64 = 150.0;
-const ENDPOINT_OFFSET: f64 = 200.0;
 const SECTOR_PADDING: f64 = 40.0;
 
 // WAN_INTERFACES removed — now passed as parameter from config.router.wan_interface
@@ -816,7 +814,7 @@ fn compute_layout(
         // Count endpoints AND single-VLAN infrastructure (APs, single-VLAN switches)
         // so their VLAN sectors are sized correctly
         let in_sector = !node.is_infrastructure
-            || (node.is_infrastructure && node.vlans_served.len() <= 1 && node.vlan_id.is_some());
+            || (node.vlans_served.len() <= 1 && node.vlan_id.is_some());
         if in_sector
             && let Some(vid) = node.vlan_id {
                 *vlan_endpoint_counts.entry(vid).or_default() += 1;
@@ -832,7 +830,7 @@ fn compute_layout(
         .iter()
         .map(|&v| (v, vlan_endpoint_counts.get(&v).copied().unwrap_or(0)))
         .collect();
-    sorted_by_count.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_by_count.sort_by_key(|x| std::cmp::Reverse(x.1));
 
     let (mut left_vlans, mut right_vlans) = (Vec::new(), Vec::new());
     let (mut left_total, mut right_total) = (0usize, 0usize);
@@ -967,7 +965,7 @@ fn compute_layout(
     let mut vlan_endpoints: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for (id, node) in nodes.iter() {
         let in_sector = !node.is_infrastructure
-            || (node.is_infrastructure && node.vlans_served.len() <= 1 && node.vlan_id.is_some());
+            || (node.vlans_served.len() <= 1 && node.vlan_id.is_some());
         if in_sector
             && let Some(vid) = node.vlan_id {
                 vlan_endpoints.entry(vid).or_default().push(id.clone());
@@ -1018,15 +1016,6 @@ fn map_device_type(dt: Option<&str>) -> NodeKind {
         Some("gaming") | Some("iot") | Some("storage") => NodeKind::IoT,
         _ => NodeKind::Unknown,
     }
-}
-
-/// Strip punctuation/whitespace and lowercase for fuzzy identity matching.
-/// e.g. "MT-4011-R-Office" → "mt4011roffice" matches "MT4011ROffice".
-fn normalize_identity(s: &str) -> String {
-    s.chars()
-        .filter(|c| !matches!(c, '-' | '_' | '.' | ' '))
-        .collect::<String>()
-        .to_lowercase()
 }
 
 // ── Background task ──────────────────────────────────────────────

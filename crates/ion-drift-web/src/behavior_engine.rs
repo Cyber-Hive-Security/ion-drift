@@ -210,10 +210,9 @@ pub async fn collect_observations(
     let now = behavior::BehaviorStore::now_unix_pub();
 
     // Group connections by source MAC
-    let mut observations: HashMap<
-        String,
-        HashMap<(String, Option<i64>, String, String), (i64, i64, i64)>,
-    > = HashMap::new();
+    /// Per-flow key: (protocol, dst port, dst subnet, direction)
+    type FlowKey = (String, Option<i64>, String, String);
+    let mut observations: HashMap<String, HashMap<FlowKey, (i64, i64, i64)>> = HashMap::new();
 
     // Track which conntrack IDs are still active this cycle
     let mut active_ids: Vec<String> = Vec::with_capacity(connections.len());
