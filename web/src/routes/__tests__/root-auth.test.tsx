@@ -30,7 +30,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   return {
     ...actual,
     Outlet: () => <div data-testid="outlet" />,
-    Link: (props: React.PropsWithChildren) => <a>{props.children}</a>,
+    Link: (props: React.PropsWithChildren) => <a href="/">{props.children}</a>,
   };
 });
 

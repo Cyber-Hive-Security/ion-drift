@@ -97,6 +97,7 @@ function ConsentDialog() {
       onMouseDown={refocusFromBackdrop}
       onClick={refocusFromBackdrop}
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70">
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- dialog handles Escape and focus trapping */}
       <div
         ref={dialogRef}
         tabIndex={-1}
