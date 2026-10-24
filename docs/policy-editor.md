@@ -18,7 +18,7 @@ Policies define what network behavior is authorized. The deviation detector comp
 | **Service** | The service type being monitored | `dns`, `ntp`, `custom` |
 | **Protocol** | Transport protocol | `udp`, `tcp`, or Any |
 | **Port** | Destination port number (1-65535) | `53` (DNS), `123` (NTP) |
-| **Authorized Targets** | IP addresses or CIDRs that devices are allowed to contact | `10.20.25.5`, `192.168.1.0/24` |
+| **Authorized Targets** | IP addresses or CIDRs that devices are allowed to contact | `198.51.100.5`, `192.168.1.0/24` |
 | **VLAN Scope** | Which VLANs this policy applies to | Specific VLANs or "All VLANs" (global) |
 | **Priority** | Severity level when violated | `critical`, `high`, `medium`, `low` |
 

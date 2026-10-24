@@ -6,7 +6,7 @@
 
 **Architecture:** Phase 4 adds **no new finding machinery**. It computes a sustained-attack judgement from the Phase 3 accumulator and records it as an ordinary attack observation (`record_observation`) under a new signal id. The existing `evaluate()` then correlates, opens, re-opens and closes findings exactly as it does for the other three signals — which advisories the signal confirms, and at what confidence, stays a catalog edit ("core never names a CVE in a Rust literal"). The detection rule's shape excludes the classic false positive (a stale integration credential retrying for a week) by requiring source diversity, and excludes single bursts (already covered per-cycle) by requiring cycle spread.
 
-**Tech Stack:** Rust workspace at `/home/yodaadmin/ion-drift`, branch `development`. Everything builds on Phase 3 (shipped through `4bd2d05`): `AdvisoryStore::auth_failures_since`, `ServiceFailureTotal`, the evaluator loop in `tasks/advisory.rs`.
+**Tech Stack:** Rust workspace at `<repo>`, branch `development`. Everything builds on Phase 3 (shipped through `4bd2d05`): `AdvisoryStore::auth_failures_since`, `ServiceFailureTotal`, the evaluator loop in `tasks/advisory.rs`.
 
 ## Global Constraints
 
@@ -15,7 +15,7 @@
 - No schema change: Phase 4 is read-only against `advisory_auth_failure` and write-only through the existing `record_observation` path. Do NOT bump `SCHEMA_VERSION`.
 - Core emits behaviour, catalog assigns meaning: the new signal id goes in `signals.rs` + the seed catalog; confidence lives ONLY in catalog JSON.
 - `cargo test --workspace` green and `cargo-deny ≥0.20 check` ok before claiming done (no new deps expected).
-- Host caveat (Viscid): openssl scratchpad-prefix workaround per memory `ion-drift-build-env-viscid.md`; use prebuilt cargo-deny ≥0.20 (0.18.x chokes on CVSS 4.0 in the RustSec DB).
+- Use prebuilt cargo-deny ≥0.20 (0.18.x chokes on CVSS 4.0 in the RustSec DB).
 - ion-drift-web has parallel module trees in `lib.rs` AND `main.rs` — new modules under `advisory/` need no root registration (the `advisory` module is already in both), but keep this in mind for any new top-level file.
 
 ## The Detection Rule (the heart — agreed defaults, all tunable constants)

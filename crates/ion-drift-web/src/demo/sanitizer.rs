@@ -94,7 +94,7 @@ impl DemoSanitizer {
 
                 // Context-aware sanitization based on field name
                 if is_ip_field(key_lower) {
-                    // Could be "10.20.25.1/24" (CIDR) or plain IP
+                    // Could be "192.168.1.1/24" (CIDR) or plain IP
                     *s = self.sanitize_ip_or_cidr(s);
                 } else if is_mac_field(key_lower) {
                     *s = self.sanitize_mac(s);
@@ -446,17 +446,17 @@ mod tests {
     #[test]
     fn sanitize_ip_deterministic() {
         let s = DemoSanitizer::new();
-        let a = s.sanitize_ip("10.20.25.1");
-        let b = s.sanitize_ip("10.20.25.1");
+        let a = s.sanitize_ip("192.168.1.1");
+        let b = s.sanitize_ip("192.168.1.1");
         assert_eq!(a, b, "same input must produce same output");
-        assert_ne!(a, "10.20.25.1", "must not return the original IP");
+        assert_ne!(a, "192.168.1.1", "must not return the original IP");
     }
 
     #[test]
     fn sanitize_ip_maps_to_10_249_with_remapped_vlan() {
         let s = DemoSanitizer::new();
         // All private IPs → 10.249.<remapped_vlan>.host
-        let result = s.sanitize_ip("10.20.25.7");
+        let result = s.sanitize_ip("192.168.1.7");
         let octets: Vec<&str> = result.split('.').collect();
         assert_eq!(octets[0], "10");
         assert_eq!(octets[1], "249");
@@ -472,20 +472,20 @@ mod tests {
         assert_eq!(vlan99_remapped, 12, "second VLAN seen should remap to 12");
 
         // Same VLAN (25) gets same remapped ID
-        let result3 = s.sanitize_ip("10.20.25.100");
+        let result3 = s.sanitize_ip("192.168.1.100");
         let octets3: Vec<&str> = result3.split('.').collect();
         assert_eq!(octets3[2], "10", "same VLAN must get same remapped ID");
 
         // Different hosts in same VLAN get different 4th octets
-        let a = s.sanitize_ip("10.20.25.1");
-        let b = s.sanitize_ip("10.20.25.2");
+        let a = s.sanitize_ip("192.168.1.1");
+        let b = s.sanitize_ip("192.168.1.2");
         assert_ne!(a, b, "different hosts must map to different IPs");
     }
 
     #[test]
     fn sanitize_cidr() {
         let s = DemoSanitizer::new();
-        let result = s.sanitize_ip_or_cidr("10.20.25.0/24");
+        let result = s.sanitize_ip_or_cidr("192.168.1.0/24");
         assert!(result.ends_with("/24"));
         let octets: Vec<&str> = result.split('/').next().unwrap().split('.').collect();
         assert_eq!(&octets[..2], &["10", "249"]);
@@ -532,17 +532,17 @@ mod tests {
     #[test]
     fn sanitize_hostname() {
         let s = DemoSanitizer::new();
-        let result = s.sanitize_hostname("spike.kaziik.xyz");
+        let result = s.sanitize_hostname("spike.example.com");
         assert!(!result.contains("kaziik"));
         assert!(!result.contains("spike"));
     }
 
     #[test]
     fn looks_like_ip_detection() {
-        assert!(looks_like_ip_or_cidr("10.20.25.1"));
+        assert!(looks_like_ip_or_cidr("192.168.1.1"));
         assert!(looks_like_ip_or_cidr("192.168.1.1/24"));
         assert!(!looks_like_ip_or_cidr("hello"));
-        assert!(!looks_like_ip_or_cidr("10.20.25.256"));
+        assert!(!looks_like_ip_or_cidr("192.168.1.256"));
     }
 
     #[test]
@@ -558,7 +558,7 @@ mod tests {
     fn sanitize_json_value() {
         let s = DemoSanitizer::new();
         let mut val = serde_json::json!({
-            "address": "10.20.25.5",
+            "address": "192.168.1.5",
             "mac-address": "AA:BB:CC:DD:EE:FF",
             "host-name": "my-server",
             "interface": "ether1",
@@ -570,7 +570,7 @@ mod tests {
         s.sanitize_value(&mut val);
 
         let obj = val.as_object().unwrap();
-        assert_ne!(obj["address"].as_str().unwrap(), "10.20.25.5");
+        assert_ne!(obj["address"].as_str().unwrap(), "192.168.1.5");
         assert_ne!(obj["mac-address"].as_str().unwrap(), "AA:BB:CC:DD:EE:FF");
         assert_ne!(obj["host-name"].as_str().unwrap(), "my-server");
         assert_eq!(obj["interface"].as_str().unwrap(), "ether1", "interfaces should be kept");

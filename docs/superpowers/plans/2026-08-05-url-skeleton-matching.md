@@ -6,7 +6,7 @@
 
 **Architecture:** Un-parks the 2026-08-04 design (workspace note `projects/ion-drift/confusable-domain-detection-2026-08-04.md`) with the input-source decision now made: **poll `/ip/dns/cache` in core** (decided 2026-08-05). Built in core as a second catalog-driven detector — NOT a Module-API module — reusing the advisory engine's discipline: two-tier catalog (bundled seed + operator overlay), untrusted-input handling (warn-and-skip, upsert-never-delete, no panic on input), supervised poller with windowed retention + prune. The DNS observation table is independently valuable: it is the name→IP join key that can later give Sankey/Investigation/World Map real hostnames.
 
-**Tech Stack:** Rust workspace at `/home/yodaadmin/ion-drift`, branch `development`. New deps in `ion-drift-web`: `unicode-security = "0.1"` (UTS #39 skeleton), `idna = "1"` (punycode → Unicode; currently only transitive). rusqlite store (new `dns.db`), RouterQueue, TaskSupervisor, FindingsStore.
+**Tech Stack:** Rust workspace at `<repo>`, branch `development`. New deps in `ion-drift-web`: `unicode-security = "0.1"` (UTS #39 skeleton), `idna = "1"` (punycode → Unicode; currently only transitive). rusqlite store (new `dns.db`), RouterQueue, TaskSupervisor, FindingsStore.
 
 ## Global Constraints
 
@@ -17,7 +17,6 @@
 - The skeleton detector is script-agnostic — it must NOT special-case "non-Latin characters" (browsers solved the mixed-script address-bar case in ~2017; the value is skeleton collision, which also catches pure-ASCII lookalikes).
 - New config keys must be added to `config/server.example.toml` in the same commit (a config-docs test enforces example/`config.rs` agreement — verify with the full test suite).
 - `cargo test --workspace` green and `cargo deny check` ok before claiming done (new deps must clear the tracked cargo-deny policy).
-- Host caveat (Viscid dev box): `openssl-sys` workaround per memory `ion-drift-build-env-viscid.md`.
 
 ## Known Limitations (accepted for v1, restate in module docs)
 
