@@ -338,9 +338,9 @@ pub struct DeviceProfile {
     pub learning_until: i64,
     pub baseline_status: String,
     pub notes: Option<String>,
-    /// Distinct days with observations in the last 7, refreshed on each promotion pass while the device is learning or sparse; frozen at graduation.
+    /// Distinct UTC days with observations, today and the six before it, refreshed on each promotion pass while the device is learning or sparse; frozen at graduation.
     pub days_seen: i64,
-    /// When the most recently discovered flow tuple was first seen; `None` without observations.
+    /// When the newest flow tuple seen in the coverage window was first seen; `None` without observations.
     pub last_new_flow: Option<i64>,
 }
 
@@ -1477,86 +1477,105 @@ impl BehaviorStore {
     /// Each pass records `days_seen` and `last_new_flow` on the profile so the UI can
     /// say why a device is still learning. Newly baselined devices get their
     /// baselines recomputed at once so detection never runs against an empty set.
+    ///
+    /// The store lock is taken per device, not for the whole pass, so a large learning
+    /// set cannot stall the collector or the API.
     pub async fn promote_eligible_devices(&self) -> Result<(usize, usize), String> {
         let now = now_unix();
-        let window_start = now - Self::LEARNING_WINDOW_SECS;
+        let window_start = (now / 86400 - 6) * 86400; // today and the six previous UTC days
         let mut promoted_baselined = 0usize;
         let mut promoted_sparse = 0usize;
         let mut newly_baselined: Vec<String> = Vec::new();
 
-        {
+        let candidates: Vec<String> = {
             let db = self.db.lock().await;
             let mut stmt = db
                 .prepare(
-                    "SELECT mac, baseline_status, first_seen, learning_until FROM device_profiles
+                    "SELECT mac FROM device_profiles
                      WHERE baseline_status IN ('learning', 'sparse')",
                 )
                 .map_err(|e| format!("prepare failed: {e}"))?;
-            let candidates: Vec<(String, String, i64, i64)> = stmt
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            stmt.query_map([], |row| row.get(0))
                 .map_err(|e| format!("query failed: {e}"))?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("collect failed: {e}"))?;
+                .map_err(|e| format!("collect failed: {e}"))?
+        };
 
-            for (mac, status, first_seen, learning_until) in &candidates {
-                let days_seen: i64 = db
-                    .query_row(
-                        "SELECT COUNT(DISTINCT timestamp / 86400) FROM device_observations
-                         WHERE mac = ?1 AND timestamp >= ?2",
-                        params![mac, window_start],
-                        |row| row.get(0),
-                    )
-                    .map_err(|e| format!("days_seen failed: {e}"))?;
-                let last_new_flow: Option<i64> = db
-                    .query_row(
-                        "SELECT MAX(first_ts) FROM (
-                             SELECT MIN(timestamp) AS first_ts FROM device_observations
-                             WHERE mac = ?1 AND timestamp >= ?2
-                             GROUP BY protocol, dst_port, dst_subnet, direction)",
-                        params![mac, window_start],
-                        |row| row.get(0),
-                    )
-                    .map_err(|e| format!("last_new_flow failed: {e}"))?;
-                db.execute(
-                    "UPDATE device_profiles SET days_seen = ?2, last_new_flow = ?3 WHERE mac = ?1",
-                    params![mac, days_seen, last_new_flow],
+        for mac in &candidates {
+            let db = self.db.lock().await;
+            // Re-read under the lock: another pass may have handled this device.
+            let Some((status, first_seen, learning_until)) = db
+                .query_row(
+                    "SELECT baseline_status, first_seen, learning_until FROM device_profiles
+                     WHERE mac = ?1",
+                    params![mac],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
                 )
-                .map_err(|e| format!("coverage update failed: {e}"))?;
-
-                let stable = last_new_flow.is_some_and(|t| t <= now - Self::STABLE_SECS);
-                let expired = *learning_until <= now;
-                let extended =
-                    *learning_until >= first_seen + Self::LEARNING_WINDOW_SECS + Self::EXTENSION_SECS;
-
-                let new_status = if (stable && days_seen >= Self::FAST_TRACK_DAYS)
-                    || (expired && days_seen >= Self::COVERAGE_DAYS)
-                {
-                    "baselined"
-                } else if status == "sparse" || !expired {
-                    continue;
-                } else if days_seen >= Self::SPARSE_DAYS && !extended {
-                    db.execute(
-                        "UPDATE device_profiles SET learning_until = ?2 WHERE mac = ?1",
-                        params![mac, now + Self::EXTENSION_SECS],
-                    )
-                    .map_err(|e| format!("extend learning failed: {e}"))?;
-                    tracing::debug!(mac = %mac, days_seen, "learning extended once: partial coverage");
-                    continue;
-                } else {
-                    "sparse"
-                };
-
-                db.execute(
-                    "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
-                    params![mac, new_status],
+                .optional()
+                .map_err(|e| format!("candidate reread failed: {e}"))?
+            else {
+                continue;
+            };
+            if status != "learning" && status != "sparse" {
+                continue;
+            }
+            let days_seen: i64 = db
+                .query_row(
+                    "SELECT COUNT(DISTINCT timestamp / 86400) FROM device_observations
+                     WHERE mac = ?1 AND timestamp >= ?2",
+                    params![mac, window_start],
+                    |row| row.get(0),
                 )
-                .map_err(|e| format!("promote failed: {e}"))?;
-                if new_status == "baselined" {
-                    promoted_baselined += 1;
-                    newly_baselined.push(mac.clone());
-                } else {
-                    promoted_sparse += 1;
-                }
+                .map_err(|e| format!("days_seen failed: {e}"))?;
+            let last_new_flow: Option<i64> = db
+                .query_row(
+                    "SELECT MAX(first_ts) FROM (
+                         SELECT MIN(timestamp) AS first_ts FROM device_observations
+                         WHERE mac = ?1 AND timestamp >= ?2
+                         GROUP BY protocol, dst_port, dst_subnet, direction)",
+                    params![mac, window_start],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("last_new_flow failed: {e}"))?;
+            db.execute(
+                "UPDATE device_profiles SET days_seen = ?2, last_new_flow = ?3 WHERE mac = ?1",
+                params![mac, days_seen, last_new_flow],
+            )
+            .map_err(|e| format!("coverage update failed: {e}"))?;
+
+            let stable = last_new_flow.is_some_and(|t| t <= now - Self::STABLE_SECS);
+            let expired = learning_until <= now;
+            let extended =
+                learning_until >= first_seen + Self::LEARNING_WINDOW_SECS + Self::EXTENSION_SECS;
+
+            let new_status = if (stable && days_seen >= Self::FAST_TRACK_DAYS)
+                || (expired && days_seen >= Self::COVERAGE_DAYS)
+            {
+                "baselined"
+            } else if status == "sparse" || !expired {
+                continue;
+            } else if days_seen >= Self::SPARSE_DAYS && !extended {
+                db.execute(
+                    "UPDATE device_profiles SET learning_until = ?2 WHERE mac = ?1",
+                    params![mac, now + Self::EXTENSION_SECS],
+                )
+                .map_err(|e| format!("extend learning failed: {e}"))?;
+                tracing::debug!(mac = %mac, days_seen, "learning extended once: partial coverage");
+                continue;
+            } else {
+                "sparse"
+            };
+
+            db.execute(
+                "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
+                params![mac, new_status],
+            )
+            .map_err(|e| format!("promote failed: {e}"))?;
+            if new_status == "baselined" {
+                promoted_baselined += 1;
+                newly_baselined.push(mac.clone());
+            } else {
+                promoted_sparse += 1;
             }
         }
 

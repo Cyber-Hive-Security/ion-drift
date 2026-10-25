@@ -176,3 +176,22 @@ async fn coverage_is_recorded_on_the_profile() {
     assert!(p.days_seen >= 3, "49 hourly samples span at least three UTC days, got {}", p.days_seen);
     assert_eq!(p.last_new_flow, Some(t0 - 49 * HOUR));
 }
+
+#[tokio::test]
+async fn sparse_device_stays_sparse_without_coverage() {
+    let path = db_path();
+    let t = today_start();
+    let store = store_with(&path, &[flow(t + 1, 554)]).await;
+    exec(&path, "UPDATE device_profiles SET baseline_status = 'sparse' WHERE mac = ?1", [MAC]);
+    advance_days(&path, 8);
+
+    let first = store.promote_eligible_devices().await.expect("promote");
+    let after_first = profile(&store).await;
+    let second = store.promote_eligible_devices().await.expect("promote again");
+    let after_second = profile(&store).await;
+
+    assert_eq!((first, second), ((0, 0), (0, 0)), "a sparse device is not counted as promoted");
+    assert_eq!(after_first.baseline_status, "sparse");
+    assert_eq!(after_second.baseline_status, "sparse");
+    assert_eq!(after_first.learning_until, after_second.learning_until, "no extension for sparse");
+}

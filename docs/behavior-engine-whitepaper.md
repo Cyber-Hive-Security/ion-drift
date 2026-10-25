@@ -20,7 +20,7 @@ Devices begin in a **7-day learning period**. During learning, the engine collec
 - **Baselined** — the device has coverage and stability: seen on at least 3 of the last 7 days with no new flow tuple in the last 48 hours (graduates early), or seen on at least 5 of the last 7 days when the 7-day window ends, stable or not. Full anomaly detection at highest confidence.
 - **Sparse** — seen on fewer than 2 of the last 7 days when the window ends, or still under-covered after one 3-day extension. Anomaly detection runs with reduced confidence scores. Sparse devices are re-evaluated on every promotion pass and graduate by the same rules once they become active.
 
-Devices that reach the end of the window with partial coverage (2 to 4 days seen, or not yet stable) get one 3-day extension and then become sparse. Coverage and stability are recorded on the profile (`days_seen`, `last_new_flow`) so the UI can show why a device is still learning. Neither measure depends on the poll interval or on how many flows a device has, so a camera with one flow and a workstation with fifty are judged the same way.
+Devices that reach the end of the window with partial coverage (2 days seen, or 3 to 4 days seen but not yet stable) get one 3-day extension and then become sparse. Coverage and stability are recorded on the profile (`days_seen`, `last_new_flow`) so the UI can show why a device is still learning. Neither measure depends on the poll interval or on how many flows a device has, so a camera with one flow and a workstation with fifty are judged the same way.
 
 Promotions are checked every 10 minutes and during nightly maintenance at 3 AM.
 
