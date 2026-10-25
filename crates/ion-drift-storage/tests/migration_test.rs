@@ -117,3 +117,51 @@ fn behavior_store_upgrade_adds_confidence_column() {
         .collect();
     assert!(cols.iter().any(|c| c == "confidence"));
 }
+
+#[tokio::test]
+async fn behavior_store_v2_adds_profile_coverage_columns() {
+    let path = db_path("behavior_v1_profiles.db");
+    let conn = rusqlite::Connection::open(&path).expect("open v1 db");
+    conn.execute_batch(
+        "CREATE TABLE device_profiles (
+            mac TEXT PRIMARY KEY,
+            hostname TEXT,
+            manufacturer TEXT,
+            current_ip TEXT,
+            current_vlan INTEGER,
+            first_seen INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL,
+            learning_until INTEGER NOT NULL,
+            baseline_status TEXT NOT NULL DEFAULT 'learning',
+            notes TEXT
+        );
+        INSERT INTO device_profiles (mac, first_seen, last_seen, learning_until)
+        VALUES ('00:00:5E:00:53:02', 1000, 2000, 3000);
+        PRAGMA user_version = 1;",
+    )
+    .expect("seed v1 schema");
+    drop(conn);
+
+    let store = BehaviorStore::new(&path).expect("v1 to v2 migration");
+    let profile = store
+        .get_profile("00:00:5E:00:53:02")
+        .await
+        .expect("get profile")
+        .expect("row survives migration");
+    assert_eq!(profile.days_seen, 0);
+    assert_eq!(profile.last_new_flow, None);
+    drop(store);
+
+    let conn = rusqlite::Connection::open(&path).expect("reopen");
+    let version: u32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("user_version");
+    assert_eq!(version, 2);
+    drop(conn);
+
+    // The step must not re-run: reopening would fail on a duplicate column.
+    let _again = BehaviorStore::new(&path).expect("reopen after migration");
+    let fresh = db_path("behavior_fresh_v2.db");
+    let _f1 = BehaviorStore::new(&fresh).expect("fresh store");
+    let _f2 = BehaviorStore::new(&fresh).expect("fresh store reopen");
+}

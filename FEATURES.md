@@ -56,7 +56,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 ## Security Analytics
 
-- Behavioral anomaly detection with per-device learned baselines (delta-based byte tracking) and dual-threshold baseline promotion (fast-track at 5000+ observations, normal at 7 days + 200 observations, sparse mode at <50, extended learning for borderline cases)
+- Behavioral anomaly detection with per-device learned baselines (delta-based byte tracking) and baseline promotion by coverage and stability (fast-track after about two to three stable days, graduate at 7 days with 5 days seen, sparse for quiet devices with re-evaluation every pass)
 - Five anomaly types: new destination, new port, new protocol, volume spike, blocked attempt
 - Three-stage volume spike validation (absolute floor, baseline comparison, multi-window persistence)
 - Tiered anomaly architecture: Tier 1 (alerts), Tier 2 (digests), Tier 3 (telemetry)
