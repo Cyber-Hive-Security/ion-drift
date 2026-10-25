@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingV1};
+use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingSubject, FindingV1};
 use ion_drift_storage::{AdvisoryRecord, FindingStatus, FindingsQuery, FindingsStore};
 use mikrotik_core::resources::ip::IpService;
 use tracing::warn;
@@ -123,6 +123,7 @@ fn build_finding(finding_id: &str, device_id: &str, svc: &IpService, adv: &Advis
                 "observed_at_unix": now,
             }),
         }],
+        subjects: vec![FindingSubject::device(device_id)],
         device_macs: Vec::new(),
         timestamp_unix: now,
         metadata: Some(serde_json::json!({
@@ -286,6 +287,7 @@ mod tests {
         let a = assess("dev1", &[svc("api-ssl", false, Some(""))], &[advisory()], 1);
         assert_eq!(a.exposed.len(), 1);
         let f = &a.exposed[0];
+        assert_eq!(f.subjects, vec![FindingSubject::device("dev1")]);
         assert_eq!(f.finding_id, ID);
         assert_eq!(f.category, EXPOSURE_CATEGORY);
         assert_eq!(f.severity, FindingSeverity::High);

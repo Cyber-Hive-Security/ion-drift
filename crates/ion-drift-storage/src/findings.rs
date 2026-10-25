@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingV1};
+use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingSubject, FindingV1};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -82,6 +82,7 @@ pub struct Finding {
     pub recommended_actions: Vec<String>,
     pub evidence: Vec<FindingEvidence>,
     pub device_macs: Vec<String>,
+    pub subjects: Vec<FindingSubject>,
     pub metadata: Option<serde_json::Value>,
     pub timestamp: i64,
     pub received_at: i64,
@@ -154,12 +155,26 @@ pub struct FindingsStore {
 impl FindingsStore {
     /// Schema version stamped into `PRAGMA user_version`. Bump when adding a
     /// versioned migration (see `crate::migrations`). v1 = the 0.5.x baseline.
-    pub const SCHEMA_VERSION: u32 = 1;
+    pub const SCHEMA_VERSION: u32 = 2;
+
+    /// Versioned migrations applied after the v1 baseline, in ascending order.
+    ///
+    /// v2 — `subjects` (0.5.6). Existing rows get their `device_macs` folded in
+    /// as endpoint subjects so nothing already on the page loses its devices.
+    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[(
+        2,
+        "ALTER TABLE findings ADD COLUMN subjects TEXT NOT NULL DEFAULT '[]';
+         UPDATE findings SET subjects = (
+             SELECT json_group_array(json_object('kind', 'endpoint', 'id', value))
+             FROM json_each(findings.device_macs))
+         WHERE device_macs != '[]' AND json_valid(device_macs);",
+    )];
 
     pub fn new(db_path: &Path) -> Result<Self, String> {
-        let conn =
+        let mut conn =
             Connection::open(db_path).map_err(|e| format!("failed to open findings db: {e}"))?;
-        crate::migrations::open_guard(&conn, "findings.db", Self::SCHEMA_VERSION)?;
+        let db_version =
+            crate::migrations::open_guard(&conn, "findings.db", Self::SCHEMA_VERSION)?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .map_err(|e| format!("pragma failed: {e}"))?;
@@ -199,6 +214,12 @@ impl FindingsStore {
         )
         .map_err(|e| format!("schema creation failed: {e}"))?;
 
+        crate::migrations::apply_versioned(
+            &mut conn,
+            "findings.db",
+            db_version,
+            Self::MIGRATION_STEPS,
+        )?;
         crate::migrations::stamp(&conn, "findings.db", Self::SCHEMA_VERSION)?;
 
         Ok(Self {
@@ -223,8 +244,16 @@ impl FindingsStore {
             .map_err(|e| format!("serialize recommended_actions: {e}"))?;
         let evidence = serde_json::to_string(&finding.evidence)
             .map_err(|e| format!("serialize evidence: {e}"))?;
-        let device_macs = serde_json::to_string(&finding.device_macs)
+        let subjects = finding.all_subjects();
+        let device_macs: Vec<&str> = subjects
+            .iter()
+            .filter(|s| s.kind == FindingSubject::ENDPOINT)
+            .map(|s| s.id.as_str())
+            .collect();
+        let device_macs = serde_json::to_string(&device_macs)
             .map_err(|e| format!("serialize device_macs: {e}"))?;
+        let subjects = serde_json::to_string(&subjects)
+            .map_err(|e| format!("serialize subjects: {e}"))?;
         let metadata = match &finding.metadata {
             Some(v) => Some(
                 serde_json::to_string(v).map_err(|e| format!("serialize metadata: {e}"))?,
@@ -238,8 +267,8 @@ impl FindingsStore {
             "INSERT INTO findings
                 (module_name, finding_id, title, narrative, severity, category,
                  recommended_actions, evidence, device_macs, metadata,
-                 timestamp, received_at, envelope_event_id, envelope_nonce, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'open')
+                 timestamp, received_at, envelope_event_id, envelope_nonce, subjects, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'open')
              ON CONFLICT(module_name, finding_id) DO UPDATE SET
                 title = excluded.title,
                 narrative = excluded.narrative,
@@ -251,7 +280,8 @@ impl FindingsStore {
                 metadata = excluded.metadata,
                 timestamp = excluded.timestamp,
                 envelope_event_id = excluded.envelope_event_id,
-                envelope_nonce = excluded.envelope_nonce",
+                envelope_nonce = excluded.envelope_nonce,
+                subjects = excluded.subjects",
             params![
                 module_name,
                 finding.finding_id,
@@ -267,6 +297,7 @@ impl FindingsStore {
                 now,
                 envelope_event_id,
                 envelope_nonce,
+                subjects,
             ],
         )
         .map_err(|e| format!("upsert_finding failed: {e}"))?;
@@ -288,7 +319,7 @@ impl FindingsStore {
                     recommended_actions, evidence, device_macs, metadata,
                     timestamp, received_at, envelope_event_id, envelope_nonce,
                     status, acknowledged_at, acknowledged_by,
-                    resolved_at, resolved_by, resolution_note
+                    resolved_at, resolved_by, resolution_note, subjects
              FROM findings WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -342,7 +373,7 @@ impl FindingsStore {
                     recommended_actions, evidence, device_macs, metadata,
                     timestamp, received_at, envelope_event_id, envelope_nonce,
                     status, acknowledged_at, acknowledged_by,
-                    resolved_at, resolved_by, resolution_note
+                    resolved_at, resolved_by, resolution_note, subjects
              FROM findings WHERE id = ?1",
             params![id],
             Self::map_row,
@@ -612,6 +643,7 @@ impl FindingsStore {
         let recommended_actions_json: String = row.get(7)?;
         let evidence_json: String = row.get(8)?;
         let device_macs_json: String = row.get(9)?;
+        let subjects_json: String = row.get(21)?;
         let metadata_json: Option<String> = row.get(10)?;
         let severity_str: String = row.get(5)?;
         let status_str: String = row.get(15)?;
@@ -620,6 +652,7 @@ impl FindingsStore {
             .unwrap_or_default();
         let evidence = serde_json::from_str(&evidence_json).unwrap_or_default();
         let device_macs = serde_json::from_str(&device_macs_json).unwrap_or_default();
+        let subjects = serde_json::from_str(&subjects_json).unwrap_or_default();
         let metadata = metadata_json
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok());
@@ -635,6 +668,7 @@ impl FindingsStore {
             recommended_actions,
             evidence,
             device_macs,
+            subjects,
             metadata,
             timestamp: row.get(11)?,
             received_at: row.get(12)?,
@@ -665,6 +699,7 @@ mod tests {
             category: "test".into(),
             recommended_actions: vec!["do thing".into()],
             evidence: vec![FindingEvidence::Anomaly { anomaly_id: 7 }],
+            subjects: vec![],
             device_macs: vec!["aa:bb:cc:dd:ee:ff".into()],
             timestamp_unix: 1_700_000_000,
             metadata: Some(serde_json::json!({"k": "v"})),
@@ -1103,6 +1138,7 @@ mod tests {
             category: "advisory_exposure".into(),
             recommended_actions: vec![],
             evidence: vec![],
+            subjects: vec![],
             device_macs: vec![],
             timestamp_unix: 1,
             metadata: None,

@@ -11,6 +11,8 @@ export type FindingEvidence =
   | { type: "connection"; connection_id: number }
   | { type: "custom"; label: string; payload: unknown };
 
+export type FindingSubject = { kind: string; id: string };
+
 export interface Finding {
   id: number;
   module_name: string;
@@ -22,6 +24,8 @@ export interface Finding {
   recommended_actions: string[];
   evidence: FindingEvidence[];
   device_macs: string[];
+  /** What the finding is about. `device_macs` is the deprecated endpoint-only view of the same list. */
+  subjects: FindingSubject[];
   metadata: unknown | null;
   timestamp: number;
   received_at: number;

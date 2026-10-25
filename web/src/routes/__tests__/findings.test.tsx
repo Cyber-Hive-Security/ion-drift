@@ -25,6 +25,7 @@ function sampleFinding(overrides: Partial<Finding> = {}): Finding {
     // Empty on purpose: DeviceLink needs router context the smoke floor
     // doesn't mount.
     device_macs: [],
+    subjects: [],
     metadata: null,
     timestamp: 1_750_000_000,
     received_at: 1_750_000_000,
