@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.5.6] - 2026-10-24
 
-Maintenance release: no feature changes. User-visible changes are limited to the three items under Fixed below.
+Maintenance release: no feature changes. User-visible changes are limited to the four items under Fixed below.
 
 ### Changed
 
@@ -29,6 +29,7 @@ Maintenance release: no feature changes. User-visible changes are limited to the
 
 ### Fixed
 
+- **Advisory findings showed no device.** CVE, exposure, and exploitation findings are about a specific router or switch, but the finding model could only name endpoints by MAC, so the Devices column stayed empty and findings for three switches looked like duplicates. Findings now carry a typed `subjects` list (`device` by registry id, `endpoint` by MAC, `domain` by name); the Findings page shows each subject by name, linking switches to their detail page. Lookalike-domain findings name the domain. `device_macs` remains in the module API and the HTTP API as a deprecated endpoint-only view. This bumps findings.db to schema version 2 with existing rows backfilled; rolling back to 0.5.5 afterwards requires the pre-upgrade backup.
 - **Devices with few distinct flows never finished learning.** Cameras, thermostats, and single-purpose servers could stay in `learning` indefinitely: promotion required ten distinct flow tuples, and the 3-day extension repeated without limit. Graduation now measures coverage (days seen in the last 7) and stability (no new flow tuple for 48 hours), sparse devices are re-evaluated every pass, and the profile records both values (`days_seen`, `last_new_flow`, added to `device_profiles` automatically on first start). The Learning Until cell on the Behavior page shows them on hover. On first start after upgrading, devices the old rule had stuck in learning or sparse are re-evaluated and may graduate in bulk within ten minutes. This bumps behavior.db to schema version 2; rolling back to 0.5.5 afterwards requires the pre-upgrade backup.
 - The secret editor on the Security settings page now shows a save error instead of silently dropping the rejection.
 - Uptime strings are parsed from the start of the string (`formatUptime`); RouterOS always supplies a bare uptime, so output is unchanged for real data.
