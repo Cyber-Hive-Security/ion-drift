@@ -266,7 +266,7 @@ pub struct FindingV1 {
     /// What the finding is about (0..N).
     #[serde(default)]
     pub subjects: Vec<FindingSubject>,
-    /// Deprecated: use `subjects` with [`FindingSubject::Endpoint`]. Still
+    /// Deprecated: use `subjects` with [`FindingSubject::endpoint`]. Still
     /// accepted; the host folds these into `subjects` when it stores the finding.
     #[serde(default)]
     pub device_macs: Vec<String>,
