@@ -325,7 +325,7 @@ async fn try_publish(
     // Findings persist at the ACL boundary so the host-stamped module
     // name lives on the row. Other event kinds are advisory-only and not
     // persisted here.
-    if let DriftEvent::Finding(ref finding) = event {
+    let event = if let DriftEvent::Finding(finding) = event {
         // Clamp module-supplied finding content before persisting. severity is
         // already an enum (serde-validated); the free-form string/array fields
         // are not, so a compromised or buggy module could store megabyte
@@ -333,7 +333,7 @@ async fn try_publish(
         // (DRIFT-2026-0005). Bound sizes and strip control/bidi characters
         // (L4, defense-in-depth); the CSP-guarded React UI also renders the
         // content inertly as text, so markup characters are left intact.
-        let finding = clamp_finding(finding);
+        let finding = clamp_finding(&finding);
         if let Err(e) = state
             .findings_store
             .upsert_finding(
@@ -350,7 +350,11 @@ async fn try_publish(
                 "findings persist failed",
             ));
         }
-    }
+        // The bus carries the same clamped finding the store holds.
+        DriftEvent::Finding(finding)
+    } else {
+        event
+    };
 
     state.event_bus.publish(event);
 
@@ -629,7 +633,7 @@ mod tests {
         assert_eq!(c.metadata, Some(serde_json::json!({ "_truncated": true })));
     }
 
-    fn hostile_finding() -> FindingV1 {
+    pub(super) fn hostile_finding() -> FindingV1 {
         use ion_drift_module_api::{FindingEvidence, FindingSeverity};
         FindingV1 {
             finding_id: "id-<1>\u{0}".into(),
@@ -1036,6 +1040,41 @@ mod integration_tests {
         assert_eq!(rows[0].finding_id, "f-1");
         assert_eq!(rows[0].envelope_event_id.as_deref(), Some("evt-f-1"));
         assert_eq!(rows[0].envelope_nonce.as_deref(), Some("nonce-f-1"));
+    }
+
+    /// The bus must carry the same clamped finding the store holds. Publishing
+    /// the raw event let any bus consumer persist or display unsanitized
+    /// references (KNOWN_ISSUES, 0.5.6 finding-subjects review).
+    #[tokio::test]
+    async fn bus_receives_the_clamped_finding() {
+        let fx = fixture("test", vec![EventKind::Finding]).await;
+        let ts = now_unix();
+        let mut hostile = super::tests::hostile_finding();
+        hostile.timestamp_unix = ts;
+        let sent = hostile.clone();
+        let envelope = EventEnvelope {
+            api_version: ApiVersion::CURRENT,
+            event_id: "evt-h".into(),
+            timestamp_unix: ts,
+            nonce: "nonce-h".into(),
+            kind: EventKind::Finding,
+            event: DriftEventWire::Finding(hostile),
+        };
+        let handle = fx.state.event_bus.handle_for("probe", Vec::new(), vec![EventKind::Finding]);
+        let mut rx = handle.subscribe();
+        let app = make_router(fx.state.clone());
+
+        let resp = app.oneshot(signed_request("test", &fx.secret, &envelope)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let DriftEvent::Finding(on_bus) = rx.recv().await.unwrap() else { panic!("not a finding") };
+        let stored = &fx.state.findings_store.list_findings(&q_all()).await.unwrap()[0];
+        assert_eq!(on_bus.references, stored.references);
+        // The store unions `device_macs` into `subjects`, so compare the bus
+        // payload with the clamped submission, not the stored row.
+        assert_eq!(on_bus.subjects, super::clamp_finding(&sent).subjects);
+        assert_eq!(on_bus.title, stored.title);
+        assert_ne!(on_bus.references, sent.references, "the raw submission was not what went on the bus");
     }
 
     #[tokio::test]

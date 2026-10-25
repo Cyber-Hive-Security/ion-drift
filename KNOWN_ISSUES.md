@@ -142,12 +142,13 @@ MNDP on the management VLAN created false direct paths between non-adjacent devi
 
 Inference binding results were not pre-populating the identity builder, so stale bindings persisted even after new inference data was available. Inference results now pre-populate the identity builder.
 
+### [LOW] Module events were published in-process before they were clamped
+**Source:** 0.5.6 finding-subjects review (2026-10-24); confirmed by the 0.5.6 pre-release external review
+**Fixed:** v0.5.6
+
+`modules_registry/inbound.rs` stored the clamped copy of a module finding and published the raw event to the in-process bus. The findings consumer in `tasks/findings.rs` stored that raw event a second time under the module name `in-process`, so every module finding appeared twice and the second row kept unsanitized references, which 0.5.6 renders as links. The endpoint now publishes the clamped finding and the consumer is removed; the inbound endpoint is the only persistence point for module findings. A test asserts the bus payload matches the stored row.
+
 ## Open
-
-### [LOW] Module events are published in-process before they are clamped
-**Source:** 0.5.6 finding-subjects review (2026-10-24)
-
-`modules_registry/inbound.rs` publishes the raw module event to the in-process event bus and stores the clamped copy. In-process subscribers and outbound module deliveries therefore see unbounded titles, narratives, and subjects while the Findings page sees the sanitized ones. Modules are already trusted at the level of the Drift binary (see the sandboxing entry under Accepted), so this is a consistency gap, not a boundary breach. Fix: clamp once, then publish and store the same value.
 
 ### [LOW] Exploitation findings may name the router by host before the device manager is ready
 **Source:** 0.5.6 finding-subjects review (2026-10-24)
