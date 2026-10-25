@@ -304,6 +304,7 @@ mod tests {
                     payload: serde_json::json!({ "asn": 12345, "country": "RU" }),
                 },
             ],
+            references: vec![],
             subjects: vec![],
             device_macs: vec!["aa:bb:cc:dd:ee:ff".to_string()],
             timestamp_unix: 1_700_000_000,
@@ -361,6 +362,7 @@ mod tests {
           }
         }
       ],
+      "references": [],
       "subjects": [],
       "device_macs": [
         "aa:bb:cc:dd:ee:ff"

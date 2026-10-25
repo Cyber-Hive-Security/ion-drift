@@ -24,6 +24,7 @@ fn finding(subjects: Vec<FindingSubject>, device_macs: Vec<String>) -> FindingV1
         category: "test".to_string(),
         recommended_actions: vec![],
         evidence: vec![FindingEvidence::Anomaly { anomaly_id: 1 }],
+        references: vec![],
         subjects,
         device_macs,
         timestamp_unix: 1_700_000_000,
@@ -87,7 +88,7 @@ async fn v1_database_backfills_subjects_from_device_macs() {
         .expect("open")
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 2);
+    assert_eq!(version, FindingsStore::SCHEMA_VERSION);
     FindingsStore::new(&path).expect("reopen does not re-run the step");
 }
 

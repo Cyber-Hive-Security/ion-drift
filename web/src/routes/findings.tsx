@@ -134,6 +134,27 @@ function FindingDetail({ finding }: { finding: Finding }) {
         </div>
       )}
 
+      {finding.references.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold mb-1">References</h3>
+          <ul className="list-disc pl-5 text-sm space-y-0.5">
+            {finding.references.map((url) => (
+              <li key={url}>
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="break-all text-primary/80 hover:text-primary hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {url}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {finding.metadata != null && (
         <details className="rounded border border-border bg-background/50 px-3 py-2 text-xs">
           <summary className="cursor-pointer font-semibold">Metadata</summary>

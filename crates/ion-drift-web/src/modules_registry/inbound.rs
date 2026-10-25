@@ -505,6 +505,7 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
                 .then_some(FindingSubject { kind, id })
         })
         .collect();
+    c.references = crate::staging::stage_references(&f.references);
     c
 }
 
@@ -607,6 +608,7 @@ mod tests {
                 label: big.clone(),
                 payload: serde_json::json!({ "blob": big }),
             }],
+            references: vec![],
             subjects: vec![],
             device_macs: vec![],
             timestamp_unix: 0,
@@ -644,6 +646,17 @@ mod tests {
                     "nested": ["<x>", 5, { "y": "a\u{7}b" }]
                 }),
             }],
+            references: vec![
+                "https://example.com/adv?id=1".into(),
+                "javascript:alert(1)".into(),
+                "ftp://example.com/x".into(),
+                "data:text/html,<script>".into(),
+                "not a url".into(),
+                "https://example.com/\u{202e}evil".into(),
+                "https://nvd.nist.gov@evil.example/x".into(),
+                "https://example.com/adv?id=1".into(),
+                "".into(),
+            ],
             subjects: vec![
                 FindingSubject::endpoint("<script>"),
                 FindingSubject::domain("EXAMPLE.com"),
@@ -744,6 +757,26 @@ mod tests {
                 FindingSubject::endpoint("a".repeat(64)),
             ]
         );
+        assert_eq!(
+            c.references,
+            vec![
+                "https://example.com/adv?id=1".to_string(),
+                "https://example.com/evil".to_string(),
+            ],
+            "only http/https URLs without userinfo survive, once each; bidi control stripped"
+        );
+    }
+
+    #[test]
+    fn references_are_capped_in_count_and_length() {
+        let mut f = hostile_finding();
+        f.references = (0..40).map(|i| format!("https://example.com/{i}")).collect();
+        f.references.insert(0, format!("https://example.com/{}", "a".repeat(5000)));
+        f.references.insert(1, format!("https://example.com/{}", "\u{4e00}".repeat(1000)));
+        let c = clamp_finding(&f);
+        assert_eq!(c.references.len(), 14, "two over-long entries dropped, not truncated");
+        assert!(c.references.iter().all(|r| r.len() <= 2048));
+        assert_eq!(c.references[0], "https://example.com/0");
     }
 
     #[test]
@@ -769,6 +802,7 @@ mod tests {
             category: "geographic".into(),
             recommended_actions: vec!["block".into()],
             evidence: vec![FindingEvidence::Anomaly { anomaly_id: 7 }],
+            references: vec![],
             subjects: vec![],
             device_macs: vec!["aa:bb:cc:dd:ee:ff".into()],
             timestamp_unix: 1_700_000_000,
@@ -793,6 +827,7 @@ mod tests {
             category: "x".into(),
             recommended_actions: vec![],
             evidence: vec![],
+            references: vec![],
             subjects: vec![],
             device_macs: vec![],
             timestamp_unix: 0,
@@ -924,6 +959,7 @@ mod integration_tests {
             category: "geographic".into(),
             recommended_actions: vec!["block".into()],
             evidence: vec![FindingEvidence::Anomaly { anomaly_id: 7 }],
+            references: vec![],
             subjects: vec![],
             device_macs: vec!["aa:bb:cc:dd:ee:ff".into()],
             timestamp_unix,

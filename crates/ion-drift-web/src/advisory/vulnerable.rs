@@ -45,6 +45,8 @@ pub(crate) struct VulnInput {
     pub ranges: Vec<VersionRange>,
     pub kev_date_added: Option<String>,
     pub mitigations: Vec<String>,
+    /// Curated references from the catalog; empty for fetched CVEs.
+    pub references: Vec<String>,
     pub source: VulnSource,
 }
 
@@ -123,7 +125,13 @@ fn build_finding(
     );
     let mut recommended_actions = vec![upgrade_action(matched)];
     recommended_actions.extend(input.mitigations.iter().cloned());
-    recommended_actions.push(format!("Details: https://nvd.nist.gov/vuln/detail/{}", input.cve_id));
+    let mut references = input.references.clone();
+    if input.cve_id.starts_with("CVE-") {
+        let nvd = format!("https://nvd.nist.gov/vuln/detail/{}", input.cve_id);
+        if !references.contains(&nvd) {
+            references.push(nvd);
+        }
+    }
 
     FindingV1 {
         finding_id: finding_id.to_string(),
@@ -142,6 +150,7 @@ fn build_finding(
                 "kev_date_added": input.kev_date_added,
             }),
         }],
+        references,
         subjects: vec![FindingSubject::device(device_id)],
         device_macs: Vec::new(),
         timestamp_unix: now,
@@ -256,6 +265,7 @@ mod tests {
             ranges: vec![r("6.0", "6.49.21"), r("7.0", "7.23.4"), r("7.24", "7.24.2")],
             kev_date_added: kev.then(|| "2026-09-10".to_string()),
             mitigations: Vec::new(),
+            references: vec![],
             source: VulnSource::Nvd,
         }
     }
@@ -286,7 +296,31 @@ mod tests {
             "Drift has not checked whether the affected feature is enabled on this router."
         ));
         assert!(f.recommended_actions[0].contains("7.24.2"));
-        assert!(f.recommended_actions.iter().any(|a| a.contains("nvd.nist.gov/vuln/detail/CVE-2026-86060")));
+        assert!(!f.recommended_actions.iter().any(|a| a.contains("nvd.nist.gov")), "URL lives in references now");
+        assert_eq!(f.references, vec!["https://nvd.nist.gov/vuln/detail/CVE-2026-86060".to_string()]);
+    }
+
+    #[test]
+    fn non_cve_advisory_gets_no_nvd_link() {
+        let a = assess("dev1", "7.24.1 (stable)", &[input("MT-2026-0001", None, false)], 1);
+        assert!(a.affected[0].references.is_empty(), "no NVD page exists for a vendor id");
+    }
+
+    #[test]
+    fn curated_references_come_first_and_nvd_is_not_duplicated() {
+        let mut i = input("CVE-2026-86060", Some(9.2), false);
+        i.references = vec![
+            "https://mikrotik.com/advisory/x".to_string(),
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-86060".to_string(),
+        ];
+        let a = assess("dev1", "7.24.1 (stable)", &[i], 1);
+        assert_eq!(
+            a.affected[0].references,
+            vec![
+                "https://mikrotik.com/advisory/x".to_string(),
+                "https://nvd.nist.gov/vuln/detail/CVE-2026-86060".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -23,6 +23,8 @@ export interface Finding {
   category: string;
   recommended_actions: string[];
   evidence: FindingEvidence[];
+  /** URLs for background reading (NVD entry, vendor advisory). Rendered as links. */
+  references: string[];
   device_macs: string[];
   /** What the finding is about. `device_macs` is the deprecated endpoint-only view of the same list. */
   subjects: FindingSubject[];
