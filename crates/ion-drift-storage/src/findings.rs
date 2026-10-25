@@ -244,9 +244,15 @@ impl FindingsStore {
             .map_err(|e| format!("serialize recommended_actions: {e}"))?;
         let evidence = serde_json::to_string(&finding.evidence)
             .map_err(|e| format!("serialize evidence: {e}"))?;
-        let device_macs = serde_json::to_string(&finding.device_macs)
+        let subjects = finding.all_subjects();
+        let device_macs: Vec<&str> = subjects
+            .iter()
+            .filter(|s| s.kind == FindingSubject::ENDPOINT)
+            .map(|s| s.id.as_str())
+            .collect();
+        let device_macs = serde_json::to_string(&device_macs)
             .map_err(|e| format!("serialize device_macs: {e}"))?;
-        let subjects = serde_json::to_string(&finding.all_subjects())
+        let subjects = serde_json::to_string(&subjects)
             .map_err(|e| format!("serialize subjects: {e}"))?;
         let metadata = match &finding.metadata {
             Some(v) => Some(

@@ -200,9 +200,16 @@ function FindingDetail({ finding }: { finding: Finding }) {
 function SubjectChip({ subject, devices }: { subject: FindingSubject; devices: NetworkDevice[] }) {
   if (subject.kind === "endpoint") return <DeviceLink mac={subject.id} />;
   if (subject.kind === "domain") return <span className="text-xs font-mono">{subject.id}</span>;
+  if (subject.kind !== "device") {
+    return (
+      <span className="text-xs" title={subject.kind}>
+        {subject.id}
+      </span>
+    );
+  }
   const device = devices.find((d) => d.id === subject.id);
   const label = device?.name ?? subject.id;
-  if (!device || device.is_primary) return <span className="text-xs">{label}</span>;
+  if (!device || device.device_type === "router") return <span className="text-xs">{label}</span>;
   return (
     <Link
       to="/switches/$deviceId"

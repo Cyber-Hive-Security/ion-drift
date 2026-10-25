@@ -35,8 +35,8 @@ fn finding(subjects: Vec<FindingSubject>, device_macs: Vec<String>) -> FindingV1
 async fn subjects_round_trip_and_legacy_macs_fold_in() {
     let store = FindingsStore::new(&db_path()).expect("findings store");
     let f = finding(vec![
-            FindingSubject::Device(DEVICE_ID.into()),
-            FindingSubject::Endpoint(MAC.into()),
+            FindingSubject::device(DEVICE_ID),
+            FindingSubject::endpoint(MAC),
         ],
         vec![MAC.into()],
     );
@@ -46,8 +46,8 @@ async fn subjects_round_trip_and_legacy_macs_fold_in() {
     assert_eq!(
         rows[0].subjects,
         vec![
-            FindingSubject::Device(DEVICE_ID.into()),
-            FindingSubject::Endpoint(MAC.into()),
+            FindingSubject::device(DEVICE_ID),
+            FindingSubject::endpoint(MAC),
         ]
     );
     assert_eq!(rows[0].device_macs, vec![MAC.to_string()], "legacy field still served");
@@ -81,7 +81,7 @@ async fn v1_database_backfills_subjects_from_device_macs() {
 
     let store = FindingsStore::new(&path).expect("open and migrate");
     let rows = store.list_findings(&FindingsQuery::default()).await.expect("list");
-    assert_eq!(rows[0].subjects, vec![FindingSubject::Endpoint(MAC.into())]);
+    assert_eq!(rows[0].subjects, vec![FindingSubject::endpoint(MAC)]);
 
     let version: u32 = rusqlite::Connection::open(&path)
         .expect("open")
@@ -89,4 +89,13 @@ async fn v1_database_backfills_subjects_from_device_macs() {
         .expect("version");
     assert_eq!(version, 2);
     FindingsStore::new(&path).expect("reopen does not re-run the step");
+}
+
+#[tokio::test]
+async fn device_macs_served_is_the_endpoint_view_of_subjects() {
+    let store = FindingsStore::new(&db_path()).expect("findings store");
+    let f = finding(vec![FindingSubject::endpoint(MAC)], vec![]);
+    store.upsert_finding("advisory", &f, None, None).await.expect("upsert");
+    let rows = store.list_findings(&FindingsQuery::default()).await.expect("list");
+    assert_eq!(rows[0].device_macs, vec![MAC.to_string()]);
 }

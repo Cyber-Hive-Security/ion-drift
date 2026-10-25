@@ -212,17 +212,35 @@ pub struct ConnectionStateChangedV1 {
     pub timestamp_unix: i64,
 }
 
-/// What a finding is about. A finding names one or more subjects; the UI
-/// renders each by kind and links it to the right page.
+/// What a finding is about. `kind` is open, like `category`, so modules and
+/// future Drift releases can add kinds without a contract bump. Drift renders
+/// the kinds below specially and shows any other kind as text.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
-pub enum FindingSubject {
+pub struct FindingSubject {
+    pub kind: String,
+    pub id: String,
+}
+
+impl FindingSubject {
     /// A managed device (router or switch) by its device-registry id.
-    Device(String),
+    pub const DEVICE: &'static str = "device";
     /// A network endpoint by MAC address.
-    Endpoint(String),
+    pub const ENDPOINT: &'static str = "endpoint";
     /// A DNS name.
-    Domain(String),
+    pub const DOMAIN: &'static str = "domain";
+
+    pub fn new(kind: &str, id: impl Into<String>) -> Self {
+        Self { kind: kind.to_string(), id: id.into() }
+    }
+    pub fn device(id: impl Into<String>) -> Self {
+        Self::new(Self::DEVICE, id)
+    }
+    pub fn endpoint(id: impl Into<String>) -> Self {
+        Self::new(Self::ENDPOINT, id)
+    }
+    pub fn domain(id: impl Into<String>) -> Self {
+        Self::new(Self::DOMAIN, id)
+    }
 }
 
 /// Payload for [`DriftEvent::Finding`].
@@ -263,7 +281,7 @@ impl FindingV1 {
     pub fn all_subjects(&self) -> Vec<FindingSubject> {
         let mut out = self.subjects.clone();
         for mac in &self.device_macs {
-            let endpoint = FindingSubject::Endpoint(mac.clone());
+            let endpoint = FindingSubject::endpoint(mac.clone());
             if !out.contains(&endpoint) {
                 out.push(endpoint);
             }
@@ -302,7 +320,7 @@ mod finding_subject_tests {
 
     #[test]
     fn subject_wire_shape_and_legacy_fold() {
-        let s = serde_json::to_string(&FindingSubject::Device("r1".into())).unwrap();
+        let s = serde_json::to_string(&FindingSubject::device("r1")).unwrap();
         assert_eq!(s, r#"{"kind":"device","id":"r1"}"#);
 
         let f: FindingV1 = serde_json::from_str(
@@ -312,6 +330,6 @@ mod finding_subject_tests {
         )
         .unwrap();
         assert!(f.subjects.is_empty(), "absent on the wire means empty");
-        assert_eq!(f.all_subjects(), vec![FindingSubject::Endpoint("00:00:5E:00:53:01".into())]);
+        assert_eq!(f.all_subjects(), vec![FindingSubject::endpoint("00:00:5E:00:53:01")]);
     }
 }

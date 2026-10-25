@@ -491,15 +491,18 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
         .subjects
         .iter()
         .take(MAX_MACS)
-        .filter_map(|s| match s {
-            FindingSubject::Endpoint(m) => neutralize_mac(m)
-                .map(|m| FindingSubject::Endpoint(m.chars().take(64).collect())),
-            FindingSubject::Device(id) => Some(clamp_str(id, 64))
-                .filter(|id| !id.is_empty())
-                .map(FindingSubject::Device),
-            FindingSubject::Domain(d) => {
-                crate::staging::stage_dns_name(d).map(FindingSubject::Domain)
-            }
+        .filter_map(|s| {
+            let id = match s.kind.as_str() {
+                FindingSubject::ENDPOINT => {
+                    neutralize_mac(&s.id)?.chars().take(64).collect::<String>()
+                }
+                FindingSubject::DOMAIN => crate::staging::stage_dns_name(&s.id)?,
+                _ => clamp_str(&s.id, 64),
+            };
+            let id: String = id.chars().take(253).collect();
+            let kind = clamp_str(&s.kind, 32);
+            (!id.trim().is_empty() && !kind.trim().is_empty())
+                .then_some(FindingSubject { kind, id })
         })
         .collect();
     c
@@ -642,11 +645,13 @@ mod tests {
                 }),
             }],
             subjects: vec![
-                FindingSubject::Endpoint("<script>".into()),
-                FindingSubject::Domain("EXAMPLE.com".into()),
-                FindingSubject::Device("r1".into()),
-                FindingSubject::Device("".into()),
-                FindingSubject::Endpoint("a".repeat(200)),
+                FindingSubject::endpoint("<script>"),
+                FindingSubject::domain("EXAMPLE.com"),
+                FindingSubject::device("r1"),
+                FindingSubject::device(""),
+                FindingSubject::device("   "),
+                FindingSubject::new("peer", "198.51.100.7"),
+                FindingSubject::endpoint("a".repeat(200)),
             ],
             device_macs: vec![
                 "aa:bb:cc:dd:ee:ff".into(),
@@ -733,9 +738,10 @@ mod tests {
         assert_eq!(
             c.subjects,
             vec![
-                FindingSubject::Domain("example.com".into()),
-                FindingSubject::Device("r1".into()),
-                FindingSubject::Endpoint("a".repeat(64)),
+                FindingSubject::domain("example.com"),
+                FindingSubject::device("r1"),
+                FindingSubject::new("peer", "198.51.100.7"),
+                FindingSubject::endpoint("a".repeat(64)),
             ]
         );
     }

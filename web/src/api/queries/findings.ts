@@ -11,7 +11,7 @@ export type FindingEvidence =
   | { type: "connection"; connection_id: number }
   | { type: "custom"; label: string; payload: unknown };
 
-export type FindingSubject = { kind: "device" | "endpoint" | "domain"; id: string };
+export type FindingSubject = { kind: string; id: string };
 
 export interface Finding {
   id: number;

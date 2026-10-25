@@ -191,7 +191,7 @@ pub(crate) fn build_finding(group: &ConfusableGroup, now: i64) -> FindingV1 {
                 "resolved_addresses": group.addresses,
             }),
         }],
-        subjects: vec![FindingSubject::Domain(group.matched_suffix.clone())],
+        subjects: vec![FindingSubject::domain(group.matched_suffix.clone())],
         device_macs: Vec::new(),
         timestamp_unix: now,
         metadata: Some(serde_json::json!({
@@ -277,7 +277,7 @@ mod tests {
         let b = build_finding(&group, 200);
         assert_eq!(a.finding_id, b.finding_id, "re-observation refines, never re-mints");
         assert_eq!(a.category, "confusable_domain");
-        assert_eq!(a.subjects, vec![FindingSubject::Domain("paypa1.com".into())]);
+        assert_eq!(a.subjects, vec![FindingSubject::domain("paypa1.com")]);
         assert!(matches!(a.severity, FindingSeverity::High));
     }
 
