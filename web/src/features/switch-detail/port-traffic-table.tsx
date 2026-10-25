@@ -11,7 +11,7 @@ import type {
   VlanMembershipEntry,
   PortUtilization,
 } from "@/api/types";
-import { portSortKey, getPortPrimaryVlan } from "./utils";
+import { physicalPortNames, portSortKey, getPortPrimaryVlan } from "./utils";
 import { utilizationColor, utilizationLabel, baselineColor, baselineLabel, formatBitrate } from "@/lib/utilization";
 
 interface PortRow {
@@ -98,16 +98,8 @@ export function PortTrafficTable({
 
   // Build rows
   const rows = useMemo(() => {
-    const allPortNames = new Set<string>();
-    for (const [name] of latestMetrics) allPortNames.add(name);
-    for (const iface of interfaces) {
-      if (iface.name) allPortNames.add(iface.name);
-    }
-
     const result: PortRow[] = [];
-    for (const portName of allPortNames) {
-      if (portName === "bridge" || portName === "lo") continue;
-
+    for (const portName of physicalPortNames(latestMetrics.keys(), interfaces)) {
       const metrics = latestMetrics.get(portName);
       const identity = identityByPort.get(portName);
       const vlanId = getPortPrimaryVlan(portName, vlans);

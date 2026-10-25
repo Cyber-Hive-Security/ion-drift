@@ -1,4 +1,17 @@
-import type { VlanConfig, VlanMembershipEntry } from "@/api/types";
+import type { RouterInterface, VlanConfig, VlanMembershipEntry } from "@/api/types";
+
+/**
+ * Port names the Port Traffic table should show: every port with metrics plus
+ * RouterOS ethernet interfaces. Bridges, VLAN interfaces and bonds have no
+ * port metrics and would otherwise appear as ports marked Down with no data.
+ */
+export function physicalPortNames(metered: Iterable<string>, interfaces: RouterInterface[]): Set<string> {
+  const names = new Set(metered);
+  for (const iface of interfaces) {
+    if (iface.type === "ether") names.add(iface.name);
+  }
+  return names;
+}
 
 /**
  * Extract the numeric port index from various naming conventions.
