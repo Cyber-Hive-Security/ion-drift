@@ -17,10 +17,10 @@ Every device on the network is tracked by MAC address. Each device profile recor
 
 Devices begin in a **7-day learning period**. During learning, the engine collects observations but does not generate behavioral anomalies (blocked connection attempts are still flagged immediately). After the learning period, the device is promoted:
 
-- **Baselined** — at least 10 distinct baseline entries and 200 total observations after the learning period. Active devices are fast-tracked to baselined early (before the 7-day mark) once they reach 5,000 observations. Full anomaly detection at highest confidence.
-- **Sparse** — fewer than 50 total observations after the learning period: barely active, thin baseline. Anomaly detection runs with reduced confidence scores.
+- **Baselined** — the device has coverage and stability: seen on at least 3 of the last 7 days with no flow tuple first seen in the last 48 hours (graduates early; first sightings are judged over the retained 30-day history, so a flow that recurs weekly is not new), or seen on at least 5 of the last 7 days when the 7-day window ends, stable or not. Full anomaly detection at highest confidence.
+- **Sparse** — seen on fewer than 2 of the last 7 days when the window ends, or still under-covered after one 3-day extension. Anomaly detection runs with reduced confidence scores. Sparse devices are re-evaluated on every promotion pass and graduate by the same rules once they become active.
 
-Devices that reach the end of the learning period with between 50 and 200 observations stay in `learning` and have their learning window extended by 3 days to collect more data.
+Devices that reach the end of the window with partial coverage (2 days seen, or 3 to 4 days seen but not yet stable) get one 3-day extension and then become sparse. Coverage and stability are recorded on the profile (`days_seen`, `last_new_flow`) so the UI can show why a device is still learning. Neither measure depends on the poll interval or on how many flows a device has, so a camera with one flow and a workstation with fifty are judged the same way. A device is marked baselined only after its baseline has been computed; if that write fails the device stays in its previous status and is retried on the next pass.
 
 Promotions are checked every 10 minutes and during nightly maintenance at 3 AM.
 

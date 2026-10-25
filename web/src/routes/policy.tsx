@@ -246,7 +246,7 @@ function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
     setError(null);
 
     const parsedTargets = targets.split("\n").map((t) => t.trim()).filter(Boolean);
-    const parsedPort = port ? parseInt(port, 10) : null;
+    const parsedPort = port ? Number.parseInt(port, 10) : null;
     const vlanScope = globalScope ? null : selectedVlans.length > 0 ? selectedVlans : null;
 
     try {
@@ -277,8 +277,8 @@ function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-lg border bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div role="presentation" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div role="presentation" className="w-full max-w-lg rounded-lg border bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">{editing ? "Edit Policy" : "Create Policy"}</h3>
           <button onClick={onClose} className="rounded p-1 hover:bg-muted"><X className="h-4 w-4" /></button>
@@ -288,8 +288,8 @@ function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
           {!editing && (
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Service</label>
-                <input
+                <label htmlFor="policy-service" className="text-xs font-medium text-muted-foreground">Service</label>
+                <input id="policy-service"
                   type="text"
                   value={service}
                   onChange={(e) => setService(e.target.value)}
@@ -299,8 +299,8 @@ function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
                 />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Protocol</label>
-                <select
+                <label htmlFor="policy-protocol" className="text-xs font-medium text-muted-foreground">Protocol</label>
+                <select id="policy-protocol"
                   value={protocol}
                   onChange={(e) => setProtocol(e.target.value)}
                   className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
@@ -311,8 +311,8 @@ function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Port</label>
-                <input
+                <label htmlFor="policy-port" className="text-xs font-medium text-muted-foreground">Port</label>
+                <input id="policy-port"
                   type="number"
                   value={port}
                   onChange={(e) => setPort(e.target.value)}
@@ -326,18 +326,18 @@ function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
           )}
 
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Authorized Targets (one per line, IP or CIDR)</label>
-            <textarea
+            <label htmlFor="policy-authorized-targets" className="text-xs font-medium text-muted-foreground">Authorized Targets (one per line, IP or CIDR)</label>
+            <textarea id="policy-authorized-targets"
               value={targets}
               onChange={(e) => setTargets(e.target.value)}
               rows={4}
-              placeholder={"10.20.25.5\n10.20.25.6\n192.168.1.0/24"}
+              placeholder={"198.51.100.5\n198.51.100.6\n192.168.1.0/24"}
               className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 font-mono text-sm"
             />
           </div>
 
           <div>
-            <label className="text-xs font-medium text-muted-foreground">VLAN Scope</label>
+            <span className="text-xs font-medium text-muted-foreground">VLAN Scope</span>
             <div className="mt-1 flex items-center gap-3">
               <label className="flex items-center gap-1.5 text-sm">
                 <input
@@ -373,8 +373,8 @@ function PolicyFormModal({ editing, vlanNames, onClose }: PolicyFormProps) {
           </div>
 
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Priority</label>
-            <select
+            <label htmlFor="policy-priority" className="text-xs font-medium text-muted-foreground">Priority</label>
+            <select id="policy-priority"
               value={priority}
               onChange={(e) => setPriority(e.target.value)}
               className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"

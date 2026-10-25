@@ -367,7 +367,9 @@ pub async fn device_port_utilization(
 
     // Group by port_name, keep only 2 most recent samples per port
     // Rows are already ordered timestamp DESC
-    let mut by_port: HashMap<String, Vec<(i64, i64, i64, Option<String>, bool)>> = HashMap::new();
+    /// (timestamp, rx_bytes, tx_bytes, speed, running)
+    type PortSample = (i64, i64, i64, Option<String>, bool);
+    let mut by_port: HashMap<String, Vec<PortSample>> = HashMap::new();
     for (port_name, rx_bytes, tx_bytes, ts, speed, running, _port_index) in rows {
         let samples = by_port.entry(port_name).or_default();
         if samples.len() < 2 {
@@ -450,11 +452,10 @@ pub async fn device_port_utilization(
 }
 
 fn resolve_speed(speed_str: Option<&str>) -> (f64, String) {
-    if let Some(s) = speed_str {
-        if let Some(mbps) = parse_speed_mbps(s) {
+    if let Some(s) = speed_str
+        && let Some(mbps) = parse_speed_mbps(s) {
             return (mbps, "polled".into());
         }
-    }
     (1000.0, "default".into())
 }
 

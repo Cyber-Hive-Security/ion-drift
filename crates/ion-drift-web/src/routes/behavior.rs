@@ -150,18 +150,16 @@ pub async fn device_detail(
         if anomaly.anomaly_type != "new_port" && anomaly.anomaly_type != "volume_spike" {
             continue;
         }
-        if let Some(ref details) = anomaly.details {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(details) {
+        if let Some(ref details) = anomaly.details
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(details) {
                 let protocol = json.get("protocol").and_then(|v| v.as_str());
                 let dst_port = json.get("dst_port").and_then(|v| v.as_i64());
-                if let (Some(proto), Some(port)) = (protocol, dst_port) {
-                    if let Ok(Some(ctx)) = state.connection_store.get_port_flow_context(proto, port)
+                if let (Some(proto), Some(port)) = (protocol, dst_port)
+                    && let Ok(Some(ctx)) = state.connection_store.get_port_flow_context(proto, port)
                     {
                         port_flow_contexts.push(ctx);
                     }
-                }
             }
-        }
     }
 
     Ok(Json(EnhancedDeviceDetailResponse {

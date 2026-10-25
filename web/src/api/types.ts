@@ -579,6 +579,8 @@ export interface DeviceProfile {
   learning_until: number;
   baseline_status: string;
   notes: string | null;
+  days_seen: number;
+  last_new_flow: number | null;
 }
 
 export interface DeviceBaseline {

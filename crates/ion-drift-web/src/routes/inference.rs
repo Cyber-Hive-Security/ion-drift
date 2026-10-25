@@ -116,8 +116,7 @@ pub async fn inference_status(
     for s in &all_states {
         if let (Some(inf_dev), Some(inf_port)) =
             (&s.current_device_id, &s.current_port_name)
-        {
-            if let Some(ident) = identity_map.get(&s.mac_address.to_uppercase()) {
+            && let Some(ident) = identity_map.get(&s.mac_address.to_uppercase()) {
                 let old_dev = ident.switch_device_id.as_deref().unwrap_or("");
                 let old_port = ident.switch_port.as_deref().unwrap_or("");
                 if old_dev != inf_dev || old_port != inf_port {
@@ -131,7 +130,6 @@ pub async fn inference_status(
                     *divergence_categories.entry(category.to_string()).or_default() += 1;
                 }
             }
-        }
     }
 
     let mode = InferenceMode::from_env();

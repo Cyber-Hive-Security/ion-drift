@@ -316,14 +316,14 @@ mod tests {
         let payload = serde_json::json!([
             { ".id": "*8", "address": "", "certificate": "none", "disabled": "false",
               "invalid": "false", "name": "api-ssl", "port": "8729", "tls-version": "any", "vrf": "main" },
-            { ".id": "*3", "address": "10.20.25.17/32", "disabled": "true", "name": "api", "port": "8728" }
+            { ".id": "*3", "address": "192.168.1.17/32", "disabled": "true", "name": "api", "port": "8728" }
         ]);
         let svcs: Vec<IpService> = serde_json::from_value(payload).unwrap();
         assert_eq!(svcs[0].name, "api-ssl");
         assert_eq!(svcs[0].port, Some(8729));
         assert!(!svcs[0].disabled);
         assert_eq!(svcs[0].address.as_deref(), Some(""));
-        assert_eq!(svcs[1].address.as_deref(), Some("10.20.25.17/32"));
+        assert_eq!(svcs[1].address.as_deref(), Some("192.168.1.17/32"));
         assert!(svcs[1].disabled);
     }
 

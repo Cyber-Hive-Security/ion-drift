@@ -8,7 +8,7 @@
 
 **Architecture:** Validation today is uneven — the advisory catalog allow-lists its control fields (`requires_surface_class`, `severity`, `confidence`, `signal_id`), but free-text and data fields reach SQLite verbatim. SQL injection is already structurally impossible (every statement is static with bound `params![]`); this plan is about garbage-in containment and storage bounds, not injection. Boundary validation goes in code where it can log and truncate gracefully; `CHECK` constraints go in the schema as the backstop that catches a future writer bypassing the staging functions — the same belt-and-braces the existing `advisory_signal.confidence` CHECK already demonstrates.
 
-**Tech Stack:** Rust workspace `/home/yodaadmin/ion-drift`, branch `development`. Head at time of writing: `05aa229`.
+**Tech Stack:** Rust workspace `<repo>`, branch `development`. Head at time of writing: `05aa229`.
 
 ## Global Constraints
 
@@ -28,7 +28,7 @@
   ```
   The `opensslconf.h` copy is the non-obvious step. `cargo-deny` is not installed; use the prebuilt musl binary from GitHub releases.
 - **Gotcha:** `ion-drift-web` has parallel module trees in BOTH `src/lib.rs` and `src/main.rs`. A new top-level module must be registered in both or the lib/test target fails E0433 while the bin target compiles.
-- Push to `origin development` (gitea at `10.20.25.17:2222`, key `id_ed25519`) when green.
+- Push to `origin development` (the Gitea remote) when green.
 
 ## File Structure
 

@@ -156,7 +156,7 @@ async fn run_passive_discovery(
     for (ip, ports) in &listening_ports {
         total_ips += 1;
 
-        for ((port, protocol), _count) in ports {
+        for (port, protocol) in ports.keys() {
             let service_name = port_to_service_name(*port, protocol);
             if let Err(e) = store
                 .upsert_observed_service(ip, *port, protocol, service_name)
@@ -175,16 +175,15 @@ async fn run_passive_discovery(
 
         if let Some((device_type, confidence)) = infer_device_type_from_services(&port_set) {
             // Find the MAC address for this IP via network_identities
-            if let Ok(identities) = store.get_network_identities().await {
-                if let Some(identity) = identities.iter().find(|i| {
+            if let Ok(identities) = store.get_network_identities().await
+                && let Some(identity) = identities.iter().find(|i| {
                     i.best_ip.as_deref() == Some(ip.as_str())
                 }) {
                     // Only update if passive confidence beats current confidence
                     // and the identity isn't human-confirmed
                     if !identity.human_confirmed
                         && confidence > identity.device_type_confidence
-                    {
-                        if let Err(e) = store
+                        && let Err(e) = store
                             .upsert_network_identity(
                                 &identity.mac_address,
                                 Some(ip),
@@ -205,9 +204,7 @@ async fn run_passive_discovery(
                         {
                             tracing::warn!(mac = %identity.mac_address, "failed to upsert network identity from passive discovery: {e}");
                         }
-                    }
                 }
-            }
         }
     }
 
@@ -223,18 +220,17 @@ async fn run_passive_discovery(
     Ok(())
 }
 
-/// Parse an IP address that may contain an embedded port (e.g. "10.20.25.8:443").
+/// Parse an IP address that may contain an embedded port (e.g. "192.168.1.8:443").
 /// Returns (ip, Option<port>).
 fn parse_ip_port(addr: &str) -> (String, Option<u32>) {
     if let Some(colon_pos) = addr.rfind(':') {
         let ip_part = &addr[..colon_pos];
         let port_part = &addr[colon_pos + 1..];
         // Verify the IP part looks like an IPv4 address (contains dots)
-        if ip_part.contains('.') {
-            if let Ok(port) = port_part.parse::<u32>() {
+        if ip_part.contains('.')
+            && let Ok(port) = port_part.parse::<u32>() {
                 return (ip_part.to_string(), Some(port));
             }
-        }
     }
     (addr.to_string(), None)
 }
@@ -259,8 +255,8 @@ fn extract_nat_service_ports_from_batch(
     let mut ports = HashSet::new();
 
     // Extract ports from NAT dst-nat rules (port forwards)
-    if let Ok(v) = nat_result {
-        if let Ok(nat_rules) = serde_json::from_value::<Vec<mikrotik_core::resources::firewall::NatRule>>(v.clone()) {
+    if let Ok(v) = nat_result
+        && let Ok(nat_rules) = serde_json::from_value::<Vec<mikrotik_core::resources::firewall::NatRule>>(v.clone()) {
             for rule in &nat_rules {
                 if rule.action != "dst-nat" {
                     continue;
@@ -282,11 +278,10 @@ fn extract_nat_service_ports_from_batch(
                 }
             }
         }
-    }
 
     // Extract ports from filter accept rules with explicit dst-port
-    if let Ok(v) = filter_result {
-        if let Ok(filter_rules) = serde_json::from_value::<Vec<mikrotik_core::resources::firewall::FilterRule>>(v.clone()) {
+    if let Ok(v) = filter_result
+        && let Ok(filter_rules) = serde_json::from_value::<Vec<mikrotik_core::resources::firewall::FilterRule>>(v.clone()) {
             for rule in &filter_rules {
                 if rule.action != "accept" {
                     continue;
@@ -301,7 +296,6 @@ fn extract_nat_service_ports_from_batch(
                 }
             }
         }
-    }
 
     if !ports.is_empty() {
         tracing::debug!(count = ports.len(), "discovered service ports from firewall rules");

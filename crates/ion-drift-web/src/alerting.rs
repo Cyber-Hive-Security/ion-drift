@@ -506,8 +506,8 @@ async fn evaluate_cycle(
 
     // Enrich anomaly alerts with investigation verdicts and filter by verdict_filter
     for alert in &mut pending_alerts {
-        if let Some(anomaly_id) = alert.anomaly_id {
-            if let Ok(Some(inv)) = behavior_store.get_investigation_by_anomaly(anomaly_id).await {
+        if let Some(anomaly_id) = alert.anomaly_id
+            && let Ok(Some(inv)) = behavior_store.get_investigation_by_anomaly(anomaly_id).await {
                 // Enrich title and body with verdict
                 let verdict_label = inv.verdict.to_uppercase();
                 alert.title = format!("[{}] {}", verdict_label, alert.title);
@@ -520,13 +520,12 @@ async fn evaluate_cycle(
                 alert.investigation_verdict = Some(inv.verdict.clone());
                 alert.investigation_summary = Some(inv.summary.clone());
             }
-        }
     }
 
     // Apply verdict_filter: drop alerts whose investigation verdict doesn't match the rule filter
     pending_alerts.retain(|alert| {
-        if let Some(rule) = enabled_rules.iter().find(|r| r.id == alert.rule_id) {
-            if let Some(ref filter) = rule.verdict_filter {
+        if let Some(rule) = enabled_rules.iter().find(|r| r.id == alert.rule_id)
+            && let Some(ref filter) = rule.verdict_filter {
                 // verdict_filter is a comma-separated list of accepted verdicts
                 let accepted: Vec<&str> = filter.split(',').map(|s| s.trim()).collect();
                 if let Some(ref verdict) = alert.investigation_verdict {
@@ -534,7 +533,6 @@ async fn evaluate_cycle(
                 }
                 // No verdict yet — keep the alert (investigation may not have run)
             }
-        }
         true
     });
 
@@ -703,7 +701,9 @@ async fn collect_new_device_alerts(
     let channels = parse_channels(&rule.delivery_channels);
 
     // Find devices with first_seen in the last 2 minutes and disposition = 'unknown'
-    let rows: Vec<(String, Option<String>, Option<String>, Option<String>, Option<i64>)> = {
+    /// (mac, best_ip, hostname, manufacturer, vlan_id)
+    type NewDeviceRow = (String, Option<String>, Option<String>, Option<String>, Option<i64>);
+    let rows: Vec<NewDeviceRow> = {
         let db = switch_store.db().await;
         let mut stmt = match db.prepare(
             "SELECT mac_address, best_ip, hostname, manufacturer, vlan_id
@@ -764,7 +764,9 @@ async fn collect_flagged_device_alerts(
     let channels = parse_channels(&rule.delivery_channels);
 
     // Get all flagged devices
-    let flagged: Vec<(String, Option<String>, Option<String>, Option<i64>)> = {
+    /// (mac, best_ip, hostname, vlan_id)
+    type FlaggedDeviceRow = (String, Option<String>, Option<String>, Option<i64>);
+    let flagged: Vec<FlaggedDeviceRow> = {
         let db = switch_store.db().await;
         let mut stmt = match db.prepare(
             "SELECT mac_address, best_ip, hostname, vlan_id
@@ -1014,7 +1016,9 @@ async fn collect_device_offline_alerts(
     let channels = parse_channels(&rule.delivery_channels);
 
     // Check confirmed devices that haven't been seen in > 5 minutes
-    let devices: Vec<(String, Option<String>, Option<String>, Option<i64>, i64)> = {
+    /// (mac, best_ip, hostname, vlan_id, last_seen)
+    type ConfirmedDeviceRow = (String, Option<String>, Option<String>, Option<i64>, i64);
+    let devices: Vec<ConfirmedDeviceRow> = {
         let db = switch_store.db().await;
         let mut stmt = match db.prepare(
             "SELECT mac_address, best_ip, hostname, vlan_id, last_seen
@@ -1137,8 +1141,8 @@ async fn collect_dhcp_pool_alerts(state: &AppState, rule: &AlertRule, alerts: &m
         let mut total = 0u64;
         for range_str in pool.ranges.split(',') {
             let range_str = range_str.trim();
-            if let Some((start_s, end_s)) = range_str.split_once('-') {
-                if let (Ok(start), Ok(end)) = (
+            if let Some((start_s, end_s)) = range_str.split_once('-')
+                && let (Ok(start), Ok(end)) = (
                     start_s.trim().parse::<std::net::Ipv4Addr>(),
                     end_s.trim().parse::<std::net::Ipv4Addr>(),
                 ) {
@@ -1148,7 +1152,6 @@ async fn collect_dhcp_pool_alerts(state: &AppState, rule: &AlertRule, alerts: &m
                         total += (e - s + 1) as u64;
                     }
                 }
-            }
         }
         if total > 0 {
             pool_capacity.insert(pool.name.clone(), total);
@@ -1421,7 +1424,7 @@ fn dedup_logging_actions<'a>(failures: &[&'a LoginFailure]) -> Vec<&'a LoginFail
 /// prefix-matched, and anything that does not parse is never Drift's own.
 /// `src_ip` is carved out of a line that embeds an attacker-chosen username, so
 /// a textual test on it is a test on attacker input: `ip.starts_with("127.")`
-/// accepted `"127.0.0.1 from 10.20.35.99"` — exactly what a username of
+/// accepted `"127.0.0.1 from 203.0.113.99"` — exactly what a username of
 /// `admin from 127.0.0.1` produced — and with `router.username` at its default
 /// of `admin`, that silently deleted a live attack from detection on a stock
 /// configuration. Failing closed here means the worst case is Drift's own stale
@@ -2506,24 +2509,24 @@ mod tests {
 
     #[test]
     fn parses_login_failure_with_source() {
-        let entry = log("*1", "12:00:00", "login failure for user admin from 10.20.30.99 via api");
+        let entry = log("*1", "12:00:00", "login failure for user admin from 203.0.113.98 via api");
         let f = parse_login_failure(&entry).unwrap();
         assert_eq!(f.user, "admin");
-        assert_eq!(f.src_ip.as_deref(), Some("10.20.30.99"));
+        assert_eq!(f.src_ip.as_deref(), Some("203.0.113.98"));
         assert_eq!(f.service, "api");
     }
 
-    /// Real kuat-dev capture: RouterOS logging actions prepend severity prefixes.
+    /// Real RouterOS capture: RouterOS logging actions prepend severity prefixes.
     #[test]
     fn parses_prefixed_login_failure() {
         let entry = log(
             "*4",
             "12:00:00",
-            "SYS-ERR: login failure for user drift-cve-test from 10.20.25.17 via rest-api",
+            "SYS-ERR: login failure for user drift-cve-test from 203.0.113.17 via rest-api",
         );
         let f = parse_login_failure(&entry).unwrap();
         assert_eq!(f.user, "drift-cve-test");
-        assert_eq!(f.src_ip.as_deref(), Some("10.20.25.17"));
+        assert_eq!(f.src_ip.as_deref(), Some("203.0.113.17"));
         assert_eq!(f.service, "rest-api");
         assert_eq!(f.prefix, "SYS-ERR:");
     }
@@ -2536,7 +2539,7 @@ mod tests {
         for i in 0..8 {
             let t = format!("12:00:{i:02}");
             for prefix in ["", "SYS-ERR:", "CRITICAL:"] {
-                failures.push(failure_p("admin", Some("10.20.25.17"), "rest-api", &t, prefix));
+                failures.push(failure_p("admin", Some("203.0.113.17"), "rest-api", &t, prefix));
             }
         }
         assert_eq!(failures.len(), 24);
@@ -3488,11 +3491,11 @@ mod tests {
     #[test]
     fn drift_own_credential_failures_are_excluded() {
         let failures: Vec<_> = (0..5)
-            .map(|_| failure("drift-svc", Some("10.20.25.27"), "rest-api", "12:00:00"))
+            .map(|_| failure("drift-svc", Some("192.168.1.27"), "rest-api", "12:00:00"))
             .collect();
         // Own source is configured, so these really are Drift's own retries.
         let (kept, own) =
-            split_own_credential_failures(&failures, "drift-svc", Some("10.20.25.27"));
+            split_own_credential_failures(&failures, "drift-svc", Some("192.168.1.27"));
         assert_eq!(own.len(), 5, "own-credential failures must be split off");
         assert!(kept.is_empty(), "nothing may survive into detection");
         assert!(
@@ -3504,10 +3507,10 @@ mod tests {
         // account from `drift-svc`, so one must not be able to hide behind the
         // other's exemption.
         let mixed_case: Vec<_> = (0..5)
-            .map(|_| failure("Drift-SVC", Some("10.20.25.27"), "rest-api", "12:00:00"))
+            .map(|_| failure("Drift-SVC", Some("192.168.1.27"), "rest-api", "12:00:00"))
             .collect();
         let (kept, own) =
-            split_own_credential_failures(&mixed_case, "drift-svc", Some("10.20.25.27"));
+            split_own_credential_failures(&mixed_case, "drift-svc", Some("192.168.1.27"));
         assert!(own.is_empty(), "a different account is not Drift's own");
         assert_eq!(kept.len(), 5);
     }
@@ -3519,11 +3522,11 @@ mod tests {
     #[test]
     fn same_username_from_foreign_ip_still_detected() {
         let failures: Vec<_> = (0..5)
-            .map(|_| failure("admin", Some("10.20.35.99"), "api", "12:00:00"))
+            .map(|_| failure("admin", Some("203.0.113.99"), "api", "12:00:00"))
             .collect();
 
         // Drift's own address is known and this is not it.
-        let (kept, own) = split_own_credential_failures(&failures, "admin", Some("10.20.25.27"));
+        let (kept, own) = split_own_credential_failures(&failures, "admin", Some("192.168.1.27"));
         assert!(own.is_empty(), "a foreign source is never Drift's own credential");
         assert_eq!(kept.len(), 5);
         let signals = detect_bruteforce(&kept);
@@ -3550,12 +3553,12 @@ mod tests {
         assert!(is_own_source(Some("127.0.0.1"), None));
         assert!(is_own_source(Some("::1"), None));
         assert!(is_own_source(Some("127.1.2.3"), None), "all of 127/8 is loopback");
-        assert!(!is_own_source(Some("10.20.25.27"), None));
+        assert!(!is_own_source(Some("192.168.1.27"), None));
 
         // Hostile: everything a `starts_with("127.")` test used to wave through.
         // The first is what a username of `admin from 127.0.0.1` produced before
         // the parser was hardened, and it is the shape that blinded detection.
-        assert!(!is_own_source(Some("127.0.0.1 from 10.20.35.99"), None));
+        assert!(!is_own_source(Some("127.0.0.1 from 203.0.113.99"), None));
         assert!(!is_own_source(Some(" 127.0.0.1"), None));
         assert!(!is_own_source(Some("127.0.0.1x"), None));
         assert!(!is_own_source(Some("not-an-ip"), None));
@@ -3564,19 +3567,19 @@ mod tests {
 
         // Configured: that address exactly. Not a console entry — Drift always
         // reaches the router over the network.
-        assert!(is_own_source(Some("10.20.25.27"), Some("10.20.25.27")));
-        assert!(!is_own_source(Some("10.20.25.28"), Some("10.20.25.27")));
-        assert!(!is_own_source(None, Some("10.20.25.27")));
+        assert!(is_own_source(Some("192.168.1.27"), Some("192.168.1.27")));
+        assert!(!is_own_source(Some("192.168.1.28"), Some("192.168.1.27")));
+        assert!(!is_own_source(None, Some("192.168.1.27")));
 
         // The same hostile shapes with an address configured: a value that only
         // *contains* the configured address is not the configured address, and
         // a configured value that is not an address matches nothing.
         assert!(!is_own_source(
-            Some("10.20.25.27 from 10.20.35.99"),
-            Some("10.20.25.27")
+            Some("192.168.1.27 from 203.0.113.99"),
+            Some("192.168.1.27")
         ));
-        assert!(!is_own_source(Some("10.20.25.27x"), Some("10.20.25.27")));
-        assert!(!is_own_source(Some("10.20.25.27"), Some("drift.kaziik.xyz")));
+        assert!(!is_own_source(Some("192.168.1.27x"), Some("192.168.1.27")));
+        assert!(!is_own_source(Some("192.168.1.27"), Some("drift.example.com")));
     }
 
     /// The full path a crafted attempt takes: raw log line → `parse_login_failure`
@@ -3584,7 +3587,7 @@ mod tests {
     ///
     /// RouterOS writes the attacker's username verbatim into the middle of the
     /// line, so an attempt as `admin from 127.0.0.1` logs as
-    /// `login failure for user admin from 127.0.0.1 from 10.20.35.99 via api`.
+    /// `login failure for user admin from 127.0.0.1 from 203.0.113.99 via api`.
     /// Splitting on the *first* ` from ` gave `src_ip` the injected loopback,
     /// which the own-source fallback accepted, so with `router.username` at its
     /// default of `admin` and `local_source_ip` shipped commented out — the
@@ -3597,7 +3600,7 @@ mod tests {
                 log(
                     &format!("*{}", i + 1),
                     &format!("12:00:0{i}"),
-                    "login failure for user admin from 127.0.0.1 from 10.20.35.99 via api",
+                    "login failure for user admin from 127.0.0.1 from 203.0.113.99 via api",
                 )
             })
             .collect();
@@ -3606,7 +3609,7 @@ mod tests {
         assert_eq!(parsed.len(), 6, "every crafted line must still parse");
         assert_eq!(
             parsed[0].src_ip.as_deref(),
-            Some("10.20.35.99"),
+            Some("203.0.113.99"),
             "the source is the one the router appended, not the one in the username"
         );
         assert_eq!(
@@ -3625,8 +3628,8 @@ mod tests {
 
         let signals = detect_bruteforce(&kept);
         assert_eq!(signals.len(), 1, "the attack must still raise a signal");
-        assert_eq!(signals[0].src_ip.as_deref(), Some("10.20.35.99"));
-        assert_eq!(signals[0].subject, "auth:10.20.35.99:api");
+        assert_eq!(signals[0].src_ip.as_deref(), Some("203.0.113.99"));
+        assert_eq!(signals[0].subject, "auth:203.0.113.99:api");
         assert_eq!(signals[0].count, 6);
 
         // And with loopback configured as Drift's own source, which is the most
@@ -3644,22 +3647,22 @@ mod tests {
         let f = parse_login_failure(&log(
             "*1",
             "12:00:00",
-            "login failure for user admin via api from 10.20.35.99 via ssh",
+            "login failure for user admin via api from 203.0.113.99 via ssh",
         ))
         .unwrap();
         assert_eq!(f.user, "admin via api");
-        assert_eq!(f.src_ip.as_deref(), Some("10.20.35.99"));
+        assert_eq!(f.src_ip.as_deref(), Some("203.0.113.99"));
         assert_eq!(f.service, "ssh");
 
         // Both injected at once.
         let f = parse_login_failure(&log(
             "*2",
             "12:00:00",
-            "login failure for user x from ::1 via console from 10.20.35.99 via api",
+            "login failure for user x from ::1 via console from 203.0.113.99 via api",
         ))
         .unwrap();
         assert_eq!(f.user, "x from ::1 via console");
-        assert_eq!(f.src_ip.as_deref(), Some("10.20.35.99"));
+        assert_eq!(f.src_ip.as_deref(), Some("203.0.113.99"));
         assert_eq!(f.service, "api");
         assert!(
             !is_own_source(f.src_ip.as_deref(), None),

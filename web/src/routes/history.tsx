@@ -217,13 +217,13 @@ function HistoryFilterBar({
         <div className="mt-2 grid grid-cols-2 gap-2 rounded-lg border border-border bg-card p-3 sm:grid-cols-3 lg:grid-cols-4">
           <FilterInput
             label="Source IP"
-            placeholder="10.20.25.100"
+            placeholder="198.51.100.10"
             value={filters.src_ip}
             onChange={(v) => onChange({ ...filters, src_ip: v })}
           />
           <FilterInput
             label="Dest IP"
-            placeholder="1.1.1.1"
+            placeholder="198.51.100.1"
             value={filters.dst_ip}
             onChange={(v) => onChange({ ...filters, dst_ip: v })}
           />
@@ -234,8 +234,8 @@ function HistoryFilterBar({
             onChange={(v) => onChange({ ...filters, dst_port: v })}
           />
           <div>
-            <label className="mb-1 block text-[10px] font-medium text-muted-foreground">Protocol</label>
-            <select
+            <label htmlFor="history-protocol" className="mb-1 block text-[10px] font-medium text-muted-foreground">Protocol</label>
+            <select id="history-protocol"
               value={filters.protocol}
               onChange={(e) => onChange({ ...filters, protocol: e.target.value })}
               className="w-full rounded border border-border bg-background px-2 py-1 text-xs"
@@ -296,10 +296,12 @@ function FilterInput({
   onChange: (v: string) => void;
   type?: string;
 }) {
+  const id = "history-filter-" + label.toLowerCase().replace(/\W+/g, "-");
   return (
     <div>
-      <label className="mb-1 block text-[10px] font-medium text-muted-foreground">{label}</label>
+      <label htmlFor={id} className="mb-1 block text-[10px] font-medium text-muted-foreground">{label}</label>
       <input
+        id={id}
         type={type}
         placeholder={placeholder}
         value={value}

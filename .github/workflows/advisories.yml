@@ -1,0 +1,55 @@
+name: Advisory scan
+
+# CI's cargo-deny only runs on push, so a quiet month means a quiet month of
+# missed advisories (the eMudhra/rustls advisories of Oct 2026 sat unseen for
+# a week). This re-checks both long-lived branches on a timer.
+
+on:
+  schedule:
+    # Every other day, 09:17 UTC. Day-of-month based: the 31st and the 1st
+    # run back to back.
+    - cron: '17 9 */2 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo-deny advisories (${{ matrix.branch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, development]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.branch }}
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+
+  npm-audit:
+    name: npm audit (${{ matrix.branch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, development]
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.branch }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # Reads package-lock.json only; no install needed.
+      - name: npm audit
+        run: npm audit --audit-level=moderate

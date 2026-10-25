@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     body::Bytes,
@@ -38,7 +38,9 @@ use axum::{
     routing::post,
     Router,
 };
-use ion_drift_module_api::{DriftEvent, EventEnvelope, EventKind, FindingEvidence, FindingV1};
+use ion_drift_module_api::{
+    DriftEvent, EventEnvelope, EventKind, FindingEvidence, FindingSubject, FindingV1,
+};
 use ion_drift_module_host::EventBus;
 use ion_drift_storage::FindingsStore;
 use secrecy::ExposeSecret;
@@ -123,7 +125,7 @@ impl NonceCache {
         let mut guard = self.inner.lock().await;
 
         let n = self.inserts.fetch_add(1, Ordering::Relaxed);
-        if n % NONCE_GC_INTERVAL == 0 || guard.len() >= MAX_NONCE_ENTRIES {
+        if n.is_multiple_of(NONCE_GC_INTERVAL) || guard.len() >= MAX_NONCE_ENTRIES {
             guard.retain(|_, t| now_unix.saturating_sub(*t) < NONCE_TTL_SECS);
         }
         // Hard backstop: if still at capacity after GC (sustained flood), drop
@@ -136,15 +138,7 @@ impl NonceCache {
         }
 
         let key = (module.to_string(), nonce.to_string());
-        match guard.insert(key, now_unix) {
-            Some(_) => true,  // already present
-            None => false,
-        }
-    }
-
-    /// Number of cached entries (for tests/diagnostics).
-    pub async fn len(&self) -> usize {
-        self.inner.lock().await.len()
+        guard.insert(key, now_unix).is_some()
     }
 }
 
@@ -331,7 +325,7 @@ async fn try_publish(
     // Findings persist at the ACL boundary so the host-stamped module
     // name lives on the row. Other event kinds are advisory-only and not
     // persisted here.
-    if let DriftEvent::Finding(ref finding) = event {
+    let event = if let DriftEvent::Finding(finding) = event {
         // Clamp module-supplied finding content before persisting. severity is
         // already an enum (serde-validated); the free-form string/array fields
         // are not, so a compromised or buggy module could store megabyte
@@ -339,7 +333,7 @@ async fn try_publish(
         // (DRIFT-2026-0005). Bound sizes and strip control/bidi characters
         // (L4, defense-in-depth); the CSP-guarded React UI also renders the
         // content inertly as text, so markup characters are left intact.
-        let finding = clamp_finding(finding);
+        let finding = clamp_finding(&finding);
         if let Err(e) = state
             .findings_store
             .upsert_finding(
@@ -356,7 +350,11 @@ async fn try_publish(
                 "findings persist failed",
             ));
         }
-    }
+        // The bus carries the same clamped finding the store holds.
+        DriftEvent::Finding(finding)
+    } else {
+        event
+    };
 
     state.event_bus.publish(event);
 
@@ -493,6 +491,25 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
         .filter_map(|m| neutralize_mac(m))
         .map(|m| m.chars().take(64).collect())
         .collect();
+    c.subjects = f
+        .subjects
+        .iter()
+        .take(MAX_MACS)
+        .filter_map(|s| {
+            let id = match s.kind.as_str() {
+                FindingSubject::ENDPOINT => {
+                    neutralize_mac(&s.id)?.chars().take(64).collect::<String>()
+                }
+                FindingSubject::DOMAIN => crate::staging::stage_dns_name(&s.id)?,
+                _ => clamp_str(&s.id, 64),
+            };
+            let id: String = id.chars().take(253).collect();
+            let kind = clamp_str(&s.kind, 32);
+            (!id.trim().is_empty() && !kind.trim().is_empty())
+                .then_some(FindingSubject { kind, id })
+        })
+        .collect();
+    c.references = crate::staging::stage_references(&f.references);
     c
 }
 
@@ -595,6 +612,8 @@ mod tests {
                 label: big.clone(),
                 payload: serde_json::json!({ "blob": big }),
             }],
+            references: vec![],
+            subjects: vec![],
             device_macs: vec![],
             timestamp_unix: 0,
             metadata: Some(serde_json::json!({ "blob": big })),
@@ -614,7 +633,7 @@ mod tests {
         assert_eq!(c.metadata, Some(serde_json::json!({ "_truncated": true })));
     }
 
-    fn hostile_finding() -> FindingV1 {
+    pub(super) fn hostile_finding() -> FindingV1 {
         use ion_drift_module_api::{FindingEvidence, FindingSeverity};
         FindingV1 {
             finding_id: "id-<1>\u{0}".into(),
@@ -631,6 +650,26 @@ mod tests {
                     "nested": ["<x>", 5, { "y": "a\u{7}b" }]
                 }),
             }],
+            references: vec![
+                "https://example.com/adv?id=1".into(),
+                "javascript:alert(1)".into(),
+                "ftp://example.com/x".into(),
+                "data:text/html,<script>".into(),
+                "not a url".into(),
+                "https://example.com/\u{202e}evil".into(),
+                "https://nvd.nist.gov@evil.example/x".into(),
+                "https://example.com/adv?id=1".into(),
+                "".into(),
+            ],
+            subjects: vec![
+                FindingSubject::endpoint("<script>"),
+                FindingSubject::domain("EXAMPLE.com"),
+                FindingSubject::device("r1"),
+                FindingSubject::device(""),
+                FindingSubject::device("   "),
+                FindingSubject::new("peer", "198.51.100.7"),
+                FindingSubject::endpoint("a".repeat(200)),
+            ],
             device_macs: vec![
                 "aa:bb:cc:dd:ee:ff".into(),
                 "<script>".into(),
@@ -711,6 +750,37 @@ mod tests {
             c.device_macs,
             vec!["aa:bb:cc:dd:ee:ff".to_string(), "AA-BB-CC-DD-EE-01".to_string()]
         );
+        // subjects: the non-MAC-shaped endpoint drops; the domain is staged
+        // (lowercased); the device id passes through.
+        assert_eq!(
+            c.subjects,
+            vec![
+                FindingSubject::domain("example.com"),
+                FindingSubject::device("r1"),
+                FindingSubject::new("peer", "198.51.100.7"),
+                FindingSubject::endpoint("a".repeat(64)),
+            ]
+        );
+        assert_eq!(
+            c.references,
+            vec![
+                "https://example.com/adv?id=1".to_string(),
+                "https://example.com/evil".to_string(),
+            ],
+            "only http/https URLs without userinfo survive, once each; bidi control stripped"
+        );
+    }
+
+    #[test]
+    fn references_are_capped_in_count_and_length() {
+        let mut f = hostile_finding();
+        f.references = (0..40).map(|i| format!("https://example.com/{i}")).collect();
+        f.references.insert(0, format!("https://example.com/{}", "a".repeat(5000)));
+        f.references.insert(1, format!("https://example.com/{}", "\u{4e00}".repeat(1000)));
+        let c = clamp_finding(&f);
+        assert_eq!(c.references.len(), 14, "two over-long entries dropped, not truncated");
+        assert!(c.references.iter().all(|r| r.len() <= 2048));
+        assert_eq!(c.references[0], "https://example.com/0");
     }
 
     #[test]
@@ -736,6 +806,8 @@ mod tests {
             category: "geographic".into(),
             recommended_actions: vec!["block".into()],
             evidence: vec![FindingEvidence::Anomaly { anomaly_id: 7 }],
+            references: vec![],
+            subjects: vec![],
             device_macs: vec!["aa:bb:cc:dd:ee:ff".into()],
             timestamp_unix: 1_700_000_000,
             metadata: None,
@@ -759,6 +831,8 @@ mod tests {
             category: "x".into(),
             recommended_actions: vec![],
             evidence: vec![],
+            references: vec![],
+            subjects: vec![],
             device_macs: vec![],
             timestamp_unix: 0,
             metadata: None,
@@ -781,11 +855,6 @@ mod tests {
             payload: serde_json::Value::Null,
         });
         assert!(wire_to_event(&EventKind::ModuleCustom, wire, "m").is_none());
-    }
-
-    #[allow(dead_code)]
-    fn _duration_used_marker() -> Duration {
-        Duration::from_secs(1)
     }
 }
 
@@ -894,6 +963,8 @@ mod integration_tests {
             category: "geographic".into(),
             recommended_actions: vec!["block".into()],
             evidence: vec![FindingEvidence::Anomaly { anomaly_id: 7 }],
+            references: vec![],
+            subjects: vec![],
             device_macs: vec!["aa:bb:cc:dd:ee:ff".into()],
             timestamp_unix,
             // Payload metadata claims a different "source" — must be ignored
@@ -969,6 +1040,41 @@ mod integration_tests {
         assert_eq!(rows[0].finding_id, "f-1");
         assert_eq!(rows[0].envelope_event_id.as_deref(), Some("evt-f-1"));
         assert_eq!(rows[0].envelope_nonce.as_deref(), Some("nonce-f-1"));
+    }
+
+    /// The bus must carry the same clamped finding the store holds. Publishing
+    /// the raw event let any bus consumer persist or display unsanitized
+    /// references (KNOWN_ISSUES, 0.5.6 finding-subjects review).
+    #[tokio::test]
+    async fn bus_receives_the_clamped_finding() {
+        let fx = fixture("test", vec![EventKind::Finding]).await;
+        let ts = now_unix();
+        let mut hostile = super::tests::hostile_finding();
+        hostile.timestamp_unix = ts;
+        let sent = hostile.clone();
+        let envelope = EventEnvelope {
+            api_version: ApiVersion::CURRENT,
+            event_id: "evt-h".into(),
+            timestamp_unix: ts,
+            nonce: "nonce-h".into(),
+            kind: EventKind::Finding,
+            event: DriftEventWire::Finding(hostile),
+        };
+        let handle = fx.state.event_bus.handle_for("probe", Vec::new(), vec![EventKind::Finding]);
+        let mut rx = handle.subscribe();
+        let app = make_router(fx.state.clone());
+
+        let resp = app.oneshot(signed_request("test", &fx.secret, &envelope)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let DriftEvent::Finding(on_bus) = rx.recv().await.unwrap() else { panic!("not a finding") };
+        let stored = &fx.state.findings_store.list_findings(&q_all()).await.unwrap()[0];
+        assert_eq!(on_bus.references, stored.references);
+        // The store unions `device_macs` into `subjects`, so compare the bus
+        // payload with the clamped submission, not the stored row.
+        assert_eq!(on_bus.subjects, super::clamp_finding(&sent).subjects);
+        assert_eq!(on_bus.title, stored.title);
+        assert_ne!(on_bus.references, sent.references, "the raw submission was not what went on the bus");
     }
 
     #[tokio::test]

@@ -52,6 +52,12 @@ pub struct MaxMindProvider {
     source: RwLock<String>,
 }
 
+impl Default for MaxMindProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MaxMindProvider {
     pub fn new() -> Self {
         Self {
@@ -59,11 +65,6 @@ impl MaxMindProvider {
             mmdb_asn: RwLock::new(None),
             source: RwLock::new("none".to_string()),
         }
-    }
-
-    /// Which database source is loaded: "maxmind", "dbip", or "none".
-    pub fn source_name(&self) -> String {
-        self.source.read().map(|s| s.clone()).unwrap_or_else(|_| "none".to_string())
     }
 
     fn lookup_asn(&self, ip: &IpAddr) -> (Option<String>, Option<String>, Option<String>) {

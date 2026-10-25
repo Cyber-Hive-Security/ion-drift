@@ -192,7 +192,7 @@ Findings
 15. Acknowledged Low exposure widened to unrestricted → reopens High; unchanged → stays acknowledged.
 16. Exposure, vulnerability and exploitation findings coexist for one device.
 
-Verify: `cargo test --workspace`, `cargo deny check` (≥ 0.20), `tsc --noEmit`, vitest; live on kuat:
+Verify: `cargo test --workspace`, `cargo deny check` (≥ 0.20), `tsc --noEmit`, vitest; live on the dev box:
 confirm modal → within one fetch + one evaluator cycle, Findings shows the two KEV CVEs for any router
 below 7.24.2 / 7.23.4 / 6.49.21, and the CVE-2026-16347 exposure finding for enabled `api-ssl`.
 

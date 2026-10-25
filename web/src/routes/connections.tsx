@@ -20,7 +20,7 @@ import { WorldMap } from "@/features/world-map/world-map";
 import { formatBytes, formatNumber } from "@/lib/format";
 import { countryFlag, isPrivateIp, vlanLabel } from "@/lib/country";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
-import { cn } from "@/lib/utils";
+import { cn, onEnterOrSpace } from "@/lib/utils";
 import { portLabel } from "@/lib/services";
 import { ChevronDown, ChevronRight, Filter, Globe, Microscope, Network, X } from "lucide-react";
 import { Link } from "@tanstack/react-router";
@@ -425,7 +425,10 @@ function TalkerPanel({
               "flex items-center gap-2 text-xs",
               onEntryClick && "cursor-pointer rounded px-1 -mx-1 hover:bg-muted/50 transition-colors",
             )}
+            role={onEntryClick ? "button" : undefined}
+            tabIndex={onEntryClick ? 0 : undefined}
             onClick={onEntryClick ? () => onEntryClick(ip) : undefined}
+            onKeyDown={onEntryClick ? onEnterOrSpace(() => onEntryClick(ip)) : undefined}
           >
             <span className="w-28 shrink-0 truncate font-mono">{ip}</span>
             <div className="relative h-3 flex-1 rounded bg-muted">
@@ -885,6 +888,7 @@ function ColumnFilterDropdown({
 
   return (
     <div
+      role="presentation"
       className="absolute top-full left-0 z-50 mt-1 w-56 rounded-lg border border-border bg-card shadow-lg"
       onClick={(e) => e.stopPropagation()}
     >
@@ -895,6 +899,7 @@ function ColumnFilterDropdown({
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search..."
           className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+          // eslint-disable-next-line jsx-a11y/no-autofocus -- field opens on user action
           autoFocus
         />
       </div>

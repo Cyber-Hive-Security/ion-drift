@@ -12,11 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ion_drift_storage::switch::{NetworkIdentity, SectorPosition, SwitchStore};
-use crate::identity_utils::{identity_overrides_lldp, is_infrastructure_type};
+use crate::identity_utils::identity_overrides_lldp;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-use crate::device_manager::DeviceManager;
 use crate::infrastructure_snapshot::{
     InfraNodeSource, InfrastructureSnapshotState, ResolvedInfrastructureSnapshot,
 };
@@ -153,7 +152,6 @@ fn resolve_vlan_config(
     }
 }
 
-/// Sorted VLAN order for consistent horizontal layout.
 // VLAN_ORDER removed — now derived from database VlanConfig at runtime.
 
 // ── Layout constants ─────────────────────────────────────────────
@@ -164,7 +162,6 @@ const VLAN_SECTOR_MIN_W: f64 = 200.0;
 const VLAN_SECTOR_EMPTY_W: f64 = 150.0;
 const NODE_SPACING: f64 = 120.0;
 const TOP_MARGIN: f64 = 150.0;
-const ENDPOINT_OFFSET: f64 = 200.0;
 const SECTOR_PADDING: f64 = 40.0;
 
 // WAN_INTERFACES removed — now passed as parameter from config.router.wan_interface
@@ -300,8 +297,8 @@ pub async fn compute_topology(
     }
 
     // WAN placeholder from snapshot
-    if snapshot.wan_neighbor_count > 0 {
-        if let Some(ref rid) = router_id {
+    if snapshot.wan_neighbor_count > 0
+        && let Some(ref rid) = router_id {
             let wan_id = "WAN".to_string();
             infra_ids.insert(wan_id.clone());
             nodes.insert(
@@ -345,7 +342,6 @@ pub async fn compute_topology(
                 traffic_bps: None,
             });
         }
-    }
 
     // ── Resolve edge speeds from port metrics ─────────────────────
     {
@@ -360,11 +356,10 @@ pub async fn compute_topology(
         }
         let mut speed_map: HashMap<String, HashMap<String, u32>> = HashMap::new();
         for dev_id in &device_ids_with_edges {
-            if let Ok(speeds) = store.get_port_speeds(dev_id).await {
-                if !speeds.is_empty() {
+            if let Ok(speeds) = store.get_port_speeds(dev_id).await
+                && !speeds.is_empty() {
                     speed_map.insert(dev_id.clone(), speeds);
                 }
-            }
         }
         for edge in &mut edges {
             if edge.speed_mbps.is_some() { continue; }
@@ -392,9 +387,8 @@ pub async fn compute_topology(
             if edge.target_port.is_some() { device_ids_with_edges.insert(edge.target.clone()); }
         }
         for dev_id in &device_ids_with_edges {
-            if let Ok(traffic) = store.get_port_traffic_bps(dev_id).await {
-                if !traffic.is_empty() { traffic_map.insert(dev_id.clone(), traffic); }
-            }
+            if let Ok(traffic) = store.get_port_traffic_bps(dev_id).await
+                && !traffic.is_empty() { traffic_map.insert(dev_id.clone(), traffic); }
         }
         for edge in &mut edges {
             let src_bps = edge.source_port.as_deref()
@@ -483,11 +477,10 @@ pub async fn compute_topology(
     }
     // Also add any MAC from the rendered infra nodes
     for node in nodes.values() {
-        if node.is_infrastructure {
-            if let Some(ref mac) = node.mac {
+        if node.is_infrastructure
+            && let Some(ref mac) = node.mac {
                 infra_macs.insert(mac.to_uppercase());
             }
-        }
     }
     // Add switch-local MACs (the switch's own interface MACs). These appear
     // in other switches' MAC tables as regular learned MACs but should never
@@ -519,11 +512,10 @@ pub async fn compute_topology(
         }
         // Skip if this identity's IP matches a registered device (catches router
         // gateway IPs that leak through ARP/DHCP into network_identities)
-        if let Some(ref ip) = identity.best_ip {
-            if ip_to_device.contains_key(ip) {
+        if let Some(ref ip) = identity.best_ip
+            && ip_to_device.contains_key(ip) {
                 continue;
             }
-        }
         // Skip if this identity's MAC matches a known infrastructure device
         if mac_to_device.contains_key(&mac) {
             continue;
@@ -581,8 +573,8 @@ pub async fn compute_topology(
         );
 
         // Create access edge from switch to endpoint
-        if let Some(ref switch_id) = parent_id {
-            if nodes.contains_key(switch_id) {
+        if let Some(ref switch_id) = parent_id
+            && nodes.contains_key(switch_id) {
                 edges.push(TopologyEdge {
                     source: switch_id.clone(),
                     target: mac,
@@ -594,7 +586,6 @@ pub async fn compute_topology(
                     traffic_bps: None,
                 });
             }
-        }
     }
 
     // ── Layer 3: Orphan handling ─────────────────────────────────
@@ -611,17 +602,15 @@ pub async fn compute_topology(
         let macs: Vec<&str> = nodes.values()
             .filter_map(|n| n.mac.as_deref())
             .collect();
-        if !macs.is_empty() {
-            if let Ok(profiles) = behavior_store.get_profiles_bulk(&macs).await {
+        if !macs.is_empty()
+            && let Ok(profiles) = behavior_store.get_profiles_bulk(&macs).await {
                 for node in nodes.values_mut() {
-                    if let Some(mac) = &node.mac {
-                        if let Some(profile) = profiles.get(mac) {
+                    if let Some(mac) = &node.mac
+                        && let Some(profile) = profiles.get(mac) {
                             node.baseline_status = Some(profile.baseline_status.clone());
                         }
-                    }
                 }
             }
-        }
     }
 
     // ── Stamp attachment state from inference engine ──────────────
@@ -632,8 +621,8 @@ pub async fn compute_topology(
             .map(|r| (r.mac_address.to_uppercase(), r))
             .collect();
         for node in nodes.values_mut() {
-            if let Some(mac) = &node.mac {
-                if let Some(att) = attachment_by_mac.get(&mac.to_uppercase()) {
+            if let Some(mac) = &node.mac
+                && let Some(att) = attachment_by_mac.get(&mac.to_uppercase()) {
                     node.attachment_state = Some(att.state.clone());
                     if att.confidence > node.confidence {
                         node.confidence = att.confidence;
@@ -649,7 +638,6 @@ pub async fn compute_topology(
                         node.binding_tier = Some("multi_signal".to_string());
                     }
                 }
-            }
         }
     }
 
@@ -675,23 +663,20 @@ pub async fn compute_topology(
         .as_ref()
         .and_then(|rid| nodes.get(rid))
         .map(|n| (n.x, n.y))
-    {
-        if let Some(wan) = nodes.get_mut("WAN") {
+        && let Some(wan) = nodes.get_mut("WAN") {
             wan.x = router_pos.0 - 300.0;
             wan.y = router_pos.1;
         }
-    }
 
     // ── Position override merging ────────────────────────────────
     let positions = store.get_topology_positions().await.unwrap_or_default();
     for pos in &positions {
-        if pos.source == "human" {
-            if let Some(node) = nodes.get_mut(&pos.node_id) {
+        if pos.source == "human"
+            && let Some(node) = nodes.get_mut(&pos.node_id) {
                 node.x = pos.x;
                 node.y = pos.y;
                 node.position_source = "human".to_string();
             }
-        }
     }
 
     // ── VLAN group computation ───────────────────────────────────
@@ -818,11 +803,10 @@ fn compute_layout(
     // ── Collect VLANs and device counts ──────────────────────────
     let mut active_vlans: Vec<u32> = configured_vlans.to_vec();
     for node in nodes.values() {
-        if let Some(vid) = node.vlan_id {
-            if !active_vlans.contains(&vid) {
+        if let Some(vid) = node.vlan_id
+            && !active_vlans.contains(&vid) {
                 active_vlans.push(vid);
             }
-        }
     }
 
     let mut vlan_endpoint_counts: HashMap<u32, usize> = HashMap::new();
@@ -830,12 +814,11 @@ fn compute_layout(
         // Count endpoints AND single-VLAN infrastructure (APs, single-VLAN switches)
         // so their VLAN sectors are sized correctly
         let in_sector = !node.is_infrastructure
-            || (node.is_infrastructure && node.vlans_served.len() <= 1 && node.vlan_id.is_some());
-        if in_sector {
-            if let Some(vid) = node.vlan_id {
+            || (node.vlans_served.len() <= 1 && node.vlan_id.is_some());
+        if in_sector
+            && let Some(vid) = node.vlan_id {
                 *vlan_endpoint_counts.entry(vid).or_default() += 1;
             }
-        }
     }
 
     // ── Balance VLANs across left/right columns ─────────────────
@@ -847,7 +830,7 @@ fn compute_layout(
         .iter()
         .map(|&v| (v, vlan_endpoint_counts.get(&v).copied().unwrap_or(0)))
         .collect();
-    sorted_by_count.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_by_count.sort_by_key(|x| std::cmp::Reverse(x.1));
 
     let (mut left_vlans, mut right_vlans) = (Vec::new(), Vec::new());
     let (mut left_total, mut right_total) = (0usize, 0usize);
@@ -895,7 +878,7 @@ fn compute_layout(
         }
         let usable_w = (sector_width - 2.0 * SECTOR_PADDING).max(NODE_SPACING);
         let cols = (usable_w / NODE_SPACING).floor().max(1.0) as usize;
-        let rows = (count + cols - 1) / cols;
+        let rows = count.div_ceil(cols);
         let grid_h = rows as f64 * NODE_SPACING;
         (grid_h + SECTOR_HEADER_H + 2.0 * SECTOR_PADDING).max(MIN_SECTOR_H)
     }
@@ -962,7 +945,7 @@ fn compute_layout(
         }
     }
 
-    for (_layer, ids) in &layers {
+    for ids in layers.values() {
         let mut infra_ids = ids.clone();
         infra_ids.sort();
 
@@ -982,12 +965,11 @@ fn compute_layout(
     let mut vlan_endpoints: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for (id, node) in nodes.iter() {
         let in_sector = !node.is_infrastructure
-            || (node.is_infrastructure && node.vlans_served.len() <= 1 && node.vlan_id.is_some());
-        if in_sector {
-            if let Some(vid) = node.vlan_id {
+            || (node.vlans_served.len() <= 1 && node.vlan_id.is_some());
+        if in_sector
+            && let Some(vid) = node.vlan_id {
                 vlan_endpoints.entry(vid).or_default().push(id.clone());
             }
-        }
     }
 
     for (vid, mut ep_ids) in vlan_endpoints {
@@ -1034,15 +1016,6 @@ fn map_device_type(dt: Option<&str>) -> NodeKind {
         Some("gaming") | Some("iot") | Some("storage") => NodeKind::IoT,
         _ => NodeKind::Unknown,
     }
-}
-
-/// Strip punctuation/whitespace and lowercase for fuzzy identity matching.
-/// e.g. "MT-4011-R-Office" → "mt4011roffice" matches "MT4011ROffice".
-fn normalize_identity(s: &str) -> String {
-    s.chars()
-        .filter(|c| !matches!(c, '-' | '_' | '.' | ' '))
-        .collect::<String>()
-        .to_lowercase()
 }
 
 // ── Background task ──────────────────────────────────────────────

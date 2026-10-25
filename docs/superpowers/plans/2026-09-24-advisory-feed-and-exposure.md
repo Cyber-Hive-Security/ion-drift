@@ -3176,14 +3176,14 @@ Append inside `mod tests` in `resources/ip.rs`:
         let payload = serde_json::json!([
             { ".id": "*8", "address": "", "certificate": "none", "disabled": "false",
               "invalid": "false", "name": "api-ssl", "port": "8729", "tls-version": "any", "vrf": "main" },
-            { ".id": "*3", "address": "10.20.25.17/32", "disabled": "true", "name": "api", "port": "8728" }
+            { ".id": "*3", "address": "192.168.1.17/32", "disabled": "true", "name": "api", "port": "8728" }
         ]);
         let svcs: Vec<IpService> = serde_json::from_value(payload).unwrap();
         assert_eq!(svcs[0].name, "api-ssl");
         assert_eq!(svcs[0].port, Some(8729));
         assert!(!svcs[0].disabled);
         assert_eq!(svcs[0].address.as_deref(), Some(""));
-        assert_eq!(svcs[1].address.as_deref(), Some("10.20.25.17/32"));
+        assert_eq!(svcs[1].address.as_deref(), Some("192.168.1.17/32"));
         assert!(svcs[1].disabled);
     }
 
@@ -3402,9 +3402,9 @@ mod tests {
         assert_eq!(scope_of(None), Scope::Unrestricted);
         assert_eq!(scope_of(Some("")), Scope::Unrestricted);
         assert_eq!(scope_of(Some("0.0.0.0/0")), Scope::Unrestricted);
-        assert_eq!(scope_of(Some("10.20.25.17/32,0.0.0.0/0")), Scope::Unrestricted);
+        assert_eq!(scope_of(Some("192.168.1.17/32,0.0.0.0/0")), Scope::Unrestricted);
         assert_eq!(scope_of(Some("::/0")), Scope::Unrestricted);
-        assert_eq!(scope_of(Some("10.20.25.17/32")), Scope::Restricted(vec!["10.20.25.17/32".into()]));
+        assert_eq!(scope_of(Some("192.168.1.17/32")), Scope::Restricted(vec!["192.168.1.17/32".into()]));
     }
 
     #[test]
@@ -3422,13 +3422,13 @@ mod tests {
 
     #[test]
     fn restricted_enabled_service_is_low_with_scope_in_evidence() {
-        let a = assess("dev1", &[svc("api-ssl", false, Some("10.20.25.17/32"))], &[advisory()], 1);
+        let a = assess("dev1", &[svc("api-ssl", false, Some("192.168.1.17/32"))], &[advisory()], 1);
         let f = &a.exposed[0];
         assert_eq!(f.severity, FindingSeverity::Low);
         let ion_drift_module_api::FindingEvidence::Custom { payload, .. } = &f.evidence[0] else {
             panic!("expected custom evidence")
         };
-        assert_eq!(payload["scope"], serde_json::json!(["10.20.25.17/32"]));
+        assert_eq!(payload["scope"], serde_json::json!(["192.168.1.17/32"]));
     }
 
     #[test]
@@ -3463,7 +3463,7 @@ mod tests {
     async fn acknowledged_low_reopens_when_widened_to_unrestricted() {
         let f = NamedTempFile::new().unwrap();
         let store = FindingsStore::new(f.path()).unwrap();
-        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("10.20.25.17/32"))], &[advisory()], 1)).await.unwrap();
+        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("192.168.1.17/32"))], &[advisory()], 1)).await.unwrap();
         store.acknowledge(rows(&store).await[0].id, "scott").await.unwrap();
 
         reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some(""))], &[advisory()], 2)).await.unwrap();
@@ -3477,7 +3477,7 @@ mod tests {
     async fn acknowledged_finding_stays_acknowledged_while_config_is_unchanged() {
         let f = NamedTempFile::new().unwrap();
         let store = FindingsStore::new(f.path()).unwrap();
-        let reads = [svc("api-ssl", false, Some("10.20.25.17/32"))];
+        let reads = [svc("api-ssl", false, Some("192.168.1.17/32"))];
         reconcile(&store, assess("dev1", &reads, &[advisory()], 1)).await.unwrap();
         store.acknowledge(rows(&store).await[0].id, "scott").await.unwrap();
         reconcile(&store, assess("dev1", &reads, &[advisory()], 2)).await.unwrap();
@@ -4013,9 +4013,9 @@ git add web/src/components/advisory-feed-status-banner.tsx web/src/components/__
 git commit -m "feat(web): feed health banner; document outbound connections"
 ```
 
-- [ ] **Step 8: Live check on kuat (Scott)**
+- [ ] **Step 8: Live check on the dev box (Scott)**
 
-Rebuild **from source** — kuat's compose file must use `build: .` (see `docker-compose.build.yml`), not the `image:` registry tag:
+Rebuild **from source** — the dev box compose file must use `build: .` (see `docker-compose.build.yml`), not the `image:` registry tag:
 ```bash
 docker compose -f docker-compose.build.yml build --no-cache && docker compose -f docker-compose.build.yml up -d
 docker compose -f docker-compose.build.yml logs -f ion-drift | grep -iE 'advisory|feed'

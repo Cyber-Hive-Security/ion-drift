@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-10-25
+
+Maintenance release: no feature changes. User-visible changes are limited to the eight items under Fixed below.
+
+### Security
+
+- `tokio` 1.52.3 → 1.54.1 (RUSTSEC-2026-0386, `AsyncFd` I/O safety). RUSTSEC-2026-0387 (`crypto-bigint` timing) is recorded as ignored in `deny.toml`: the crate is reached only through `openidconnect` for verifying ID-token signatures with the IdP's public keys, and the fixed version is not reachable without an `openidconnect` major bump.
+- Module findings published on the in-process event bus now carry the same clamped content the store holds. Before, the raw submission was published and a bus consumer stored it a second time under the module name `in-process`, with unsanitized references. That consumer is gone; the inbound endpoint is the single persistence point.
+
+### Changed
+
+- **Clippy at zero, blocking in CI.** 300 unique warnings cleared across the workspace: nested `if`s collapsed into
+  let-chains, dead code removed, remaining `too_many_arguments`/`result_large_err` cases carry an item-level allow with
+  a one-line reason. The CI job now runs `cargo clippy --workspace --locked --all-targets -- -D warnings`.
+- **ESLint for the web app.** ESLint 9 flat config (typescript-eslint, react-hooks, jsx-a11y) added and run in CI.
+  Form labels are associated with their controls, clickable rows and cards are keyboard reachable (including every data-table row, which now takes focus and expands on Enter or Space), and `autoFocus`
+  stays only where a field opens on user action.
+- **SonarQube findings resolved.** `Number.isNaN`/`Number.parseInt` throughout; three regexes with super-linear
+  backtracking rewritten (Cisco port names, trailing port numbers, uptime) with tests; the setup-wizard retry and the
+  secret editor no longer drop promise rejections, and the secret editor shows a save error. Default string sorts and
+  the decorative `Math.random()` star field were reviewed and left as-is (see KNOWN_ISSUES).
+- **Internal identifiers removed.** Lab addresses, hostnames, and user paths in tests, the example config, UI
+  placeholders, and docs replaced with RFC 1918 and RFC 5737 example ranges and `example.com`.
+  `scripts/check-internal-identifiers.sh` runs in pre-commit and CI, scans staged content, and fails closed.
+- `ROADMAP.md` rewritten for the standalone Drift 1.0 train (0.5.7 to 1.0); companion-product work moved to post-1.0.
+
+### Fixed
+
+- **Switch port grid showed the bridge as port 1.** RouterOS lists the bridge interface itself as a tagged member of the management VLAN, and the switch poller recorded it as a VLAN member like any port. On a switch whose bridge is named `bridge1`, the port grid read the trailing digit as port 1 and drew it over ether1. The poller no longer records the bridge itself as a VLAN member, so it disappears from the port grid and the VLAN audit grid; bonds and other bridge members are unaffected. Existing rows clear on the first poll after upgrade. The Port Traffic table on the same page now lists physical ports only; bridge and VLAN interfaces, which have no port metrics, no longer appear as ports marked Down.
+- **Advisory findings showed no device.** CVE, exposure, and exploitation findings are about a specific router or switch, but the finding model could only name endpoints by MAC, so the Devices column stayed empty and findings for three switches looked like duplicates. Findings now carry a typed `subjects` list (an open `kind` plus `id`; Drift renders `device` by registry id, `endpoint` by MAC, and `domain` by name, and shows any other kind as text); the Findings page shows each subject by name, linking switches to their detail page. Lookalike-domain findings name the domain. `device_macs` remains in the module API and the HTTP API as a deprecated endpoint-only view. This bumps findings.db to schema version 2 with existing rows backfilled; rolling back to 0.5.5 afterwards requires the pre-upgrade backup.
+- **CVE and advisory links were plain text.** Findings now carry a `references` list of URLs; CVE findings reference their NVD entry, exposure and exploitation findings reference the advisory's sources, and the Findings detail panel shows them as links. The `Details: https://...` line is gone from CVE recommended actions. Module-supplied references are kept only when they are well-formed `http`/`https` URLs, and every finding's final reference list passes through the same check at emission, so advisory rows stored by earlier versions cannot carry an unchecked URL onto the page. This bumps findings.db to schema version 3 (column added, no backfill); rolling back to 0.5.5 afterwards requires the pre-upgrade backup.
+- **Devices with few distinct flows never finished learning.** Cameras, thermostats, and single-purpose servers could stay in `learning` indefinitely: promotion required ten distinct flow tuples, and the 3-day extension repeated without limit. Graduation now measures coverage (days seen in the last 7) and stability (no flow tuple first seen in the retained 30-day history within the last 48 hours, so a flow that recurs weekly does not count as new), sparse devices are re-evaluated every pass, a device is marked baselined only after its baseline has been computed, and the profile records both values (`days_seen`, `last_new_flow`, added to `device_profiles` automatically on first start). The Learning Until cell on the Behavior page shows them on hover. On first start after upgrading, devices the old rule had stuck in learning or sparse are re-evaluated and may graduate in bulk within ten minutes. This bumps behavior.db to schema version 2; rolling back to 0.5.5 afterwards requires the pre-upgrade backup.
+- The secret editor on the Security settings page now shows a save error instead of silently dropping the rejection.
+- Uptime strings are parsed from the start of the string (`formatUptime`); RouterOS always supplies a bare uptime, so output is unchanged for real data.
+- `TempDir::into_path` deprecation in storage tests; `cfg(fuzzing)` declared as a known cfg in `mikrotik-core`.
+- `modules_registry` re-exports restored after an over-eager auto-fix; the bin target does not use them, so the
+  unused-import lint is silenced there with a comment.
+
 ## [0.5.5] - 2026-10-22
 
 ### Security

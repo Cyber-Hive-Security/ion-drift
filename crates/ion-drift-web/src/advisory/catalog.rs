@@ -398,7 +398,7 @@ fn validate(
         no_fixed_release: raw.no_fixed_release,
         fixed_versions: raw.fixed_versions,
         mitigations: raw.mitigations,
-        references: raw.references,
+        references: crate::staging::stage_references(&raw.references),
         attack_techniques: raw.attack_techniques,
         source: source.to_string(),
         catalog_version,

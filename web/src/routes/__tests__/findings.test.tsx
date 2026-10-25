@@ -22,9 +22,11 @@ function sampleFinding(overrides: Partial<Finding> = {}): Finding {
     category: "behavior",
     recommended_actions: ["Review the device's recent connections"],
     evidence: [],
+    references: [],
     // Empty on purpose: DeviceLink needs router context the smoke floor
     // doesn't mount.
     device_macs: [],
+    subjects: [],
     metadata: null,
     timestamp: 1_750_000_000,
     received_at: 1_750_000_000,
@@ -86,6 +88,25 @@ describe("FindingsPage", () => {
     expect(
       screen.getByText(/review the device's recent connections/i),
     ).toBeInTheDocument();
+  });
+
+  it("renders references as external links in the detail panel", async () => {
+    const href = "https://nvd.nist.gov/vuln/detail/CVE-2026-86060";
+    mockFetchRoutes({
+      "GET /api/findings": [sampleFinding({ references: [href] })],
+      "GET /api/findings/summary": { open: 1, acknowledged: 0, resolved: 0 },
+    });
+    renderWithClient(<FindingsPage />);
+    const user = userEvent.setup();
+
+    await user.click(
+      await screen.findByText("Repeated anomalies from workstation"),
+    );
+
+    const link = await screen.findByRole("link", { name: href });
+    expect(link).toHaveAttribute("href", href);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("acknowledge fires POST /api/findings/{id}/acknowledge", async () => {

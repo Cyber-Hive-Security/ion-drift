@@ -154,23 +154,8 @@ impl RouterQueue {
         serde_json::from_value(value).map_err(|e| format!("deserialize {path}: {e}"))
     }
 
-    /// Submit a batch and deserialize each response into the same type.
-    /// Returns results in the same order as the requests.
-    pub async fn submit_typed<T: serde::de::DeserializeOwned>(
-        &self,
-        poller_id: &str,
-        priority: Priority,
-        requests: Vec<QueuedRequest>,
-    ) -> Result<Vec<Result<T, String>>, String> {
-        let results = self.submit(poller_id, priority, requests).await
-            .map_err(|e| format!("queue error: {e}"))?;
-        Ok(results.into_iter().map(|r| {
-            let value = r.map_err(|e| format!("{e}"))?;
-            serde_json::from_value(value).map_err(|e| format!("deserialize: {e}"))
-        }).collect())
-    }
-
     /// Get current queue metrics.
+    #[allow(dead_code)] // read by the 0.6 poller-diagnostics endpoint, see ROADMAP.md
     pub async fn metrics(&self) -> QueueMetrics {
         self.metrics.lock().await.clone()
     }
@@ -180,7 +165,6 @@ impl RouterQueue {
 pub enum QueueError {
     QueueClosed,
     WorkerDropped,
-    Superseded,
 }
 
 impl std::fmt::Display for QueueError {
@@ -188,7 +172,6 @@ impl std::fmt::Display for QueueError {
         match self {
             Self::QueueClosed => write!(f, "router queue closed"),
             Self::WorkerDropped => write!(f, "queue worker dropped response"),
-            Self::Superseded => write!(f, "batch superseded by newer submission"),
         }
     }
 }
@@ -237,12 +220,11 @@ impl CircuitBreaker {
     }
 
     fn is_open(&self) -> bool {
-        if let Some(until) = self.open_until {
-            if Instant::now() < until {
+        if let Some(until) = self.open_until
+            && Instant::now() < until {
                 return true;
             }
             // Circuit half-open — will close on next success
-        }
         false
     }
 }

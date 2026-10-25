@@ -11,17 +11,16 @@
 //! 3. Normalized/fuzzy identity (confidence 0.75)
 //! 4. IP address, skip fe80:: link-local (confidence 0.80)
 //! 5. MAC address fallback (confidence 0.60)
-//! 6. Learned mapping, if not expired and above confidence floor (confidence varies)
+//! 6. Learned mapping, if above confidence floor (confidence varies)
 //!
 //! Confidence values are **ordinal heuristics**, not calibrated probabilities.
 //! They support ranking and gating decisions, not statistical inference.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use ion_drift_storage::switch::NeighborEntry;
 
-use crate::device_manager::{DeviceEntry, DeviceManager, DeviceStatus};
+use crate::device_manager::{DeviceManager, DeviceStatus};
 use crate::infrastructure_snapshot::{EvidenceAuthority, ResolutionMethod};
 
 // ── Constants ───────────────────────────────────────────────────
@@ -32,9 +31,6 @@ const LEARNING_CONFIDENCE_FLOOR: f32 = 0.70;
 
 /// Maximum learned mappings to prevent unbounded growth.
 const MAX_LEARNED_MAPPINGS: usize = 500;
-
-/// Default TTL for learned mappings (24 hours).
-pub const DEFAULT_LEARNING_TTL: Duration = Duration::from_secs(24 * 3600);
 
 // ── Public types ────────────────────────────────────────────────
 
@@ -47,30 +43,13 @@ pub struct ResolvedNeighborMatch {
     pub confidence: f32,
 }
 
-/// A learned mapping with metadata for TTL, audit, and link-down invalidation.
+/// A learned mapping with the metadata used for oldest-entry eviction.
 #[derive(Debug, Clone)]
 pub struct LearnedMapping {
     pub device_id: String,
     pub original_method: ResolutionMethod,
     pub learned_at_secs: i64,
-    /// Which device reported this neighbor (for audit trail).
-    pub source_device: String,
-    /// Which port the neighbor was seen on (for link-down invalidation).
-    pub source_port: Option<String>,
     pub confidence: f32,
-}
-
-/// Entry returned by the audit endpoint.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct LearnedAuditEntry {
-    pub key: String,
-    pub device_id: String,
-    pub original_method: String,
-    pub learned_at_secs: i64,
-    pub source_device: String,
-    pub source_port: Option<String>,
-    pub confidence: f32,
-    pub age_secs: i64,
 }
 
 // ── Resolution maps ─────────────────────────────────────────────
@@ -90,14 +69,14 @@ pub struct DeviceResolutionMaps {
     ip_to_device: HashMap<String, String>,
     /// MAC address (uppercase) → device_id
     mac_to_device: HashMap<String, String>,
-    /// Learned mappings with metadata for TTL and auditing.
+    /// Learned mappings with metadata for oldest-entry eviction.
     learned: HashMap<String, LearnedMapping>,
 }
 
 impl DeviceResolutionMaps {
     /// Build resolution maps from DeviceManager entries.
     ///
-    /// Optionally carries forward prior learned mappings (already TTL-filtered).
+    /// Optionally carries forward prior learned mappings.
     pub fn build(
         device_manager: &DeviceManager,
         prior_learned: Option<HashMap<String, LearnedMapping>>,
@@ -304,8 +283,8 @@ impl DeviceResolutionMaps {
         }
 
         // Cap cardinality — evict oldest if at limit
-        if self.learned.len() >= MAX_LEARNED_MAPPINGS && !self.learned.contains_key(&key) {
-            if let Some(oldest_key) = self
+        if self.learned.len() >= MAX_LEARNED_MAPPINGS && !self.learned.contains_key(&key)
+            && let Some(oldest_key) = self
                 .learned
                 .iter()
                 .min_by_key(|(_, v)| v.learned_at_secs)
@@ -313,7 +292,6 @@ impl DeviceResolutionMaps {
             {
                 self.learned.remove(&oldest_key);
             }
-        }
 
         self.learned.insert(
             key,
@@ -321,54 +299,9 @@ impl DeviceResolutionMaps {
                 device_id: result.device_id.clone(),
                 original_method: result.method.clone(),
                 learned_at_secs: now_secs,
-                source_device: neighbor.device_id.clone(),
-                source_port: Some(neighbor.interface.clone()),
                 confidence: result.confidence,
             },
         );
-    }
-
-    /// Expire learned mappings older than TTL.
-    /// Call at the start of each correlation cycle.
-    pub fn expire_learned(&mut self, ttl: Duration, now_secs: i64) {
-        let ttl_secs = ttl.as_secs() as i64;
-        self.learned
-            .retain(|_, v| (now_secs - v.learned_at_secs) < ttl_secs);
-    }
-
-    /// Invalidate learned mappings sourced from a port that has gone link-down.
-    ///
-    /// Prevents 24h hallucination when hardware is physically moved.
-    /// Returns the number of mappings purged.
-    pub fn invalidate_for_port(&mut self, device_id: &str, port_name: &str) -> usize {
-        let before = self.learned.len();
-        self.learned.retain(|_, v| {
-            !(v.source_device == device_id
-                && v.source_port.as_deref() == Some(port_name))
-        });
-        before - self.learned.len()
-    }
-
-    /// Dump learned mappings for the admin debug endpoint.
-    pub fn audit_learned(&self, now_secs: i64) -> Vec<LearnedAuditEntry> {
-        self.learned
-            .iter()
-            .map(|(key, v)| LearnedAuditEntry {
-                key: key.clone(),
-                device_id: v.device_id.clone(),
-                original_method: format!("{:?}", v.original_method),
-                learned_at_secs: v.learned_at_secs,
-                source_device: v.source_device.clone(),
-                source_port: v.source_port.clone(),
-                confidence: v.confidence,
-                age_secs: now_secs - v.learned_at_secs,
-            })
-            .collect()
-    }
-
-    /// Take ownership of learned mappings (for carrying forward to next cycle).
-    pub fn take_learned(self) -> HashMap<String, LearnedMapping> {
-        self.learned
     }
 
     // ── Private helpers ─────────────────────────────────────────

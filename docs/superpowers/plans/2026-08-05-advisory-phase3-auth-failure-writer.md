@@ -6,7 +6,7 @@
 
 **Architecture:** Phase 2 (commit `d6b569c`) created the `advisory_auth_failure` table schema-only: no accessors, no writer. Phase 3 adds (1) storage accessors on `AdvisoryStore` mirroring the existing observation methods, (2) per-service deduped failure totals computed in the auth scan *before* thresholding — `BruteforceSignal` only exists above alert thresholds, but the whole point of cross-cycle counting is catching low-and-slow runs that never cross a per-cycle threshold, so the writer must see sub-threshold failures too — and (3) the evaluator loop writing one row per surface per cycle plus pruning. The advisory evaluator is the table's **sole writer** (ADR sole-writer rule for detection state).
 
-**Tech Stack:** Rust workspace at `/home/yodaadmin/ion-drift`, branch `development`. rusqlite behind `AdvisoryStore` (advisory.db), tokio tasks, existing alerting parser in `crates/ion-drift-web/src/alerting.rs`.
+**Tech Stack:** Rust workspace at `<repo>`, branch `development`. rusqlite behind `AdvisoryStore` (advisory.db), tokio tasks, existing alerting parser in `crates/ion-drift-web/src/alerting.rs`.
 
 ## Global Constraints
 
@@ -17,7 +17,6 @@
 - No schema change is needed or allowed here: `advisory_auth_failure` exists at schema v2. Do NOT bump `SCHEMA_VERSION`, do NOT touch `MIGRATION_STEPS`.
 - `advisory_auth_failure` has exactly one writer: the advisory evaluator. Nothing in alerting may write it.
 - Verify with `cargo test --workspace` (baseline: 435 passing as of cp100) and `cargo deny check` before claiming done.
-- Host caveat (this dev box, Viscid): `openssl-sys` needs the scratchpad libssl prefix workaround (`OPENSSL_STATIC=1` + extracted libssl-dev .deb + copied `opensslconf.h`) — see memory `ion-drift-build-env-viscid.md`. Budget for it or build where libssl-dev exists.
 
 ## File Structure
 

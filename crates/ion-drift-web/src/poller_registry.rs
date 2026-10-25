@@ -16,6 +16,12 @@ pub struct PollerRegistry {
     tasks: HashMap<String, (watch::Sender<bool>, JoinHandle<()>)>,
 }
 
+impl Default for PollerRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PollerRegistry {
     pub fn new() -> Self {
         Self {
@@ -129,10 +135,5 @@ impl PollerRegistry {
             handle.abort();
             tracing::info!(device = %device_id, "poller stopped");
         }
-    }
-
-    /// Check if a poller is running for a device.
-    pub fn has_poller(&self, device_id: &str) -> bool {
-        self.tasks.contains_key(device_id)
     }
 }

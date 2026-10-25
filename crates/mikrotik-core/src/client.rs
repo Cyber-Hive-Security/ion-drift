@@ -341,14 +341,13 @@ impl MikrotikClient {
     /// — it can lie), then streams and stops the moment the cap is crossed, so an
     /// oversized body is never fully buffered (review ID-08).
     async fn read_body_limited(mut resp: reqwest::Response) -> Result<String, MikrotikError> {
-        if let Some(len) = resp.content_length() {
-            if len > MAX_RESPONSE_BYTES as u64 {
+        if let Some(len) = resp.content_length()
+            && len > MAX_RESPONSE_BYTES as u64 {
                 return Err(MikrotikError::ResponseTooLarge(
                     len as usize,
                     MAX_RESPONSE_BYTES,
                 ));
             }
-        }
         let mut buf: Vec<u8> = Vec::new();
         while let Some(chunk) = resp.chunk().await? {
             if buf.len() + chunk.len() > MAX_RESPONSE_BYTES {

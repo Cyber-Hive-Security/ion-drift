@@ -98,14 +98,14 @@ fn current_iso_week() -> String {
     // ISO week calculation
     // Jan 1, 1970 was a Thursday (day 4 of ISO week)
     // ISO weeks start on Monday
-    let dow = ((days + 3) % 7) as i64; // 0=Monday
+    let dow = (days + 3) % 7; // 0=Monday
     let week_start = days - dow;
     // Get the Thursday of the week (ISO 8601 says week belongs to the year containing its Thursday)
     let thursday = week_start + 3;
     let (year, _, _) = days_to_ymd(thursday);
     // Week number = 1 + floor((thursday - first_thursday_of_year) / 7)
     let jan1 = ymd_to_days(year, 1, 1);
-    let jan1_dow = ((jan1 + 3) % 7) as i64;
+    let jan1_dow = (jan1 + 3) % 7;
     let first_thursday = jan1 + ((10 - jan1_dow) % 7);
     let week_num = 1 + (thursday - first_thursday) / 7;
     format!("{year}-W{week_num:02}")
@@ -123,7 +123,7 @@ fn week_boundaries(week: &str) -> (String, String) {
 
     // Find January 1 of the year, then find the first Monday
     let jan1 = ymd_to_days(year, 1, 1);
-    let jan1_dow = ((jan1 + 3) % 7) as i64; // 0=Monday
+    let jan1_dow = (jan1 + 3) % 7; // 0=Monday
     let first_monday = if jan1_dow <= 3 {
         jan1 - jan1_dow // Monday of the week containing Jan 1
     } else {

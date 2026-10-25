@@ -266,7 +266,7 @@ impl SnmpClient {
                 .with_auth(auth);
 
             let mut sess = SyncSession::new_v3(
-                &self.addr(),
+                self.addr(),
                 Some(Duration::from_secs(5)),
                 0,
                 security,
@@ -289,7 +289,7 @@ impl SnmpClient {
                 None => "public",
             };
             SyncSession::new_v2c(
-                &self.addr(),
+                self.addr(),
                 community.as_bytes(),
                 Some(Duration::from_secs(5)),
                 0,
@@ -541,8 +541,8 @@ impl SnmpClient {
                     if !oid.starts_with(&addr_oid) {
                         break;
                     }
-                    if let Value::OctetString(bytes) = val {
-                        if bytes.len() == 6 {
+                    if let Value::OctetString(bytes) = val
+                        && bytes.len() == 6 {
                             let components = oid_components(&oid);
                             let suffix_key = components[addr_base_len..]
                                 .iter()
@@ -551,7 +551,6 @@ impl SnmpClient {
                                 .join(".");
                             mac_by_suffix.insert(suffix_key, format_mac(bytes));
                         }
-                    }
                     current = oid.to_owned();
                     advanced = true;
                 }
@@ -593,15 +592,14 @@ impl SnmpClient {
 
             let mut entries = Vec::new();
             for (suffix, mac) in &mac_by_suffix {
-                if let Some(&port) = port_by_suffix.get(suffix) {
-                    if port > 0 {
+                if let Some(&port) = port_by_suffix.get(suffix)
+                    && port > 0 {
                         entries.push(SnmpMacEntry {
                             mac_address: mac.clone(),
                             port_index: port,
                             vlan_id: None,
                         });
                     }
-                }
             }
 
             Ok(entries)
@@ -891,11 +889,10 @@ fn walk_raw_column(
             }
             last_components = new_components;
             let suffix = oid_suffix(&oid, base_len);
-            if let Some(&idx) = suffix.first() {
-                if let Value::OctetString(bytes) = val {
+            if let Some(&idx) = suffix.first()
+                && let Value::OctetString(bytes) = val {
                     map.insert(idx as u32, bytes.to_vec());
                 }
-            }
             current = oid.to_owned();
             advanced = true;
         }

@@ -15,7 +15,7 @@ const BOTH_PROVIDERS = {
   "GET /auth/config": {
     local_auth_enabled: true,
     oidc_enabled: true,
-    oidc_provider_name: "TheHolonet",
+    oidc_provider_name: "Example IdP",
   },
   "GET /auth/status": { authenticated: false },
 };
@@ -35,7 +35,7 @@ describe("LoginPage", () => {
     renderWithClient(<LoginPage />);
 
     const link = await screen.findByRole("link", {
-      name: /sign in with TheHolonet/i,
+      name: /sign in with Example IdP/i,
     });
     expect(link).toHaveAttribute("href", "/auth/login");
   });

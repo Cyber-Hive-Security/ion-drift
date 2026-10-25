@@ -24,6 +24,12 @@ pub struct DemoSanitizer {
     next_vlan_id: Mutex<u16>,
 }
 
+impl Default for DemoSanitizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DemoSanitizer {
     pub fn new() -> Self {
         Self {
@@ -88,7 +94,7 @@ impl DemoSanitizer {
 
                 // Context-aware sanitization based on field name
                 if is_ip_field(key_lower) {
-                    // Could be "10.20.25.1/24" (CIDR) or plain IP
+                    // Could be "192.168.1.1/24" (CIDR) or plain IP
                     *s = self.sanitize_ip_or_cidr(s);
                 } else if is_mac_field(key_lower) {
                     *s = self.sanitize_mac(s);
@@ -116,12 +122,11 @@ impl DemoSanitizer {
             }
             serde_json::Value::Number(n) => {
                 // Remap numeric VLAN ID fields
-                if is_vlan_id_field(key_lower) {
-                    if let Some(id) = n.as_u64() {
+                if is_vlan_id_field(key_lower)
+                    && let Some(id) = n.as_u64() {
                         let fake = self.remap_vlan_id(id as u16);
                         *value = serde_json::Value::Number(serde_json::Number::from(fake));
                     }
-                }
             }
             serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
                 self.sanitize_value(value);
@@ -328,7 +333,7 @@ impl DemoSanitizer {
     /// HMAC-like hash using SHA-256 with the fixed seed.
     fn hash_bytes(&self, input: &[u8]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.seed);
+        hasher.update(self.seed);
         hasher.update(input);
         hasher.finalize().into()
     }
@@ -340,7 +345,7 @@ fn is_ip_field(key: &str) -> bool {
     matches!(
         key,
         "address" | "src_address" | "dst_address" | "src-address" | "dst-address"
-            | "gateway" | "dst-address" | "network" | "best_ip" | "current_ip"
+            | "gateway" | "network" | "best_ip" | "current_ip"
             | "target_ip" | "ip" | "local-address" | "remote-address"
             | "active-address" | "server-address" | "dns-server"
             | "ntp-server" | "dhcp_gateway" | "target"
@@ -441,23 +446,23 @@ mod tests {
     #[test]
     fn sanitize_ip_deterministic() {
         let s = DemoSanitizer::new();
-        let a = s.sanitize_ip("10.20.25.1");
-        let b = s.sanitize_ip("10.20.25.1");
+        let a = s.sanitize_ip("192.168.1.1");
+        let b = s.sanitize_ip("192.168.1.1");
         assert_eq!(a, b, "same input must produce same output");
-        assert_ne!(a, "10.20.25.1", "must not return the original IP");
+        assert_ne!(a, "192.168.1.1", "must not return the original IP");
     }
 
     #[test]
     fn sanitize_ip_maps_to_10_249_with_remapped_vlan() {
         let s = DemoSanitizer::new();
         // All private IPs → 10.249.<remapped_vlan>.host
-        let result = s.sanitize_ip("10.20.25.7");
+        let result = s.sanitize_ip("192.168.1.7");
         let octets: Vec<&str> = result.split('.').collect();
         assert_eq!(octets[0], "10");
         assert_eq!(octets[1], "249");
         // 3rd octet is remapped (first VLAN seen gets 10)
-        let vlan25_remapped: u16 = octets[2].parse().unwrap();
-        assert_eq!(vlan25_remapped, 10, "first VLAN seen should remap to 10");
+        let vlan1_remapped: u16 = octets[2].parse().unwrap();
+        assert_eq!(vlan1_remapped, 10, "first VLAN seen should remap to 10");
 
         // Second unique VLAN gets 12
         let result2 = s.sanitize_ip("192.168.99.5");
@@ -466,27 +471,27 @@ mod tests {
         let vlan99_remapped: u16 = octets2[2].parse().unwrap();
         assert_eq!(vlan99_remapped, 12, "second VLAN seen should remap to 12");
 
-        // Same VLAN (25) gets same remapped ID
-        let result3 = s.sanitize_ip("10.20.25.100");
+        // Same VLAN (1) gets same remapped ID
+        let result3 = s.sanitize_ip("192.168.1.100");
         let octets3: Vec<&str> = result3.split('.').collect();
         assert_eq!(octets3[2], "10", "same VLAN must get same remapped ID");
 
         // Different hosts in same VLAN get different 4th octets
-        let a = s.sanitize_ip("10.20.25.1");
-        let b = s.sanitize_ip("10.20.25.2");
+        let a = s.sanitize_ip("192.168.1.1");
+        let b = s.sanitize_ip("192.168.1.2");
         assert_ne!(a, b, "different hosts must map to different IPs");
     }
 
     #[test]
     fn sanitize_cidr() {
         let s = DemoSanitizer::new();
-        let result = s.sanitize_ip_or_cidr("10.20.25.0/24");
+        let result = s.sanitize_ip_or_cidr("192.168.1.0/24");
         assert!(result.ends_with("/24"));
         let octets: Vec<&str> = result.split('/').next().unwrap().split('.').collect();
         assert_eq!(&octets[..2], &["10", "249"]);
         // 3rd octet is remapped, not the original
         let remapped: u16 = octets[2].parse().unwrap();
-        assert!(remapped >= 10 && remapped % 2 == 0, "VLAN ID should be remapped to even number >= 10");
+        assert!(remapped >= 10 && remapped.is_multiple_of(2), "VLAN ID should be remapped to even number >= 10");
     }
 
     #[test]
@@ -527,17 +532,17 @@ mod tests {
     #[test]
     fn sanitize_hostname() {
         let s = DemoSanitizer::new();
-        let result = s.sanitize_hostname("spike.kaziik.xyz");
-        assert!(!result.contains("kaziik"));
+        let result = s.sanitize_hostname("spike.example.com");
+        assert!(!result.contains("example"));
         assert!(!result.contains("spike"));
     }
 
     #[test]
     fn looks_like_ip_detection() {
-        assert!(looks_like_ip_or_cidr("10.20.25.1"));
+        assert!(looks_like_ip_or_cidr("192.168.1.1"));
         assert!(looks_like_ip_or_cidr("192.168.1.1/24"));
         assert!(!looks_like_ip_or_cidr("hello"));
-        assert!(!looks_like_ip_or_cidr("10.20.25.256"));
+        assert!(!looks_like_ip_or_cidr("192.168.1.256"));
     }
 
     #[test]
@@ -553,7 +558,7 @@ mod tests {
     fn sanitize_json_value() {
         let s = DemoSanitizer::new();
         let mut val = serde_json::json!({
-            "address": "10.20.25.5",
+            "address": "192.168.1.5",
             "mac-address": "AA:BB:CC:DD:EE:FF",
             "host-name": "my-server",
             "interface": "ether1",
@@ -565,7 +570,7 @@ mod tests {
         s.sanitize_value(&mut val);
 
         let obj = val.as_object().unwrap();
-        assert_ne!(obj["address"].as_str().unwrap(), "10.20.25.5");
+        assert_ne!(obj["address"].as_str().unwrap(), "192.168.1.5");
         assert_ne!(obj["mac-address"].as_str().unwrap(), "AA:BB:CC:DD:EE:FF");
         assert_ne!(obj["host-name"].as_str().unwrap(), "my-server");
         assert_eq!(obj["interface"].as_str().unwrap(), "ether1", "interfaces should be kept");
@@ -589,7 +594,7 @@ mod tests {
         let remapped = s.sanitize_vlan_name("25");
         assert_ne!(remapped, "25");
         let id: u16 = remapped.parse().unwrap();
-        assert!(id >= 10 && id % 2 == 0, "remapped VLAN ID should be even >= 10, got {id}");
+        assert!(id >= 10 && id.is_multiple_of(2), "remapped VLAN ID should be even >= 10, got {id}");
     }
 
     #[test]

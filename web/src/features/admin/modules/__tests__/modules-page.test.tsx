@@ -112,7 +112,7 @@ describe("AdminModulesPage", () => {
       await screen.findByRole("button", { name: /register module/i }),
     );
     await user.type(
-      screen.getByPlaceholderText("http://host:port"),
+      screen.getByPlaceholderText("https://host:port"),
       "http://127.0.0.1:8991",
     );
     const [secretInput, tokenInput] = Array.from(

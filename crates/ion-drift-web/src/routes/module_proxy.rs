@@ -170,8 +170,8 @@ async fn proxy_impl(
     // matches module policy (modules may run on the same host).
     match url::Url::parse(&module.url) {
         Ok(u) => {
-            if let Some(host) = u.host_str() {
-                if crate::ssrf::host_resolves_to_blocked(host, true) {
+            if let Some(host) = u.host_str()
+                && crate::ssrf::host_resolves_to_blocked(host, true) {
                     tracing::warn!(
                         module = %name, host = %host,
                         "module host resolves to a blocked address (possible DNS rebinding); refusing proxy"
@@ -184,7 +184,6 @@ async fn proxy_impl(
                     )
                         .into_response();
                 }
-            }
         }
         Err(e) => {
             tracing::warn!(module = %name, error = %e, "stored module url is unparseable");
@@ -320,8 +319,8 @@ async fn proxy_impl(
     // Stream the upstream body with a cap so a malicious or oversized module
     // response can't exhaust process memory (review ID-08). Reject early on an
     // oversized Content-Length, then stop the moment the cap is crossed.
-    if let Some(len) = response.content_length() {
-        if len > MAX_RESPONSE_BYTES as u64 {
+    if let Some(len) = response.content_length()
+        && len > MAX_RESPONSE_BYTES as u64 {
             tracing::warn!(module = %name, len, "module response exceeds cap (content-length)");
             return (
                 StatusCode::BAD_GATEWAY,
@@ -329,7 +328,6 @@ async fn proxy_impl(
             )
                 .into_response();
         }
-    }
     let mut response = response;
     let mut resp_body: Vec<u8> = Vec::new();
     loop {
@@ -614,7 +612,7 @@ mod tests {
             .method(Method::GET)
             .uri("/m/ping")
             .header("x-forwarded-for", "203.0.113.7")
-            .header("x-forwarded-host", "hiverouter.kaziik.xyz")
+            .header("x-forwarded-host", "router.example.com")
             .header("x-forwarded-port", "443")
             .header("x-forwarded-proto", "https")
             .header("x-forwarded-server", "7394d40d0c24")

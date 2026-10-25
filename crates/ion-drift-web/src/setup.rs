@@ -71,7 +71,7 @@ pub async fn setup_submit(
     if let Some(ref expected) = state.bootstrap_token {
         let provided = form.setup_token.as_deref().unwrap_or("");
         if !setup_token_matches(provided, expected) {
-            return Html(format!("<h1>Invalid setup token</h1><p>Check the server logs for the correct token.</p><p><a href=\"/setup\">Try again</a></p>")).into_response();
+            return Html("<h1>Invalid setup token</h1><p>Check the server logs for the correct token.</p><p><a href=\"/setup\">Try again</a></p>".to_string()).into_response();
         }
     }
 

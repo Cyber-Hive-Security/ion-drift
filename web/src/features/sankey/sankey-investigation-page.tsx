@@ -482,7 +482,7 @@ function VlanDetail({
   const { data, isLoading, error, refetch } = useSankeyVlan(vlanId, range, destVlan, country);
   const vlanNum = Number(vlanId);
   const { data: anomalies } = useBehaviorAnomalies(
-    !isNaN(vlanNum) ? { vlan: vlanNum, status: "pending", limit: 20 } : undefined,
+    !Number.isNaN(vlanNum) ? { vlan: vlanNum, status: "pending", limit: 20 } : undefined,
   );
   const queryClient = useQueryClient();
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; mac: string; hostname?: string; ip?: string } | null>(null);

@@ -63,6 +63,7 @@ fn bad_request(msg: &str) -> Response {
         .into_response()
 }
 
+#[allow(clippy::result_large_err)] // Err is an axum Response (handler error type); boxing it would ripple through every caller
 fn validate_ca_cert_path(path: &str) -> Result<(), Response> {
     if path.contains("..")
         || (!path.starts_with("/app/data/certs/") && !path.starts_with("/app/certs/"))
@@ -92,6 +93,7 @@ fn is_structural_host(host: &str) -> bool {
         && (host.parse::<std::net::IpAddr>().is_ok() || url::Host::parse(host).is_ok())
 }
 
+#[allow(clippy::result_large_err)] // Err is an axum Response (handler error type); boxing it would ripple through every caller
 fn validate_host(host: &str) -> Result<(), Response> {
     if !is_structural_host(host) {
         return Err(bad_request(
@@ -108,6 +110,7 @@ fn validate_host(host: &str) -> Result<(), Response> {
 /// Called immediately before creating a device client, after initial validate_host.
 /// Re-checks structure too, in case a malformed host was stored before this
 /// validation existed.
+#[allow(clippy::result_large_err)] // Err is an axum Response (handler error type); boxing it would ripple through every caller
 fn revalidate_host(host: &str) -> Result<(), Response> {
     if !is_structural_host(host) || is_blocked_host(host) {
         tracing::warn!(host = %host, "device host failed connection-time SSRF revalidation (structure or DNS rebinding)");
@@ -117,6 +120,7 @@ fn revalidate_host(host: &str) -> Result<(), Response> {
 }
 
 /// Validate optional host and ca_cert_path fields on an update request.
+#[allow(clippy::result_large_err)] // Err is an axum Response (handler error type); boxing it would ripple through every caller
 fn validate_device_update(update: &UpdateDevice) -> Result<(), Response> {
     if let Some(ref host) = update.host {
         validate_host(host)?;
@@ -473,8 +477,8 @@ pub async fn create_device(
     );
 
     // Start the poller for this device immediately (no server restart needed)
-    if let Some(entry) = dm.get_device(&req.device.id) {
-        if entry.record.enabled {
+    if let Some(entry) = dm.get_device(&req.device.id)
+        && entry.record.enabled {
             let ros_queue = match &entry.client {
                 crate::device_manager::DeviceClient::RouterOs(client) => {
                     let mut dq = state.device_queues.write().await;
@@ -490,7 +494,6 @@ pub async fn create_device(
                 ros_queue,
             );
         }
-    }
 
     Ok(Json(serde_json::json!({
         "id": req.device.id,
@@ -892,7 +895,7 @@ mod tests {
     fn host_accepts_bare_hostnames_and_ips() {
         assert!(is_structural_host("router.lan"));
         assert!(is_structural_host("mikrotik-01"));
-        assert!(is_structural_host("10.20.25.1"));
+        assert!(is_structural_host("192.168.1.1"));
         assert!(is_structural_host("8.8.8.8"));
         assert!(is_structural_host("fe80::1")); // structurally valid; SSRF-blocked separately
     }

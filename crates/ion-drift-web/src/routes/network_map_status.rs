@@ -47,10 +47,6 @@ pub struct NetworkMapStatusResponse {
     pub as_of: Option<String>,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 #[derive(Clone)]
 pub struct NetworkMapStatusCache {
     pub data: NetworkMapStatusResponse,
@@ -100,11 +96,10 @@ pub async fn status(
     // Check cache
     {
         let cache = state.network_map_cache.read().await;
-        if let Some(ref cached) = *cache {
-            if cached.cached_at.elapsed().as_secs() < 5 {
+        if let Some(ref cached) = *cache
+            && cached.cached_at.elapsed().as_secs() < 5 {
                 return Ok(Json(cached.data.clone()));
             }
-        }
     }
 
     // Fetch all three concurrently; if the router is unreachable, serve the last

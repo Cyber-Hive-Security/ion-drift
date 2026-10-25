@@ -46,8 +46,9 @@ impl RouterOsVersion {
 }
 
 fn split_pre_release(token: &str) -> Option<(&str, Option<PreRelease>)> {
-    let tags: [(&str, fn(u32) -> PreRelease); 2] =
-        [("beta", PreRelease::Beta), ("rc", PreRelease::Rc)];
+    /// A pre-release tag name paired with its constructor.
+    type PreReleaseTag = (&'static str, fn(u32) -> PreRelease);
+    let tags: [PreReleaseTag; 2] = [("beta", PreRelease::Beta), ("rc", PreRelease::Rc)];
     for (tag, make) in tags {
         if let Some(at) = token.find(tag) {
             let digits = &token[at + tag.len()..];

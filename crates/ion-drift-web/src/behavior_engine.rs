@@ -210,10 +210,9 @@ pub async fn collect_observations(
     let now = behavior::BehaviorStore::now_unix_pub();
 
     // Group connections by source MAC
-    let mut observations: HashMap<
-        String,
-        HashMap<(String, Option<i64>, String, String), (i64, i64, i64)>,
-    > = HashMap::new();
+    /// Per-flow key: (protocol, dst port, dst subnet, direction)
+    type FlowKey = (String, Option<i64>, String, String);
+    let mut observations: HashMap<String, HashMap<FlowKey, (i64, i64, i64)>> = HashMap::new();
 
     // Track which conntrack IDs are still active this cycle
     let mut active_ids: Vec<String> = Vec::with_capacity(connections.len());
@@ -540,13 +539,12 @@ pub async fn detect_anomalies(
                                 vlan: Some(vlan),
                                 timestamp_unix: now_unix(),
                             }));
-                            if let Some(action) = suppression_action.as_deref() {
-                                if action == "dismissed" || action == "accepted" {
+                            if let Some(action) = suppression_action.as_deref()
+                                && (action == "dismissed" || action == "accepted") {
                                     let _ = store
                                         .resolve_anomaly(anomaly_id, action, "system-pattern")
                                         .await;
                                 }
-                            }
                             anomaly_count += 1;
                         }
                     }
@@ -700,13 +698,12 @@ pub async fn detect_anomalies(
                         vlan: Some(vlan),
                         timestamp_unix: now_unix(),
                     }));
-                    if let Some(action) = suppression_action.as_deref() {
-                        if action == "dismissed" || action == "accepted" {
+                    if let Some(action) = suppression_action.as_deref()
+                        && (action == "dismissed" || action == "accepted") {
                             let _ = store
                                 .resolve_anomaly(anomaly_id, action, "system-pattern")
                                 .await;
                         }
-                    }
                     anomaly_count += 1;
                 }
             }
@@ -819,7 +816,7 @@ pub async fn detect_blocked_attempts(
         // WAN scan routing: aggregate non-sensitive port probes, create Tier 1 for sensitive ports
         if vlan == -1 {
             let proto_str = protocol;
-            if store.is_wan_sensitive_port(dst_port as u16, proto_str).await? {
+            if store.is_wan_sensitive_port(dst_port, proto_str).await? {
                 // Sensitive port probe -> create Tier 1 anomaly with per-port dedup
                 let wan_dedup_key = format!("{}|{}", proto_str, dst_port);
                 if let Some(existing_id) = store.find_dedup_anomaly(&mac, "wan_targeted_probe", &wan_dedup_key).await? {
@@ -917,7 +914,7 @@ pub async fn detect_blocked_attempts(
             } else {
                 // Non-sensitive port -> aggregate into WAN scan pressure bucket
                 let country = fields.dst_country.as_ref().map(|c| c.country.clone());
-                store.record_wan_scan_probes(&[(src_ip.to_string(), dst_port as u16, country)]).await?;
+                store.record_wan_scan_probes(&[(src_ip.to_string(), dst_port, country)]).await?;
             }
             continue; // Don't create individual blocked_attempt anomaly for WAN traffic
         }
@@ -1036,13 +1033,12 @@ pub async fn detect_blocked_attempts(
             vlan: Some(vlan),
             timestamp_unix: now_unix(),
         }));
-        if let Some(action) = suppression_action.as_deref() {
-            if action == "dismissed" || action == "accepted" {
+        if let Some(action) = suppression_action.as_deref()
+            && (action == "dismissed" || action == "accepted") {
                 let _ = store
                     .resolve_anomaly(anomaly_id, action, "system-pattern")
                     .await;
             }
-        }
         anomaly_count += 1;
     }
 
@@ -1093,11 +1089,10 @@ fn port_matches(spec: &str, port: u16) -> bool {
             if port >= lo && port <= hi {
                 return true;
             }
-        } else if let Ok(p) = part.parse::<u16>() {
-            if port == p {
+        } else if let Ok(p) = part.parse::<u16>()
+            && port == p {
                 return true;
             }
-        }
     }
     false
 }
@@ -1120,25 +1115,22 @@ pub fn correlate_with_firewall(
         }
 
         // Protocol match
-        if let Some(ref rule_proto) = rule.protocol {
-            if normalize_protocol(rule_proto) != normalize_protocol(&proto_lower) {
+        if let Some(ref rule_proto) = rule.protocol
+            && normalize_protocol(rule_proto) != normalize_protocol(&proto_lower) {
                 continue;
             }
-        }
 
         // Source address match
-        if let Some(ref src) = rule.src_address {
-            if !cidr_matches(src, src_ip) {
+        if let Some(ref src) = rule.src_address
+            && !cidr_matches(src, src_ip) {
                 continue;
             }
-        }
 
         // Destination address match
-        if let Some(ref dst) = rule.dst_address {
-            if !cidr_matches(dst, dst_ip) {
+        if let Some(ref dst) = rule.dst_address
+            && !cidr_matches(dst, dst_ip) {
                 continue;
             }
-        }
 
         // Destination port match
         if let Some(ref dp) = rule.dst_port {

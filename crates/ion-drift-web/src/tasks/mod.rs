@@ -90,8 +90,7 @@ pub fn spawn_all(
         state.behavior_store.clone(),
         state.vlan_registry.clone(),
     );
-    // Module-emitted findings: persistence + lifecycle
-    findings::spawn_findings_consumer(state.findings_store.clone(), state.event_bus.clone());
+    // Findings lifecycle (persistence happens at the inbound ACL boundary)
     findings::spawn_findings_auto_resolver(state.findings_store.clone());
 
     crate::anomaly_correlator::spawn_anomaly_correlator(
@@ -227,9 +226,9 @@ pub fn spawn_all(
     spawn_stats_pruner(state.stats_store.clone());
 
     // Cert rotation (only if CertWarden is configured)
-    if let Some(ref sm) = state.secrets_manager {
-        if let Some(cw_config) = state.config.certwarden.resolve() {
-            if let Some(ca_path) = state.config.oidc.as_ref().and_then(|o| o.ca_cert_path.as_deref()) {
+    if let Some(ref sm) = state.secrets_manager
+        && let Some(cw_config) = state.config.certwarden.resolve()
+            && let Some(ca_path) = state.config.oidc.as_ref().and_then(|o| o.ca_cert_path.as_deref()) {
                 cert::spawn_cert_rotation(
                     sm.clone(),
                     cw_config,
@@ -237,8 +236,6 @@ pub fn spawn_all(
                     ca_path.to_string(),
                 );
             }
-        }
-    }
 }
 
 /// Prune old page view stats daily (retain 90 days).

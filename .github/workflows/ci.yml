@@ -10,9 +10,9 @@ on:
 jobs:
   rust:
     name: Rust tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
@@ -26,14 +26,14 @@ jobs:
 
   frontend:
     name: Frontend typecheck + build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -42,20 +42,22 @@ jobs:
       - name: npm ci
         run: npm ci
 
-      - name: typecheck
-        run: npx tsc --noEmit
+      - name: lint (eslint + jsx-a11y)
+        run: npm run lint
 
       - name: test (vitest smoke floor)
         run: npm test
 
-      - name: build
+      # `tsc -b` inside the build is the typecheck; `tsc --noEmit` on the
+      # references-only root tsconfig checks nothing.
+      - name: typecheck + build
         run: npm run build
 
   secrets:
     name: Secret scan (gitleaks, full history)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -68,24 +70,24 @@ jobs:
       - name: gitleaks (history + working tree)
         run: gitleaks git --no-banner --redact --verbose .
 
+      - name: internal identifiers (lab addresses, hostnames, user paths)
+        run: scripts/check-internal-identifiers.sh
+
   deny:
     name: cargo-deny (advisories, licenses, bans, sources)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
 
   clippy:
-    name: Clippy (informational)
-    runs-on: ubuntu-latest
-    # Existing warning debt (~200) means a hard gate would be red forever.
-    # Visible-but-non-blocking until the debt is paid down, then flip to -D warnings.
-    continue-on-error: true
+    name: Clippy (blocking)
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
@@ -97,4 +99,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo clippy
-        run: cargo clippy --workspace
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings

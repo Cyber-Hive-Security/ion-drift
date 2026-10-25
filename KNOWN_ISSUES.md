@@ -142,6 +142,44 @@ MNDP on the management VLAN created false direct paths between non-adjacent devi
 
 Inference binding results were not pre-populating the identity builder, so stale bindings persisted even after new inference data was available. Inference results now pre-populate the identity builder.
 
+### [LOW] Module events were published in-process before they were clamped
+**Source:** 0.5.6 finding-subjects review (2026-10-24); confirmed by the 0.5.6 pre-release external review
+**Fixed:** v0.5.6
+
+`modules_registry/inbound.rs` stored the clamped copy of a module finding and published the raw event to the in-process bus. The findings consumer in `tasks/findings.rs` stored that raw event a second time under the module name `in-process`, so every module finding appeared twice and the second row kept unsanitized references, which 0.5.6 renders as links. The endpoint now publishes the clamped finding and the consumer is removed; the inbound endpoint is the only persistence point for module findings. A test asserts the bus payload matches the stored row.
+
+## Open
+
+### [LOW] Exploitation findings may name the router by host before the device manager is ready
+**Source:** 0.5.6 finding-subjects review (2026-10-24)
+
+`advisory/exploitation.rs::primary_device_id` falls back to the configured router host when the device manager has no primary yet. A finding emitted in that startup window carries a `device` subject whose id is a hostname or address, so the Findings page shows it as plain text instead of the registry name. The next emission after startup corrects it. Fix: wait for the device manager or skip emission until a primary exists.
+
+### [LOW] Per-device queues are never removed when a device is deleted or disabled
+**Source:** 0.5.6 clippy cleanup (2026-10-24)
+
+`DeviceQueueRegistry::remove` had no callers and was deleted as dead code. Nothing removes a device's queue when the device is deleted or disabled, so the registry grows for the life of the process. Harmless at homelab scale; wire removal into the device delete/disable path when the poll cadence tiers land in 0.5.7. `RouterQueue` records `QueueMetrics` but no endpoint reads them yet; the `metrics()` accessor is kept for the 0.6 poller-diagnostics endpoint.
+
+### [LOW] Learned device-mapping TTL, link-down invalidation, and audit were never wired
+**Source:** 0.5.6 clippy cleanup (2026-10-24)
+
+`expire_learned`, `invalidate_for_port`, `audit_learned`, and `take_learned` had no callers and were deleted. Behavior is unchanged because correlation rebuilds the device maps each cycle, so nothing learned persists long enough to need expiry or invalidation.
+
+### [LOW] Infrastructure evidence vectors are not capped
+**Source:** 0.5.6 clippy cleanup (2026-10-24)
+
+`push_evidence` and `MAX_EVIDENCE_ENTRIES` were never called and were deleted. Evidence chains on inferred nodes and edges grow without a bound within a snapshot. Snapshots are rebuilt each cycle, so growth is per cycle, not cumulative.
+
+### [LOW] Mixed line endings across the repository
+**Source:** 0.5.6 release work (2026-10-24)
+
+234 tracked files use CRLF and the rest use LF. Any editor or tool that normalizes on save produces a whole-file diff, which happened once during this release and was reverted. Fix: add `.gitattributes` with `* text=auto eol=lf` and renormalize in one dedicated commit after coordinating with every active checkout, since pulling that commit touches every file.
+
+### [LOW] Remaining ESLint warnings in the web app
+**Source:** 0.5.6 ESLint introduction (2026-10-24)
+
+Lint passes with 22 warnings: 12 `react-hooks/exhaustive-deps`, 8 `@typescript-eslint/no-explicit-any` (`vlan-sankey.tsx:310,312`, `port-sankey.tsx:476,478`, `world-map.tsx:373,374,381,404`), 1 `react-hooks/preserve-manual-memoization` (`connections.tsx:1318`), 1 `react-hooks/incompatible-library`. `no-explicit-any` and `preserve-manual-memoization` are set to `warn` in `web/eslint.config.js` with comments; flip them to `error` once the sites are typed.
+
 ## Accepted
 
 ### [LOW] Module API v1.0 — Connection / Snapshot / DeviceManager state reads not yet wired
@@ -182,6 +220,20 @@ The provisioning permission pre-check endpoint returned the raw RouterOS policy 
 
 ## Won't Fix
 
+### [INFO] SonarQube findings reviewed and left as-is (2026-10-24 scan)
+**Source:** SonarQube TypeScript scan, 2026-10-24
+
+- `typescript:S2871` (7 "critical bugs"): `Array.prototype.sort()` without a comparator on arrays of VLAN names, firewall chains, protocols, log topics, and module names. These are ASCII identifiers; code-unit order is the intended order. Adding `localeCompare` would change nothing visible and add a dependency on locale.
+- `typescript:S2245` (6 "vulnerabilities"): `Math.random()` positions decorative background stars on the topology map. Not security relevant.
+- `typescript:S5332` (3 of 4): `http://` URLs in test fixtures. The one UI placeholder was changed to `https://`.
+- `typescript:S9379` (8): `autoFocus` on inputs that appear as the result of a user action (inline edit, modal). Each carries an `eslint-disable-next-line` with the reason; the login page keeps it as the sole-purpose-form exception.
+
+### [INFO] `#[allow(unused_imports)]` on `modules_registry` re-exports
+**Source:** 0.5.6 clippy cleanup (2026-10-24)
+
+The web crate builds as both lib and bin and re-declares its modules in `lib.rs` and `main.rs`. Public re-exports used only by lib consumers (integration tests, future modules) are unused in the bin build, so clippy flags them there. The allow is item-level with a comment. The real fix, having the bin depend on the lib, is a larger change deferred past 0.5.6.
+
+
 ### [LOW] Panic Message Information Leak (task_supervisor.rs)
 **Source:** External review 2026-03-25
 
@@ -191,3 +243,48 @@ Panic payloads are logged directly. We don't put secrets in `expect()` messages,
 **Source:** External review 2026-03-25
 
 `get_policies_for_service` combines fetching, filtering, and VLAN matching in one method. This is a style/refactor suggestion, not a bug. The current implementation is correct and the method is well-scoped. Refactoring would add abstraction without reducing defect risk.
+
+### [LOW] Sparse devices are re-evaluated on every pass with no upper bound
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+Every `sparse` device is a promotion candidate forever, including long-gone and randomized MACs. Each one costs two range scans and an `UPDATE` every ten minutes. Status does not flip-flop and the cost is small at homelab scale, but it grows with the number of dead profiles. Fix: skip candidates with no observation in the retention window, or retire profiles unseen for 30 days.
+
+### [LOW] A backwards clock step inflates coverage
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+The coverage window has no upper bound on time. If the host clock steps backwards, existing observations look like they are in the future: they count as extra days seen and a `last_new_flow` later than now stops the device counting as stable until the clock catches up. Self-correcting; NTP-disciplined hosts never hit it.
+
+### [LOW] Finding subjects are not deduplicated case-insensitively
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+The same MAC sent once in `subjects` (uppercase) and once in `device_macs` (lowercase) is stored as two endpoint subjects. Display-only duplication; the advisory engine never does this. Fix: normalise MACs to lowercase in `FindingV1::all_subjects`.
+
+### [LOW] Modules can name any device as a finding subject
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+A `device` subject id from a module is only length-clamped, so a module can attach its finding to any Drift-managed router or switch by id. Display-only today; revisit if subjects ever drive filtering, alert routing, or automation. Modules are trusted at the level of the Drift binary (see the sandboxing entry under Accepted).
+
+### [LOW] Stale advisory rows are never deleted
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+The catalog loader upserts and never deletes, by design, so a bad load degrades to last-known-good. An advisory whose file is removed or goes malformed keeps producing findings from its stored row. Since 0.5.6 every finding's reference list is sanitised at emission, so a stale row cannot carry an unchecked URL onto the page; it can still carry stale text. Fix: delete rows absent from a fully successful load.
+
+### [LOW] Secret editor: Enter bypasses the in-flight guard
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+In `settings-security.tsx`, the Save button is disabled while a save is pending, but pressing Enter in the field skips that guard, so repeated Enter sends concurrent saves. Last write wins; no data loss observed. Fix: check `isPending` in the key handler too.
+
+### [LOW] Data-table rows expand from a focusable row, not a native button
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+Rows with a click handler now take focus and activate on Enter or Space, so keyboard users can expand findings and reach their references. A native per-row expansion button with `aria-expanded` and an accessible name would serve screen readers better than a focusable `<tr>`. Planned alongside the Logical Interfaces table work in 0.5.7.
+
+### [LOW] `formatUptime` parses only from the start of the string
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+The uptime regex is anchored to prevent super-linear backtracking. Strings that do not begin with the uptime (`up 1d02:03:04`, `100:00:00`) now pass through unformatted where they used to be misparsed. RouterOS supplies bare uptimes, so real data is unchanged; no test pins the behaviour on the other forms.
+
+### [LOW] Findings stored before 0.5.6 show no references until re-emitted
+**Source:** 0.5.6 finding-references review (2026-10-24)
+
+findings.db v3 adds `references` without a backfill: the only legacy source of URLs was the CVE finding's `Details:` recommended action, which the advisory engine rewrites on its next pass, so open advisory findings gain references within one pass of the upgrade. Resolved findings are never re-emitted and keep an empty list; module findings refresh only when the module re-sends them. Cosmetic; no action planned.

@@ -20,10 +20,16 @@ pub mod inbound;
 pub mod service;
 pub mod store;
 
+// Public API of the lib crate. The bin target re-declares these modules and
+// does not use every re-export, so the unused-import lint is silenced here.
+#[allow(unused_imports)]
 pub use dispatcher::{
     spawn_dispatcher_loop, DeliveryStats, DispatcherConfig, EventDispatcher, SIGNATURE_HEADER,
 };
+#[allow(unused_imports)]
 pub use hmac::{sign_bytes, verify_signature, VerifyError};
 pub use inbound::{inbound_router, NonceCache};
+#[allow(unused_imports)]
 pub use service::{validate_manifest, ModuleRegistryService, RegisterRequest};
+#[allow(unused_imports)]
 pub use store::{ModuleRegistryStore, NewModuleRegistration, RegisteredModule};

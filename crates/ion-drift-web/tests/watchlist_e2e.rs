@@ -95,10 +95,10 @@ where
     F: Fn(&ion_drift_web::modules_registry::DeliveryStats) -> bool,
 {
     for _ in 0..100 {
-        if let Some(stats) = dispatcher.stats_snapshot().await.get(name) {
-            if pred(stats) {
-                return true;
-            }
+        if let Some(stats) = dispatcher.stats_snapshot().await.get(name)
+            && pred(stats)
+        {
+            return true;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

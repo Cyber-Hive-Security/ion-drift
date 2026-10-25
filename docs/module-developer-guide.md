@@ -367,6 +367,32 @@ cx.publish_custom(
 The plain `publish` rejects `ModuleCustom` with
 `EventError::CustomMustUsePublishCustom` for exactly this reason.
 
+### Findings
+
+`DriftEvent::Finding(FindingV1)` is how a module puts something on the
+operator's Findings page. Fields worth knowing beyond the obvious ones:
+
+- `finding_id` — stable per module; Drift dedups on `(module_name, finding_id)`,
+  so re-emitting an id refines the existing finding instead of creating a new one.
+- `subjects` — what the finding is about, `0..N` of `FindingSubject::device(id)`
+  (a Drift-managed router or switch, by registry id), `FindingSubject::endpoint(mac)`,
+  or `FindingSubject::domain(name)`. The UI shows device subjects by name with a
+  link, endpoints through the device lookup, domains as text.
+- `references` — URLs for background (vendor advisory, NVD entry, write-up).
+  Rendered as links, so the host keeps only well-formed `http`/`https` URLs with
+  no embedded credentials, at most 16 per finding and 2048 bytes each after
+  normalisation; anything else is dropped, never truncated.
+- `device_macs` — deprecated. Still accepted; the host folds each MAC into
+  `subjects` as an endpoint when it stores the finding. New code should use
+  `subjects`.
+
+Everything a module sends is clamped at the inbound boundary before it is
+stored or published: title 512 chars, narrative 8192, category 128, finding id
+and evidence labels 256, 32 recommended actions, 64 evidence entries, 256 subjects,
+16 KiB of metadata, 8 KiB per evidence payload, control and bidirectional
+override characters removed. The clamped finding is what the store holds and
+what other modules receive on the bus; the raw submission goes nowhere.
+
 ---
 
 ## State reads

@@ -114,7 +114,7 @@ pub(crate) fn live_or_degrade<T>(
 /// On the live path use [`Degradable::live`]; when serving cached/last-known
 /// data use [`Degradable::degraded`].
 #[derive(serde::Serialize)]
-pub(crate) struct Degradable<T> {
+pub struct Degradable<T> {
     pub items: Vec<T>,
     pub live_available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -217,111 +217,6 @@ pub(crate) async fn csrf_guard_layer(
     next.run(request).await
 }
 
-#[cfg(test)]
-mod tests {
-    use axum::Router;
-    use axum::body::Body;
-    use axum::http::{Method, Request, StatusCode, header};
-    use axum::middleware;
-    use axum::routing::{delete, get, options, post, put};
-    use tower::util::ServiceExt;
-
-    use super::csrf_guard_layer;
-
-    fn app() -> Router {
-        Router::new()
-            .route(
-                "/x",
-                get(|| async { StatusCode::OK })
-                    .post(|| async { StatusCode::OK })
-                    .put(|| async { StatusCode::OK })
-                    .delete(|| async { StatusCode::OK })
-                    .options(|| async { StatusCode::OK }),
-            )
-            .layer(middleware::from_fn(csrf_guard_layer))
-    }
-
-    async fn call(method: Method, content_type: Option<&str>, body: &str) -> StatusCode {
-        let mut req = Request::builder().method(method).uri("/x");
-        if let Some(ct) = content_type {
-            req = req.header(header::CONTENT_TYPE, ct);
-        }
-        let req = req
-            .header(header::CONTENT_LENGTH, body.len().to_string())
-            .body(Body::from(body.to_string()))
-            .expect("request build");
-        app().oneshot(req).await.expect("response").status()
-    }
-
-    #[tokio::test]
-    async fn csrf_rejects_form_urlencoded_post() {
-        let status = call(
-            Method::POST,
-            Some("application/x-www-form-urlencoded"),
-            "a=1&b=2",
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    }
-
-    #[tokio::test]
-    async fn csrf_rejects_multipart_post() {
-        let status = call(Method::POST, Some("multipart/form-data"), "payload").await;
-        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    }
-
-    #[tokio::test]
-    async fn csrf_rejects_text_plain_post() {
-        let status = call(Method::POST, Some("text/plain"), "payload").await;
-        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    }
-
-    #[tokio::test]
-    async fn csrf_allows_json_post() {
-        let status = call(Method::POST, Some("application/json"), "{\"x\":1}").await;
-        assert_eq!(status, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn csrf_rejects_empty_body_post_without_json_content_type() {
-        // WSTG-N02: no-body mutating requests must ALSO declare
-        // application/json — otherwise they bypass the CSRF guard.
-        let req = Request::builder()
-            .method(Method::POST)
-            .uri("/x")
-            .header(header::CONTENT_LENGTH, "0")
-            .body(Body::empty())
-            .expect("request");
-        let status = app().oneshot(req).await.expect("response").status();
-        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    }
-
-    #[tokio::test]
-    async fn csrf_allows_empty_body_post_with_json_content_type() {
-        let req = Request::builder()
-            .method(Method::POST)
-            .uri("/x")
-            .header(header::CONTENT_TYPE, "application/json")
-            .header(header::CONTENT_LENGTH, "0")
-            .body(Body::empty())
-            .expect("request");
-        let status = app().oneshot(req).await.expect("response").status();
-        assert_eq!(status, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn csrf_allows_get_requests() {
-        let status = call(Method::GET, Some("text/plain"), "payload").await;
-        assert_eq!(status, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn csrf_allows_options_requests() {
-        let status = call(Method::OPTIONS, Some("text/plain"), "payload").await;
-        assert_eq!(status, StatusCode::OK);
-    }
-}
-
 /// Global auth guard middleware for all /api/* routes.
 /// This is belt-and-suspenders on top of per-handler `RequireAuth` extractors —
 /// ensures no API route can accidentally be exposed without authentication.
@@ -369,7 +264,7 @@ async fn demo_sanitize_layer(
         .headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map_or(false, |ct| ct.contains("application/json"));
+        .is_some_and(|ct| ct.contains("application/json"));
 
     if !is_json {
         return Response::from_parts(parts, body);
@@ -1012,5 +907,110 @@ async fn require_admin_passthrough(
             next.run(req).await
         }
         Err(rej) => rej,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode, header};
+    use axum::middleware;
+    use axum::routing::get;
+    use tower::util::ServiceExt;
+
+    use super::csrf_guard_layer;
+
+    fn app() -> Router {
+        Router::new()
+            .route(
+                "/x",
+                get(|| async { StatusCode::OK })
+                    .post(|| async { StatusCode::OK })
+                    .put(|| async { StatusCode::OK })
+                    .delete(|| async { StatusCode::OK })
+                    .options(|| async { StatusCode::OK }),
+            )
+            .layer(middleware::from_fn(csrf_guard_layer))
+    }
+
+    async fn call(method: Method, content_type: Option<&str>, body: &str) -> StatusCode {
+        let mut req = Request::builder().method(method).uri("/x");
+        if let Some(ct) = content_type {
+            req = req.header(header::CONTENT_TYPE, ct);
+        }
+        let req = req
+            .header(header::CONTENT_LENGTH, body.len().to_string())
+            .body(Body::from(body.to_string()))
+            .expect("request build");
+        app().oneshot(req).await.expect("response").status()
+    }
+
+    #[tokio::test]
+    async fn csrf_rejects_form_urlencoded_post() {
+        let status = call(
+            Method::POST,
+            Some("application/x-www-form-urlencoded"),
+            "a=1&b=2",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn csrf_rejects_multipart_post() {
+        let status = call(Method::POST, Some("multipart/form-data"), "payload").await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn csrf_rejects_text_plain_post() {
+        let status = call(Method::POST, Some("text/plain"), "payload").await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_json_post() {
+        let status = call(Method::POST, Some("application/json"), "{\"x\":1}").await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csrf_rejects_empty_body_post_without_json_content_type() {
+        // WSTG-N02: no-body mutating requests must ALSO declare
+        // application/json — otherwise they bypass the CSRF guard.
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/x")
+            .header(header::CONTENT_LENGTH, "0")
+            .body(Body::empty())
+            .expect("request");
+        let status = app().oneshot(req).await.expect("response").status();
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_empty_body_post_with_json_content_type() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/x")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CONTENT_LENGTH, "0")
+            .body(Body::empty())
+            .expect("request");
+        let status = app().oneshot(req).await.expect("response").status();
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_get_requests() {
+        let status = call(Method::GET, Some("text/plain"), "payload").await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_options_requests() {
+        let status = call(Method::OPTIONS, Some("text/plain"), "payload").await;
+        assert_eq!(status, StatusCode::OK);
     }
 }

@@ -37,17 +37,4 @@ impl DeviceQueueRegistry {
             })
             .clone()
     }
-
-    /// Get an existing queue.
-    pub fn get(&self, device_id: &str) -> Option<RouterQueue> {
-        self.queues.get(device_id).cloned()
-    }
-
-    /// Remove a device's queue (on device removal/disable).
-    /// The queue worker exits when all senders are dropped.
-    pub fn remove(&mut self, device_id: &str) {
-        if self.queues.remove(device_id).is_some() {
-            tracing::info!(device = %device_id, "removed per-device API queue");
-        }
-    }
 }

@@ -33,7 +33,7 @@ pub(crate) const MODULES_USER_AGENT: &str = "ion-drift-modules";
 
 /// Inputs for [`ModuleRegistryService::register`].
 pub struct RegisterRequest {
-    /// Base URL of the module, e.g. `http://10.20.25.50:3099`.
+    /// Base URL of the module, e.g. `http://192.168.1.50:3099`.
     pub url: String,
     /// HMAC-SHA256 shared secret used to sign outbound event deliveries.
     /// The operator generates this on the module side and pastes it here.
@@ -61,12 +61,6 @@ impl ModuleRegistryService {
             .build()
             .context("build module registry http client")?;
         Ok(Self { store, http })
-    }
-
-    /// For tests: build with a custom reqwest client.
-    #[cfg(test)]
-    pub fn with_client(store: Arc<ModuleRegistryStore>, http: reqwest::Client) -> Self {
-        Self { store, http }
     }
 
     /// Register a new module.
@@ -153,10 +147,6 @@ impl ModuleRegistryService {
         Ok(Some(hex::encode(digest)[..8].to_string()))
     }
 
-    pub async fn get_by_name(&self, name: &str) -> anyhow::Result<Option<RegisteredModule>> {
-        self.store.get_by_name(name).await
-    }
-
     /// Probe a registered module's `/manifest` endpoint and touch its
     /// `last_seen_at` on success. Does not persist the manifest.
     pub async fn test_connection(&self, name: &str) -> anyhow::Result<Manifest> {
@@ -172,26 +162,18 @@ impl ModuleRegistryService {
         Ok(manifest)
     }
 
-    /// Probe the module, replace the cached manifest with the fresh copy.
-    pub async fn refresh_manifest(&self, name: &str) -> anyhow::Result<Manifest> {
-        let manifest = self.test_connection(name).await?;
-        self.store.update_manifest(name, &manifest).await?;
-        Ok(manifest)
-    }
-
     async fn fetch_manifest(&self, base: &Url) -> anyhow::Result<Manifest> {
         // Re-run the SSRF host guard immediately before every probe (not just
         // at registration) so a domain that rebinds to a blocked address after
-        // registration — or a stored URL reached via test_connection/refresh —
+        // registration — or a stored URL reached via test_connection —
         // is still caught (DRIFT-2026-0001 DNS-rebind + re-probe gap).
-        if let Some(host) = base.host_str() {
-            if crate::ssrf::host_resolves_to_blocked(host, true) {
+        if let Some(host) = base.host_str()
+            && crate::ssrf::host_resolves_to_blocked(host, true) {
                 return Err(anyhow!(
                     "module host resolves to a blocked address range at probe time \
                      (link-local/unspecified/broadcast)"
                 ));
             }
-        }
         let manifest_url = Url::parse(&format!(
             "{}/manifest",
             base.as_str().trim_end_matches('/')
@@ -512,7 +494,7 @@ mod tests {
     fn url_parse_allows_loopback_and_private() {
         // Modules legitimately run on the LAN or the same host.
         assert!(parse_module_url("http://127.0.0.1:9201").is_ok());
-        assert!(parse_module_url("http://10.20.25.27:9201").is_ok());
+        assert!(parse_module_url("http://192.168.1.27:9201").is_ok());
         assert!(parse_module_url("http://192.168.1.50:8080").is_ok());
     }
 
@@ -597,11 +579,11 @@ mod tests {
         .await
         .unwrap();
 
-        let before = svc.get_by_name("probe-me").await.unwrap().unwrap();
+        let before = svc.store.get_by_name("probe-me").await.unwrap().unwrap();
         assert!(before.last_seen_at.is_none());
 
         let _m = svc.test_connection("probe-me").await.unwrap();
-        let after = svc.get_by_name("probe-me").await.unwrap().unwrap();
+        let after = svc.store.get_by_name("probe-me").await.unwrap().unwrap();
         assert!(after.last_seen_at.is_some());
     }
 }

@@ -272,14 +272,13 @@ impl SwosClient {
     /// oversized `Content-Length`, then streams and stops once the cap is
     /// crossed so an oversized body is never fully buffered (review ID-08).
     async fn read_body_limited(mut resp: reqwest::Response) -> Result<String, MikrotikError> {
-        if let Some(len) = resp.content_length() {
-            if len > MAX_RESPONSE_BYTES as u64 {
+        if let Some(len) = resp.content_length()
+            && len > MAX_RESPONSE_BYTES as u64 {
                 return Err(MikrotikError::ResponseTooLarge(
                     len as usize,
                     MAX_RESPONSE_BYTES,
                 ));
             }
-        }
         let mut buf: Vec<u8> = Vec::new();
         while let Some(chunk) = resp.chunk().await? {
             if buf.len() + chunk.len() > MAX_RESPONSE_BYTES {
@@ -539,7 +538,7 @@ impl SwosClient {
                 } else {
                     decode_hex_string(&e.nm)
                 };
-                let member_ports = decode_bitmask(e.mbr as u64);
+                let member_ports = decode_bitmask(e.mbr);
 
                 SwosVlanEntry {
                     vlan_id: e.vid as u16,

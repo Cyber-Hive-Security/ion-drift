@@ -78,8 +78,8 @@ pub async fn list(
     }
 
     // Filter by action
-    if let Some(ref action) = f.action {
-        if action != "all" {
+    if let Some(ref action) = f.action
+        && action != "all" {
             entries.retain(|e| {
                 e.parsed
                     .as_ref()
@@ -88,14 +88,12 @@ pub async fn list(
                     .unwrap_or(false)
             });
         }
-    }
 
     // Filter by severity
-    if let Some(ref severity) = f.severity {
-        if severity != "all" {
+    if let Some(ref severity) = f.severity
+        && severity != "all" {
             entries.retain(|e| e.level == *severity);
         }
-    }
 
     // Compute analytics before truncating
     let analytics = log_parser::compute_analytics(&entries);

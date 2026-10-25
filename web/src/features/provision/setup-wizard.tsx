@@ -275,7 +275,7 @@ function StepConfigure({
 
         {/* Device selector */}
         <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">
+          <label htmlFor="wizard-target-device" className="block text-xs font-medium text-muted-foreground mb-1">
             Target Device
           </label>
           {devicesLoading ? (
@@ -286,6 +286,7 @@ function StepConfigure({
             </p>
           ) : (
             <select
+              id="wizard-target-device"
               value={deviceId}
               onChange={(e) => {
                 setDeviceId(e.target.value);
@@ -307,7 +308,7 @@ function StepConfigure({
         {/* WAN interface */}
         {deviceId && (
           <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">
+            <label htmlFor="wizard-wan-interface" className="block text-xs font-medium text-muted-foreground mb-1">
               WAN Interface
             </label>
             {ifLoading ? (
@@ -318,6 +319,7 @@ function StepConfigure({
               </p>
             ) : (
               <select
+                id="wizard-wan-interface"
                 value={wanInterface}
                 onChange={(e) => setWanInterface(e.target.value)}
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
@@ -343,10 +345,10 @@ function StepConfigure({
 
         {/* Syslog host */}
         <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">
+          <label htmlFor="wizard-syslog-host" className="block text-xs font-medium text-muted-foreground mb-1">
             Syslog Host
           </label>
-          <input
+          <input id="wizard-syslog-host"
             type="text"
             value={syslogHost}
             onChange={(e) => setSyslogHost(e.target.value)}
@@ -360,10 +362,10 @@ function StepConfigure({
 
         {/* Syslog port */}
         <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">
+          <label htmlFor="wizard-syslog-port" className="block text-xs font-medium text-muted-foreground mb-1">
             Syslog Port
           </label>
-          <input
+          <input id="wizard-syslog-port"
             type="number"
             value={syslogPort}
             onChange={(e) => setSyslogPort(Number(e.target.value))}
@@ -376,10 +378,10 @@ function StepConfigure({
         {/* Router source IP */}
         {deviceId && (
           <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">
+            <label htmlFor="wizard-router-source-ip" className="block text-xs font-medium text-muted-foreground mb-1">
               Router Source IP
             </label>
-            <input
+            <input id="wizard-router-source-ip"
               type="text"
               value={routerSourceIp}
               onChange={(e) => setRouterSourceIp(e.target.value)}
@@ -798,7 +800,7 @@ export function SetupWizard() {
       .filter((r: ApplyItemResult) => !r.success)
       .map((r: ApplyItemResult) => r.id);
     if (failedIds.length > 0) {
-      handleApply(failedIds);
+      void handleApply(failedIds);
     }
   };
 

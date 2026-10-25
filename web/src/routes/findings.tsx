@@ -3,11 +3,15 @@ import {
   useFindings,
   useAcknowledgeFinding,
   useResolveFinding,
+  useDevices,
   type Finding,
+  type FindingSubject,
   type FindingSeverity,
   type FindingStatus,
   type FindingEvidence,
 } from "@/api/queries";
+import type { NetworkDevice } from "@/api/types";
+import { Link } from "@tanstack/react-router";
 import { PageShell } from "@/components/layout/page-shell";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { ErrorDisplay } from "@/components/error-display";
@@ -130,6 +134,27 @@ function FindingDetail({ finding }: { finding: Finding }) {
         </div>
       )}
 
+      {finding.references.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold mb-1">References</h3>
+          <ul className="list-disc pl-5 text-sm space-y-0.5">
+            {finding.references.map((url) => (
+              <li key={url}>
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="break-all text-primary/80 hover:text-primary hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {url}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {finding.metadata != null && (
         <details className="rounded border border-border bg-background/50 px-3 py-2 text-xs">
           <summary className="cursor-pointer font-semibold">Metadata</summary>
@@ -193,6 +218,31 @@ function FindingDetail({ finding }: { finding: Finding }) {
   );
 }
 
+function SubjectChip({ subject, devices }: { subject: FindingSubject; devices: NetworkDevice[] }) {
+  if (subject.kind === "endpoint") return <DeviceLink mac={subject.id} />;
+  if (subject.kind === "domain") return <span className="text-xs font-mono">{subject.id}</span>;
+  if (subject.kind !== "device") {
+    return (
+      <span className="text-xs" title={subject.kind}>
+        {subject.id}
+      </span>
+    );
+  }
+  const device = devices.find((d) => d.id === subject.id);
+  const label = device?.name ?? subject.id;
+  if (!device || device.device_type === "router") return <span className="text-xs">{label}</span>;
+  return (
+    <Link
+      to="/switches/$deviceId"
+      params={{ deviceId: device.id }}
+      className="text-xs text-primary/80 hover:text-primary hover:underline"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {label}
+    </Link>
+  );
+}
+
 export function FindingsPage() {
   const [statusFilter, setStatusFilter] = useState<FindingStatus | "all">(
     "open",
@@ -215,6 +265,7 @@ export function FindingsPage() {
   );
 
   const findingsQ = useFindings(filters);
+  const { data: devices = [] } = useDevices();
 
   const filtered = useMemo(() => {
     if (!findingsQ.data) return [];
@@ -280,25 +331,23 @@ export function FindingsPage() {
       sortValue: (f) => f.category,
     },
     {
-      key: "devices",
-      header: "Devices",
+      key: "subjects",
+      header: "Subjects",
       width: "200px",
       render: (f) =>
-        f.device_macs.length === 0 ? (
+        f.subjects.length === 0 ? (
           <span className="text-xs text-muted-foreground">—</span>
         ) : (
           <div className="flex flex-wrap gap-1">
-            {f.device_macs.slice(0, 3).map((mac) => (
-              <DeviceLink key={mac} mac={mac} />
+            {f.subjects.slice(0, 3).map((s) => (
+              <SubjectChip key={`${s.kind}:${s.id}`} subject={s} devices={devices} />
             ))}
-            {f.device_macs.length > 3 && (
-              <span className="text-xs text-muted-foreground">
-                +{f.device_macs.length - 3}
-              </span>
+            {f.subjects.length > 3 && (
+              <span className="text-xs text-muted-foreground">+{f.subjects.length - 3}</span>
             )}
           </div>
         ),
-      sortValue: (f) => f.device_macs.join(","),
+      sortValue: (f) => f.subjects.map((s) => s.id).join(","),
     },
     {
       key: "status",

@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingV1};
+use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingSubject, FindingV1};
 use ion_drift_storage::{AdvisoryRecord, FindingStatus, FindingsQuery, FindingsStore};
 use mikrotik_core::resources::ip::IpService;
 use tracing::warn;
@@ -100,6 +100,7 @@ fn build_finding(finding_id: &str, device_id: &str, svc: &IpService, adv: &Advis
         ),
     };
     let port = svc.port.map(|p| p.to_string()).unwrap_or_else(|| "default".to_string());
+    let references = crate::staging::stage_references(&adv.references);
     FindingV1 {
         finding_id: finding_id.to_string(),
         title: format!("{} — exposed on {service}", adv.title),
@@ -123,11 +124,13 @@ fn build_finding(finding_id: &str, device_id: &str, svc: &IpService, adv: &Advis
                 "observed_at_unix": now,
             }),
         }],
+        references: references.clone(),
+        subjects: vec![FindingSubject::device(device_id)],
         device_macs: Vec::new(),
         timestamp_unix: now,
         metadata: Some(serde_json::json!({
             "advisory_id": adv.advisory_id,
-            "references": adv.references,
+            "references": references,
             "no_fixed_release": adv.no_fixed_release,
             "fixed_versions": adv.fixed_versions,
             "catalog_version": adv.catalog_version,
@@ -220,11 +223,10 @@ pub(crate) async fn reconcile(store: &FindingsStore, assessment: ExposureAssessm
     }
 
     for id in &assessment.not_exposed {
-        if matches!(held.get(id), Some((FindingStatus::Open | FindingStatus::Acknowledged, _, _, _))) {
-            if let Err(e) = store.resolve_by_key(ADVISORY_MODULE, id, CEASED_NOTE).await {
+        if matches!(held.get(id), Some((FindingStatus::Open | FindingStatus::Acknowledged, _, _, _)))
+            && let Err(e) = store.resolve_by_key(ADVISORY_MODULE, id, CEASED_NOTE).await {
                 warn!(finding_id = %id, error = %e, "advisory: exposure resolve failed");
             }
-        }
     }
     Ok(())
 }
@@ -253,7 +255,7 @@ mod tests {
             requires_surface_names: vec!["api".into(), "api-ssl".into()],
             requires_state: vec![], version_constraint: None, no_fixed_release: true,
             fixed_versions: vec![], mitigations: vec!["/ip/service set api-ssl address=<mgmt-cidr>".into()],
-            references: vec![], attack_techniques: vec![], source: "bundled".into(),
+            references: vec!["https://example.com/adv".into()], attack_techniques: vec![], source: "bundled".into(),
             catalog_version: 2, generated_at: "2026-07-28".into(),
         }
     }
@@ -265,9 +267,9 @@ mod tests {
         assert_eq!(scope_of(None), Scope::Unrestricted);
         assert_eq!(scope_of(Some("")), Scope::Unrestricted);
         assert_eq!(scope_of(Some("0.0.0.0/0")), Scope::Unrestricted);
-        assert_eq!(scope_of(Some("10.20.25.17/32,0.0.0.0/0")), Scope::Unrestricted);
+        assert_eq!(scope_of(Some("192.168.1.17/32,0.0.0.0/0")), Scope::Unrestricted);
         assert_eq!(scope_of(Some("::/0")), Scope::Unrestricted);
-        assert_eq!(scope_of(Some("10.20.25.17/32")), Scope::Restricted(vec!["10.20.25.17/32".into()]));
+        assert_eq!(scope_of(Some("192.168.1.17/32")), Scope::Restricted(vec!["192.168.1.17/32".into()]));
     }
 
     #[test]
@@ -282,14 +284,30 @@ mod tests {
         assert_eq!(scope_of(Some(&entries.join(","))), Scope::Unrestricted);
     }
 
+    /// Advisory rows written before the sanitizer existed, or by a file that
+    /// has since gone away, still feed findings: sanitize at emission too.
+    #[test]
+    fn stored_references_are_sanitized_before_emission() {
+        let mut adv = advisory();
+        adv.references = vec![
+            "https://nvd.nist.gov@evil.example/x".into(),
+            "javascript:alert(1)".into(),
+            "https://example.com/adv".into(),
+        ];
+        let a = assess("dev1", &[svc("api-ssl", false, Some(""))], &[adv], 1);
+        assert_eq!(a.exposed[0].references, vec!["https://example.com/adv".to_string()]);
+    }
+
     #[test]
     fn unrestricted_enabled_service_is_high() {
         let a = assess("dev1", &[svc("api-ssl", false, Some(""))], &[advisory()], 1);
         assert_eq!(a.exposed.len(), 1);
         let f = &a.exposed[0];
+        assert_eq!(f.subjects, vec![FindingSubject::device("dev1")]);
         assert_eq!(f.finding_id, ID);
         assert_eq!(f.category, EXPOSURE_CATEGORY);
         assert_eq!(f.severity, FindingSeverity::High);
+        assert_eq!(f.references, vec!["https://example.com/adv".to_string()]);
         assert!(f.narrative.contains("no attack has been observed"));
         // api is absent, so its surface counts as not exposed.
         assert!(a.not_exposed.contains("dev1:svc:api:CVE-2026-16347:exposure"));
@@ -297,13 +315,13 @@ mod tests {
 
     #[test]
     fn restricted_enabled_service_is_low_with_scope_in_evidence() {
-        let a = assess("dev1", &[svc("api-ssl", false, Some("10.20.25.17/32"))], &[advisory()], 1);
+        let a = assess("dev1", &[svc("api-ssl", false, Some("192.168.1.17/32"))], &[advisory()], 1);
         let f = &a.exposed[0];
         assert_eq!(f.severity, FindingSeverity::Low);
         let ion_drift_module_api::FindingEvidence::Custom { payload, .. } = &f.evidence[0] else {
             panic!("expected custom evidence")
         };
-        assert_eq!(payload["scope"], serde_json::json!(["10.20.25.17/32"]));
+        assert_eq!(payload["scope"], serde_json::json!(["192.168.1.17/32"]));
     }
 
     #[test]
@@ -338,7 +356,7 @@ mod tests {
     async fn acknowledged_low_reopens_when_widened_to_unrestricted() {
         let f = NamedTempFile::new().unwrap();
         let store = FindingsStore::new(f.path()).unwrap();
-        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("10.20.25.17/32"))], &[advisory()], 1)).await.unwrap();
+        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("192.168.1.17/32"))], &[advisory()], 1)).await.unwrap();
         store.acknowledge(rows(&store).await[0].id, "scott").await.unwrap();
 
         reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some(""))], &[advisory()], 2)).await.unwrap();
@@ -352,7 +370,7 @@ mod tests {
     async fn acknowledged_finding_stays_acknowledged_while_config_is_unchanged() {
         let f = NamedTempFile::new().unwrap();
         let store = FindingsStore::new(f.path()).unwrap();
-        let reads = [svc("api-ssl", false, Some("10.20.25.17/32"))];
+        let reads = [svc("api-ssl", false, Some("192.168.1.17/32"))];
         reconcile(&store, assess("dev1", &reads, &[advisory()], 1)).await.unwrap();
         store.acknowledge(rows(&store).await[0].id, "scott").await.unwrap();
         reconcile(&store, assess("dev1", &reads, &[advisory()], 2)).await.unwrap();
@@ -413,7 +431,7 @@ mod tests {
     async fn escalation_note_persists_on_later_cycles() {
         let f = NamedTempFile::new().unwrap();
         let store = FindingsStore::new(f.path()).unwrap();
-        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("10.20.25.17/32"))], &[advisory()], 1)).await.unwrap();
+        reconcile(&store, assess("dev1", &[svc("api-ssl", false, Some("192.168.1.17/32"))], &[advisory()], 1)).await.unwrap();
         store.acknowledge(rows(&store).await[0].id, "scott").await.unwrap();
         let widened = [svc("api-ssl", false, Some(""))];
         reconcile(&store, assess("dev1", &widened, &[advisory()], 2)).await.unwrap();

@@ -44,6 +44,7 @@ pub(crate) fn merge_inputs(feed: Vec<FeedCve>, kev: Vec<FeedKev>, catalog: &[Adv
                 cvss_vector: c.cvss_vector,
                 ranges,
                 mitigations: Vec::new(),
+                references: Vec::new(),
                 source: VulnSource::Nvd,
             },
         );
@@ -71,6 +72,7 @@ pub(crate) fn merge_inputs(feed: Vec<FeedCve>, kev: Vec<FeedKev>, catalog: &[Adv
                 ranges,
                 kev_date_added: kev.get(&a.advisory_id).cloned(),
                 mitigations: a.mitigations.clone(),
+                references: a.references.clone(),
                 source: VulnSource::Catalog,
             },
         );

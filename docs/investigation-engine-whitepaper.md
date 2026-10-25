@@ -156,7 +156,7 @@ Each investigation produces a `NewInvestigation` record containing:
 - **Verdict**: one of `benign`, `routine`, `suspicious`, `threat`, `inconclusive`
 - **Recommended action**: `no_action`, `monitor`, `investigate`, or `escalate`
 - **Reason**: one-line explanation of why the verdict was chosen
-- **Summary**: human-readable narrative (e.g., "printer-office (online for 12 days, fully baselined) -- new destination to 1.2.3.4, US, Cloudflare, CDN. New destination is CDN provider (Cloudflare)")
+- **Summary**: human-readable narrative (e.g., "printer-office (online for 12 days, fully baselined) -- new destination to 192.0.2.10, US, Cloudflare, CDN. New destination is CDN provider (Cloudflare)")
 - **Evidence chain**: JSON array of every check performed
 - **Timestamps**: `investigated_at` (epoch seconds), `duration_ms`
 

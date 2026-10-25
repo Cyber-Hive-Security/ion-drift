@@ -29,20 +29,18 @@ pub fn build_ap_feeder_map(
         let b_is_wap = wap_identifiers.contains(&link.device_b);
 
         // If device_a is a WAP, the feeder port is on device_b
-        if a_is_wap && !b_is_wap {
-            if let Some(ref port) = link.port_b {
+        if a_is_wap && !b_is_wap
+            && let Some(ref port) = link.port_b {
                 let key = (link.device_b.clone(), canonicalize_port_name(port));
                 map.entry(key).or_default().push(link.device_a.clone());
             }
-        }
 
         // If device_b is a WAP, the feeder port is on device_a
-        if b_is_wap && !a_is_wap {
-            if let Some(ref port) = link.port_a {
+        if b_is_wap && !a_is_wap
+            && let Some(ref port) = link.port_a {
                 let key = (link.device_a.clone(), canonicalize_port_name(port));
                 map.entry(key).or_default().push(link.device_b.clone());
             }
-        }
     }
 
     map
@@ -114,11 +112,10 @@ pub fn canonicalize_port_name(name: &str) -> String {
     ];
 
     for prefix in prefixes {
-        if let Some(suffix) = lower.strip_prefix(prefix) {
-            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+        if let Some(suffix) = lower.strip_prefix(prefix)
+            && !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
                 return format!("port{suffix}");
             }
-        }
     }
 
     // Not a recognized alias pattern — return lowercase as-is

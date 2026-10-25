@@ -235,6 +235,7 @@ impl SwitchStore {
     }
 
     /// Insert a new alert rule. Returns the new rule's ID.
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn create_alert_rule(
         &self,
         name: &str,
@@ -270,6 +271,7 @@ impl SwitchStore {
 
     /// Dynamically update an alert rule. Only non-None fields are updated.
     /// Column names are hardcoded — no injection risk.
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn update_alert_rule(
         &self,
         id: i64,
@@ -440,6 +442,7 @@ impl SwitchStore {
         }
     }
 
+    // One argument per alert_history column; a struct here would be built once and read once.
     #[allow(clippy::too_many_arguments)]
     pub async fn record_alert_history(
         &self,

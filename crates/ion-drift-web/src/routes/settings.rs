@@ -153,91 +153,81 @@ pub async fn update_secrets(
     let mut deferred = Vec::new();
     let mut restart_required = false;
 
-    if let Some(ref username) = req.router_username {
-        if !username.trim().is_empty() {
+    if let Some(ref username) = req.router_username
+        && !username.trim().is_empty() {
             deferred.push(secrets::SECRET_ROUTER_USERNAME.to_string());
             restart_required = true;
         }
-    }
 
-    if let Some(ref password) = req.router_password {
-        if !password.is_empty() {
+    if let Some(ref password) = req.router_password
+        && !password.is_empty() {
             deferred.push(secrets::SECRET_ROUTER_PASSWORD.to_string());
             restart_required = true;
         }
-    }
 
-    if let Some(ref secret) = req.oidc_client_secret {
-        if !secret.is_empty() {
+    if let Some(ref secret) = req.oidc_client_secret
+        && !secret.is_empty() {
             deferred.push(secrets::SECRET_OIDC_CLIENT_SECRET.to_string());
             restart_required = true;
         }
-    }
 
     let sm = sm.read().await;
 
     // Router and OIDC secrets are intentionally deferred until restart so the
     // running clients do not claim to have picked up credentials they still
     // have cached in memory.
-    if let Some(ref username) = req.router_username {
-        if !username.trim().is_empty() {
+    if let Some(ref username) = req.router_username
+        && !username.trim().is_empty() {
             sm.encrypt_secret(secrets::SECRET_ROUTER_USERNAME, username.trim())
                 .await
                 .map_err(|e| internal_error("encrypt router_username", e))?;
         }
-    }
 
-    if let Some(ref password) = req.router_password {
-        if !password.is_empty() {
+    if let Some(ref password) = req.router_password
+        && !password.is_empty() {
             sm.encrypt_secret(secrets::SECRET_ROUTER_PASSWORD, password)
                 .await
                 .map_err(|e| internal_error("encrypt router_password", e))?;
         }
-    }
 
-    if let Some(ref secret) = req.oidc_client_secret {
-        if !secret.is_empty() {
+    if let Some(ref secret) = req.oidc_client_secret
+        && !secret.is_empty() {
             sm.encrypt_secret(secrets::SECRET_OIDC_CLIENT_SECRET, secret)
                 .await
                 .map_err(|e| internal_error("encrypt oidc_client_secret", e))?;
         }
-    }
 
-    if let Some(ref key) = req.certwarden_cert_api_key {
-        if !key.is_empty() {
+    if let Some(ref key) = req.certwarden_cert_api_key
+        && !key.is_empty() {
             sm.encrypt_secret(secrets::SECRET_CW_CERT_API_KEY, key)
                 .await
                 .map_err(|e| internal_error("encrypt certwarden_cert_api_key", e))?;
             updated.push(secrets::SECRET_CW_CERT_API_KEY.to_string());
         }
-    }
 
-    if let Some(ref key) = req.certwarden_key_api_key {
-        if !key.is_empty() {
+    if let Some(ref key) = req.certwarden_key_api_key
+        && !key.is_empty() {
             sm.encrypt_secret(secrets::SECRET_CW_KEY_API_KEY, key)
                 .await
                 .map_err(|e| internal_error("encrypt certwarden_key_api_key", e))?;
             updated.push(secrets::SECRET_CW_KEY_API_KEY.to_string());
         }
-    }
 
-    if let Some(ref id) = req.maxmind_account_id {
-        if !id.trim().is_empty() {
+    if let Some(ref id) = req.maxmind_account_id
+        && !id.trim().is_empty() {
             sm.encrypt_secret(secrets::SECRET_MAXMIND_ACCOUNT_ID, id.trim())
                 .await
                 .map_err(|e| internal_error("encrypt maxmind_account_id", e))?;
             updated.push(secrets::SECRET_MAXMIND_ACCOUNT_ID.to_string());
         }
-    }
 
-    if let Some(ref key) = req.maxmind_license_key {
-        if !key.is_empty() {
+    if let Some(ref key) = req.maxmind_license_key
+        && !key.is_empty() {
             sm.encrypt_secret(secrets::SECRET_MAXMIND_LICENSE_KEY, key)
                 .await
                 .map_err(|e| internal_error("encrypt maxmind_license_key", e))?;
             updated.push(secrets::SECRET_MAXMIND_LICENSE_KEY.to_string());
         }
-    }
 
     if !updated.is_empty() {
         tracing::info!(count = updated.len(), "secrets updated via settings API");

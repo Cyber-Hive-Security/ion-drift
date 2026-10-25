@@ -75,11 +75,9 @@ pub struct SyslogEvent {
     pub protocol: String,
     pub src_ip: String,
     pub dst_ip: String,
-    pub src_port: Option<i64>,
     pub dst_port: Option<i64>,
     pub src_mac: Option<String>,
     pub action: Option<String>,
-    pub in_interface: Option<String>,
     pub timestamp: String,
 }
 
@@ -1729,7 +1727,9 @@ impl ConnectionStore {
              LIMIT 10"
         );
         let mut stmt = db.prepare(&sql)?;
-        let device_rows: Vec<(String, String, Option<String>, Option<String>, i64, i64)> = stmt
+        /// (mac, ip, vlan, hostname, bytes, connections)
+        type DeviceRow = (String, String, Option<String>, Option<String>, i64, i64);
+        let device_rows: Vec<DeviceRow> = stmt
             .query_map(params![cutoff, dst_port, protocol], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -2122,11 +2122,10 @@ fn build_filter_clause(filters: &HistoryFilters) -> (String, Vec<BindValue>) {
         conditions.push(format!("closed = ?{}", values.len() + 1));
         values.push(BindValue::Int(if v { 1 } else { 0 }));
     }
-    if let Some(v) = filters.flagged {
-        if v {
+    if let Some(v) = filters.flagged
+        && v {
             conditions.push("flagged = 1".into());
         }
-    }
     if let Some(ref v) = filters.after {
         conditions.push(format!("first_seen >= ?{}", values.len() + 1));
         values.push(BindValue::Text(v.clone()));

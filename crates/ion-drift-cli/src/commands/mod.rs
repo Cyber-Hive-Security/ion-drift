@@ -143,9 +143,9 @@ pub fn status_colored(running: bool, no_color: bool) -> String {
         return if running { "UP".into() } else { "down".into() };
     }
     if running {
-        format!("\x1b[32mUP\x1b[0m")
+        "\x1b[32mUP\x1b[0m".to_string()
     } else {
-        format!("\x1b[90mdown\x1b[0m")
+        "\x1b[90mdown\x1b[0m".to_string()
     }
 }
 

@@ -46,7 +46,7 @@ wan_interface = "1-WAN"
 # Override: DRIFT_ROUTER_LOCAL_SOURCE_IP env var
 # A value that is not a valid IP address is logged as a warning and ignored
 # (falls back to loopback-only) — it never stops the server from starting.
-# local_source_ip = "10.20.25.27"
+# local_source_ip = "192.168.1.27"
 
 # ── Authentication ─────────────────────────────────────────────────
 # By default, ion-drift uses local auth (username/password). The setup wizard

@@ -43,7 +43,7 @@ all others are silently dropped. Incoming lines are parsed by
 
 ```
 <pri>MMM DD HH:MM:SS router firewall,info ION forward: in:IF out:IF, ...
-    proto TCP (SYN), 1.2.3.4:80->5.6.7.8:443, len 60
+    proto TCP (SYN), 192.0.2.10:80->198.51.100.20:443, len 60
 ```
 
 The parser extracts protocol, source/destination IP:port (via the `->` arrow),

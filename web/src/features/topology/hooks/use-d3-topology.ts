@@ -219,7 +219,7 @@ export function createTopologyMapInstance(
 
   // ── Mutable state ──
   let currentData: NetworkTopologyResponse | null = null;
-  let nodeMap: Map<string, TopologyNode> = new Map();
+  const nodeMap: Map<string, TopologyNode> = new Map();
   let selectedNodeId: string | null = null;
   let vlanFilter: Set<number> | null = null;
   let kindFilter: Set<string> | null = null;
@@ -671,8 +671,8 @@ export function createTopologyMapInstance(
                 // Update labels
                 layerLabels.selectAll(`[data-node-id="${CSS.escape(node.id)}"]`).each(function () {
                   const el = d3.select(this);
-                  const baseX = parseFloat(el.attr("data-base-x") || el.attr("x")) || 0;
-                  const baseY = parseFloat(el.attr("data-base-y") || el.attr("y")) || 0;
+                  const baseX = Number.parseFloat(el.attr("data-base-x") || el.attr("x")) || 0;
+                  const baseY = Number.parseFloat(el.attr("data-base-y") || el.attr("y")) || 0;
                   if (!el.attr("data-base-x")) {
                     el.attr("data-base-x", baseX).attr("data-base-y", baseY);
                   }
@@ -790,7 +790,6 @@ export function createTopologyMapInstance(
         .attr("stroke-width", 1)
         .attr("cursor", "nwse-resize")
         .call(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           d3.drag<SVGRectElement, unknown>()
             .on("start", function () {
               origBboxX = group.bbox_x;

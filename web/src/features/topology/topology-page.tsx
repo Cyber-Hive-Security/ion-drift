@@ -20,6 +20,7 @@ import {
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import "../topology/topology-map.css";
 import { Link } from "@tanstack/react-router";
+import { onEnterOrSpace } from "@/lib/utils";
 import {
   RefreshCw,
   Search,
@@ -228,6 +229,9 @@ function Legend({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => v
       }}
     >
       <div
+        role="button"
+        tabIndex={0}
+        onKeyDown={onEnterOrSpace(onToggle)}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -444,6 +448,7 @@ function NodeContextMenu({
     <>
       {/* Backdrop */}
       <div
+        role="presentation"
         className="fixed inset-0 z-40"
         onClick={onClose}
         onContextMenu={(e) => {
@@ -493,6 +498,7 @@ function NodeContextMenu({
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               className="mb-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+              // eslint-disable-next-line jsx-a11y/no-autofocus -- field opens on user action
               autoFocus
             />
             <div className="max-h-40 overflow-y-auto">

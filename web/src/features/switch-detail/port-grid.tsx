@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { cn } from "@/lib/utils";
+import { cn, onEnterOrSpace } from "@/lib/utils";
 import { useVlanLookup } from "@/hooks/use-vlan-lookup";
 import type {
   PortMetricsTuple,
@@ -223,9 +223,7 @@ export function PortGrid({
     for (const cell of portCells) {
       const pos = portToGridPosition(cell.portName, cell.portIndex);
       if (!pos) {
-        if (cell.portName !== "bridge") {
-          other.push(cell);
-        }
+        other.push(cell);
         continue;
       }
       if (pos.col === -1) {
@@ -283,6 +281,8 @@ export function PortGrid({
     return (
       <div
         key={key}
+        role="button"
+        tabIndex={0}
         className={cn(
           "relative flex h-9 w-full cursor-pointer items-center justify-center rounded text-[9px] font-bold transition-all",
           cell.hasViolation
@@ -304,6 +304,7 @@ export function PortGrid({
             : undefined,
         }}
         onClick={() => onSelectPort(isSelected ? null : cell.portName)}
+        onKeyDown={onEnterOrSpace(() => onSelectPort(isSelected ? null : cell.portName))}
         onMouseEnter={(e) => handleMouseEnter(cell.portName, e)}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
@@ -513,6 +514,8 @@ export function PortGrid({
             {otherPorts.map((cell) => (
               <div
                 key={cell.portName}
+                role="button"
+                tabIndex={0}
                 className={cn(
                   "h-8 w-16 cursor-pointer rounded border text-[9px] font-medium flex items-center justify-center",
                   cell.running ? "border-green-500/40" : "border-muted-foreground/20",
@@ -520,6 +523,7 @@ export function PortGrid({
                 )}
                 style={{ backgroundColor: cell.vlanColor }}
                 onClick={() => onSelectPort(selectedPort === cell.portName ? null : cell.portName)}
+                onKeyDown={onEnterOrSpace(() => onSelectPort(selectedPort === cell.portName ? null : cell.portName))}
               >
                 <span className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
                   {cell.shortName}

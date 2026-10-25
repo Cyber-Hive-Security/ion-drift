@@ -10,7 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { cn } from "@/lib/utils";
+import { cn, onEnterOrSpace } from "@/lib/utils";
 import type { VlanActivityEntry } from "@/api/types";
 
 type Range = "24h" | "7d";
@@ -45,7 +45,10 @@ function VlanRow({
   return (
     <div>
       <div
+        role="button"
+        tabIndex={0}
         onClick={onToggle}
+        onKeyDown={onEnterOrSpace(onToggle)}
         className={cn(
           "flex cursor-pointer items-center gap-3 rounded-md border border-border bg-card px-3 py-2 transition-colors hover:bg-muted/30",
           dimmed && "opacity-40",

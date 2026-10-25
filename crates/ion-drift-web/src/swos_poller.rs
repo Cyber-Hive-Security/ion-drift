@@ -180,11 +180,10 @@ async fn poll_swos_switch(
         }
     };
 
-    if !entries.is_empty() {
-        if let Err(e) = store.record_port_metrics(device_id, &entries).await {
+    if !entries.is_empty()
+        && let Err(e) = store.record_port_metrics(device_id, &entries).await {
             tracing::warn!(device = %device_id, "SwOS port metrics: {e}");
         }
-    }
 
     // ── Dynamic host (MAC) table ────────────────────────────────────
     if let Ok(hosts) = hosts_res {
@@ -196,7 +195,7 @@ async fn poll_swos_switch(
             "SwOS host table result"
         );
         // Log link index→name mapping periodically for debugging
-        if cycle % 10 == 0 && !links.is_empty() {
+        if cycle.is_multiple_of(10) && !links.is_empty() {
             let link_indices: Vec<String> = links.iter().map(|l| format!("{}={}", l.port_index, l.port_name)).collect();
             tracing::info!(device = %device_id, link_map = ?link_indices, "SwOS port index→name map");
         }
@@ -242,7 +241,7 @@ async fn poll_swos_switch(
     }
 
     // ── VLAN membership (every 4th cycle to reduce load) ────────────
-    if cycle % 4 == 0 {
+    if cycle.is_multiple_of(4) {
         match client.get_vlans().await {
             Ok(vlans) => {
                 let mut membership_entries = Vec::new();

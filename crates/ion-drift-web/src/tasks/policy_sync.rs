@@ -38,11 +38,7 @@ pub fn spawn_policy_sync(
 fn network_to_vlans(network_cidr: &str, registry: &VlanRegistry) -> Option<Vec<i64>> {
     // Extract the network address from the CIDR
     let ip = network_cidr.split('/').next()?;
-    if let Some(vlan) = registry.ip_to_vlan(ip) {
-        Some(vec![vlan as i64])
-    } else {
-        None
-    }
+    registry.ip_to_vlan(ip).map(|vlan| vec![vlan as i64])
 }
 
 /// Parse ION tags from a firewall rule comment.
@@ -209,14 +205,14 @@ async fn sync_policies(
                 }
 
                 // Gateway from DHCP
-                if let Some(ref gw) = net.gateway {
-                    if !gw.is_empty() {
+                if let Some(ref gw) = net.gateway
+                    && !gw.is_empty() {
                         store
                             .upsert_policy(
                                 "gateway",
                                 None,
                                 None,
-                                &[gw.clone()],
+                                std::slice::from_ref(gw),
                                 vlan_json,
                                 "dhcp_gateway",
                                 "medium",
@@ -224,7 +220,6 @@ async fn sync_policies(
                             )
                             .await?;
                     }
-                }
             }
             tracing::info!("synced {} DHCP networks", networks.len());
         }
@@ -281,7 +276,7 @@ async fn sync_policies(
                                 "gateway",
                                 None,
                                 None,
-                                &[gw.clone()],
+                                std::slice::from_ref(gw),
                                 None,
                                 "ip_route_default",
                                 "high",
@@ -385,11 +380,11 @@ async fn sync_policies(
                 let has_lan_filter = rule
                     .in_interface_list
                     .as_deref()
-                    .map_or(false, |l| l != "WAN")
+                    .is_some_and(|l| l != "WAN")
                     || rule
                         .in_interface
                         .as_deref()
-                        .map_or(false, |i| i != wan_interface);
+                        .is_some_and(|i| i != wan_interface);
                 let is_wan = rule.in_interface.as_deref() == Some(wan_interface)
                     || rule.in_interface_list.as_deref() == Some("WAN")
                     || (rule.chain == "input" && !has_lan_filter);

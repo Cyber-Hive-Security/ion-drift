@@ -255,7 +255,7 @@ fn extract_field(text: &str, key: &str) -> Option<String> {
     let start = text.find(key)? + key.len();
     let rest = &text[start..];
     let end = rest
-        .find(|c: char| c == ',' || c == ' ' || c == '\n')
+        .find([',', ' ', '\n'])
         .unwrap_or(rest.len());
     let val = rest[..end].trim();
     if val.is_empty() {
@@ -270,17 +270,16 @@ fn extract_proto(text: &str) -> Option<String> {
     let start = text.find("proto ")? + 6;
     let rest = &text[start..];
     // If it starts with a word followed by " (", include the parenthetical
-    let word_end = rest.find(|c: char| c == ',' || c == ' ').unwrap_or(rest.len());
+    let word_end = rest.find([',', ' ']).unwrap_or(rest.len());
     let word = &rest[..word_end];
 
     // Check if there's a parenthetical like "(SYN)" or "(type 8, code 0)"
     if rest.len() > word_end && rest[word_end..].starts_with(' ') {
         let after_word = &rest[word_end + 1..];
-        if after_word.starts_with('(') {
-            if let Some(paren_end) = after_word.find(')') {
+        if after_word.starts_with('(')
+            && let Some(paren_end) = after_word.find(')') {
                 return Some(format!("{} {}", word, &after_word[..=paren_end]));
             }
-        }
     }
 
     Some(word.to_string())
@@ -304,8 +303,8 @@ fn extract_addresses(text: &str) -> (Option<String>, Option<u16>, Option<String>
     };
 
     let addr_section = &text[comma_pos..];
-    // addr_section is like "10.20.25.15:54329->10.20.25.255:32414, len 49"
-    // or "10.20.30.88->10.20.30.1, len 84" (ICMP)
+    // addr_section is like "192.168.1.15:54329->192.168.1.255:32414, len 49"
+    // or "192.168.1.88->192.168.1.1, len 84" (ICMP)
 
     let arrow = match addr_section.find("->") {
         Some(p) => p,
@@ -540,8 +539,8 @@ pub fn compute_analytics(entries: &[StructuredLogEntry]) -> LogAnalytics {
         }
 
         // Action
-        if let Some(ref parsed) = entry.parsed {
-            if let Some(ref action) = parsed.action {
+        if let Some(ref parsed) = entry.parsed
+            && let Some(ref action) = parsed.action {
                 *by_action.entry(action.clone()).or_default() += 1;
 
                 // Drops analytics
@@ -574,7 +573,6 @@ pub fn compute_analytics(entries: &[StructuredLogEntry]) -> LogAnalytics {
                     }
                 }
             }
-        }
 
         // Volume over time (group by minute)
         // Timestamps look like "2026-02-20 14:30:45"
@@ -596,7 +594,7 @@ pub fn compute_analytics(entries: &[StructuredLogEntry]) -> LogAnalytics {
             flagged,
         })
         .collect();
-    top_dropped_sources.sort_by(|a, b| b.count.cmp(&a.count));
+    top_dropped_sources.sort_by_key(|x| std::cmp::Reverse(x.count));
     top_dropped_sources.truncate(10);
 
     let mut top_targeted_ports: Vec<PortCount> = targeted_ports
@@ -607,14 +605,14 @@ pub fn compute_analytics(entries: &[StructuredLogEntry]) -> LogAnalytics {
             protocol: Some(protocol),
         })
         .collect();
-    top_targeted_ports.sort_by(|a, b| b.count.cmp(&a.count));
+    top_targeted_ports.sort_by_key(|x| std::cmp::Reverse(x.count));
     top_targeted_ports.truncate(10);
 
     let mut drops_per_interface: Vec<InterfaceCount> = drops_by_iface
         .into_iter()
         .map(|(interface, count)| InterfaceCount { interface, count })
         .collect();
-    drops_per_interface.sort_by(|a, b| b.count.cmp(&a.count));
+    drops_per_interface.sort_by_key(|x| std::cmp::Reverse(x.count));
 
     let mut volume_over_time: Vec<TimeCount> = volume_by_minute
         .into_iter()

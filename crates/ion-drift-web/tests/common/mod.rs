@@ -6,6 +6,7 @@ pub fn read_repo_file(path: &str) -> String {
         .unwrap_or_else(|e| panic!("failed to read {path}: {e}"))
 }
 
+#[allow(dead_code)] // shared test helper; not every test binary that includes this module calls it
 pub fn source_paths_under(dir: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);

@@ -121,23 +121,20 @@ fn validate_policy_request(req: &CreatePolicyRequest) -> Result<(), String> {
     }
 
     // Protocol
-    if let Some(ref p) = req.protocol {
-        if !matches!(p.as_str(), "tcp" | "udp" | "icmp") {
+    if let Some(ref p) = req.protocol
+        && !matches!(p.as_str(), "tcp" | "udp" | "icmp") {
             return Err("protocol must be tcp, udp, or icmp".into());
         }
-    }
 
     // Port: required if protocol is tcp/udp
-    if let Some(ref p) = req.protocol {
-        if matches!(p.as_str(), "tcp" | "udp") && req.port.is_none() {
+    if let Some(ref p) = req.protocol
+        && matches!(p.as_str(), "tcp" | "udp") && req.port.is_none() {
             return Err("port is required when protocol is tcp or udp".into());
         }
-    }
-    if let Some(port) = req.port {
-        if !(1..=65535).contains(&port) {
+    if let Some(port) = req.port
+        && !(1..=65535).contains(&port) {
             return Err("port must be between 1 and 65535".into());
         }
-    }
 
     // Priority
     if !matches!(req.priority.as_str(), "critical" | "high" | "medium" | "low") {

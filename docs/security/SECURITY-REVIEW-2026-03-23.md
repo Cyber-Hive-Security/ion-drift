@@ -13,13 +13,13 @@ Reviewed 22 commits (excluding 3 DNS policy deviation commits).
 ## HIGH — Should fix before release
 
 ### H-1: KEK salt derived from filesystem path is fragile and non-random
-- **File:** `/home/yodaadmin/ion-drift/crates/ion-drift-web/src/bootstrap.rs` lines 486-491
+- **File:** `crates/ion-drift-web/src/bootstrap.rs` lines 486-491
 - **Commit:** 56846c9
 - **Issue:** `derive_kek_from_password()` creates the argon2id salt by SHA-256 hashing `b"ion-drift-kek-salt:" + db_path`. The db_path is a predictable local path (e.g., `/app/data/secrets.db`). This means every Docker deployment using the default data directory has **the same salt**. The argon2id parameters (64 MiB, 3 iterations, parallelism 4) are reasonable, but identical salt + identical OIDC client secret across installations yields identical KEK.
 - **Recommendation:** Incorporate a random 16-byte salt generated on first run and persisted alongside the cached KEK, rather than deriving salt solely from the db path. Alternatively, include additional installation-specific entropy (e.g., a UUID generated at first boot).
 
 ### H-2: SNMP v2c community string not wrapped in SecretString
-- **File:** `/home/yodaadmin/ion-drift/crates/mikrotik-core/src/snmp_client.rs` line 143
+- **File:** `crates/mikrotik-core/src/snmp_client.rs` line 143
 - **Commit:** 0242679
 - **Issue:** The SNMP v3 auth/priv passwords were correctly wrapped in `SecretString`, but `community: Option<String>` remains a plain `String`. The `Debug` impl already redacts it via `map(|_| "[REDACTED]")`, but the field is still `Serialize`-capable and could leak in API responses or logs via `{:?}` on parent structs. The v3 passwords got the `SecretString` treatment; community should too for consistency.
 - **Recommendation:** Wrap `community` in `SecretString` to match the v3 credential handling.
@@ -29,20 +29,20 @@ Reviewed 22 commits (excluding 3 DNS policy deviation commits).
 ## MEDIUM — Fix soon
 
 ### M-1: Empty router password accepted silently on subsequent runs
-- **File:** `/home/yodaadmin/ion-drift/crates/ion-drift-web/src/config.rs` lines 370-374
+- **File:** `crates/ion-drift-web/src/config.rs` lines 370-374
 - **Commit:** afba7e9
 - **Issue:** `DRIFT_ROUTER_PASSWORD` uses `unwrap_or_default()` (empty string) in all auth modes. On subsequent runs, if the encrypted secrets DB fails to load or is corrupted, the app will silently proceed with an empty router password. The startup code in `main.rs` does attempt to load from the secrets DB, but the `if let Ok(Some(p))` pattern means a missing/failed decryption silently leaves the password empty.
 - **Risk:** The router API connection will simply fail (no bypass risk), but this could cause confusing "authentication failed" errors with no indication that the env var was missing and the DB load failed.
 - **Recommendation:** Add a warning log when the config ends up with an empty router password after all loading stages complete.
 
 ### M-2: Diagnostic report exposes data directory path
-- **File:** `/home/yodaadmin/ion-drift/crates/ion-drift-web/src/routes/stats.rs` ~line 279+
+- **File:** `crates/ion-drift-web/src/routes/stats.rs` ~line 279+
 - **Commit:** fd4969d / 18087e5
 - **Issue:** `DiagnosticReport.environment.data_directory` includes the absolute filesystem path. While the endpoint is protected by `RequireAdmin`, this leaks internal path structure to any admin user. For a single-admin product this is low-risk, but if admin access is ever shared or the report is copy-pasted into a support ticket, it reveals deployment details.
 - **Recommendation:** Consider omitting or hashing the data directory path, or replacing it with a relative/symbolic name.
 
 ### M-3: `get_profiles_bulk` builds dynamic SQL IN clause
-- **File:** `/home/yodaadmin/ion-drift/crates/ion-drift-web/src/routes/` (behavior store)
+- **File:** `crates/ion-drift-web/src/routes/` (behavior store)
 - **Commit:** 7d39e38 (investigation enrichment uses `get_identity_by_mac` which is safe, but bulk queries exist)
 - **Issue:** `get_profiles_bulk()` builds a dynamic `IN (?, ?, ...)` clause from the MAC array length. The placeholders are parameterized (not string-interpolated), so there is **no SQL injection** risk. However, the lack of an upper bound on the MAC array size could lead to excessively large queries.
 - **Recommendation:** Add a `LIMIT` or cap on the number of MACs accepted in bulk queries, consistent with the 10,000-row limits added elsewhere.
@@ -55,7 +55,7 @@ Reviewed 22 commits (excluding 3 DNS policy deviation commits).
 - **Issue:** TypeScript `as any` casts were reverted for build compatibility. These are frontend-only and pose no runtime security risk — D3 types are purely for developer ergonomics.
 
 ### L-2: Page view context sanitization uses unsalted SHA-256 for MAC hashing
-- **File:** `/home/yodaadmin/ion-drift/crates/ion-drift-web/src/routes/stats.rs`
+- **File:** `crates/ion-drift-web/src/routes/stats.rs`
 - **Issue:** MAC addresses in page view context are replaced with truncated SHA-256 hashes. Since MACs are a small keyspace (~280 trillion), an attacker with DB access could rainbow-table them. However, this is analytics data behind auth, not a public-facing API, and the threat model is low.
 
 ### L-3: Docker compose templates include resource limits (good practice)

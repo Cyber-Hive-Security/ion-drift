@@ -894,7 +894,9 @@ function DevicesTab({ statusFilter, vlanNames }: { statusFilter: DeviceStatusFil
       header: "Learning Until",
       render: (r) => {
         if (r.baseline_status !== "learning") return <span className="text-xs text-muted-foreground">—</span>;
-        return <span className="text-xs text-muted-foreground">{new Date(r.learning_until * 1000).toLocaleDateString()}</span>;
+        const newFlow = r.last_new_flow ? `; newest flow first seen ${new Date(r.last_new_flow * 1000).toLocaleString()}` : "";
+        const why = `Seen on ${r.days_seen} of the last 7 days${newFlow}`;
+        return <span className="text-xs text-muted-foreground" title={why}>{new Date(r.learning_until * 1000).toLocaleDateString()}</span>;
       },
       sortValue: (r) => r.learning_until,
     },

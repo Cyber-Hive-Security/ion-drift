@@ -220,6 +220,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       {/* Mobile overlay backdrop */}
       {open && (
         <div
+          role="presentation"
           className="fixed inset-0 z-40 bg-black/50 md:hidden"
           onClick={onClose}
         />

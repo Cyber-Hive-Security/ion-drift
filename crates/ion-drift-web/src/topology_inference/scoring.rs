@@ -68,6 +68,7 @@ const W_AP_FEEDER_PENALTY: f64 = -1.0;
 ///
 /// Returns candidates sorted by score descending. Suppressed candidates
 /// are scored but their scores are ignored for winner selection.
+#[allow(clippy::too_many_arguments)] // internal builder; a parameter struct would add indirection without clarity
 pub fn score_candidates(
     candidates: &[AttachmentCandidate],
     observations: &[MacObservation],

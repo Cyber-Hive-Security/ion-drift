@@ -36,6 +36,7 @@ pub enum VlanSensitivity {
 }
 
 impl VlanSensitivity {
+    #[allow(clippy::should_implement_trait)] // infallible parse (unknown -> Monitor); FromStr would change the public signature
     pub fn from_str(s: &str) -> Self {
         match s {
             "strictest" => Self::Strictest,
@@ -62,6 +63,7 @@ struct SubnetEntry {
 /// Runtime VLAN registry loaded from database VlanConfig entries.
 /// Provides all the lookup functions the behavior engine needs.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct VlanRegistry {
     /// VLAN ID → name.
     names: HashMap<u16, String>,
@@ -71,15 +73,6 @@ pub struct VlanRegistry {
     subnets: Vec<SubnetEntry>,
 }
 
-impl Default for VlanRegistry {
-    fn default() -> Self {
-        Self {
-            names: HashMap::new(),
-            sensitivities: HashMap::new(),
-            subnets: Vec::new(),
-        }
-    }
-}
 
 impl VlanRegistry {
     /// Build a VlanRegistry from a list of VlanConfig entries.
@@ -93,15 +86,14 @@ impl VlanRegistry {
             names.insert(vid, cfg.name.clone());
             sensitivities.insert(vid, VlanSensitivity::from_str(&cfg.sensitivity));
 
-            if let Some(subnet_str) = &cfg.subnet {
-                if let Some(entry) = Self::parse_cidr(subnet_str, vid) {
+            if let Some(subnet_str) = &cfg.subnet
+                && let Some(entry) = Self::parse_cidr(subnet_str, vid) {
                     subnets.push(entry);
                 }
-            }
         }
 
         // Sort by longest prefix first for most-specific match
-        subnets.sort_by(|a, b| b.prefix_len.cmp(&a.prefix_len));
+        subnets.sort_by_key(|s| std::cmp::Reverse(s.prefix_len));
 
         Self {
             names,
@@ -346,6 +338,30 @@ pub struct DeviceProfile {
     pub learning_until: i64,
     pub baseline_status: String,
     pub notes: Option<String>,
+    /// Distinct UTC days with observations, today and the six before it, refreshed on each promotion pass while the device is learning or sparse; frozen at graduation.
+    pub days_seen: i64,
+    /// When the newest flow tuple seen in the coverage window was first seen; `None` without observations.
+    pub last_new_flow: Option<i64>,
+}
+
+const PROFILE_COLUMNS: &str = "mac, hostname, manufacturer, current_ip, current_vlan, \
+     first_seen, last_seen, learning_until, baseline_status, notes, days_seen, last_new_flow";
+
+fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceProfile> {
+    Ok(DeviceProfile {
+        mac: row.get(0)?,
+        hostname: row.get(1)?,
+        manufacturer: row.get(2)?,
+        current_ip: row.get(3)?,
+        current_vlan: row.get(4)?,
+        first_seen: row.get(5)?,
+        last_seen: row.get(6)?,
+        learning_until: row.get(7)?,
+        baseline_status: row.get(8)?,
+        notes: row.get(9)?,
+        days_seen: row.get(10)?,
+        last_new_flow: row.get(11)?,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -552,6 +568,9 @@ pub struct NewPolicyDeviation {
     pub classification: DataClassification,
     pub observed_from: SourceTier,
 }
+
+/// Row shape returned by the observation query: (mac, vlan, src, dst, f64, f64, count).
+type ObservationRow = (String, Option<i64>, String, String, f64, f64, i64);
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct PolicyDeviationCounts {
@@ -807,12 +826,21 @@ impl BehaviorStore {
 
     /// Schema version stamped into `PRAGMA user_version`. Bump when adding a
     /// versioned migration (see `crate::migrations`). v1 = the 0.5.x baseline.
-    pub const SCHEMA_VERSION: u32 = 1;
+    pub const SCHEMA_VERSION: u32 = 2;
+
+    /// Versioned migrations applied after the v1 baseline, in ascending order.
+    ///
+    /// v2 — coverage columns for baseline promotion (0.5.6).
+    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[(
+        2,
+        "ALTER TABLE device_profiles ADD COLUMN days_seen INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE device_profiles ADD COLUMN last_new_flow INTEGER;",
+    )];
 
     pub fn new(db_path: &Path) -> Result<Self, String> {
-        let conn =
+        let mut conn =
             Connection::open(db_path).map_err(|e| format!("failed to open behavior db: {e}"))?;
-        crate::migrations::open_guard(&conn, "behavior.db", Self::SCHEMA_VERSION)?;
+        let db_version = crate::migrations::open_guard(&conn, "behavior.db", Self::SCHEMA_VERSION)?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .map_err(|e| format!("pragma failed: {e}"))?;
@@ -1132,6 +1160,7 @@ impl BehaviorStore {
             tracing::info!("Phase 3 migration: added service metadata + SoA classification to policy_deviations");
         }
 
+        crate::migrations::apply_versioned(&mut conn, "behavior.db", db_version, Self::MIGRATION_STEPS)?;
         crate::migrations::stamp(&conn, "behavior.db", Self::SCHEMA_VERSION)?;
 
         Ok(Self {
@@ -1151,7 +1180,7 @@ impl BehaviorStore {
     ) -> Result<(), String> {
         let db = self.db.lock().await;
         let now = now_unix();
-        let learning_until = now + 7 * 86400;
+        let learning_until = now + Self::LEARNING_WINDOW_SECS;
         db.execute(
             "INSERT INTO device_profiles (mac, hostname, manufacturer, current_ip, current_vlan, first_seen, last_seen, learning_until)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
@@ -1170,24 +1199,9 @@ impl BehaviorStore {
     pub async fn get_profile(&self, mac: &str) -> Result<Option<DeviceProfile>, String> {
         let db = self.db.lock().await;
         db.query_row(
-            "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
-                    first_seen, last_seen, learning_until, baseline_status, notes
-             FROM device_profiles WHERE mac = ?1",
+            &format!("SELECT {PROFILE_COLUMNS} FROM device_profiles WHERE mac = ?1"),
             params![mac],
-            |row| {
-                Ok(DeviceProfile {
-                    mac: row.get(0)?,
-                    hostname: row.get(1)?,
-                    manufacturer: row.get(2)?,
-                    current_ip: row.get(3)?,
-                    current_vlan: row.get(4)?,
-                    first_seen: row.get(5)?,
-                    last_seen: row.get(6)?,
-                    learning_until: row.get(7)?,
-                    baseline_status: row.get(8)?,
-                    notes: row.get(9)?,
-                })
-            },
+            profile_from_row,
         )
         .optional()
         .map_err(|e| format!("get_profile failed: {e}"))
@@ -1214,9 +1228,7 @@ impl BehaviorStore {
         // Build "WHERE mac IN (?, ?, ...)" with dynamic placeholders
         let placeholders: Vec<&str> = macs.iter().map(|_| "?").collect();
         let sql = format!(
-            "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
-                    first_seen, last_seen, learning_until, baseline_status, notes
-             FROM device_profiles WHERE mac IN ({})",
+            "SELECT {PROFILE_COLUMNS} FROM device_profiles WHERE mac IN ({})",
             placeholders.join(", ")
         );
 
@@ -1225,20 +1237,7 @@ impl BehaviorStore {
         // Bind each MAC as a parameter
         let params_vec: Vec<&dyn rusqlite::types::ToSql> = macs.iter().map(|m| m as &dyn rusqlite::types::ToSql).collect();
         let rows = stmt
-            .query_map(params_vec.as_slice(), |row| {
-                Ok(DeviceProfile {
-                    mac: row.get(0)?,
-                    hostname: row.get(1)?,
-                    manufacturer: row.get(2)?,
-                    current_ip: row.get(3)?,
-                    current_vlan: row.get(4)?,
-                    first_seen: row.get(5)?,
-                    last_seen: row.get(6)?,
-                    learning_until: row.get(7)?,
-                    baseline_status: row.get(8)?,
-                    notes: row.get(9)?,
-                })
-            })
+            .query_map(params_vec.as_slice(), profile_from_row)
             .map_err(|e| format!("bulk profile query: {e}"))?;
 
         let mut map = HashMap::with_capacity(macs.len());
@@ -1253,26 +1252,11 @@ impl BehaviorStore {
         let db = self.db.lock().await;
         let mut stmt = db
             .prepare(
-                "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
-                        first_seen, last_seen, learning_until, baseline_status, notes
-                 FROM device_profiles ORDER BY last_seen DESC",
+                &format!("SELECT {PROFILE_COLUMNS} FROM device_profiles ORDER BY last_seen DESC"),
             )
             .map_err(|e| format!("prepare failed: {e}"))?;
         let rows = stmt
-            .query_map([], |row| {
-                Ok(DeviceProfile {
-                    mac: row.get(0)?,
-                    hostname: row.get(1)?,
-                    manufacturer: row.get(2)?,
-                    current_ip: row.get(3)?,
-                    current_vlan: row.get(4)?,
-                    first_seen: row.get(5)?,
-                    last_seen: row.get(6)?,
-                    learning_until: row.get(7)?,
-                    baseline_status: row.get(8)?,
-                    notes: row.get(9)?,
-                })
-            })
+            .query_map([], profile_from_row)
             .map_err(|e| format!("query failed: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("row collect failed: {e}"))
@@ -1282,26 +1266,11 @@ impl BehaviorStore {
         let db = self.db.lock().await;
         let mut stmt = db
             .prepare(
-                "SELECT mac, hostname, manufacturer, current_ip, current_vlan,
-                        first_seen, last_seen, learning_until, baseline_status, notes
-                 FROM device_profiles WHERE current_vlan = ?1 ORDER BY last_seen DESC",
+                &format!("SELECT {PROFILE_COLUMNS} FROM device_profiles WHERE current_vlan = ?1 ORDER BY last_seen DESC"),
             )
             .map_err(|e| format!("prepare failed: {e}"))?;
         let rows = stmt
-            .query_map(params![vlan], |row| {
-                Ok(DeviceProfile {
-                    mac: row.get(0)?,
-                    hostname: row.get(1)?,
-                    manufacturer: row.get(2)?,
-                    current_ip: row.get(3)?,
-                    current_vlan: row.get(4)?,
-                    first_seen: row.get(5)?,
-                    last_seen: row.get(6)?,
-                    learning_until: row.get(7)?,
-                    baseline_status: row.get(8)?,
-                    notes: row.get(9)?,
-                })
-            })
+            .query_map(params![vlan], profile_from_row)
             .map_err(|e| format!("query failed: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("row collect failed: {e}"))
@@ -1419,17 +1388,18 @@ impl BehaviorStore {
             .map_err(|e| format!("row collect failed: {e}"))
     }
 
-    /// Minimum distinct baseline entries for a device to be considered "baselined".
-    /// Below this threshold, the device is promoted to "sparse" instead.
-    const MIN_BASELINE_ENTRIES: i64 = 10;
-    /// Minimum total observation count for "baselined" promotion after learning period.
-    const MIN_OBSERVATION_COUNT: i64 = 200;
-    /// Observation count that triggers early "baselined" promotion before learning_until.
-    /// Active servers and workstations hit this in 3-4 days.
-    const FAST_TRACK_OBSERVATION_COUNT: i64 = 5000;
-    /// Devices with fewer than this many baseline observations after the learning
-    /// period are promoted to "sparse" — not enough data for meaningful baselines.
-    const SPARSE_THRESHOLD: i64 = 50;
+    /// Learning window granted at enrollment.
+    const LEARNING_WINDOW_SECS: i64 = 7 * 86400;
+    /// One extension granted when the window ends with partial coverage.
+    const EXTENSION_SECS: i64 = 3 * 86400;
+    /// Days seen (of the last 7) for a stable device to graduate before the window ends.
+    const FAST_TRACK_DAYS: i64 = 3;
+    /// Days seen (of the last 7) to graduate when the window ends, stable or not.
+    const COVERAGE_DAYS: i64 = 5;
+    /// Fewer days seen than this at window end means the device is sparse.
+    const SPARSE_DAYS: i64 = 2;
+    /// A device is stable when no flow tuple was first seen within this period.
+    const STABLE_SECS: i64 = 2 * 86400;
 
     /// Recompute baselines for a single device from its observations.
     /// Does NOT handle promotion — use `promote_eligible_devices()` instead.
@@ -1453,7 +1423,7 @@ impl BehaviorStore {
 
         // ?3 = interval seconds between observations (60s typically)
         let interval_secs: f64 = 60.0;
-        let rows: Vec<(String, Option<i64>, String, String, f64, f64, i64)> = stmt
+        let rows: Vec<ObservationRow> = stmt
             .query_map(params![mac, cutoff, interval_secs], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -1491,103 +1461,134 @@ impl BehaviorStore {
         Ok(())
     }
 
-    /// Promote eligible devices from `learning` to `baselined` or `sparse`.
+    /// Promote devices out of `learning`, and `sparse` devices that have since become active.
     ///
-    /// Dual-threshold promotion:
-    /// 1. **Time-gated:** `learning_until <= now` AND observation_count >= MIN_OBSERVATION_COUNT
-    ///    → promoted to `baselined` (normal 7-day graduation)
-    /// 2. **Fast-tracked:** observation_count >= FAST_TRACK_OBSERVATION_COUNT regardless of time
-    ///    → promoted to `baselined` (active devices graduate early)
-    /// 3. **Sparse:** time expired AND observation_count < SPARSE_THRESHOLD
-    ///    → promoted to `sparse` (barely active, thin baseline)
-    /// 4. **Stays learning:** time expired but observations between SPARSE_THRESHOLD and
-    ///    MIN_OBSERVATION_COUNT → learning_until extended by 3 days (needs more data)
+    /// A baseline needs coverage (the device was seen on enough distinct days of the
+    /// last seven) and stability (no new flow tuple in the last two days). Neither
+    /// depends on the poll interval or on how many flows a device has, so a camera
+    /// with one flow and a workstation with fifty are judged the same way.
     ///
-    /// This is decoupled from baseline recomputation so it can run on a
-    /// short cadence (e.g. every 5 minutes) independent of nightly maintenance.
+    /// - stable and seen on `FAST_TRACK_DAYS` days: baselined, at any time
+    /// - window ended and seen on `COVERAGE_DAYS` days: baselined, stable or not
+    /// - window ended and seen on fewer than `SPARSE_DAYS` days: sparse
+    /// - window ended with partial coverage: one `EXTENSION_SECS` extension, then sparse
+    /// - sparse devices are re-evaluated every pass and graduate by the same rules
+    ///
+    /// Each pass records `days_seen` and `last_new_flow` on the profile so the UI can
+    /// say why a device is still learning. Newly baselined devices get their
+    /// baselines recomputed at once so detection never runs against an empty set.
+    ///
+    /// The store lock is taken per device, not for the whole pass, so a large learning
+    /// set cannot stall the collector or the API.
     pub async fn promote_eligible_devices(&self) -> Result<(usize, usize), String> {
-        let db = self.db.lock().await;
         let now = now_unix();
-
-        // Find all learning devices — both time-expired and potential fast-tracks
-        let mut stmt = db
-            .prepare(
-                "SELECT mac, learning_until FROM device_profiles
-                 WHERE baseline_status = 'learning'",
-            )
-            .map_err(|e| format!("prepare failed: {e}"))?;
-        let learning_devices: Vec<(String, i64)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| format!("query failed: {e}"))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("collect failed: {e}"))?;
-
+        let window_start = (now / 86400 - 6) * 86400; // today and the six previous UTC days
         let mut promoted_baselined = 0usize;
         let mut promoted_sparse = 0usize;
 
-        for (mac, learning_until) in &learning_devices {
-            let time_expired = *learning_until <= now;
+        let candidates: Vec<String> = {
+            let db = self.db.lock().await;
+            let mut stmt = db
+                .prepare(
+                    "SELECT mac FROM device_profiles
+                     WHERE baseline_status IN ('learning', 'sparse')",
+                )
+                .map_err(|e| format!("prepare failed: {e}"))?;
+            stmt.query_map([], |row| row.get(0))
+                .map_err(|e| format!("query failed: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("collect failed: {e}"))?
+        };
 
-            // Count distinct baseline entries
-            let baseline_count: i64 = db
+        for mac in &candidates {
+            let db = self.db.lock().await;
+            // Re-read under the lock: another pass may have handled this device.
+            let Some((status, first_seen, learning_until)) = db
                 .query_row(
-                    "SELECT COUNT(*) FROM device_baselines WHERE mac = ?1",
+                    "SELECT baseline_status, first_seen, learning_until FROM device_profiles
+                     WHERE mac = ?1",
+                    params![mac],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+                )
+                .optional()
+                .map_err(|e| format!("candidate reread failed: {e}"))?
+            else {
+                continue;
+            };
+            if status != "learning" && status != "sparse" {
+                continue;
+            }
+            let days_seen: i64 = db
+                .query_row(
+                    "SELECT COUNT(DISTINCT timestamp / 86400) FROM device_observations
+                     WHERE mac = ?1 AND timestamp >= ?2",
+                    params![mac, window_start],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("days_seen failed: {e}"))?;
+            let last_new_flow: Option<i64> = db
+                .query_row(
+                    "SELECT MAX(first_ts) FROM (
+                         SELECT MIN(timestamp) AS first_ts FROM device_observations
+                         WHERE mac = ?1
+                         GROUP BY protocol, dst_port, dst_subnet, direction)",
                     params![mac],
                     |row| row.get(0),
                 )
-                .map_err(|e| format!("baseline count failed: {e}"))?;
+                .map_err(|e| format!("last_new_flow failed: {e}"))?;
+            db.execute(
+                "UPDATE device_profiles SET days_seen = ?2, last_new_flow = ?3 WHERE mac = ?1",
+                params![mac, days_seen, last_new_flow],
+            )
+            .map_err(|e| format!("coverage update failed: {e}"))?;
 
-            // Count total observations
-            let obs_count: i64 = db
-                .query_row(
-                    "SELECT COUNT(*) FROM device_observations WHERE mac = ?1",
-                    params![mac],
-                    |row| row.get(0),
-                )
-                .map_err(|e| format!("observation count failed: {e}"))?;
+            let stable = last_new_flow.is_some_and(|t| t <= now - Self::STABLE_SECS);
+            let expired = learning_until <= now;
+            let extended =
+                learning_until >= first_seen + Self::LEARNING_WINDOW_SECS + Self::EXTENSION_SECS;
 
-            // Fast-track: very active devices graduate early regardless of time
-            let fast_track = obs_count >= Self::FAST_TRACK_OBSERVATION_COUNT
-                && baseline_count >= Self::MIN_BASELINE_ENTRIES;
-
-            let new_status = if fast_track {
-                promoted_baselined += 1;
-                "baselined"
-            } else if time_expired && baseline_count >= Self::MIN_BASELINE_ENTRIES
-                && obs_count >= Self::MIN_OBSERVATION_COUNT
+            let new_status = if (stable && days_seen >= Self::FAST_TRACK_DAYS)
+                || (expired && days_seen >= Self::COVERAGE_DAYS)
             {
-                // Normal graduation: time expired + sufficient data
-                promoted_baselined += 1;
                 "baselined"
-            } else if time_expired && obs_count < Self::SPARSE_THRESHOLD {
-                // Barely active device — sparse
-                promoted_sparse += 1;
-                "sparse"
-            } else if time_expired {
-                // Time expired but between sparse and baselined thresholds —
-                // extend learning by 3 days to collect more data
-                let extended = now + 3 * 86400;
+            } else if status == "sparse" || !expired {
+                continue;
+            } else if days_seen >= Self::SPARSE_DAYS && !extended {
                 db.execute(
                     "UPDATE device_profiles SET learning_until = ?2 WHERE mac = ?1",
-                    params![mac, extended],
+                    params![mac, now + Self::EXTENSION_SECS],
                 )
                 .map_err(|e| format!("extend learning failed: {e}"))?;
-                tracing::debug!(
-                    mac = %mac, obs_count, baseline_count,
-                    "learning extended 3 days — insufficient data for baseline"
-                );
-                continue; // Don't update baseline_status
+                tracing::debug!(mac = %mac, days_seen, "learning extended once: partial coverage");
+                continue;
             } else {
-                continue; // Still within learning period, not fast-tracked
+                "sparse"
             };
 
-            db.execute(
-                "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
-                params![mac, new_status],
-            )
-            .map_err(|e| format!("promote failed: {e}"))?;
+            if new_status == "baselined" {
+                // Baseline first, then flip. A device marked baselined with no
+                // baseline rows is skipped by detection until the nightly recompute.
+                drop(db);
+                if let Err(e) = self.recompute_baselines(mac, Self::LEARNING_WINDOW_SECS).await {
+                    tracing::warn!(mac = %mac, "baseline recompute before graduation failed: {e}");
+                    continue;
+                }
+                let db = self.db.lock().await;
+                db.execute(
+                    "UPDATE device_profiles SET baseline_status = 'baselined' WHERE mac = ?1",
+                    params![mac],
+                )
+                .map_err(|e| format!("promote failed: {e}"))?;
+                promoted_baselined += 1;
+            } else {
+                db.execute(
+                    "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
+                    params![mac, new_status],
+                )
+                .map_err(|e| format!("promote failed: {e}"))?;
+                promoted_sparse += 1;
+            }
         }
-
         Ok((promoted_baselined, promoted_sparse))
     }
 
@@ -1693,6 +1694,7 @@ impl BehaviorStore {
     /// Check for recent elevated observations (multi-window persistence).
     /// Returns the count of recent observations in the given flow that exceed
     /// the specified byte threshold within the last `window_secs`.
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn count_elevated_observations(
         &self,
         mac: &str,
@@ -2758,7 +2760,7 @@ impl BehaviorStore {
             *port_counts.entry(*port).or_default() += 1;
         }
         let mut top_ports: Vec<_> = port_counts.into_iter().collect();
-        top_ports.sort_by(|a, b| b.1.cmp(&a.1));
+        top_ports.sort_by_key(|p| std::cmp::Reverse(p.1));
         top_ports.truncate(10);
         let top_ports_json = serde_json::to_string(&top_ports.iter().map(|(p, c)| serde_json::json!({"port": p, "count": c})).collect::<Vec<_>>()).unwrap_or_default();
 
@@ -2770,7 +2772,7 @@ impl BehaviorStore {
             }
         }
         let mut top_countries: Vec<_> = country_counts.into_iter().collect();
-        top_countries.sort_by(|a, b| b.1.cmp(&a.1));
+        top_countries.sort_by_key(|c| std::cmp::Reverse(c.1));
         top_countries.truncate(10);
         let top_countries_json = serde_json::to_string(&top_countries.iter().map(|(c, n)| serde_json::json!({"country": c, "count": n})).collect::<Vec<_>>()).unwrap_or_default();
 
@@ -2831,6 +2833,7 @@ impl BehaviorStore {
     // ── Policy Methods ──
 
     /// Upsert an infrastructure policy entry.
+    #[allow(clippy::too_many_arguments)] // mirrors the table columns; a params struct would change the public API
     pub async fn upsert_policy(
         &self,
         service: &str,
@@ -2926,14 +2929,12 @@ impl BehaviorStore {
         for row in rows {
             let policy = row.map_err(|e| format!("row error: {e}"))?;
             // Filter by VLAN if specified
-            if let Some(v) = vlan {
-                if let Some(ref scope) = policy.vlan_scope {
-                    if !scope.contains(&v) {
+            if let Some(v) = vlan
+                && let Some(ref scope) = policy.vlan_scope
+                    && !scope.contains(&v) {
                         continue;
                     }
-                }
                 // vlan_scope == None means global (all VLANs) — include it
-            }
             results.push(policy);
         }
         Ok(results)
@@ -3331,29 +3332,16 @@ impl BehaviorStore {
     /// Get summary counts of deviations by status.
     pub async fn policy_deviation_counts(&self) -> Result<PolicyDeviationCounts, String> {
         let db = self.db.lock().await;
-        let mut counts = PolicyDeviationCounts::default();
-
-        counts.total = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE status != 'dismissed'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.new = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE status = 'new'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.acknowledged = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE status = 'acknowledged'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.resolved = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE status = 'resolved'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.dns = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'dns%'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.ntp = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'ntp%'", [], |row| row.get(0),
-        ).unwrap_or(0);
-        counts.gateway = db.query_row(
-            "SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'gateway%'", [], |row| row.get(0),
-        ).unwrap_or(0);
+        let count = |sql: &str| -> i64 { db.query_row(sql, [], |row| row.get(0)).unwrap_or(0) };
+        let counts = PolicyDeviationCounts {
+            total: count("SELECT COUNT(*) FROM policy_deviations WHERE status != 'dismissed'"),
+            new: count("SELECT COUNT(*) FROM policy_deviations WHERE status = 'new'"),
+            acknowledged: count("SELECT COUNT(*) FROM policy_deviations WHERE status = 'acknowledged'"),
+            resolved: count("SELECT COUNT(*) FROM policy_deviations WHERE status = 'resolved'"),
+            dns: count("SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'dns%'"),
+            ntp: count("SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'ntp%'"),
+            gateway: count("SELECT COUNT(*) FROM policy_deviations WHERE deviation_type LIKE 'gateway%'"),
+        };
 
         Ok(counts)
     }

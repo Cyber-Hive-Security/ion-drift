@@ -65,8 +65,8 @@ function AlertRulesSection() {
       {showAdd && (
         <div className="border-b border-border p-4 bg-muted/30 flex flex-wrap items-end gap-3">
           <div>
-            <label className="text-xs text-muted-foreground">Name</label>
-            <input
+            <label htmlFor="alert-name" className="text-xs text-muted-foreground">Name</label>
+            <input id="alert-name"
               className="block w-48 rounded border border-border bg-background px-2 py-1 text-sm"
               value={newRule.name}
               onChange={(e) => setNewRule({ ...newRule, name: e.target.value })}
@@ -74,8 +74,8 @@ function AlertRulesSection() {
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Event Type</label>
-            <select
+            <label htmlFor="alert-event-type" className="text-xs text-muted-foreground">Event Type</label>
+            <select id="alert-event-type"
               className="block rounded border border-border bg-background px-2 py-1 text-sm"
               value={newRule.event_type}
               onChange={(e) => setNewRule({ ...newRule, event_type: e.target.value })}
@@ -84,8 +84,8 @@ function AlertRulesSection() {
             </select>
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Cooldown (s)</label>
-            <input
+            <label htmlFor="alert-cooldown" className="text-xs text-muted-foreground">Cooldown (s)</label>
+            <input id="alert-cooldown"
               className="block w-24 rounded border border-border bg-background px-2 py-1 text-sm"
               type="number"
               value={newRule.cooldown_seconds}
@@ -99,7 +99,7 @@ function AlertRulesSection() {
               await createRule.mutateAsync({
                 name: newRule.name,
                 event_type: newRule.event_type,
-                cooldown_seconds: parseInt(newRule.cooldown_seconds) || 300,
+                cooldown_seconds: Number.parseInt(newRule.cooldown_seconds) || 300,
               });
               setShowAdd(false);
               setNewRule({ name: "", event_type: "anomaly_critical", cooldown_seconds: "300" });
@@ -353,8 +353,8 @@ function ChannelCard({
       {config.channel === "ntfy" && (
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <label className="text-xs text-muted-foreground">Server URL</label>
-            <input
+            <label htmlFor="alert-server-url" className="text-xs text-muted-foreground">Server URL</label>
+            <input id="alert-server-url"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={(cfg.url as string) || ""}
               placeholder="https://ntfy.sh or self-hosted URL"
@@ -362,16 +362,16 @@ function ChannelCard({
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Topic</label>
-            <input
+            <label htmlFor="alert-topic" className="text-xs text-muted-foreground">Topic</label>
+            <input id="alert-topic"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={(cfg.topic as string) || ""}
               onBlur={(e) => handleBlur("topic", e.target.value)}
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Token (optional)</label>
-            <input
+            <label htmlFor="alert-token" className="text-xs text-muted-foreground">Token (optional)</label>
+            <input id="alert-token"
               type="password"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={(cfg.token as string) || ""}
@@ -384,16 +384,16 @@ function ChannelCard({
       {config.channel === "webhook" && (
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-muted-foreground">URL</label>
-            <input
+            <label htmlFor="alert-url" className="text-xs text-muted-foreground">URL</label>
+            <input id="alert-url"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={(cfg.url as string) || ""}
               onBlur={(e) => handleBlur("url", e.target.value)}
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Secret (optional)</label>
-            <input
+            <label htmlFor="alert-secret" className="text-xs text-muted-foreground">Secret (optional)</label>
+            <input id="alert-secret"
               type="password"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={(cfg.secret as string) || ""}
@@ -406,16 +406,16 @@ function ChannelCard({
       {config.channel === "smtp" && (
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <label className="text-xs text-muted-foreground">Host</label>
-            <input
+            <label htmlFor="alert-host" className="text-xs text-muted-foreground">Host</label>
+            <input id="alert-host"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={(cfg.host as string) || ""}
               onBlur={(e) => handleBlur("host", e.target.value)}
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Port</label>
-            <input
+            <label htmlFor="alert-port" className="text-xs text-muted-foreground">Port</label>
+            <input id="alert-port"
               type="number"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={String(cfg.port ?? 587)}
@@ -423,24 +423,24 @@ function ChannelCard({
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Username</label>
-            <input
+            <label htmlFor="alert-username" className="text-xs text-muted-foreground">Username</label>
+            <input id="alert-username"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={(cfg.username as string) || ""}
               onBlur={(e) => handleBlur("username", e.target.value)}
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">From</label>
-            <input
+            <label htmlFor="alert-from" className="text-xs text-muted-foreground">From</label>
+            <input id="alert-from"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={(cfg.from as string) || ""}
               onBlur={(e) => handleBlur("from", e.target.value)}
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">To (comma-separated)</label>
-            <input
+            <label htmlFor="alert-to" className="text-xs text-muted-foreground">To (comma-separated)</label>
+            <input id="alert-to"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               defaultValue={Array.isArray(cfg.to) ? (cfg.to as string[]).join(", ") : ""}
               onBlur={(e) => {
@@ -450,8 +450,8 @@ function ChannelCard({
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Password</label>
-            <input
+            <label htmlFor="alert-password" className="text-xs text-muted-foreground">Password</label>
+            <input id="alert-password"
               type="password"
               className="block w-full rounded border border-border bg-background px-2 py-1 text-sm"
               placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
