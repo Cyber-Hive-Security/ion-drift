@@ -440,6 +440,8 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
     const MAX_ACTIONS: usize = 32;
     const MAX_EVIDENCE: usize = 64;
     const MAX_MACS: usize = 256;
+    const MAX_REFERENCES: usize = 16;
+    const MAX_REFERENCE_LEN: usize = 2048;
     // Nested JSON the top-level clamp previously missed (review ID-06): the
     // opaque `metadata` blob and each `Custom` evidence payload are bounded by
     // serialized size, and evidence labels by length.
@@ -504,6 +506,14 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
             (!id.trim().is_empty() && !kind.trim().is_empty())
                 .then_some(FindingSubject { kind, id })
         })
+        .collect();
+    c.references = f
+        .references
+        .iter()
+        .take(MAX_REFERENCES)
+        .filter_map(|r| url::Url::parse(&clamp_str(r, MAX_REFERENCE_LEN)).ok())
+        .filter(|u| matches!(u.scheme(), "http" | "https"))
+        .map(String::from)
         .collect();
     c
 }
@@ -645,7 +655,15 @@ mod tests {
                     "nested": ["<x>", 5, { "y": "a\u{7}b" }]
                 }),
             }],
-            references: vec![],
+            references: vec![
+                "https://example.com/adv?id=1".into(),
+                "javascript:alert(1)".into(),
+                "ftp://example.com/x".into(),
+                "data:text/html,<script>".into(),
+                "not a url".into(),
+                "https://example.com/\u{202e}evil".into(),
+                "".into(),
+            ],
             subjects: vec![
                 FindingSubject::endpoint("<script>"),
                 FindingSubject::domain("EXAMPLE.com"),
@@ -746,6 +764,24 @@ mod tests {
                 FindingSubject::endpoint("a".repeat(64)),
             ]
         );
+        assert_eq!(
+            c.references,
+            vec![
+                "https://example.com/adv?id=1".to_string(),
+                "https://example.com/evil".to_string(),
+            ],
+            "only http/https URLs that parse survive; bidi control stripped"
+        );
+    }
+
+    #[test]
+    fn references_are_capped_in_count_and_length() {
+        let mut f = hostile_finding();
+        f.references = (0..40).map(|i| format!("https://example.com/{i}")).collect();
+        f.references.push(format!("https://example.com/{}", "a".repeat(5000)));
+        let c = clamp_finding(&f);
+        assert_eq!(c.references.len(), 16);
+        assert!(c.references.iter().all(|r| r.chars().count() <= 2048));
     }
 
     #[test]

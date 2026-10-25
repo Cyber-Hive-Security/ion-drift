@@ -123,7 +123,7 @@ fn build_finding(finding_id: &str, device_id: &str, svc: &IpService, adv: &Advis
                 "observed_at_unix": now,
             }),
         }],
-        references: vec![],
+        references: adv.references.clone(),
         subjects: vec![FindingSubject::device(device_id)],
         device_macs: Vec::new(),
         timestamp_unix: now,
@@ -254,7 +254,7 @@ mod tests {
             requires_surface_names: vec!["api".into(), "api-ssl".into()],
             requires_state: vec![], version_constraint: None, no_fixed_release: true,
             fixed_versions: vec![], mitigations: vec!["/ip/service set api-ssl address=<mgmt-cidr>".into()],
-            references: vec![], attack_techniques: vec![], source: "bundled".into(),
+            references: vec!["https://example.com/adv".into()], attack_techniques: vec![], source: "bundled".into(),
             catalog_version: 2, generated_at: "2026-07-28".into(),
         }
     }
@@ -292,6 +292,7 @@ mod tests {
         assert_eq!(f.finding_id, ID);
         assert_eq!(f.category, EXPOSURE_CATEGORY);
         assert_eq!(f.severity, FindingSeverity::High);
+        assert_eq!(f.references, vec!["https://example.com/adv".to_string()]);
         assert!(f.narrative.contains("no attack has been observed"));
         // api is absent, so its surface counts as not exposed.
         assert!(a.not_exposed.contains("dev1:svc:api:CVE-2026-16347:exposure"));
