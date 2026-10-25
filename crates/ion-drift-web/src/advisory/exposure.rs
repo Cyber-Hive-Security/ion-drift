@@ -100,6 +100,7 @@ fn build_finding(finding_id: &str, device_id: &str, svc: &IpService, adv: &Advis
         ),
     };
     let port = svc.port.map(|p| p.to_string()).unwrap_or_else(|| "default".to_string());
+    let references = crate::staging::stage_references(&adv.references);
     FindingV1 {
         finding_id: finding_id.to_string(),
         title: format!("{} — exposed on {service}", adv.title),
@@ -123,13 +124,13 @@ fn build_finding(finding_id: &str, device_id: &str, svc: &IpService, adv: &Advis
                 "observed_at_unix": now,
             }),
         }],
-        references: adv.references.clone(),
+        references: references.clone(),
         subjects: vec![FindingSubject::device(device_id)],
         device_macs: Vec::new(),
         timestamp_unix: now,
         metadata: Some(serde_json::json!({
             "advisory_id": adv.advisory_id,
-            "references": adv.references,
+            "references": references,
             "no_fixed_release": adv.no_fixed_release,
             "fixed_versions": adv.fixed_versions,
             "catalog_version": adv.catalog_version,
@@ -281,6 +282,20 @@ mod tests {
         entries.pop();
         entries.push(" 0.0.0.0/0\u{200B} ".into());
         assert_eq!(scope_of(Some(&entries.join(","))), Scope::Unrestricted);
+    }
+
+    /// Advisory rows written before the sanitizer existed, or by a file that
+    /// has since gone away, still feed findings: sanitize at emission too.
+    #[test]
+    fn stored_references_are_sanitized_before_emission() {
+        let mut adv = advisory();
+        adv.references = vec![
+            "https://nvd.nist.gov@evil.example/x".into(),
+            "javascript:alert(1)".into(),
+            "https://example.com/adv".into(),
+        ];
+        let a = assess("dev1", &[svc("api-ssl", false, Some(""))], &[adv], 1);
+        assert_eq!(a.exposed[0].references, vec!["https://example.com/adv".to_string()]);
     }
 
     #[test]
