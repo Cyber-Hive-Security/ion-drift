@@ -47,6 +47,7 @@ pub struct ModuleContext {
 impl ModuleContext {
     /// Construct a context. Intended for host use only; modules receive one
     /// from [`crate::Module::init`].
+    // Host-side constructor: one argument per injected capability, called once.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &'static str,
