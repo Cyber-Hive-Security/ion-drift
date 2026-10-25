@@ -212,6 +212,19 @@ pub struct ConnectionStateChangedV1 {
     pub timestamp_unix: i64,
 }
 
+/// What a finding is about. A finding names one or more subjects; the UI
+/// renders each by kind and links it to the right page.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum FindingSubject {
+    /// A managed device (router or switch) by its device-registry id.
+    Device(String),
+    /// A network endpoint by MAC address.
+    Endpoint(String),
+    /// A DNS name.
+    Domain(String),
+}
+
 /// Payload for [`DriftEvent::Finding`].
 ///
 /// `module_name` is **not** part of this payload — Drift host-stamps it at
@@ -232,12 +245,31 @@ pub struct FindingV1 {
     pub category: String,
     pub recommended_actions: Vec<String>,
     pub evidence: Vec<FindingEvidence>,
-    /// Affected device MAC addresses (0..N).
+    /// What the finding is about (0..N).
+    #[serde(default)]
+    pub subjects: Vec<FindingSubject>,
+    /// Deprecated: use `subjects` with [`FindingSubject::Endpoint`]. Still
+    /// accepted; the host folds these into `subjects` when it stores the finding.
+    #[serde(default)]
     pub device_macs: Vec<String>,
     pub timestamp_unix: i64,
     /// Module-specific blob, opaque to Drift. Surfaced in the UI as
     /// collapsible JSON.
     pub metadata: Option<serde_json::Value>,
+}
+
+impl FindingV1 {
+    /// `subjects` plus any `device_macs` not already listed as endpoints.
+    pub fn all_subjects(&self) -> Vec<FindingSubject> {
+        let mut out = self.subjects.clone();
+        for mac in &self.device_macs {
+            let endpoint = FindingSubject::Endpoint(mac.clone());
+            if !out.contains(&endpoint) {
+                out.push(endpoint);
+            }
+        }
+        out
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -262,4 +294,24 @@ pub enum FindingEvidence {
         label: String,
         payload: serde_json::Value,
     },
+}
+
+#[cfg(test)]
+mod finding_subject_tests {
+    use super::*;
+
+    #[test]
+    fn subject_wire_shape_and_legacy_fold() {
+        let s = serde_json::to_string(&FindingSubject::Device("r1".into())).unwrap();
+        assert_eq!(s, r#"{"kind":"device","id":"r1"}"#);
+
+        let f: FindingV1 = serde_json::from_str(
+            r#"{"finding_id":"x","title":"t","narrative":"n","severity":"low","category":"c",
+                "recommended_actions":[],"evidence":[],"device_macs":["00:00:5E:00:53:01"],
+                "timestamp_unix":1,"metadata":null}"#,
+        )
+        .unwrap();
+        assert!(f.subjects.is_empty(), "absent on the wire means empty");
+        assert_eq!(f.all_subjects(), vec![FindingSubject::Endpoint("00:00:5E:00:53:01".into())]);
+    }
 }

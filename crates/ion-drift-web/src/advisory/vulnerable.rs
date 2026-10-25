@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingV1};
+use ion_drift_module_api::{FindingEvidence, FindingSeverity, FindingSubject, FindingV1};
 use ion_drift_storage::{FindingStatus, FindingsQuery, FindingsStore};
 use tracing::warn;
 
@@ -142,6 +142,7 @@ fn build_finding(
                 "kev_date_added": input.kev_date_added,
             }),
         }],
+        subjects: vec![FindingSubject::Device(device_id.to_string())],
         device_macs: Vec::new(),
         timestamp_unix: now,
         metadata: Some(serde_json::json!({
@@ -275,6 +276,7 @@ mod tests {
         let a = assess("dev1", "7.24.1 (stable)", &[input("CVE-2026-86060", Some(9.2), true)], 1);
         assert_eq!(a.affected.len(), 1);
         let f = &a.affected[0];
+        assert_eq!(f.subjects, vec![FindingSubject::Device("dev1".into())]);
         assert_eq!(f.finding_id, "dev1:ver:CVE-2026-86060");
         assert_eq!(f.category, VULN_CATEGORY);
         assert_eq!(f.severity, FindingSeverity::Critical);

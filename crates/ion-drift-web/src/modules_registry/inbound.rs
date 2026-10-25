@@ -38,7 +38,9 @@ use axum::{
     routing::post,
     Router,
 };
-use ion_drift_module_api::{DriftEvent, EventEnvelope, EventKind, FindingEvidence, FindingV1};
+use ion_drift_module_api::{
+    DriftEvent, EventEnvelope, EventKind, FindingEvidence, FindingSubject, FindingV1,
+};
 use ion_drift_module_host::EventBus;
 use ion_drift_storage::FindingsStore;
 use secrecy::ExposeSecret;
@@ -485,6 +487,18 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
         .filter_map(|m| neutralize_mac(m))
         .map(|m| m.chars().take(64).collect())
         .collect();
+    c.subjects = f
+        .subjects
+        .iter()
+        .take(MAX_MACS)
+        .filter_map(|s| match s {
+            FindingSubject::Endpoint(m) => neutralize_mac(m).map(FindingSubject::Endpoint),
+            FindingSubject::Device(id) => Some(FindingSubject::Device(clamp_str(id, 64))),
+            FindingSubject::Domain(d) => {
+                crate::staging::stage_dns_name(d).map(FindingSubject::Domain)
+            }
+        })
+        .collect();
     c
 }
 
@@ -587,6 +601,7 @@ mod tests {
                 label: big.clone(),
                 payload: serde_json::json!({ "blob": big }),
             }],
+            subjects: vec![],
             device_macs: vec![],
             timestamp_unix: 0,
             metadata: Some(serde_json::json!({ "blob": big })),
@@ -623,6 +638,11 @@ mod tests {
                     "nested": ["<x>", 5, { "y": "a\u{7}b" }]
                 }),
             }],
+            subjects: vec![
+                FindingSubject::Endpoint("<script>".into()),
+                FindingSubject::Domain("EXAMPLE.com".into()),
+                FindingSubject::Device("r1".into()),
+            ],
             device_macs: vec![
                 "aa:bb:cc:dd:ee:ff".into(),
                 "<script>".into(),
@@ -703,6 +723,15 @@ mod tests {
             c.device_macs,
             vec!["aa:bb:cc:dd:ee:ff".to_string(), "AA-BB-CC-DD-EE-01".to_string()]
         );
+        // subjects: the non-MAC-shaped endpoint drops; the domain is staged
+        // (lowercased); the device id passes through.
+        assert_eq!(
+            c.subjects,
+            vec![
+                FindingSubject::Domain("example.com".into()),
+                FindingSubject::Device("r1".into()),
+            ]
+        );
     }
 
     #[test]
@@ -728,6 +757,7 @@ mod tests {
             category: "geographic".into(),
             recommended_actions: vec!["block".into()],
             evidence: vec![FindingEvidence::Anomaly { anomaly_id: 7 }],
+            subjects: vec![],
             device_macs: vec!["aa:bb:cc:dd:ee:ff".into()],
             timestamp_unix: 1_700_000_000,
             metadata: None,
@@ -751,6 +781,7 @@ mod tests {
             category: "x".into(),
             recommended_actions: vec![],
             evidence: vec![],
+            subjects: vec![],
             device_macs: vec![],
             timestamp_unix: 0,
             metadata: None,
@@ -881,6 +912,7 @@ mod integration_tests {
             category: "geographic".into(),
             recommended_actions: vec!["block".into()],
             evidence: vec![FindingEvidence::Anomaly { anomaly_id: 7 }],
+            subjects: vec![],
             device_macs: vec!["aa:bb:cc:dd:ee:ff".into()],
             timestamp_unix,
             // Payload metadata claims a different "source" — must be ignored

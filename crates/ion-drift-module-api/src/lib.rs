@@ -102,7 +102,7 @@ pub use error::{EventError, ModuleError, StorageError};
 pub use event::{
     AnomalyDetectedV1, BehaviorBaselineUpdatedV1, ConnectionStateChangedV1, DeviceAddedV1,
     DeviceRemovedV1, DeviceUnreachableV1, DriftEvent, EventKind, FindingEvidence,
-    FindingSeverity, FindingV1, InfrastructureSnapshotUpdatedV1, InvestigationCompletedV1,
+    FindingSeverity, FindingSubject, FindingV1, InfrastructureSnapshotUpdatedV1, InvestigationCompletedV1,
     InvestigationStartedV1, SwitchTopologyChangedV1,
 };
 pub use module::{ApiVersion, Module};
