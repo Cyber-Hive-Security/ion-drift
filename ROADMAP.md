@@ -27,6 +27,7 @@ New read-only collectors and findings for the router itself. Each collector ship
 - Guest-VLAN isolation finding
 - Poll cadence tiers (live, minutes, hourly) so the new endpoints do not raise load on small boards; CPU ceiling measured on a hEX and recorded as a test
 - Onboarding script generator: the setup wizard emits a pasted RouterOS command block that creates a least-privilege read-only user and syslog target. Drift never writes router configuration itself.
+- Logical Interfaces table on the switch page, beside Port Traffic (which stays physical ports only). Bridges, VLAN interfaces and bonds with their own Up/Down state and byte counters from the interface record, and a tied-to column resolving each one to its physical ports: bridge to member ports (`/interface/bridge/port`, already polled but not stored), VLAN interface to its parent (`/interface/vlan`), bond to its slaves (`/interface/bonding`), chained so a VLAN on a bond on four ports resolves to the four. Needs a small switch-store table keyed by device and interface name, hence a minor release not a patch. Later feeds port-grid hover (which bridge and VLAN interfaces ride on a port).
 
 ## 0.5.8 — Read the detectors RouterOS already has
 
