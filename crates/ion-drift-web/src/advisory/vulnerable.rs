@@ -142,6 +142,7 @@ fn build_finding(
                 "kev_date_added": input.kev_date_added,
             }),
         }],
+        references: vec![],
         subjects: vec![FindingSubject::device(device_id)],
         device_macs: Vec::new(),
         timestamp_unix: now,

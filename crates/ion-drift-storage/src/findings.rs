@@ -81,6 +81,7 @@ pub struct Finding {
     pub category: String,
     pub recommended_actions: Vec<String>,
     pub evidence: Vec<FindingEvidence>,
+    pub references: Vec<String>,
     pub device_macs: Vec<String>,
     pub subjects: Vec<FindingSubject>,
     pub metadata: Option<serde_json::Value>,
@@ -155,20 +156,29 @@ pub struct FindingsStore {
 impl FindingsStore {
     /// Schema version stamped into `PRAGMA user_version`. Bump when adding a
     /// versioned migration (see `crate::migrations`). v1 = the 0.5.x baseline.
-    pub const SCHEMA_VERSION: u32 = 2;
+    pub const SCHEMA_VERSION: u32 = 3;
 
     /// Versioned migrations applied after the v1 baseline, in ascending order.
     ///
     /// v2 — `subjects` (0.5.6). Existing rows get their `device_macs` folded in
     /// as endpoint subjects so nothing already on the page loses its devices.
-    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[(
-        2,
-        "ALTER TABLE findings ADD COLUMN subjects TEXT NOT NULL DEFAULT '[]';
-         UPDATE findings SET subjects = (
-             SELECT json_group_array(json_object('kind', 'endpoint', 'id', value))
-             FROM json_each(findings.device_macs))
-         WHERE device_macs != '[]' AND json_valid(device_macs);",
-    )];
+    ///
+    /// v3 — `references` (0.5.6). No backfill: advisory findings are rewritten
+    /// on the next pass and module findings had no reference field to carry over.
+    const MIGRATION_STEPS: &'static [(u32, &'static str)] = &[
+        (
+            2,
+            "ALTER TABLE findings ADD COLUMN subjects TEXT NOT NULL DEFAULT '[]';
+             UPDATE findings SET subjects = (
+                 SELECT json_group_array(json_object('kind', 'endpoint', 'id', value))
+                 FROM json_each(findings.device_macs))
+             WHERE device_macs != '[]' AND json_valid(device_macs);",
+        ),
+        (
+            3,
+            "ALTER TABLE findings ADD COLUMN \"references\" TEXT NOT NULL DEFAULT '[]';",
+        ),
+    ];
 
     pub fn new(db_path: &Path) -> Result<Self, String> {
         let mut conn =
@@ -244,6 +254,8 @@ impl FindingsStore {
             .map_err(|e| format!("serialize recommended_actions: {e}"))?;
         let evidence = serde_json::to_string(&finding.evidence)
             .map_err(|e| format!("serialize evidence: {e}"))?;
+        let references = serde_json::to_string(&finding.references)
+            .map_err(|e| format!("serialize references: {e}"))?;
         let subjects = finding.all_subjects();
         let device_macs: Vec<&str> = subjects
             .iter()
@@ -267,8 +279,8 @@ impl FindingsStore {
             "INSERT INTO findings
                 (module_name, finding_id, title, narrative, severity, category,
                  recommended_actions, evidence, device_macs, metadata,
-                 timestamp, received_at, envelope_event_id, envelope_nonce, subjects, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'open')
+                 timestamp, received_at, envelope_event_id, envelope_nonce, subjects, \"references\", status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'open')
              ON CONFLICT(module_name, finding_id) DO UPDATE SET
                 title = excluded.title,
                 narrative = excluded.narrative,
@@ -281,7 +293,8 @@ impl FindingsStore {
                 timestamp = excluded.timestamp,
                 envelope_event_id = excluded.envelope_event_id,
                 envelope_nonce = excluded.envelope_nonce,
-                subjects = excluded.subjects",
+                subjects = excluded.subjects,
+                \"references\" = excluded.\"references\"",
             params![
                 module_name,
                 finding.finding_id,
@@ -298,6 +311,7 @@ impl FindingsStore {
                 envelope_event_id,
                 envelope_nonce,
                 subjects,
+                references,
             ],
         )
         .map_err(|e| format!("upsert_finding failed: {e}"))?;
@@ -319,7 +333,7 @@ impl FindingsStore {
                     recommended_actions, evidence, device_macs, metadata,
                     timestamp, received_at, envelope_event_id, envelope_nonce,
                     status, acknowledged_at, acknowledged_by,
-                    resolved_at, resolved_by, resolution_note, subjects
+                    resolved_at, resolved_by, resolution_note, subjects, \"references\"
              FROM findings WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -373,7 +387,7 @@ impl FindingsStore {
                     recommended_actions, evidence, device_macs, metadata,
                     timestamp, received_at, envelope_event_id, envelope_nonce,
                     status, acknowledged_at, acknowledged_by,
-                    resolved_at, resolved_by, resolution_note, subjects
+                    resolved_at, resolved_by, resolution_note, subjects, \"references\"
              FROM findings WHERE id = ?1",
             params![id],
             Self::map_row,
@@ -644,6 +658,7 @@ impl FindingsStore {
         let evidence_json: String = row.get(8)?;
         let device_macs_json: String = row.get(9)?;
         let subjects_json: String = row.get(21)?;
+        let references_json: String = row.get(22)?;
         let metadata_json: Option<String> = row.get(10)?;
         let severity_str: String = row.get(5)?;
         let status_str: String = row.get(15)?;
@@ -653,6 +668,7 @@ impl FindingsStore {
         let evidence = serde_json::from_str(&evidence_json).unwrap_or_default();
         let device_macs = serde_json::from_str(&device_macs_json).unwrap_or_default();
         let subjects = serde_json::from_str(&subjects_json).unwrap_or_default();
+        let references = serde_json::from_str(&references_json).unwrap_or_default();
         let metadata = metadata_json
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok());
@@ -667,6 +683,7 @@ impl FindingsStore {
             category: row.get(6)?,
             recommended_actions,
             evidence,
+            references,
             device_macs,
             subjects,
             metadata,
@@ -699,6 +716,7 @@ mod tests {
             category: "test".into(),
             recommended_actions: vec!["do thing".into()],
             evidence: vec![FindingEvidence::Anomaly { anomaly_id: 7 }],
+            references: vec![],
             subjects: vec![],
             device_macs: vec!["aa:bb:cc:dd:ee:ff".into()],
             timestamp_unix: 1_700_000_000,
@@ -1138,6 +1156,7 @@ mod tests {
             category: "advisory_exposure".into(),
             recommended_actions: vec![],
             evidence: vec![],
+            references: vec![],
             subjects: vec![],
             device_macs: vec![],
             timestamp_unix: 1,

@@ -220,6 +220,7 @@ mod tests {
             category: "test".into(),
             recommended_actions: vec![],
             evidence: vec![],
+            references: vec![],
             subjects: vec![],
             device_macs: vec![],
             timestamp_unix: 0,

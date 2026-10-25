@@ -191,6 +191,7 @@ pub(crate) fn build_finding(group: &ConfusableGroup, now: i64) -> FindingV1 {
                 "resolved_addresses": group.addresses,
             }),
         }],
+        references: vec![],
         subjects: vec![FindingSubject::domain(group.matched_suffix.clone())],
         device_macs: Vec::new(),
         timestamp_unix: now,

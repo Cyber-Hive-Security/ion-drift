@@ -263,6 +263,11 @@ pub struct FindingV1 {
     pub category: String,
     pub recommended_actions: Vec<String>,
     pub evidence: Vec<FindingEvidence>,
+    /// URLs the operator can follow for background: vendor advisory, NVD
+    /// entry, write-up. Drift renders these as links; anything that is not an
+    /// `http`/`https` URL is dropped at the inbound boundary.
+    #[serde(default)]
+    pub references: Vec<String>,
     /// What the finding is about (0..N).
     #[serde(default)]
     pub subjects: Vec<FindingSubject>,

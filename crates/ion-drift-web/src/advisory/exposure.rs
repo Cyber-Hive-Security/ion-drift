@@ -123,6 +123,7 @@ fn build_finding(finding_id: &str, device_id: &str, svc: &IpService, adv: &Advis
                 "observed_at_unix": now,
             }),
         }],
+        references: vec![],
         subjects: vec![FindingSubject::device(device_id)],
         device_macs: Vec::new(),
         timestamp_unix: now,
