@@ -778,10 +778,10 @@ mod tests {
     fn references_are_capped_in_count_and_length() {
         let mut f = hostile_finding();
         f.references = (0..40).map(|i| format!("https://example.com/{i}")).collect();
-        f.references.push(format!("https://example.com/{}", "a".repeat(5000)));
+        f.references.insert(0, format!("https://example.com/{}", "a".repeat(5000)));
         let c = clamp_finding(&f);
         assert_eq!(c.references.len(), 16);
-        assert!(c.references.iter().all(|r| r.chars().count() <= 2048));
+        assert_eq!(c.references[0].chars().count(), 2048);
     }
 
     #[test]
