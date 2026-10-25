@@ -244,6 +244,46 @@ Panic payloads are logged directly. We don't put secrets in `expect()` messages,
 
 `get_policies_for_service` combines fetching, filtering, and VLAN matching in one method. This is a style/refactor suggestion, not a bug. The current implementation is correct and the method is well-scoped. Refactoring would add abstraction without reducing defect risk.
 
+### [LOW] Sparse devices are re-evaluated on every pass with no upper bound
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+Every `sparse` device is a promotion candidate forever, including long-gone and randomized MACs. Each one costs two range scans and an `UPDATE` every ten minutes. Status does not flip-flop and the cost is small at homelab scale, but it grows with the number of dead profiles. Fix: skip candidates with no observation in the retention window, or retire profiles unseen for 30 days.
+
+### [LOW] A backwards clock step inflates coverage
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+The coverage window has no upper bound on time. If the host clock steps backwards, existing observations look like they are in the future: they count as extra days seen and a `last_new_flow` later than now stops the device counting as stable until the clock catches up. Self-correcting; NTP-disciplined hosts never hit it.
+
+### [LOW] Finding subjects are not deduplicated case-insensitively
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+The same MAC sent once in `subjects` (uppercase) and once in `device_macs` (lowercase) is stored as two endpoint subjects. Display-only duplication; the advisory engine never does this. Fix: normalise MACs to lowercase in `FindingV1::all_subjects`.
+
+### [LOW] Modules can name any device as a finding subject
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+A `device` subject id from a module is only length-clamped, so a module can attach its finding to any Drift-managed router or switch by id. Display-only today; revisit if subjects ever drive filtering, alert routing, or automation. Modules are trusted at the level of the Drift binary (see the sandboxing entry under Accepted).
+
+### [LOW] Stale advisory rows are never deleted
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+The catalog loader upserts and never deletes, by design, so a bad load degrades to last-known-good. An advisory whose file is removed or goes malformed keeps producing findings from its stored row. Since 0.5.6 every finding's reference list is sanitised at emission, so a stale row cannot carry an unchecked URL onto the page; it can still carry stale text. Fix: delete rows absent from a fully successful load.
+
+### [LOW] Secret editor: Enter bypasses the in-flight guard
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+In `settings-security.tsx`, the Save button is disabled while a save is pending, but pressing Enter in the field skips that guard, so repeated Enter sends concurrent saves. Last write wins; no data loss observed. Fix: check `isPending` in the key handler too.
+
+### [LOW] Data-table rows expand from a focusable row, not a native button
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+Rows with a click handler now take focus and activate on Enter or Space, so keyboard users can expand findings and reach their references. A native per-row expansion button with `aria-expanded` and an accessible name would serve screen readers better than a focusable `<tr>`. Planned alongside the Logical Interfaces table work in 0.5.7.
+
+### [LOW] `formatUptime` parses only from the start of the string
+**Source:** 0.5.6 pre-release review (2026-10-25)
+
+The uptime regex is anchored to prevent super-linear backtracking. Strings that do not begin with the uptime (`up 1d02:03:04`, `100:00:00`) now pass through unformatted where they used to be misparsed. RouterOS supplies bare uptimes, so real data is unchanged; no test pins the behaviour on the other forms.
+
 ### [LOW] Findings stored before 0.5.6 show no references until re-emitted
 **Source:** 0.5.6 finding-references review (2026-10-24)
 

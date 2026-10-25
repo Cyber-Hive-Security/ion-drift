@@ -56,7 +56,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 
 ## Security Analytics
 
-- Behavioral anomaly detection with per-device learned baselines (delta-based byte tracking) and baseline promotion by coverage and stability (fast-track after about two to three stable days, graduate at 7 days with 5 days seen, sparse for quiet devices with re-evaluation every pass)
+- Behavioral anomaly detection with per-device learned baselines (delta-based byte tracking) and baseline promotion by coverage and stability (fast-track after about two to three stable days, graduate at 7 days with 5 days seen, sparse for quiet devices with re-evaluation every pass; stability is judged against the retained 30-day flow history so weekly-recurring flows are not "new")
 - Five anomaly types: new destination, new port, new protocol, volume spike, blocked attempt
 - Three-stage volume spike validation (absolute floor, baseline comparison, multi-window persistence)
 - Tiered anomaly architecture: Tier 1 (alerts), Tier 2 (digests), Tier 3 (telemetry)
@@ -89,6 +89,8 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 ## Findings & Advisory Intelligence
 
 - **Unified Findings surface** — vulnerability, service-exposure, exploitation, confusable-domain, and module-published findings converge on one triage page, filterable by status (open/acknowledged/resolved), severity, module, and category, with full-text search
+- **Subjects** — every finding names what it is about: a managed router or switch by its registry name (linked to the device page), an endpoint by MAC, or a domain. Findings for three switches are three findings, not one with an empty device column
+- **References** — findings carry source links (NVD entry, vendor advisory, write-up) shown in the detail panel; only well-formed `http`/`https` URLs without embedded credentials are kept, at most 16 per finding, and the list is checked again at emission so stored data cannot carry an unchecked URL onto the page
 - **Vulnerability feed (NVD + CISA KEV)** — daily pull of RouterOS advisories; every managed device whose firmware falls in a published affected range raises a finding; CVEs on the CISA Known Exploited Vulnerabilities list are raised to Critical
 - **Version-honest findings** — a vulnerability finding states that Drift matched the device *version*, not whether the affected feature is enabled, so a real exposure is never hidden behind a false "not applicable"
 - **Service exposure findings** (`advisory_exposure`) — a service tied to a known advisory (e.g. `api`/`api-ssl`) that is enabled raises an early-warning finding: High when reachable from anywhere, Low when restricted by `address`
@@ -99,7 +101,7 @@ ion-drift is a Rust-based network monitoring, security analytics, and device man
 - **Operator resolutions stick** — a manually resolved vulnerability or exposure finding stays resolved; Drift reopens those only when it resolved them itself (version regression after an upgrade, or a re-enabled service). Exploitation findings reopen when the attack signal resumes, preserving your resolution as evidence
 - **Advisory catalog** — bundled advisories whose `version_constraint` is null or an array of version ranges (`exact` cannot combine with bounds)
 - **Last-known-data resilience** — when the router is unreachable, Findings and other live views serve the last data they had behind a "showing last-known data" banner instead of erroring
-- **Module-published findings** — external modules publish findings over the signed Module API (HMAC-SHA256); inbound finding content is length-clamped and stripped of control/bidirectional-override characters
+- **Module-published findings** — external modules publish findings over the signed Module API (HMAC-SHA256); inbound finding content is length-clamped and stripped of control/bidirectional-override characters; the same clamped finding is what the event bus carries to other modules
 
 ## Visualization
 

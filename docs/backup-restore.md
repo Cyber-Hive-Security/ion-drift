@@ -15,7 +15,7 @@ The container writes to `XDG_DATA_HOME=/app/data`, so all state is under
 | `behavior.db` | Device behavior baselines and observations | Baselines rebuild over the 7-day learning period |
 | `connections.db` | Connection history | Historical data, not recoverable |
 | `traffic.db`, `metrics.db`, `stats.db` | Traffic/metric history, usage stats | Historical data, not recoverable |
-| `findings.db` | Module-emitted findings and lifecycle state | Open findings re-emitted by modules |
+| `findings.db` | Advisory and module findings with lifecycle state | Advisory findings re-emitted on the next pass; module findings when the module re-sends them |
 | `sessions.db` | Login sessions | Users log in again |
 | `geo.db` | GeoIP lookup cache | Rebuilt automatically |
 | `geoip/` | GeoIP databases | **No backup needed** — reseeded from the image on every start |
@@ -98,3 +98,8 @@ client credentials to decrypt it. Local-auth installs have no external dependenc
 Take an Option A backup before pulling a new image. Upgrades migrate the schema
 forward automatically; the backup is your path back if you need to return to the
 previous version (downgrades require restoring the matching backup — see above).
+
+0.5.6 migrates `findings.db` to schema 3 (typed subjects, reference links) and
+`behavior.db` to schema 2 (coverage and stability columns) on first start. A 0.5.5
+image refuses to open either database afterwards, so the backup taken before the
+upgrade is the only way back to 0.5.5.
