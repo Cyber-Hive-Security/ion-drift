@@ -45,6 +45,8 @@ async fn references_round_trip() {
         .expect("re-upsert");
     let one = store.get_finding(rows[0].id).await.expect("get").expect("row");
     assert_eq!(one.references, vec![NVD.to_string()]);
+    let rows = store.list_findings(&FindingsQuery::default()).await.expect("list");
+    assert_eq!(rows[0].references, vec![NVD.to_string()], "list SELECT serves the same column");
 }
 
 #[tokio::test]
