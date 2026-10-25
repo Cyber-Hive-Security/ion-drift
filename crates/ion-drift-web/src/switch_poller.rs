@@ -106,6 +106,31 @@ fn deserialize_result<T: serde::de::DeserializeOwned>(
     }
 }
 
+/// Expand bridge VLAN tagged/untagged lists into membership rows.
+///
+/// RouterOS lists the bridge itself as a tagged member of the management VLAN.
+/// It is not a port, so it is skipped; every other member (ethernet, bond,
+/// wireless) is kept because VLAN audit, port roles and topology rely on them.
+fn vlan_membership(vlans: &[mikrotik_core::resources::bridge::BridgeVlan]) -> Vec<VlanMembershipEntry> {
+    let mut rows = Vec::new();
+    for vlan in vlans {
+        // vlan_ids can be "10" or "10,20" — use the primary one
+        let Some(vlan_id) = vlan.vlan_ids.split(',').next().and_then(|s| s.trim().parse().ok()) else {
+            continue;
+        };
+        for (list, tagged) in [(&vlan.tagged, true), (&vlan.untagged, false)] {
+            for port in list.as_deref().unwrap_or("").split(',') {
+                let port = port.trim();
+                if port.is_empty() || port == vlan.bridge {
+                    continue;
+                }
+                rows.push(VlanMembershipEntry { port_name: port.to_string(), vlan_id, tagged });
+            }
+        }
+    }
+    rows
+}
+
 /// Run one poll cycle for a switch device.
 ///
 /// All requests are submitted as a single batch through the device's RouterQueue,
@@ -259,51 +284,8 @@ async fn poll_switch(
 
     // ── Bridge VLANs → VLAN membership ────────────────────────────
     if let Ok(vlans) = bridge_vlans_res {
-        let mut membership_entries = Vec::new();
-
-        for vlan in &vlans {
-            // vlan_ids can be "10" or "10,20" — handle the primary one
-            let vlan_id: Option<u32> = vlan
-                .vlan_ids
-                .split(',')
-                .next()
-                .and_then(|s| s.trim().parse().ok());
-
-            let vlan_id = match vlan_id {
-                Some(v) => v,
-                None => continue,
-            };
-
-            // Tagged ports
-            if let Some(ref tagged) = vlan.tagged {
-                for port in tagged.split(',') {
-                    let port = port.trim();
-                    if !port.is_empty() {
-                        membership_entries.push(VlanMembershipEntry {
-                            port_name: port.to_string(),
-                            vlan_id,
-                            tagged: true,
-                        });
-                    }
-                }
-            }
-
-            // Untagged ports
-            if let Some(ref untagged) = vlan.untagged {
-                for port in untagged.split(',') {
-                    let port = port.trim();
-                    if !port.is_empty() {
-                        membership_entries.push(VlanMembershipEntry {
-                            port_name: port.to_string(),
-                            vlan_id,
-                            tagged: false,
-                        });
-                    }
-                }
-            }
-        }
-
-        if let Err(e) = store.set_vlan_membership(device_id, &membership_entries).await {
+        let rows = vlan_membership(&vlans);
+        if let Err(e) = store.set_vlan_membership(device_id, &rows).await {
             tracing::warn!(device = %device_id, "vlan membership: {e}");
         }
     } else if let Err(e) = bridge_vlans_res {
@@ -468,4 +450,51 @@ pub fn spawn_device_health_check(supervisor: &TaskSupervisor, device_manager: Ar
             }
         }
     })});
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vlan_membership;
+    use mikrotik_core::resources::bridge::BridgeVlan;
+
+    fn vlan(ids: &str, tagged: Option<&str>, untagged: Option<&str>) -> BridgeVlan {
+        BridgeVlan {
+            id: "*1".into(),
+            bridge: "bridge1".into(),
+            vlan_ids: ids.into(),
+            tagged: tagged.map(str::to_string),
+            untagged: untagged.map(str::to_string),
+            current_tagged: None,
+            current_untagged: None,
+            dynamic: None,
+            disabled: None,
+        }
+    }
+
+    #[test]
+    fn bridge_interface_is_not_a_vlan_member() {
+        // RouterOS lists the bridge itself as tagged on the management VLAN.
+        let vlans = [vlan("99", Some("bridge1,ether1"), Some("ether2"))];
+        let rows = vlan_membership(&vlans);
+        let names: Vec<_> = rows.iter().map(|r| r.port_name.as_str()).collect();
+        assert_eq!(names, ["ether1", "ether2"]);
+        assert!(rows[0].tagged && !rows[1].tagged);
+        assert!(rows.iter().all(|r| r.vlan_id == 99));
+    }
+
+    #[test]
+    fn bond_and_other_logical_members_are_kept() {
+        // Only the bridge is special; a trunk over a bond still carries VLANs.
+        let vlans = [vlan("10", Some("bond1,wlan1"), None)];
+        let names: Vec<_> = vlan_membership(&vlans).into_iter().map(|r| r.port_name).collect();
+        assert_eq!(names, ["bond1", "wlan1"]);
+    }
+
+    #[test]
+    fn first_vlan_id_wins_and_unparseable_is_skipped() {
+        let vlans = [vlan("10,20", None, Some("ether1")), vlan("bogus", None, Some("ether1"))];
+        let rows = vlan_membership(&vlans);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].vlan_id, 10);
+    }
 }

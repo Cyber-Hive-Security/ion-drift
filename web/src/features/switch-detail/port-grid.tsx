@@ -223,9 +223,7 @@ export function PortGrid({
     for (const cell of portCells) {
       const pos = portToGridPosition(cell.portName, cell.portIndex);
       if (!pos) {
-        if (cell.portName !== "bridge") {
-          other.push(cell);
-        }
+        other.push(cell);
         continue;
       }
       if (pos.col === -1) {
