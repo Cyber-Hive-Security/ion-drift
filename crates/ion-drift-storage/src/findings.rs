@@ -167,7 +167,7 @@ impl FindingsStore {
          UPDATE findings SET subjects = (
              SELECT json_group_array(json_object('kind', 'endpoint', 'id', value))
              FROM json_each(findings.device_macs))
-         WHERE device_macs != '[]';",
+         WHERE device_macs != '[]' AND json_valid(device_macs);",
     )];
 
     pub fn new(db_path: &Path) -> Result<Self, String> {

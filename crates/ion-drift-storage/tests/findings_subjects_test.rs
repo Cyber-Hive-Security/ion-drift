@@ -34,7 +34,12 @@ fn finding(subjects: Vec<FindingSubject>, device_macs: Vec<String>) -> FindingV1
 #[tokio::test]
 async fn subjects_round_trip_and_legacy_macs_fold_in() {
     let store = FindingsStore::new(&db_path()).expect("findings store");
-    let f = finding(vec![FindingSubject::Device(DEVICE_ID.into())], vec![MAC.into()]);
+    let f = finding(vec![
+            FindingSubject::Device(DEVICE_ID.into()),
+            FindingSubject::Endpoint(MAC.into()),
+        ],
+        vec![MAC.into()],
+    );
     store.upsert_finding("advisory", &f, None, None).await.expect("upsert");
 
     let rows = store.list_findings(&FindingsQuery::default()).await.expect("list");

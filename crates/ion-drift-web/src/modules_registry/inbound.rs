@@ -492,8 +492,11 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
         .iter()
         .take(MAX_MACS)
         .filter_map(|s| match s {
-            FindingSubject::Endpoint(m) => neutralize_mac(m).map(FindingSubject::Endpoint),
-            FindingSubject::Device(id) => Some(FindingSubject::Device(clamp_str(id, 64))),
+            FindingSubject::Endpoint(m) => neutralize_mac(m)
+                .map(|m| FindingSubject::Endpoint(m.chars().take(64).collect())),
+            FindingSubject::Device(id) => Some(clamp_str(id, 64))
+                .filter(|id| !id.is_empty())
+                .map(FindingSubject::Device),
             FindingSubject::Domain(d) => {
                 crate::staging::stage_dns_name(d).map(FindingSubject::Domain)
             }
@@ -642,6 +645,8 @@ mod tests {
                 FindingSubject::Endpoint("<script>".into()),
                 FindingSubject::Domain("EXAMPLE.com".into()),
                 FindingSubject::Device("r1".into()),
+                FindingSubject::Device("".into()),
+                FindingSubject::Endpoint("a".repeat(200)),
             ],
             device_macs: vec![
                 "aa:bb:cc:dd:ee:ff".into(),
@@ -730,6 +735,7 @@ mod tests {
             vec![
                 FindingSubject::Domain("example.com".into()),
                 FindingSubject::Device("r1".into()),
+                FindingSubject::Endpoint("a".repeat(64)),
             ]
         );
     }
