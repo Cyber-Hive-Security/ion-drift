@@ -144,6 +144,16 @@ Inference binding results were not pre-populating the identity builder, so stale
 
 ## Open
 
+### [LOW] Module events are published in-process before they are clamped
+**Source:** 0.5.6 finding-subjects review (2026-10-24)
+
+`modules_registry/inbound.rs` publishes the raw module event to the in-process event bus and stores the clamped copy. In-process subscribers and outbound module deliveries therefore see unbounded titles, narratives, and subjects while the Findings page sees the sanitized ones. Modules are already trusted at the level of the Drift binary (see the sandboxing entry under Accepted), so this is a consistency gap, not a boundary breach. Fix: clamp once, then publish and store the same value.
+
+### [LOW] Exploitation findings may name the router by host before the device manager is ready
+**Source:** 0.5.6 finding-subjects review (2026-10-24)
+
+`advisory/exploitation.rs::primary_device_id` falls back to the configured router host when the device manager has no primary yet. A finding emitted in that startup window carries a `device` subject whose id is a hostname or address, so the Findings page shows it as plain text instead of the registry name. The next emission after startup corrects it. Fix: wait for the device manager or skip emission until a primary exists.
+
 ### [LOW] Per-device queues are never removed when a device is deleted or disabled
 **Source:** 0.5.6 clippy cleanup (2026-10-24)
 
