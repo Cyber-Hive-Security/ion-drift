@@ -34,12 +34,15 @@ fn finding(references: Vec<String>) -> FindingV1 {
 #[tokio::test]
 async fn references_round_trip() {
     let store = FindingsStore::new(&db_path()).expect("findings store");
+    store.upsert_finding("advisory", &finding(vec![]), None, None).await.expect("upsert");
+    let rows = store.list_findings(&FindingsQuery::default()).await.expect("list");
+    assert!(rows[0].references.is_empty());
+
+    // Re-emitting replaces the list: the only "backfill" the v3 migration relies on.
     store
         .upsert_finding("advisory", &finding(vec![NVD.into()]), None, None)
         .await
-        .expect("upsert");
-    let rows = store.list_findings(&FindingsQuery::default()).await.expect("list");
-    assert_eq!(rows[0].references, vec![NVD.to_string()]);
+        .expect("re-upsert");
     let one = store.get_finding(rows[0].id).await.expect("get").expect("row");
     assert_eq!(one.references, vec![NVD.to_string()]);
 }

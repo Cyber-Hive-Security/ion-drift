@@ -125,10 +125,12 @@ fn build_finding(
     );
     let mut recommended_actions = vec![upgrade_action(matched)];
     recommended_actions.extend(input.mitigations.iter().cloned());
-    let nvd = format!("https://nvd.nist.gov/vuln/detail/{}", input.cve_id);
     let mut references = input.references.clone();
-    if !references.contains(&nvd) {
-        references.push(nvd);
+    if input.cve_id.starts_with("CVE-") {
+        let nvd = format!("https://nvd.nist.gov/vuln/detail/{}", input.cve_id);
+        if !references.contains(&nvd) {
+            references.push(nvd);
+        }
     }
 
     FindingV1 {
@@ -296,6 +298,12 @@ mod tests {
         assert!(f.recommended_actions[0].contains("7.24.2"));
         assert!(!f.recommended_actions.iter().any(|a| a.contains("nvd.nist.gov")), "URL lives in references now");
         assert_eq!(f.references, vec!["https://nvd.nist.gov/vuln/detail/CVE-2026-86060".to_string()]);
+    }
+
+    #[test]
+    fn non_cve_advisory_gets_no_nvd_link() {
+        let a = assess("dev1", "7.24.1 (stable)", &[input("MT-2026-0001", None, false)], 1);
+        assert!(a.affected[0].references.is_empty(), "no NVD page exists for a vendor id");
     }
 
     #[test]

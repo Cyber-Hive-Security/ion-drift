@@ -440,8 +440,6 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
     const MAX_ACTIONS: usize = 32;
     const MAX_EVIDENCE: usize = 64;
     const MAX_MACS: usize = 256;
-    const MAX_REFERENCES: usize = 16;
-    const MAX_REFERENCE_LEN: usize = 2048;
     // Nested JSON the top-level clamp previously missed (review ID-06): the
     // opaque `metadata` blob and each `Custom` evidence payload are bounded by
     // serialized size, and evidence labels by length.
@@ -507,14 +505,7 @@ fn clamp_finding(f: &FindingV1) -> FindingV1 {
                 .then_some(FindingSubject { kind, id })
         })
         .collect();
-    c.references = f
-        .references
-        .iter()
-        .take(MAX_REFERENCES)
-        .filter_map(|r| url::Url::parse(&clamp_str(r, MAX_REFERENCE_LEN)).ok())
-        .filter(|u| matches!(u.scheme(), "http" | "https"))
-        .map(String::from)
-        .collect();
+    c.references = crate::staging::stage_references(&f.references);
     c
 }
 
@@ -662,6 +653,8 @@ mod tests {
                 "data:text/html,<script>".into(),
                 "not a url".into(),
                 "https://example.com/\u{202e}evil".into(),
+                "https://nvd.nist.gov@evil.example/x".into(),
+                "https://example.com/adv?id=1".into(),
                 "".into(),
             ],
             subjects: vec![
@@ -770,7 +763,7 @@ mod tests {
                 "https://example.com/adv?id=1".to_string(),
                 "https://example.com/evil".to_string(),
             ],
-            "only http/https URLs that parse survive; bidi control stripped"
+            "only http/https URLs without userinfo survive, once each; bidi control stripped"
         );
     }
 
@@ -779,9 +772,11 @@ mod tests {
         let mut f = hostile_finding();
         f.references = (0..40).map(|i| format!("https://example.com/{i}")).collect();
         f.references.insert(0, format!("https://example.com/{}", "a".repeat(5000)));
+        f.references.insert(1, format!("https://example.com/{}", "\u{4e00}".repeat(1000)));
         let c = clamp_finding(&f);
-        assert_eq!(c.references.len(), 16);
-        assert_eq!(c.references[0].chars().count(), 2048);
+        assert_eq!(c.references.len(), 14, "two over-long entries dropped, not truncated");
+        assert!(c.references.iter().all(|r| r.len() <= 2048));
+        assert_eq!(c.references[0], "https://example.com/0");
     }
 
     #[test]

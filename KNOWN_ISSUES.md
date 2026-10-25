@@ -242,3 +242,8 @@ Panic payloads are logged directly. We don't put secrets in `expect()` messages,
 **Source:** External review 2026-03-25
 
 `get_policies_for_service` combines fetching, filtering, and VLAN matching in one method. This is a style/refactor suggestion, not a bug. The current implementation is correct and the method is well-scoped. Refactoring would add abstraction without reducing defect risk.
+
+### [LOW] Findings stored before 0.5.6 show no references until re-emitted
+**Source:** 0.5.6 finding-references review (2026-10-24)
+
+findings.db v3 adds `references` without a backfill: the only legacy source of URLs was the CVE finding's `Details:` recommended action, which the advisory engine rewrites on its next pass, so open advisory findings gain references within one pass of the upgrade. Resolved findings are never re-emitted and keep an empty list; module findings refresh only when the module re-sends them. Cosmetic; no action planned.

@@ -100,6 +100,32 @@ pub(crate) fn stage_dns_name(raw: &str) -> Option<String> {
     Some(name)
 }
 
+/// Longest reference URL kept, in bytes, measured after normalization.
+pub(crate) const MAX_REFERENCE_LEN: usize = 2048;
+/// Most references considered per finding or advisory, counted before filtering.
+pub(crate) const MAX_REFERENCES: usize = 16;
+
+/// Keep only `http`/`https` URLs that parse, carry no userinfo, and stay within
+/// [`MAX_REFERENCE_LEN`] once normalized; drop duplicates and everything else.
+///
+/// This is the one place the "bound, don't drop" rule does not apply: these
+/// values become `href`s the operator clicks, and a truncated URL is a
+/// different link, not a shorter one.
+pub(crate) fn stage_references(raw: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in raw.iter().take(MAX_REFERENCES) {
+        let Ok(u) = url::Url::parse(&scrub(r)) else { continue };
+        let clean = matches!(u.scheme(), "http" | "https")
+            && u.username().is_empty()
+            && u.password().is_none()
+            && u.as_str().len() <= MAX_REFERENCE_LEN;
+        if clean && !out.iter().any(|s| s == u.as_str()) {
+            out.push(u.into());
+        }
+    }
+    out
+}
+
 /// Bound a service token without ever discarding it.
 pub(crate) fn stage_service(raw: &str) -> String {
     truncate_chars(scrub(raw).trim(), MAX_SERVICE)
@@ -128,6 +154,26 @@ pub(crate) fn stage_addresses(raw: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_references_keeps_only_clean_http_urls() {
+        let raw: Vec<String> = [
+            "https://example.com/a",
+            "HTTPS://example.com/a", // same URL after normalization
+            "ftp://example.com/x",
+            "javascript:alert(1)",
+            "https://user@example.com/x",
+            "https://example.com/\u{202e}b",
+            &format!("https://example.com/{}", "\u{4e00}".repeat(1000)),
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            stage_references(&raw),
+            ["https://example.com/a", "https://example.com/b"]
+        );
+    }
 
     #[test]
     fn scrub_strips_bidi_and_zero_width() {
