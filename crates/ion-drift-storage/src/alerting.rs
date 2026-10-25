@@ -442,6 +442,7 @@ impl SwitchStore {
         }
     }
 
+    // One argument per alert_history column; a struct here would be built once and read once.
     #[allow(clippy::too_many_arguments)]
     pub async fn record_alert_history(
         &self,

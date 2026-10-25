@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { cn } from "@/lib/utils";
+import { cn, onEnterOrSpace } from "@/lib/utils";
 import { ArrowUpDown, Search } from "lucide-react";
 
 export interface Column<T> {
@@ -201,6 +201,8 @@ export function DataTable<T>({
                         className={cn("border-b border-border/50 hover:bg-muted/30", onRowClick && "cursor-pointer")}
                         style={rowStyle?.(row)}
                         onClick={onRowClick ? () => onRowClick(row) : undefined}
+                        tabIndex={onRowClick ? 0 : undefined}
+                        onKeyDown={onRowClick ? onEnterOrSpace(() => onRowClick(row)) : undefined}
                       >
                         {columns.map((col) => (
                           <td key={col.key} className="px-3 py-2">
@@ -286,6 +288,8 @@ function VirtualizedBody<T>({
                   className={cn("border-b border-border/50 hover:bg-muted/30", onRowClick && "cursor-pointer")}
                   style={rowStyle?.(row)}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  tabIndex={onRowClick ? 0 : undefined}
+                  onKeyDown={onRowClick ? onEnterOrSpace(() => onRowClick(row)) : undefined}
                 >
                   {columns.map((col) => (
                     <td key={col.key} className="px-3 py-2" style={col.width ? { width: col.width } : undefined}>

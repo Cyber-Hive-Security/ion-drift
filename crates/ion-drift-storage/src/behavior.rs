@@ -1485,7 +1485,6 @@ impl BehaviorStore {
         let window_start = (now / 86400 - 6) * 86400; // today and the six previous UTC days
         let mut promoted_baselined = 0usize;
         let mut promoted_sparse = 0usize;
-        let mut newly_baselined: Vec<String> = Vec::new();
 
         let candidates: Vec<String> = {
             let db = self.db.lock().await;
@@ -1531,9 +1530,9 @@ impl BehaviorStore {
                 .query_row(
                     "SELECT MAX(first_ts) FROM (
                          SELECT MIN(timestamp) AS first_ts FROM device_observations
-                         WHERE mac = ?1 AND timestamp >= ?2
+                         WHERE mac = ?1
                          GROUP BY protocol, dst_port, dst_subnet, direction)",
-                    params![mac, window_start],
+                    params![mac],
                     |row| row.get(0),
                 )
                 .map_err(|e| format!("last_new_flow failed: {e}"))?;
@@ -1566,22 +1565,28 @@ impl BehaviorStore {
                 "sparse"
             };
 
-            db.execute(
-                "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
-                params![mac, new_status],
-            )
-            .map_err(|e| format!("promote failed: {e}"))?;
             if new_status == "baselined" {
+                // Baseline first, then flip. A device marked baselined with no
+                // baseline rows is skipped by detection until the nightly recompute.
+                drop(db);
+                if let Err(e) = self.recompute_baselines(mac, Self::LEARNING_WINDOW_SECS).await {
+                    tracing::warn!(mac = %mac, "baseline recompute before graduation failed: {e}");
+                    continue;
+                }
+                let db = self.db.lock().await;
+                db.execute(
+                    "UPDATE device_profiles SET baseline_status = 'baselined' WHERE mac = ?1",
+                    params![mac],
+                )
+                .map_err(|e| format!("promote failed: {e}"))?;
                 promoted_baselined += 1;
-                newly_baselined.push(mac.clone());
             } else {
+                db.execute(
+                    "UPDATE device_profiles SET baseline_status = ?2 WHERE mac = ?1",
+                    params![mac, new_status],
+                )
+                .map_err(|e| format!("promote failed: {e}"))?;
                 promoted_sparse += 1;
-            }
-        }
-
-        for mac in &newly_baselined {
-            if let Err(e) = self.recompute_baselines(mac, Self::LEARNING_WINDOW_SECS).await {
-                tracing::warn!(mac = %mac, "baseline recompute after graduation failed: {e}");
             }
         }
         Ok((promoted_baselined, promoted_sparse))

@@ -1,18 +1,13 @@
-//! Findings consumer — bridges the in-process EventBus to the persistent
-//! `FindingsStore`, and runs the auto-resolve loop for stale findings.
+//! Findings lifecycle: the auto-resolve loop for stale findings.
 //!
-//! The inbound publish endpoint (`modules_registry::inbound`) host-stamps
-//! the emitting module's name and publishes a `DriftEvent::Finding` onto
-//! the bus. This task is the durable consumer: it upserts every finding
-//! into `findings.db`. The dispatcher will *also* see the same event and
-//! fan it out to any subscribed module — that's an emergent capability,
-//! not coupled to persistence.
+//! Persistence of module findings happens at the ACL boundary in
+//! `modules_registry::inbound`, where the URL-path module identity is known
+//! and the finding has been clamped; the same clamped finding is then
+//! published on the bus for module fan-out.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use ion_drift_module_api::{DriftEvent, EventKind};
-use ion_drift_module_host::EventBus;
 use ion_drift_storage::FindingsStore;
 
 /// Default cutoff for auto-resolve: 30 days. Critical/high are never
@@ -20,42 +15,6 @@ use ion_drift_storage::FindingsStore;
 const AUTO_RESOLVE_CUTOFF_SECS: i64 = 30 * 86400;
 /// Cadence for the auto-resolve sweep. Cheap UPDATE — running often is fine.
 const AUTO_RESOLVE_INTERVAL_SECS: u64 = 3600;
-
-/// Subscribe to `EventKind::Finding` for emergent fan-out. Inbound
-/// findings are persisted at the ACL boundary in `inbound.rs` where the
-/// URL-path module identity is known; the bus payload (`FindingV1`)
-/// deliberately omits `module_name`. This task exists so any future
-/// in-process emitter that publishes a `Finding` directly onto the bus
-/// still lands a durable row, stamped `"in-process"`.
-pub fn spawn_findings_consumer(store: Arc<FindingsStore>, event_bus: EventBus) {
-    tokio::spawn(async move {
-        let handle = event_bus.handle_for(
-            "findings-consumer",
-            Vec::new(),
-            vec![EventKind::Finding],
-        );
-        let mut rx = handle.subscribe();
-        tracing::info!("findings consumer started");
-        loop {
-            match rx.recv().await {
-                Ok(DriftEvent::Finding(finding)) => {
-                    if let Err(e) = store
-                        .upsert_finding("in-process", &finding, None, None)
-                        .await
-                    {
-                        tracing::warn!(error = %e, "findings consumer: upsert failed");
-                    }
-                }
-                Ok(_) => {}
-                Err(ion_drift_module_api::EventError::Lagged(n)) => {
-                    tracing::warn!(skipped = n, "findings consumer lagged");
-                }
-                Err(_) => break,
-            }
-        }
-        tracing::info!("findings consumer stopped");
-    });
-}
 
 /// Periodically auto-resolve stale low/medium/info findings.
 pub fn spawn_findings_auto_resolver(store: Arc<FindingsStore>) {

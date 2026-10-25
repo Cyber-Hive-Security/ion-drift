@@ -132,6 +132,9 @@ fn build_finding(
             references.push(nvd);
         }
     }
+    // Final list through the one sanitizer: stored rows may predate it, and the
+    // NVD link must not push a full curated list past the cap.
+    let references = crate::staging::stage_references(&references);
 
     FindingV1 {
         finding_id: finding_id.to_string(),
@@ -318,6 +321,32 @@ mod tests {
             a.affected[0].references,
             vec![
                 "https://mikrotik.com/advisory/x".to_string(),
+                "https://nvd.nist.gov/vuln/detail/CVE-2026-86060".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn final_reference_list_is_sanitized_and_capped() {
+        // Sixteen clean curated references already fill the cap: the NVD link
+        // does not become a seventeenth.
+        let mut full = input("CVE-2026-86060", Some(9.2), false);
+        full.references = (0..16).map(|n| format!("https://example.com/adv/{n}")).collect();
+        let refs = &assess("dev1", "7.24.1 (stable)", &[full], 1).affected[0].references;
+        assert_eq!(refs.len(), 16);
+        assert!(!refs.iter().any(|r| r.contains("nvd.nist.gov")), "{refs:?}");
+
+        // A stored row that predates the sanitizer is cleaned at emission.
+        let mut dirty = input("CVE-2026-86060", Some(9.2), false);
+        dirty.references = vec![
+            "https://nvd.nist.gov@evil.example/x".to_string(),
+            "https://example.com/adv".to_string(),
+        ];
+        let refs = &assess("dev1", "7.24.1 (stable)", &[dirty], 1).affected[0].references;
+        assert_eq!(
+            refs,
+            &vec![
+                "https://example.com/adv".to_string(),
                 "https://nvd.nist.gov/vuln/detail/CVE-2026-86060".to_string(),
             ]
         );

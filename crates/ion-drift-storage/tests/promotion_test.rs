@@ -195,3 +195,34 @@ async fn sparse_device_stays_sparse_without_coverage() {
     assert_eq!(after_second.baseline_status, "sparse");
     assert_eq!(after_first.learning_until, after_second.learning_until, "no extension for sparse");
 }
+
+/// A tuple that recurs weekly is not "new" each week. Stability must look at
+/// when a tuple was first seen in the retained history, not within the
+/// seven-day coverage window, or a device with a different weekly flow on
+/// each of its active days never has 48 quiet hours and never graduates.
+#[tokio::test]
+async fn weekly_recurring_tuples_do_not_reset_stability() {
+    let path = db_path();
+    let t = today_start() + HOUR;
+    // Three active days per week (coverage 3 < 5), a distinct port on each,
+    // repeated for three weeks. Newest sample of each tuple is 1, 3, 5 days old.
+    let mut obs = Vec::new();
+    for week in 0..3 {
+        for (age_days, port) in [(1, 80), (3, 443), (5, 8080)] {
+            obs.push(flow(t - (age_days + 7 * week) * DAY, port));
+        }
+    }
+    let store = store_with(&path, &obs).await;
+    exec(&path, "UPDATE device_profiles SET baseline_status = 'sparse' WHERE mac = ?1", [MAC]);
+    advance_days(&path, 30);
+
+    store.promote_eligible_devices().await.expect("promote");
+
+    let p = profile(&store).await;
+    assert_eq!(p.baseline_status, "baselined", "every tuple is weeks old: {p:?}");
+    assert!(p.last_new_flow.unwrap() <= t - 15 * DAY, "first sighting is three weeks back");
+    assert!(
+        !store.get_baselines(MAC).await.expect("baselines").is_empty(),
+        "a baselined device has baselines"
+    );
+}

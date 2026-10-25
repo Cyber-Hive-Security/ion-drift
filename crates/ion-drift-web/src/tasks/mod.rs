@@ -90,8 +90,7 @@ pub fn spawn_all(
         state.behavior_store.clone(),
         state.vlan_registry.clone(),
     );
-    // Module-emitted findings: persistence + lifecycle
-    findings::spawn_findings_consumer(state.findings_store.clone(), state.event_bus.clone());
+    // Findings lifecycle (persistence happens at the inbound ACL boundary)
     findings::spawn_findings_auto_resolver(state.findings_store.clone());
 
     crate::anomaly_correlator::spawn_anomaly_correlator(
