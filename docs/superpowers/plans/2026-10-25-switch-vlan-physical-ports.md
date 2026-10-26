@@ -191,7 +191,7 @@ In the 0.5.6 section, change "five items under Fixed" to "six items under Fixed"
 
 - [ ] **Step 7: Full battery and commit**
 
-Run from the worktree root: `cargo test --workspace --locked`, `cargo clippy --workspace --locked --all-targets -- -D warnings`, `scripts/check-internal-identifiers.sh` (staged), `gitleaks git --no-banner .`
+Run from the worktree root: `cargo test --workspace --locked`, `cargo clippy --workspace --locked --all-targets -- -D warnings`, `gitleaks git --no-banner .`
 Expected: all green.
 
 ```bash

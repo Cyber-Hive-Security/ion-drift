@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- `scripts/check-internal-identifiers.sh` and its CI and pre-commit steps. The script carried the list of
+  identifiers it screened for, which does not belong in the repository. The check now runs as a local git hook
+  outside the tree.
+
 ## [0.5.6] - 2026-10-25
 
 Maintenance release: no feature changes. User-visible changes are limited to the eight items under Fixed below.
@@ -29,7 +35,6 @@ Maintenance release: no feature changes. User-visible changes are limited to the
   the decorative `Math.random()` star field were reviewed and left as-is (see KNOWN_ISSUES).
 - **Internal identifiers removed.** Lab addresses, hostnames, and user paths in tests, the example config, UI
   placeholders, and docs replaced with RFC 1918 and RFC 5737 example ranges and `example.com`.
-  `scripts/check-internal-identifiers.sh` runs in pre-commit and CI, scans staged content, and fails closed.
 - `ROADMAP.md` rewritten for the standalone Drift 1.0 train (0.5.7 to 1.0); companion-product work moved to post-1.0.
 
 ### Fixed
